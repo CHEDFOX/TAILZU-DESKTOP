@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>Tailzu recorder</title></head>
+  <body>
+    <!--
+      Hidden window. Records the mic with getUserMedia + MediaRecorder, then
+      POSTs the audio to the Tailzu backend's /v1/transcribe-clean (the exact
+      endpoint the mobile app uses) and hands the cleaned text back to main.
+    -->
+    <script>
+      let mediaRecorder = null;
+      let chunks = [];
+      let cfg = {};
+      let stream = null;
+
+      window.tailzu.onStart((c) => { cfg = c; start(); });
+      window.tailzu.onStop(() => stop());
+
+      function pickMime() {
+        const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+        for (const m of candidates) {
+          if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+        }
+        return ""; // let the browser choose
+      }
+
+      async function start() {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          chunks = [];
+          const mimeType = pickMime();
+          mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+          mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+          mediaRecorder.onstop = () => { stopTracks(); upload(); };
+          mediaRecorder.start();
+        } catch (err) {
+          stopTracks();
+          window.tailzu.error("mic: " + (err && err.message ? err.message : String(err)));
+        }
+      }
+
+      function stop() {
+        try {
+          if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+          else stopTracks();
+        } catch (err) {
+          window.tailzu.error(String(err));
+        }
+      }
+
+      function stopTracks() {
+        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      }
+
+      async function upload() {
+        try {
+          if (!chunks.length) { window.tailzu.error("no audio captured"); return; }
+          const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+          const ext = type.includes("ogg") ? "ogg" : "webm";
+          const blob = new Blob(chunks, { type });
+          const fd = new FormData();
+          fd.append("audio", blob, "audio." + ext);
+          fd.append("targetApp", "Desktop");
+          fd.append("language", cfg.language || "auto");
+          const res = await fetch(cfg.baseUrl.replace(/\/+$/, "") + "/v1/transcribe-clean", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + cfg.token },
+            body: fd,
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            window.tailzu.error("HTTP " + res.status + (body ? " " + body.slice(0, 120) : ""));
+            return;
+          }
+          const json = await res.json();
+          window.tailzu.result(json.cleanedText || json.text || "");
+        } catch (err) {
+          window.tailzu.error("upload: " + (err && err.message ? err.message : String(err)));
+        }
+      }
+    </script>
+  </body>
+</html>

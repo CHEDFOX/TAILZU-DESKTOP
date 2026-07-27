@@ -1,0 +1,36 @@
+{
+  "name": "tailzu-desktop",
+  "version": "0.1.0",
+  "description": "Tailzu desktop voice dictation — hotkey → record → clean → paste. Reuses the Tailzu backend.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node gen-icon.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "space.tailzu.desktop",
+    "productName": "Tailzu",
+    "files": ["main.js", "preload.js", "recorder.html", "assets/**", "config.json"],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg"],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}
