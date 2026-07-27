@@ -32,6 +32,7 @@
       "category": "public.app-category.productivity",
       "target": ["dmg"],
       "icon": "assets/icon.png",
+      "artifactName": "Tailzu.${ext}",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
         "LSUIElement": true
@@ -44,11 +45,13 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Tailzu-Setup.${ext}"
     },
     "linux": {
       "target": ["AppImage"],
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "artifactName": "Tailzu.${ext}"
     }
   }
 }
