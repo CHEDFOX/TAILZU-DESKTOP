@@ -22,14 +22,22 @@ const fs = require("fs");
 // ---- Config -----------------------------------------------------------------
 // Precedence: env vars > config.json (next to this file) > defaults.
 // Copy config.example.json → config.json and fill in your token.
+let configError = null; // surfaced as a notification once the app is ready
 function loadConfig() {
   let file = {};
+  const p = path.join(__dirname, "config.json");
   try {
-    file = JSON.parse(fs.readFileSync(path.join(__dirname, "config.json"), "utf8"));
-  } catch { /* no config.json yet — env/defaults */ }
+    file = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (err) {
+    // Distinguish "no config yet" (fine — env/defaults) from "config EXISTS but
+    // is broken JSON" — silently falling back to token "dev" on a typo made a
+    // client-side 401 undiagnosable. Surface it loudly instead.
+    if (fs.existsSync(p)) configError = "config.json is invalid JSON: " + err.message;
+  }
   return {
-    baseUrl: process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space",
-    token: process.env.TAILZU_TOKEN || file.token || "dev",
+    baseUrl: (process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space").trim(),
+    // trim: a token pasted with a stray space/newline fails auth invisibly.
+    token: String(process.env.TAILZU_TOKEN || file.token || "dev").trim(),
     language: process.env.TAILZU_LANGUAGE || file.language || "auto",
     // Electron accelerator string. CommandOrControl = ⌘ on macOS, Ctrl on Win/Linux.
     hotkey: process.env.TAILZU_HOTKEY || file.hotkey || "CommandOrControl+Shift+Space",
@@ -85,6 +93,9 @@ function buildMenu() {
     { type: "separator" },
     { label: `Hotkey: ${cfg.hotkey}`, enabled: false },
     { label: `Backend: ${cfg.baseUrl}`, enabled: false },
+    // Which credential is ACTUALLY loaded — ends the "which token is it using"
+    // guessing when auth fails. "dev" here means config.json wasn't read.
+    { label: `Token: ${cfg.token === "dev" ? "dev (no config!)" : cfg.token.slice(0, 8) + "…"}`, enabled: false },
     { label: "Edit config…", click: openConfig },
     { type: "separator" },
     { label: "Quit Tailzu", click: () => app.quit() },
@@ -173,6 +184,10 @@ app.whenReady().then(() => {
 
   tray = new Tray(trayIcon());
   refreshTray();
+
+  if (configError) {
+    new Notification({ title: "Tailzu — config problem", body: configError }).show();
+  }
 
   const ok = globalShortcut.register(cfg.hotkey, toggleDictation);
   if (!ok) {
