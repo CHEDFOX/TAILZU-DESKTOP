@@ -6,9 +6,13 @@
   "scripts": {
     "start": "electron .",
     "icon": "node gen-icon.js",
+    "postinstall": "electron-builder install-app-deps",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^31.3.1",
@@ -17,20 +21,34 @@
   "build": {
     "appId": "space.tailzu.desktop",
     "productName": "Tailzu",
-    "files": ["main.js", "preload.js", "recorder.html", "assets/**", "config.json"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "recorder.html",
+      "overlay.html",
+      "assets/**"
+    ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": ["dmg"],
+      "icon": "assets/icon.png",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
         "LSUIElement": true
       }
     },
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis"],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     },
     "linux": {
-      "target": ["AppImage"]
+      "target": ["AppImage"],
+      "icon": "assets/icon.png"
     }
   }
 }

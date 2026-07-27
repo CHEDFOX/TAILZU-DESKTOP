@@ -3,19 +3,66 @@
   <head><meta charset="utf-8" /><title>Tailzu recorder</title></head>
   <body>
     <!--
-      Hidden window. Records the mic with getUserMedia + MediaRecorder, then
-      POSTs the audio to the Tailzu backend's /v1/transcribe-clean (the exact
-      endpoint the mobile app uses) and hands the cleaned text back to main.
+      Hidden window with two capture paths:
+
+      BATCH (default): MediaRecorder → webm → POST /v1/transcribe-clean →
+        cleaned text → main pastes it. Proven, simple, one round-trip.
+
+      LIVE (cfg.live): WebAudio → 16 kHz PCM frames → WS /v1/transcribe-stream.
+        Partials/finals stream back and paint the caption overlay while you
+        talk; on stop the assembled transcript goes through the same per-tone
+        refine routing the mobile app uses, and the final text pastes once.
+        (Partials are NEVER typed into the target app — captions only.)
     -->
     <script>
-      let mediaRecorder = null;
-      let chunks = [];
       let cfg = {};
       let stream = null;
 
-      window.tailzu.onStart((c) => { cfg = c; start(); });
-      window.tailzu.onStop(() => stop());
+      // ---- batch state ----
+      let mediaRecorder = null;
+      let chunks = [];
 
+      // ---- live state ----
+      let ws = null;
+      let audioCtx = null;
+      let srcNode = null;
+      let proc = null;
+      let live = false;
+      let finals = [];
+      let lastPartial = "";
+      let wsWatchdog = null;
+
+      window.tailzu.onStart((c) => { cfg = c; cfg.live ? startLive() : startBatch(); });
+      window.tailzu.onStop(() => { live ? stopLive() : stopBatch(); });
+
+      function base() { return (cfg.baseUrl || "").replace(/\/+$/, ""); }
+      function stopTracks() {
+        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      }
+      async function getMic() {
+        return navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+      }
+
+      // ---- Per-tone refine routing (mirrors the mobile app/src/api.ts) -------
+      const LLM_TONES = ["formal", "casual", "very-casual", "excited"];
+      async function refineText(text) {
+        const tone = (cfg.tone || "none").toLowerCase();
+        const p = tone === "none" ? "/v1/refine/none"
+          : LLM_TONES.includes(tone) ? "/v1/refine/" + tone
+          : "/v1/refine";
+        const res = await fetch(base() + p, {
+          method: "POST",
+          headers: { Authorization: "Bearer " + cfg.token, "Content-Type": "application/json" },
+          body: JSON.stringify({ text, targetApp: "Desktop", language: cfg.language || "auto" }),
+        });
+        if (!res.ok) throw new Error("refine HTTP " + res.status);
+        const j = await res.json();
+        return (j.refinedText || "").trim();
+      }
+
+      // ======================= BATCH =======================
       function pickMime() {
         const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
         for (const m of candidates) {
@@ -24,16 +71,14 @@
         return ""; // let the browser choose
       }
 
-      async function start() {
+      async function startBatch() {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          });
+          stream = await getMic();
           chunks = [];
           const mimeType = pickMime();
           mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
           mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-          mediaRecorder.onstop = () => { stopTracks(); upload(); };
+          mediaRecorder.onstop = () => { stopTracks(); uploadBatch(); };
           mediaRecorder.start();
         } catch (err) {
           stopTracks();
@@ -41,7 +86,7 @@
         }
       }
 
-      function stop() {
+      function stopBatch() {
         try {
           if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
           else stopTracks();
@@ -50,11 +95,7 @@
         }
       }
 
-      function stopTracks() {
-        if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
-      }
-
-      async function upload() {
+      async function uploadBatch() {
         try {
           if (!chunks.length) { window.tailzu.error("no audio captured"); return; }
           const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
@@ -64,7 +105,9 @@
           fd.append("audio", blob, "audio." + ext);
           fd.append("targetApp", "Desktop");
           fd.append("language", cfg.language || "auto");
-          const res = await fetch(cfg.baseUrl.replace(/\/+$/, "") + "/v1/transcribe-clean", {
+          // Explicit tone override — same field the mobile keyboard sends.
+          fd.append("tone", cfg.tone || "none");
+          const res = await fetch(base() + "/v1/transcribe-clean", {
             method: "POST",
             headers: { Authorization: "Bearer " + cfg.token },
             body: fd,
@@ -90,6 +133,120 @@
           }
         } catch (err) {
           window.tailzu.error("upload: " + (err && err.message ? err.message : String(err)));
+        }
+      }
+
+      // ======================= LIVE =======================
+      function wsUrl() { return base().replace(/^http/, "ws") + "/v1/transcribe-stream"; }
+      function previewText() { return (finals.join(" ") + " " + lastPartial).trim(); }
+
+      async function startLive() {
+        live = true;
+        finals = [];
+        lastPartial = "";
+        try {
+          stream = await getMic();
+          ws = new WebSocket(wsUrl());
+          ws.binaryType = "arraybuffer";
+          // Browser WebSocket can't set an Authorization header; the protocol
+          // carries the token in the start message (the server accepts both).
+          ws.onopen = () => ws.send(JSON.stringify({
+            type: "start", token: cfg.token, targetApp: "Desktop",
+            language: cfg.language || "auto",
+            sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
+          }));
+          ws.onmessage = (ev) => {
+            let m; try { m = JSON.parse(ev.data); } catch { return; }
+            if (m.type === "partial") {
+              lastPartial = m.text || "";
+              window.tailzu.partial(previewText());
+            } else if (m.type === "final") {
+              if (m.text && m.text.trim()) finals.push(m.text.trim());
+              lastPartial = "";
+              window.tailzu.partial(previewText());
+            } else if (m.type === "done") {
+              finishLive();
+            } else if (m.type === "error") {
+              window.tailzu.error(m.message || "stream error");
+              teardownLive();
+            }
+          };
+          ws.onclose = () => { if (live) finishLive(); };
+          ws.onerror = () => { /* onclose follows and routes to finishLive */ };
+
+          // WebAudio capture → linear-interp downsample → 16 kHz s16le frames.
+          // ScriptProcessor is deprecated but universally supported in Electron
+          // and by far the simplest way to tap PCM.
+          audioCtx = new AudioContext();
+          srcNode = audioCtx.createMediaStreamSource(stream);
+          proc = audioCtx.createScriptProcessor(4096, 1, 1);
+          srcNode.connect(proc);
+          proc.connect(audioCtx.destination);
+          const inRate = audioCtx.sampleRate;
+          proc.onaudioprocess = (e) => {
+            if (!ws || ws.readyState !== 1) return;
+            ws.send(downsampleTo16k(e.inputBuffer.getChannelData(0), inRate));
+          };
+        } catch (err) {
+          window.tailzu.error("mic: " + (err && err.message ? err.message : String(err)));
+          teardownLive();
+        }
+      }
+
+      function downsampleTo16k(f32, inRate) {
+        const ratio = inRate / 16000;
+        const outLen = Math.floor(f32.length / ratio);
+        const out = new Int16Array(outLen);
+        for (let i = 0; i < outLen; i++) {
+          const idx = i * ratio;
+          const i0 = Math.floor(idx);
+          const i1 = Math.min(i0 + 1, f32.length - 1);
+          const frac = idx - i0;
+          let s = f32[i0] * (1 - frac) + f32[i1] * frac;
+          s = Math.max(-1, Math.min(1, s));
+          out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        return out.buffer;
+      }
+
+      function stopAudioGraph() {
+        try { proc && proc.disconnect(); } catch {}
+        try { srcNode && srcNode.disconnect(); } catch {}
+        try { audioCtx && audioCtx.close(); } catch {}
+        proc = srcNode = audioCtx = null;
+        stopTracks();
+      }
+
+      function stopLive() {
+        stopAudioGraph();
+        try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
+        // If "done" never arrives (server hiccup), finish with what we have.
+        wsWatchdog = setTimeout(() => { if (live) finishLive(); }, 4000);
+      }
+
+      function teardownLive() {
+        live = false;
+        clearTimeout(wsWatchdog);
+        stopAudioGraph();
+        try { ws && ws.close(); } catch {}
+        ws = null;
+      }
+
+      async function finishLive() {
+        if (!live) return;
+        const raw = previewText();
+        teardownLive();
+        if (!raw) {
+          window.tailzu.error("no speech detected — check your microphone");
+          return;
+        }
+        // Same shape as mobile: stream gives the transcript, refine polishes it
+        // with the active tone. If refine hiccups, the raw words still paste.
+        try {
+          const refined = await refineText(raw);
+          window.tailzu.result(refined || raw);
+        } catch {
+          window.tailzu.result(raw);
         }
       }
     </script>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tailzu captions</title>
+    <style>
+      html, body { margin: 0; background: transparent; overflow: hidden; }
+      #box {
+        box-sizing: border-box;
+        margin: 8px;
+        padding: 12px 18px;
+        min-height: 44px;
+        max-height: 64px;
+        border-radius: 14px;
+        background: rgba(12, 12, 16, 0.88);
+        color: #f5f0e8;
+        font: 500 15px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      }
+      #dot {
+        flex: 0 0 auto;
+        width: 9px; height: 9px;
+        border-radius: 50%;
+        background: #e8a23c;
+        margin-right: 11px;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      #text {
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        /* keep the TAIL of the sentence in view as it grows */
+        direction: rtl;
+        text-align: left;
+      }
+      #text span { direction: ltr; unicode-bidi: bidi-override; }
+    </style>
+  </head>
+  <body>
+    <div id="box">
+      <div id="dot"></div>
+      <div id="text"><span id="inner">listening…</span></div>
+    </div>
+    <script>
+      window.tailzu.onOverlayText((t) => {
+        document.getElementById("inner").textContent = t && t.trim() ? t : "listening…";
+      });
+    </script>
+  </body>
+</html>
