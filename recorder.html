@@ -75,7 +75,19 @@
             return;
           }
           const json = await res.json();
-          window.tailzu.result(json.cleanedText || json.text || "");
+          const cleaned = (json.cleanedText || "").trim();
+          const transcript = (json.transcript || json.text || "").trim();
+          if (cleaned) {
+            window.tailzu.result(cleaned);
+          } else if (transcript) {
+            // Cleanup returned nothing but STT heard real words — paste the raw
+            // transcript rather than silently pasting nothing.
+            window.tailzu.result(transcript);
+          } else {
+            // Both empty: the mic captured silence (wrong input device, muted
+            // mic, or OS permission). Say so instead of a no-op.
+            window.tailzu.error("no speech detected — check your microphone (Windows: Settings → System → Sound → Input)");
+          }
         } catch (err) {
           window.tailzu.error("upload: " + (err && err.message ? err.message : String(err)));
         }
