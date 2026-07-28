@@ -2,6 +2,7 @@
   "name": "tailzu-desktop",
   "version": "0.1.0",
   "description": "Tailzu desktop voice dictation — hotkey → record → clean → paste. Reuses the Tailzu backend.",
+  "author": "Tailzu <hello@tailzu.space>",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
