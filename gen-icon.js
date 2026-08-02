@@ -66,7 +66,9 @@ function encodePng(SIZE) {
 
 const outDir = path.join(__dirname, "assets");
 fs.mkdirSync(outDir, { recursive: true });
-for (const [name, size] of [["tray.png", 32], ["icon.png", 256]]) {
+// icon.png: macOS icns generation REQUIRES ≥512×512 (the mac CI job failed at
+// 256 with "must be at least 512x512"); Windows/Linux accept 512 and downscale.
+for (const [name, size] of [["tray.png", 32], ["icon.png", 512]]) {
   const png = encodePng(size);
   fs.writeFileSync(path.join(outDir, name), png);
   console.log(`wrote assets/${name}`, png.length, "bytes");
