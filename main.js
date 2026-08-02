@@ -82,6 +82,15 @@ let overlayWin = null;
 let recording = false;
 let holdActive = false;
 let uiohookRef = null;
+// Monotonic dictation-session id. Every start mints a new id; the renderer
+// echoes it in result/error/partial. State (recording flag, overlay) only
+// reacts to the CURRENT session's messages — a slow upload from a PREVIOUS
+// session finishing mid-recording used to flip `recording` false, which made
+// hold-to-talk's keyup guard skip the stop and left the mic hot forever.
+// Text is still pasted whichever session it came from (late words are still
+// the user's words); only STATE changes are gated.
+let sessionSeq = 0;
+let activeSession = 0;
 
 // ---- Hidden recorder window --------------------------------------------------
 // getUserMedia + MediaRecorder/WebAudio live in a renderer (Chromium), so we
@@ -98,7 +107,29 @@ function createRecorderWindow() {
       nodeIntegration: false,
     },
   });
+  hardenWindow(recorderWin);
   recorderWin.loadFile("recorder.html");
+}
+
+/** Deny navigation + popups on our local windows — they only ever load our own
+ *  files, so anything else is a bug or an injection attempt. */
+function hardenWindow(win) {
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
+}
+
+/** Send an IPC message to the recorder, deferring until the page has loaded.
+ *  webContents.send on a still-loading window is silently dropped — that turned
+ *  a first-ever hotkey press (window just created) into a dead cycle: tray said
+ *  "listening", nothing recorded, and the next press no-op'd. */
+function sendToRecorder(channel, payload) {
+  if (!recorderWin || recorderWin.isDestroyed()) return;
+  const wc = recorderWin.webContents;
+  if (wc.isLoading()) {
+    wc.once("did-finish-load", () => wc.send(channel, payload));
+  } else {
+    wc.send(channel, payload);
+  }
 }
 
 // ---- Live-caption overlay ----------------------------------------------------
@@ -121,6 +152,7 @@ function showOverlay() {
     },
   });
   overlayWin.setIgnoreMouseEvents(true);
+  hardenWindow(overlayWin);
   overlayWin.loadFile("overlay.html");
 }
 function hideOverlay() { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide(); }
@@ -207,13 +239,14 @@ function toggleDictation() {
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
   recording = !recording;
   if (recording) {
-    recorderWin.webContents.send("start-recording", {
+    activeSession = ++sessionSeq;
+    sendToRecorder("start-recording", {
       baseUrl: cfg.baseUrl, token: cfg.token, language: cfg.language,
-      tone: cfg.tone, live: cfg.live,
+      tone: cfg.tone, live: cfg.live, session: activeSession,
     });
     if (cfg.live) { showOverlay(); overlayText(""); }
   } else {
-    recorderWin.webContents.send("stop-recording");
+    sendToRecorder("stop-recording", { session: activeSession });
   }
   refreshTray();
 }
@@ -276,10 +309,22 @@ function notifyAccessibility() {
 }
 
 // ---- IPC from the recorder window -------------------------------------------
-ipcMain.on("dictation-result", (_e, text) => {
+// Clear recording state ONLY when the message belongs to the current session.
+// A slow upload from a previous session finishing mid-recording must not flip
+// state for the session that's still capturing.
+function settleSession(session) {
+  if (session !== activeSession) return;
+  activeSession = 0;
   recording = false;
   hideOverlay();
   refreshTray();
+}
+
+ipcMain.on("dictation-result", (_e, payload) => {
+  const { session, text } = payload || {};
+  settleSession(session);
+  // Paste regardless of session age — late-arriving words are still the
+  // user's words and belong at the cursor.
   const t = (text || "").trim();
   if (!t) return;
   clipboard.writeText(t);
@@ -287,24 +332,28 @@ ipcMain.on("dictation-result", (_e, text) => {
   setTimeout(pasteIntoFocusedApp, 120);
 });
 
-ipcMain.on("dictation-error", (_e, msg) => {
-  recording = false;
-  hideOverlay();
-  refreshTray();
-  new Notification({ title: "Tailzu", body: "Dictation failed: " + msg }).show();
+ipcMain.on("dictation-error", (_e, payload) => {
+  const { session, message } = payload || {};
+  settleSession(session);
+  new Notification({ title: "Tailzu", body: "Dictation failed: " + message }).show();
 });
 
-// Live partials from the recorder → overlay captions.
-ipcMain.on("live-partial", (_e, text) => overlayText(text));
+// Live partials from the recorder → overlay captions (current session only).
+ipcMain.on("live-partial", (_e, payload) => {
+  const { session, text } = payload || {};
+  if (session === activeSession) overlayText(text);
+});
 
 // ---- App lifecycle -----------------------------------------------------------
 app.whenReady().then(() => {
   // Menu-bar / tray-only app — no dock icon on macOS.
   if (process.platform === "darwin" && app.dock) app.dock.hide();
 
-  // Auto-grant mic to our own hidden recorder window (it's us asking).
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, done) => {
-    done(permission === "media" || permission === "audioCapture");
+  // Auto-grant mic to our own local pages ONLY. Scoping to file:// means any
+  // future remote content loaded by mistake can never inherit silent mic access.
+  session.defaultSession.setPermissionRequestHandler((wc, permission, done) => {
+    const local = (wc?.getURL() || "").startsWith("file://");
+    done(local && (permission === "media" || permission === "audioCapture"));
   });
 
   createRecorderWindow();

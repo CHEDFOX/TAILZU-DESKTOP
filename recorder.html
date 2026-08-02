@@ -13,9 +13,16 @@
         talk; on stop the assembled transcript goes through the same per-tone
         refine routing the mobile app uses, and the final text pastes once.
         (Partials are NEVER typed into the target app — captions only.)
+
+      SESSION PROTOCOL: main mints a monotonic session id per dictation and
+      sends it in start-recording; every message we emit echoes it. All async
+      callbacks here capture their own session id and no-op when a NEWER
+      session has started — so a stale watchdog, a late ws close, or a slow
+      upload can never tear down or contaminate the session that replaced it.
     -->
     <script>
       let cfg = {};
+      let session = 0;      // id of the CURRENT session (from main)
       let stream = null;
 
       // ---- batch state ----
@@ -32,12 +39,48 @@
       let lastPartial = "";
       let wsWatchdog = null;
 
-      window.tailzu.onStart((c) => { cfg = c; cfg.live ? startLive() : startBatch(); });
-      window.tailzu.onStop(() => { live ? stopLive() : stopBatch(); });
+      window.tailzu.onStart((c) => {
+        cfg = c;
+        session = c.session || 0;
+        // Defensive teardown: if a previous session is somehow still capturing
+        // (state desync upstream), kill it completely before starting fresh —
+        // never let two captures share the mic or a chunks array.
+        forceTeardownAll();
+        cfg.live ? startLive(session) : startBatch(session);
+      });
+      window.tailzu.onStop((p) => {
+        // Only stop the session main thinks is active; a stale stop is a no-op.
+        if (p && p.session && p.session !== session) return;
+        live ? stopLive(session) : stopBatch(session);
+      });
+
+      function emitResult(sid, text) { window.tailzu.result({ session: sid, text: text }); }
+      function emitError(sid, message) { window.tailzu.error({ session: sid, message: message }); }
+      function emitPartial(sid, text) { window.tailzu.partial({ session: sid, text: text }); }
 
       function base() { return (cfg.baseUrl || "").replace(/\/+$/, ""); }
       function stopTracks() {
         if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+      }
+      function forceTeardownAll() {
+        try {
+          if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.ondataavailable = null;
+            mediaRecorder.onstop = null;
+            mediaRecorder.stop();
+          }
+        } catch {}
+        mediaRecorder = null;
+        chunks = [];
+        teardownLiveGraph();
+        if (ws) {
+          ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
+          try { ws.close(); } catch {}
+          ws = null;
+        }
+        live = false;
+        clearTimeout(wsWatchdog);
+        stopTracks();
       }
       async function getMic() {
         return navigator.mediaDevices.getUserMedia({
@@ -71,33 +114,39 @@
         return ""; // let the browser choose
       }
 
-      async function startBatch() {
+      async function startBatch(sid) {
         try {
           stream = await getMic();
+          if (sid !== session) { stopTracks(); return; } // superseded while awaiting the mic
           chunks = [];
           const mimeType = pickMime();
           mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
           mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-          mediaRecorder.onstop = () => { stopTracks(); uploadBatch(); };
+          mediaRecorder.onstop = () => { stopTracks(); uploadBatch(sid); };
           mediaRecorder.start();
         } catch (err) {
           stopTracks();
-          window.tailzu.error("mic: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, "mic: " + (err && err.message ? err.message : String(err)));
         }
       }
 
-      function stopBatch() {
+      function stopBatch(sid) {
         try {
           if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-          else stopTracks();
+          else {
+            stopTracks();
+            // Nothing was ever recording — say so instead of dying silently
+            // (this is the state a dropped start-recording IPC used to leave).
+            emitError(sid, "recorder was not running");
+          }
         } catch (err) {
-          window.tailzu.error(String(err));
+          emitError(sid, String(err));
         }
       }
 
-      async function uploadBatch() {
+      async function uploadBatch(sid) {
         try {
-          if (!chunks.length) { window.tailzu.error("no audio captured"); return; }
+          if (!chunks.length) { emitError(sid, "no audio captured"); return; }
           const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
           const ext = type.includes("ogg") ? "ogg" : "webm";
           const blob = new Blob(chunks, { type });
@@ -114,25 +163,25 @@
           });
           if (!res.ok) {
             const body = await res.text().catch(() => "");
-            window.tailzu.error("HTTP " + res.status + (body ? " " + body.slice(0, 120) : ""));
+            emitError(sid, "HTTP " + res.status + (body ? " " + body.slice(0, 120) : ""));
             return;
           }
           const json = await res.json();
           const cleaned = (json.cleanedText || "").trim();
           const transcript = (json.transcript || json.text || "").trim();
           if (cleaned) {
-            window.tailzu.result(cleaned);
+            emitResult(sid, cleaned);
           } else if (transcript) {
             // Cleanup returned nothing but STT heard real words — paste the raw
             // transcript rather than silently pasting nothing.
-            window.tailzu.result(transcript);
+            emitResult(sid, transcript);
           } else {
             // Both empty: the mic captured silence (wrong input device, muted
             // mic, or OS permission). Say so instead of a no-op.
-            window.tailzu.error("no speech detected — check your microphone (Windows: Settings → System → Sound → Input)");
+            emitError(sid, "no speech detected — check your microphone (Windows: Settings → System → Sound → Input)");
           }
         } catch (err) {
-          window.tailzu.error("upload: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, "upload: " + (err && err.message ? err.message : String(err)));
         }
       }
 
@@ -140,38 +189,43 @@
       function wsUrl() { return base().replace(/^http/, "ws") + "/v1/transcribe-stream"; }
       function previewText() { return (finals.join(" ") + " " + lastPartial).trim(); }
 
-      async function startLive() {
+      async function startLive(sid) {
+        // A stale watchdog from the PREVIOUS live session must never fire into
+        // this one (it used to finishLive() the new session prematurely).
+        clearTimeout(wsWatchdog);
         live = true;
         finals = [];
         lastPartial = "";
         try {
           stream = await getMic();
+          if (sid !== session) { stopTracks(); return; } // superseded while awaiting the mic
           ws = new WebSocket(wsUrl());
           ws.binaryType = "arraybuffer";
           // Browser WebSocket can't set an Authorization header; the protocol
           // carries the token in the start message (the server accepts both).
-          ws.onopen = () => ws.send(JSON.stringify({
+          ws.onopen = () => { if (sid === session && ws) ws.send(JSON.stringify({
             type: "start", token: cfg.token, targetApp: "Desktop",
             language: cfg.language || "auto",
             sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
-          }));
+          })); };
           ws.onmessage = (ev) => {
+            if (sid !== session) return; // message for a dead session
             let m; try { m = JSON.parse(ev.data); } catch { return; }
             if (m.type === "partial") {
               lastPartial = m.text || "";
-              window.tailzu.partial(previewText());
+              emitPartial(sid, previewText());
             } else if (m.type === "final") {
               if (m.text && m.text.trim()) finals.push(m.text.trim());
               lastPartial = "";
-              window.tailzu.partial(previewText());
+              emitPartial(sid, previewText());
             } else if (m.type === "done") {
-              finishLive();
+              finishLive(sid);
             } else if (m.type === "error") {
-              window.tailzu.error(m.message || "stream error");
+              emitError(sid, m.message || "stream error");
               teardownLive();
             }
           };
-          ws.onclose = () => { if (live) finishLive(); };
+          ws.onclose = () => { if (sid === session && live) finishLive(sid); };
           ws.onerror = () => { /* onclose follows and routes to finishLive */ };
 
           // WebAudio capture → linear-interp downsample → 16 kHz s16le frames.
@@ -184,11 +238,11 @@
           proc.connect(audioCtx.destination);
           const inRate = audioCtx.sampleRate;
           proc.onaudioprocess = (e) => {
-            if (!ws || ws.readyState !== 1) return;
+            if (sid !== session || !ws || ws.readyState !== 1) return;
             ws.send(downsampleTo16k(e.inputBuffer.getChannelData(0), inRate));
           };
         } catch (err) {
-          window.tailzu.error("mic: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, "mic: " + (err && err.message ? err.message : String(err)));
           teardownLive();
         }
       }
@@ -209,44 +263,51 @@
         return out.buffer;
       }
 
-      function stopAudioGraph() {
+      function teardownLiveGraph() {
         try { proc && proc.disconnect(); } catch {}
         try { srcNode && srcNode.disconnect(); } catch {}
         try { audioCtx && audioCtx.close(); } catch {}
         proc = srcNode = audioCtx = null;
-        stopTracks();
       }
 
-      function stopLive() {
-        stopAudioGraph();
+      function stopLive(sid) {
+        teardownLiveGraph();
+        stopTracks();
         try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
-        // If "done" never arrives (server hiccup), finish with what we have.
-        wsWatchdog = setTimeout(() => { if (live) finishLive(); }, 4000);
+        // If "done" never arrives (server hiccup), finish with what we have —
+        // but only for THIS session (checked inside finishLive).
+        wsWatchdog = setTimeout(() => { if (sid === session && live) finishLive(sid); }, 4000);
       }
 
       function teardownLive() {
         live = false;
         clearTimeout(wsWatchdog);
-        stopAudioGraph();
-        try { ws && ws.close(); } catch {}
-        ws = null;
+        teardownLiveGraph();
+        stopTracks();
+        if (ws) {
+          // Detach handlers BEFORE closing so the old socket's close event can
+          // never call finishLive against a newer session.
+          ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
+          try { ws.close(); } catch {}
+          ws = null;
+        }
       }
 
-      async function finishLive() {
-        if (!live) return;
+      async function finishLive(sid) {
+        if (sid !== session || !live) return;
         const raw = previewText();
         teardownLive();
         if (!raw) {
-          window.tailzu.error("no speech detected — check your microphone");
+          emitError(sid, "no speech detected — check your microphone");
           return;
         }
         // Same shape as mobile: stream gives the transcript, refine polishes it
         // with the active tone. If refine hiccups, the raw words still paste.
         try {
           const refined = await refineText(raw);
-          window.tailzu.result(refined || raw);
+          emitResult(sid, refined || raw);
         } catch {
-          window.tailzu.result(raw);
+          emitResult(sid, raw);
         }
       }
     </script>

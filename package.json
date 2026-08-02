@@ -12,7 +12,7 @@
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac"
   },
-  "dependencies": {
+  "optionalDependencies": {
     "uiohook-napi": "^1.5.4"
   },
   "devDependencies": {
@@ -34,6 +34,7 @@
       "target": ["dmg"],
       "icon": "assets/icon.png",
       "artifactName": "Tailzu.${ext}",
+      "x64ArchFiles": "**/*.node",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
         "LSUIElement": true
