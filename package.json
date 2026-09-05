@@ -27,6 +27,8 @@
       "preload.js",
       "recorder.html",
       "overlay.html",
+      "app.html",
+      "sdui.js",
       "assets/**"
     ],
     "mac": {

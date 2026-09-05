@@ -13,3 +13,13 @@ contextBridge.exposeInMainWorld("tailzu", {
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
 });
+
+// The app window's own bridge, kept separate from the recorder's so neither
+// surface can reach the other's calls. Everything here is a request the main
+// process validates — the renderer never touches the filesystem or the shell.
+contextBridge.exposeInMainWorld("tailzuApp", {
+  env: () => ipcRenderer.invoke("app:env"),
+  setSession: (v) => ipcRenderer.invoke("app:setSession", v),
+  openExternal: (url) => ipcRenderer.send("app:openExternal", url),
+  dictate: () => ipcRenderer.send("app:dictate"),
+});

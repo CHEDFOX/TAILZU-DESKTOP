@@ -29,6 +29,29 @@ const configPath = app.isPackaged
   ? path.join(app.getPath("userData"), "config.json")
   : path.join(__dirname, "config.json");
 
+// ---- Session ----------------------------------------------------------------
+// The signed-in user's Supabase tokens, beside config.json in the same
+// per-user directory. A SEPARATE file on purpose: config.json is something the
+// user opens and edits by hand, and a refresh token rewritten under them every
+// hour does not belong in a file they are reading.
+const sessionPath = app.isPackaged
+  ? path.join(app.getPath("userData"), "session.json")
+  : path.join(__dirname, "session.json");
+
+function loadSession() {
+  try { return JSON.parse(fs.readFileSync(sessionPath, "utf8")); } catch { return null; }
+}
+function saveSession(v) {
+  try {
+    if (v) {
+      fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+      fs.writeFileSync(sessionPath, JSON.stringify(v, null, 2), { mode: 0o600 });
+    } else if (fs.existsSync(sessionPath)) {
+      fs.unlinkSync(sessionPath);
+    }
+  } catch { /* a session that will not persist still works for this run */ }
+}
+
 let configError = null; // surfaced as a notification once the app is ready
 function loadConfig() {
   let file = {};
@@ -111,6 +134,34 @@ function createRecorderWindow() {
   recorderWin.loadFile("recorder.html");
 }
 
+// ---- The app window ---------------------------------------------------------
+// Everything that is not dictation: Train, Stats, You, history, settings, the
+// paywall. All of it is the same server-drawn JSON the phones render, so this
+// window is a renderer, not a second app — a screen added to the catalog
+// appears here without a desktop release.
+//
+// Created on demand and HIDDEN on close rather than destroyed: this is a tray
+// app, closing the window means "put it away", and rebuilding it on every open
+// would throw away the boot it already has.
+let appWin = null;
+function openAppWindow() {
+  if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); return; }
+  appWin = new BrowserWindow({
+    width: 980, height: 760, minWidth: 380, minHeight: 520,
+    title: "Tailzu",
+    backgroundColor: "#000000",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  hardenWindow(appWin);
+  appWin.on("close", (e) => { e.preventDefault(); appWin.hide(); });
+  appWin.loadFile("app.html");
+}
+
 /** Deny navigation + popups on our local windows — they only ever load our own
  *  files, so anything else is a bug or an injection attempt. */
 function hardenWindow(win) {
@@ -180,6 +231,7 @@ function refreshTray() {
 function buildMenu() {
   return Menu.buildFromTemplate([
     { label: recording ? "◉ Listening — press hotkey to stop" : "Dictate", click: toggleDictation },
+    { label: "Open Tailzu", click: openAppWindow },
     { type: "separator" },
     {
       label: `Tone: ${cfg.tone}`,
@@ -233,6 +285,26 @@ function openConfig() {
   }
   shell.openPath(configPath);
 }
+
+// ---- What the app window is allowed to ask for -------------------------------
+// Narrow on purpose: the renderer gets the backend URL, the session, and the
+// ability to store one. It never gets fs, and it never gets the config file
+// path — a renderer that can write arbitrary paths is a renderer that can be
+// talked into writing arbitrary paths.
+ipcMain.handle("app:env", () => ({
+  baseUrl: cfg.baseUrl,
+  fallbackToken: cfg.token,
+  session: loadSession(),
+  tone: cfg.tone,
+  language: cfg.language,
+}));
+ipcMain.handle("app:setSession", (_e, v) => { saveSession(v || null); return true; });
+ipcMain.on("app:openExternal", (_e, url) => {
+  // Only ever http(s). A renderer handing this a file:// or a shell scheme is
+  // the whole reason this check exists.
+  if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+ipcMain.on("app:dictate", () => toggleDictation());
 
 // ---- Dictation toggle --------------------------------------------------------
 function toggleDictation() {
