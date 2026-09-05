@@ -38,6 +38,12 @@ const sessionPath = app.isPackaged
   ? path.join(app.getPath("userData"), "session.json")
   : path.join(__dirname, "session.json");
 
+// The public client credential, same pair the window and the phones use. It is
+// the anon key: safe in a distributable, useless without a user's own tokens.
+const SUPABASE_URL = "https://merzyohecmyfvlyahxaz.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lcnp5b2hlY215ZnZseWFoeGF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyMjU1MzAsImV4cCI6MjA5NzgwMTUzMH0.scDhHeRU20wRIgKBFL8GouIEp8bJG8w8aIsySUkePHY";
+
 function loadSession() {
   try { return JSON.parse(fs.readFileSync(sessionPath, "utf8")); } catch { return null; }
 }
@@ -108,18 +114,93 @@ const TONES = ["none", "formal", "casual", "very-casual", "excited"];
 //
 // cfg.tone survives as the signed-out fallback. Dictation works without an
 // account; it just cannot read a preference that lives on one.
-let authToken = null;      // pushed by the app window, which owns refresh
-let accountTone = null;    // last value read from the account
+//
+// And the tray must do all of this with the window shut — that is the shape of
+// this app, a hotkey and a menu bar. So the main process holds the session
+// itself and refreshes it; it does not wait to be handed a token by a window
+// the user may never open. The window still pushes its token when it has one,
+// which only ever makes this fresher.
+let authSession = loadSession();   // { access_token, refresh_token, expires_at }
+let accountTone = null;            // last value read from the account
+let refreshing = null;             // in-flight refresh, so N callers make 1 POST
 
-function bearerToken() { return authToken || cfg.token; }
+/** True when the stored access token is spent (or about to be). An expiry we
+ *  do not have counts as spent: guessing it is still good is how a tray ends
+ *  up sending a dead token for an hour. */
+function tokenStale() {
+  if (!authSession || !authSession.access_token) return false;
+  const exp = Number(authSession.expires_at || 0);
+  return exp <= 0 || exp - 60 <= Math.floor(Date.now() / 1000);
+}
+
+/** Signed in, as far as this process can tell. */
+function signedIn() { return !!(authSession && authSession.access_token); }
+
+/**
+ * The token to send right now, without awaiting anything.
+ *
+ * Dictation calls this on the hotkey path, where a network round-trip would
+ * cost the user the first word of their sentence. Freshness is kept by
+ * refreshSession() running ahead of time, not by blocking here.
+ */
+function tokenNow() {
+  return (authSession && authSession.access_token) || cfg.token;
+}
+
+/** Swap in a new session (from a refresh, or from the window signing in). */
+function adoptSession(raw) {
+  authSession = raw && raw.access_token
+    ? {
+        access_token: raw.access_token,
+        refresh_token: raw.refresh_token || (authSession && authSession.refresh_token) || null,
+        expires_at: raw.expires_at || Math.floor(Date.now() / 1000) + (raw.expires_in || 3600),
+      }
+    : null;
+  saveSession(authSession);
+}
+
+/** Renew the access token against Supabase when it has gone stale. One POST,
+ *  no SDK. A refresh that fails means the session is gone, not merely old. */
+async function refreshSession() {
+  if (!tokenStale() || !authSession.refresh_token) return;
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    try {
+      const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ refresh_token: authSession.refresh_token }),
+      });
+      if (!res.ok) throw new Error("refresh " + res.status);
+      adoptSession(await res.json());
+    } catch {
+      // Signed out for real: fall back to the device tone rather than keep
+      // showing an account this process can no longer reach.
+      adoptSession(null);
+      accountTone = null;
+      refreshTray();
+    } finally { refreshing = null; }
+  })();
+  return refreshing;
+}
 
 async function apiJson(path, init) {
-  const res = await fetch(cfg.baseUrl + path, Object.assign({
+  await refreshSession();
+  const send = () => fetch(cfg.baseUrl + path, Object.assign({
     headers: {
       "Content-Type": "application/json",
-      Authorization: "Bearer " + bearerToken(),
+      Authorization: "Bearer " + tokenNow(),
     },
   }, init || {}));
+  let res = await send();
+  // A 401 means the token is spent whatever its stated expiry said — a clock
+  // that drifted, a session revoked elsewhere. Force one renewal and retry,
+  // rather than leaving the tray permanently unable to read its own account.
+  if (res.status === 401 && authSession && authSession.refresh_token) {
+    authSession.expires_at = 0;   // tokenStale() reads this as spent
+    await refreshSession();
+    if (signedIn()) res = await send();
+  }
   if (!res.ok) throw new Error(path + " → " + res.status);
   return res.json();
 }
@@ -127,7 +208,7 @@ async function apiJson(path, init) {
 /** Read the account's tone, and redraw the tray if it moved. Silent on
  *  failure: a tray that cannot reach the backend still dictates. */
 async function refreshAccountTone() {
-  if (!authToken) return;
+  if (!signedIn()) return;
   try {
     const p = await apiJson("/v1/personality", { method: "GET" });
     const t = (p && (p.personality ? p.personality.activeTone : p.activeTone)) || null;
@@ -139,7 +220,7 @@ async function refreshAccountTone() {
 async function setAccountTone(tone) {
   accountTone = tone;
   refreshTray();
-  if (!authToken) { saveConfig({ tone }); return; }   // signed out: local only
+  if (!signedIn()) { saveConfig({ tone }); return; }   // signed out: local only
   try {
     await apiJson("/v1/personality", { method: "PUT", body: JSON.stringify({ activeTone: tone }) });
   } catch {
@@ -287,7 +368,7 @@ function buildMenu() {
     { label: "Open Tailzu", click: openAppWindow },
     { type: "separator" },
     {
-      label: `Tone: ${currentTone()}${authToken ? "" : " (this device)"}`,
+      label: `Tone: ${currentTone()}${signedIn() ? "" : " (this device)"}`,
       // The account's tone may be a voice the user created, which is not in
       // this list — include it so the menu can show it selected rather than
       // showing five unticked rows and implying none is active.
@@ -320,9 +401,15 @@ function buildMenu() {
       enabled: false,
     },
     { label: `Backend: ${cfg.baseUrl}`, enabled: false },
-    // Which credential is ACTUALLY loaded — ends the "which token is it using"
-    // guessing when auth fails. "dev" here means config.json wasn't read.
-    { label: `Token: ${cfg.token === "dev" ? "dev (no config!)" : cfg.token.slice(0, 8) + "…"}`, enabled: false },
+    // Which credential is ACTUALLY in use — ends the "which token is it using"
+    // guessing when auth fails. Signed in, that is the account; saying "dev"
+    // there sent people to edit a config.json that is not the thing being sent.
+    {
+      label: signedIn()
+        ? "Signed in — dictation lands on your account"
+        : `Token: ${cfg.token === "dev" ? "dev (no config!)" : cfg.token.slice(0, 8) + "…"}`,
+      enabled: false,
+    },
     { label: "Edit config…", click: openConfig },
     { type: "separator" },
     { label: "Quit Tailzu", click: () => app.quit() },
@@ -350,11 +437,19 @@ function openConfig() {
 ipcMain.handle("app:env", () => ({
   baseUrl: cfg.baseUrl,
   fallbackToken: cfg.token,
-  session: loadSession(),
+  session: authSession,
   tone: cfg.tone,
   language: cfg.language,
 }));
-ipcMain.handle("app:setSession", (_e, v) => { saveSession(v || null); return true; });
+ipcMain.handle("app:setSession", (_e, v) => {
+  // The window signed in or out. The tray shares the session, so it adopts it
+  // here rather than learning about it on the next token push.
+  adoptSession(v || null);
+  if (!signedIn()) accountTone = null;
+  refreshTray();
+  void refreshAccountTone();
+  return true;
+});
 ipcMain.on("app:openExternal", (_e, url) => {
   // Only ever http(s). A renderer handing this a file:// or a shell scheme is
   // the whole reason this check exists.
@@ -368,11 +463,18 @@ ipcMain.on("app:token", (_e, t) => {
   // Signing out has to drop the tone too. Keeping it would leave the tray
   // showing — and dictating with — the tone of an account nobody is signed
   // into any more, which is exactly the split this whole section removes.
-  if (!next) { authToken = null; accountTone = null; refreshTray(); return; }
+  if (!next) {
+    if (!signedIn() && !accountTone) return;
+    adoptSession(null); accountTone = null; refreshTray();
+    return;
+  }
   // The window pushes on every request it makes, so most of these are the
   // same token again. Only a change is worth a read.
-  if (next === authToken) return;
-  authToken = next;
+  if (authSession && authSession.access_token === next) return;
+  // A token we did not have means the window refreshed. It carries no expiry
+  // here, and the old one would mark this brand-new token as spent — assume a
+  // full hour; the window's setSession lands the real expiry moments later.
+  adoptSession({ access_token: next });
   void refreshAccountTone();
 });
 // Anything the window wrote could have been the tone. Cheaper to re-read than
@@ -386,7 +488,10 @@ function toggleDictation() {
   if (recording) {
     activeSession = ++sessionSeq;
     sendToRecorder("start-recording", {
-      baseUrl: cfg.baseUrl, token: cfg.token, language: cfg.language,
+      // The account's token when there is one, so a dictation from the hotkey
+      // lands in the same history the window shows instead of on the static
+      // synthetic user the fallback token resolves to.
+      baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
       tone: currentTone(), live: cfg.live, session: activeSession,
     });
     if (cfg.live) { showOverlay(); overlayText(""); }
@@ -519,6 +624,15 @@ app.whenReady().then(() => {
   }
 
   setupHoldToTalk();
+
+  // Come up already knowing who is signed in and what tone they chose, so the
+  // first thing in the menu is right before the window has ever been opened.
+  void refreshAccountTone();
+  // Keep the access token ahead of the hotkey. Renewing on a timer means
+  // tokenNow() is valid when a key is pressed; renewing on demand would spend
+  // a network round-trip out of the start of someone's sentence.
+  const keepFresh = setInterval(() => { void refreshSession(); }, 10 * 60 * 1000);
+  app.on("will-quit", () => clearInterval(keepFresh));
 
   if (app.isPackaged && cfg.autoStart) app.setLoginItemSettings({ openAtLogin: true });
 });
