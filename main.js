@@ -19,6 +19,7 @@ const {
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 
 // ---- Config -----------------------------------------------------------------
 // Dev: desktop/config.json (next to this file). Packaged: the asar is read-only,
@@ -232,6 +233,92 @@ async function setAccountTone(tone) {
 
 /** What dictation should actually use. */
 function currentTone() { return accountTone || cfg.tone; }
+
+// ---- Apple / Google ---------------------------------------------------------
+//
+// The phone signs in with Apple and Google natively: the OS hands the app an
+// identity token and Supabase trades it for a session. A desktop has no such
+// OS service, so this is the web flow — the provider's own consent page, in a
+// window we own, with PKCE so the authorization code is useless to anyone who
+// intercepts it.
+//
+// Nothing is caught by loading the redirect. The moment the browser tries to
+// GO to it we read the code off the URL and cancel the request, so the page at
+// REDIRECT_URL is never fetched and does not have to exist. It only has to be
+// on the provider's allow-list, which is why it is a real https URL on a
+// domain that is ours rather than a localhost port or a custom scheme.
+const REDIRECT_URL = "https://tailzu.space/auth/callback";
+
+const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/** Run one provider sign-in. Resolves with a Supabase session, or throws. */
+function oauthSignIn(provider) {
+  if (provider !== "apple" && provider !== "google") {
+    return Promise.reject(new Error("unsupported provider"));
+  }
+  const verifier = b64url(crypto.randomBytes(32));
+  const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
+  const url = SUPABASE_URL + "/auth/v1/authorize" +
+    "?provider=" + encodeURIComponent(provider) +
+    "&redirect_to=" + encodeURIComponent(REDIRECT_URL) +
+    "&code_challenge=" + challenge +
+    "&code_challenge_method=s256";
+
+  return new Promise((resolve, reject) => {
+    // Its own partition, wiped on close: a sign-in window that keeps cookies
+    // is a sign-in window that silently reuses whoever signed in last, with no
+    // way to pick a different account.
+    const part = "oauth-" + Date.now();
+    const ses = session.fromPartition(part, { cache: false });
+    const win = new BrowserWindow({
+      width: 480, height: 680, title: "Sign in", backgroundColor: "#000000",
+      autoHideMenuBar: true, parent: appWin && !appWin.isDestroyed() ? appWin : undefined,
+      modal: false,
+      webPreferences: { partition: part, contextIsolation: true, nodeIntegration: false },
+    });
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+    let settled = false;
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      try { ses.clearStorageData(); } catch { /* best effort */ }
+      if (!win.isDestroyed()) win.destroy();
+      err ? reject(err) : resolve(value);
+    };
+
+    // Read the code the instant the browser reaches for the redirect, and stop
+    // the request there.
+    ses.webRequest.onBeforeRequest({ urls: [REDIRECT_URL + "*"] }, (details, cb) => {
+      cb({ cancel: true });
+      let u;
+      try { u = new URL(details.url); } catch { return finish(new Error("bad redirect")); }
+      const err = u.searchParams.get("error_description") || u.searchParams.get("error");
+      if (err) return finish(new Error(err));
+      const code = u.searchParams.get("code");
+      if (!code) return finish(new Error("no authorization code"));
+      exchangeCode(code, verifier).then((r) => finish(null, r), (e) => finish(e));
+    });
+
+    win.on("closed", () => finish(new Error("cancelled")));
+    win.loadURL(url).catch((e) => finish(e));
+  });
+}
+
+/** Trade the authorization code for a session. PKCE: the verifier proves the
+ *  code came back to the same process that asked for it. */
+async function exchangeCode(code, verifier) {
+  const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=pkce", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+    body: JSON.stringify({ auth_code: code, code_verifier: verifier }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.access_token) {
+    throw new Error(json.error_description || json.msg || json.error || "sign-in failed");
+  }
+  return json;
+}
 
 let tray = null;
 let recorderWin = null;
@@ -456,6 +543,19 @@ ipcMain.on("app:openExternal", (_e, url) => {
   if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 ipcMain.on("app:dictate", () => toggleDictation());
+// Apple / Google. The window asks; the main process owns the browser window,
+// the PKCE secret and the code exchange, and hands back only the session.
+ipcMain.handle("app:oauth", async (_e, provider) => {
+  try {
+    const raw = await oauthSignIn(String(provider || ""));
+    adoptSession(raw);
+    refreshTray();
+    void refreshAccountTone();
+    return { ok: true, session: authSession };
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
 // The window owns the session and its refresh, so it hands the main process a
 // live token rather than the main process parsing and refreshing one too.
 ipcMain.on("app:token", (_e, t) => {

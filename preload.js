@@ -27,4 +27,7 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // to refresh sessions as well.
   token: (t) => ipcRenderer.send("app:token", t),
   changed: () => ipcRenderer.send("app:changed"),
+  // Apple / Google. The renderer cannot open a window or hold the PKCE
+  // secret, so it asks and gets back a session or an error string.
+  oauth: (provider) => ipcRenderer.invoke("app:oauth", provider),
 });

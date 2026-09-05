@@ -663,6 +663,26 @@ async function verify(email, token) {
   const r = await sbFetch("/auth/v1/verify", { email, token, type: "email" });
   await setSession(r);
 }
+// Phone is the same two calls with a different key and a different OTP type.
+// It only appears when the backend says an SMS provider is actually wired up —
+// a button that sends a code nobody can receive is worse than no button.
+async function signInPhone(phone) {
+  await sbFetch("/auth/v1/otp", { phone, create_user: true });
+}
+async function verifyPhone(phone, token) {
+  const r = await sbFetch("/auth/v1/verify", { phone, token, type: "sms" });
+  await setSession(r);
+}
+
+/** Whether phone sign-in is on, straight from the flag the phones read. The
+ *  bootstrap runs on the fallback token here, which is all this needs. */
+async function phoneEnabled() {
+  try {
+    const b = await bootstrap();
+    const v = (b.flags || {})["auth.enablePhone"];
+    return v === true || v === "true";
+  } catch { return false; }
+}
 
 (async function start() {
   ENV = await window.tailzuApp.env();
@@ -682,13 +702,39 @@ async function verify(email, token) {
   const email = $("email"), code = $("code"), err = $("gateErr");
   const fail = (e) => { err.textContent = String((e && e.message) || e || ""); };
 
+  // Which of email / phone the code was sent to, so the verify step knows
+  // which endpoint to answer with.
+  let method = "email";
+  let sentTo = "";
+  const dialled = () => ($("dial").value.trim() + $("phone").value.trim()).replace(/[^\d+]/g, "");
+
+  $("methods").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    method = b.dataset.m;
+    Array.prototype.forEach.call($("methods").children, (x) => {
+      x.setAttribute("aria-pressed", String(x.dataset.m === method));
+    });
+    $("email").hidden = method !== "email";
+    $("phoneRow").hidden = method !== "phone";
+    err.textContent = "";
+    (method === "email" ? email : $("phone")).focus();
+  });
+
   $("sendCode").addEventListener("click", async () => {
     err.textContent = "";
-    const v = email.value.trim();
-    if (!v) return fail("Enter your email address.");
     $("sendCode").disabled = true;
     try {
-      await signIn(v);
+      if (method === "phone") {
+        const v = dialled();
+        if (!/^\+\d{7,15}$/.test(v)) throw new Error("Enter a number with its country code, like +1 555 000 1234.");
+        await signInPhone(v);
+        sentTo = v;
+      } else {
+        const v = email.value.trim();
+        if (!v) throw new Error("Enter your email address.");
+        await signIn(v);
+        sentTo = v;
+      }
       $("stepEmail").hidden = true;
       $("stepCode").hidden = false;
       code.focus();
@@ -697,15 +743,45 @@ async function verify(email, token) {
   $("backToEmail").addEventListener("click", () => {
     $("stepEmail").hidden = false; $("stepCode").hidden = true; err.textContent = "";
   });
+
+  // Apple / Google. The main process owns the window and the code exchange;
+  // this only asks and reacts.
+  const oauth = async (provider, btn) => {
+    err.textContent = "";
+    $("appleBtn").disabled = $("googleBtn").disabled = true;
+    try {
+      const r = await window.tailzuApp.oauth(provider);
+      if (!r || !r.ok) {
+        // Closing the window is a decision, not a failure worth shouting about.
+        if (r && r.error === "cancelled") return;
+        throw new Error((r && r.error) || "Sign-in failed.");
+      }
+      SESSION = r.session;
+      location.reload();
+    } catch (e) { fail(e); } finally {
+      $("appleBtn").disabled = $("googleBtn").disabled = false;
+    }
+  };
+  $("appleBtn").addEventListener("click", () => oauth("apple"));
+  $("googleBtn").addEventListener("click", () => oauth("google"));
+
+  // Ask the backend, once, whether phone is live. Everything else on the gate
+  // works while this is in flight.
+  if (!SESSION) {
+    phoneEnabled().then((on) => { if (on) $("methods").hidden = false; });
+  }
   $("verify").addEventListener("click", async () => {
     err.textContent = "";
     $("verify").disabled = true;
     try {
-      await verify(email.value.trim(), code.value.trim());
+      // Answer with whichever address the code actually went to.
+      if (method === "phone") await verifyPhone(sentTo, code.value.trim());
+      else await verify(sentTo || email.value.trim(), code.value.trim());
       await render();
     } catch (e) { fail(e); } finally { $("verify").disabled = false; }
   });
   email.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sendCode").click(); });
+  $("phone").addEventListener("keydown", (e) => { if (e.key === "Enter") $("sendCode").click(); });
   code.addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify").click(); });
 
   try {
