@@ -96,6 +96,9 @@ async function bearer() {
       return ENV.fallbackToken || "dev";
     }
   }
+  // The tray reads the account's tone with this, so it always has the current
+  // one rather than a copy that goes stale the moment the token rotates.
+  try { window.tailzuApp.token(SESSION.access_token); } catch { /* tray only */ }
   return SESSION.access_token;
 }
 
@@ -513,7 +516,12 @@ async function run(action) {
         const res = await api(path, body, action.method || "POST");
         if (action.assignTo) { setStatePath(action.assignTo, res); repaint(); }
         await run(action.onSuccess);
-        if (action.method && action.method.toUpperCase() !== "GET") await paint(true);
+        if (action.method && action.method.toUpperCase() !== "GET") {
+          // Any write could have been the tone. Telling the tray to re-read is
+          // cheaper, and more honest, than guessing which writes matter.
+          try { window.tailzuApp.changed(); } catch { /* tray only */ }
+          await paint(true);
+        }
       } catch (err) {
         if (err && err.quota) { go("paywall"); return; }
         await run(action.onError);
@@ -663,7 +671,13 @@ async function verify(email, token) {
   $("dictate").addEventListener("click", () => { window.tailzuApp.dictate(); toast("Listening — press your hotkey to stop"); });
   $("settingsLink").addEventListener("click", () => go("settings"));
   $("back").addEventListener("click", back);
-  $("signOut").addEventListener("click", async () => { await setSession(null); location.reload(); });
+  $("signOut").addEventListener("click", async () => {
+    await setSession(null);
+    // Drop the tray's token too, or it keeps reading the account of someone
+    // who just signed out of it.
+    try { window.tailzuApp.token(null); } catch { /* tray only */ }
+    location.reload();
+  });
 
   const email = $("email"), code = $("code"), err = $("gateErr");
   const fail = (e) => { err.textContent = String((e && e.message) || e || ""); };

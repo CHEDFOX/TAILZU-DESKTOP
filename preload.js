@@ -22,4 +22,9 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   setSession: (v) => ipcRenderer.invoke("app:setSession", v),
   openExternal: (url) => ipcRenderer.send("app:openExternal", url),
   dictate: () => ipcRenderer.send("app:dictate"),
+  // The window owns auth; the tray needs a live token to read the account's
+  // tone, so the window hands one over rather than the main process learning
+  // to refresh sessions as well.
+  token: (t) => ipcRenderer.send("app:token", t),
+  changed: () => ipcRenderer.send("app:changed"),
 });

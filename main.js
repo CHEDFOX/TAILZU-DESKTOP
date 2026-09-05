@@ -99,6 +99,59 @@ function saveConfig(patch) {
 
 const TONES = ["none", "formal", "casual", "very-casual", "excited"];
 
+// ---- Tone, once ------------------------------------------------------------
+// The account's `personality.activeTone` is the tone. The phone keyboard reads
+// it, the app writes it, and the tray now does both — because the alternative,
+// which is what shipped, is two tones: one in config.json that the hotkey used
+// and one on the account that the window showed, disagreeing silently and
+// neither of them wrong from where it was standing.
+//
+// cfg.tone survives as the signed-out fallback. Dictation works without an
+// account; it just cannot read a preference that lives on one.
+let authToken = null;      // pushed by the app window, which owns refresh
+let accountTone = null;    // last value read from the account
+
+function bearerToken() { return authToken || cfg.token; }
+
+async function apiJson(path, init) {
+  const res = await fetch(cfg.baseUrl + path, Object.assign({
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + bearerToken(),
+    },
+  }, init || {}));
+  if (!res.ok) throw new Error(path + " → " + res.status);
+  return res.json();
+}
+
+/** Read the account's tone, and redraw the tray if it moved. Silent on
+ *  failure: a tray that cannot reach the backend still dictates. */
+async function refreshAccountTone() {
+  if (!authToken) return;
+  try {
+    const p = await apiJson("/v1/personality", { method: "GET" });
+    const t = (p && (p.personality ? p.personality.activeTone : p.activeTone)) || null;
+    if (t && t !== accountTone) { accountTone = t; refreshTray(); }
+    else if (t) accountTone = t;
+  } catch { /* leave the last known value */ }
+}
+
+async function setAccountTone(tone) {
+  accountTone = tone;
+  refreshTray();
+  if (!authToken) { saveConfig({ tone }); return; }   // signed out: local only
+  try {
+    await apiJson("/v1/personality", { method: "PUT", body: JSON.stringify({ activeTone: tone }) });
+  } catch {
+    // The write failed, so the value we are showing is not the account's.
+    // Re-read rather than leaving the menu asserting something untrue.
+    void refreshAccountTone();
+  }
+}
+
+/** What dictation should actually use. */
+function currentTone() { return accountTone || cfg.tone; }
+
 let tray = null;
 let recorderWin = null;
 let overlayWin = null;
@@ -234,10 +287,13 @@ function buildMenu() {
     { label: "Open Tailzu", click: openAppWindow },
     { type: "separator" },
     {
-      label: `Tone: ${cfg.tone}`,
-      submenu: TONES.map((t) => ({
-        label: t, type: "radio", checked: cfg.tone === t,
-        click: () => saveConfig({ tone: t }),
+      label: `Tone: ${currentTone()}${authToken ? "" : " (this device)"}`,
+      // The account's tone may be a voice the user created, which is not in
+      // this list — include it so the menu can show it selected rather than
+      // showing five unticked rows and implying none is active.
+      submenu: Array.from(new Set(TONES.concat(accountTone ? [accountTone] : []))).map((t) => ({
+        label: t, type: "radio", checked: currentTone() === t,
+        click: () => { void setAccountTone(t); },
       })),
     },
     {
@@ -305,6 +361,23 @@ ipcMain.on("app:openExternal", (_e, url) => {
   if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 ipcMain.on("app:dictate", () => toggleDictation());
+// The window owns the session and its refresh, so it hands the main process a
+// live token rather than the main process parsing and refreshing one too.
+ipcMain.on("app:token", (_e, t) => {
+  const next = typeof t === "string" && t ? t : null;
+  // Signing out has to drop the tone too. Keeping it would leave the tray
+  // showing — and dictating with — the tone of an account nobody is signed
+  // into any more, which is exactly the split this whole section removes.
+  if (!next) { authToken = null; accountTone = null; refreshTray(); return; }
+  // The window pushes on every request it makes, so most of these are the
+  // same token again. Only a change is worth a read.
+  if (next === authToken) return;
+  authToken = next;
+  void refreshAccountTone();
+});
+// Anything the window wrote could have been the tone. Cheaper to re-read than
+// to have the window guess which of its writes mattered.
+ipcMain.on("app:changed", () => { void refreshAccountTone(); });
 
 // ---- Dictation toggle --------------------------------------------------------
 function toggleDictation() {
@@ -314,7 +387,7 @@ function toggleDictation() {
     activeSession = ++sessionSeq;
     sendToRecorder("start-recording", {
       baseUrl: cfg.baseUrl, token: cfg.token, language: cfg.language,
-      tone: cfg.tone, live: cfg.live, session: activeSession,
+      tone: currentTone(), live: cfg.live, session: activeSession,
     });
     if (cfg.live) { showOverlay(); overlayText(""); }
   } else {
