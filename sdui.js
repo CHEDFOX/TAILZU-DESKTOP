@@ -369,10 +369,22 @@ function node(n) {
     case "Image": case "Video": {
       const src = p.source && (p.source.url || p.source.uri);
       if (!src) return "";
-      const box = "width:" + (st.width ? st.width + "px" : "100%") + ";" +
-        (st.aspectRatio ? "aspect-ratio:" + st.aspectRatio + ";" : "height:" + (st.height || 160) + "px;") +
-        "border-radius:" + (st.borderRadius != null ? st.borderRadius : 16) + "px;object-fit:" +
-        (p.contentFit === "contain" ? "contain" : "cover") + ";display:block;margin:0 auto 14px";
+      // The PARENT usually owns the box. A hero is a Stack carrying the aspect
+      // ratio and the clipping, holding a media node whose only instruction is
+      // "fill me" — so a percentage has to survive as a percentage. Appending
+      // "px" to it produced `height:100%px`, which the browser drops, and the
+      // fallback 160px then collapsed a full-bleed hero into a strip.
+      const dim = (v, fb) => (v == null ? fb : typeof v === "number" ? v + "px" : String(v));
+      const fills = String(st.height) === "100%";
+      const box =
+        "width:" + dim(st.width, "100%") + ";" +
+        (st.aspectRatio ? "aspect-ratio:" + st.aspectRatio + ";"
+                        : "height:" + dim(st.height, "160px") + ";") +
+        "min-height:0;" +
+        // Filling a parent means the parent draws the corners and the spacing.
+        "border-radius:" + (st.borderRadius != null ? st.borderRadius : fills ? 0 : 16) + "px;" +
+        "object-fit:" + (p.contentFit === "contain" ? "contain" : "cover") + ";" +
+        "display:block;" + (fills ? "margin:0;" : "margin:0 auto 14px;");
       return n.type === "Video"
         ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + box + '"></video>'
         : '<img src="' + esc(src) + '" alt="" style="' + box + '">';
@@ -388,9 +400,11 @@ function node(n) {
 
     // Everything the phones draw natively and this window has no business
     // imitating — the keyboard preview, the mic toggle, the particle mark.
-    // Their children still render, so a card built around one is not lost.
+    // Their children still render, so a card built around one is not lost,
+    // and a node that shipped a fallback gets it — the same rule the phone
+    // renderer follows, so the server can keep emitting one tree for both.
     default:
-      return kids;
+      return kids || (n.fallback ? node(n.fallback) : "");
   }
 }
 
