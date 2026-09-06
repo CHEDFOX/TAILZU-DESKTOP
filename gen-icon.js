@@ -1,8 +1,16 @@
-// Generates assets/tray.png (32×32, tray/menu-bar) and assets/icon.png
-// (256×256, installer/app icon — electron-builder converts it per-platform) —
-// an amber dot in the Tailzu accent #E8A23C, drawn with pure Node (zlib + a
-// hand-rolled PNG encoder) so real, valid icons live in the repo without
-// shipping binary blobs by hand. Run: npm run icon.
+// Generates assets/tray.png — the 32×32 menu-bar / system-tray mark: an amber
+// dot in the Tailzu accent #E8A23C, drawn with pure Node (zlib + a hand-rolled
+// PNG encoder) so a real, valid icon lives in the repo without shipping a
+// binary blob by hand. Run: npm run icon.
+//
+// It does NOT touch assets/icon.png any more. That used to be generated here
+// too, and it is now the real brand mark — running this script would have
+// silently replaced authored artwork with a dot, one npm command away from
+// shipping the wrong installer icon.
+//
+// The tray stays a dot on purpose. It renders at 18pt in a macOS menu bar that
+// may be light or dark; the mark is white shapes on black, which reads as a
+// black square there. A dot with a transparent ground works on either.
 const zlib = require("zlib");
 const fs = require("fs");
 const path = require("path");
@@ -68,7 +76,7 @@ const outDir = path.join(__dirname, "assets");
 fs.mkdirSync(outDir, { recursive: true });
 // icon.png: macOS icns generation REQUIRES ≥512×512 (the mac CI job failed at
 // 256 with "must be at least 512x512"); Windows/Linux accept 512 and downscale.
-for (const [name, size] of [["tray.png", 32], ["icon.png", 512]]) {
+for (const [name, size] of [["tray.png", 32]]) {
   const png = encodePng(size);
   fs.writeFileSync(path.join(outDir, name), png);
   console.log(`wrote assets/${name}`, png.length, "bytes");
