@@ -171,6 +171,57 @@ function applyTheme(theme) {
   set("--bg", c.bg); set("--card", c.card); set("--input", c.inputBg);
   set("--border", c.border); set("--text", c.text); set("--body", c.body);
   set("--muted", c.muted); set("--label", c.label); set("--danger", c.danger);
+  // The accent was the one colour this window kept to itself — a literal in the
+  // stylesheet — so the brand could be retuned on the phones and this stayed
+  // the old amber, with nothing to show that it had.
+  set("--accent", c.primary || c.accent);
+}
+
+/**
+ * THE SERVER'S TYPOGRAPHY, HERE TOO.
+ *
+ * Every size, weight, tracking and colour in this window was written into this
+ * file by hand, while the backend was already sending the whole system —
+ * `theme.font.roles`, the same 50-odd roles the phones resolve. So the two
+ * surfaces drifted by construction: retuning a heading on the phone did
+ * nothing here, and nobody could see that from either side.
+ *
+ * A role resolves to CSS. `family: "display"` is a slot, not a face — the
+ * phone maps it to a downloaded serif, and a window under a font-src 'self'
+ * policy cannot fetch that, so it maps to the platform serif instead. Same
+ * intent, whatever is installed.
+ *
+ * SCALE, because a phone column is 393pt and this one is 640. Sizes are
+ * carried at a ratio rather than re-chosen, so the rhythm between them — the
+ * thing that makes it read as one product — survives the change of surface.
+ */
+const TYPE_SCALE = 1.08;
+const SERIF = 'Georgia,"Times New Roman",serif';
+const SANS = '-apple-system,"Segoe UI",system-ui,sans-serif';
+
+function role(name, extra) {
+  const theme = (BOOT && BOOT.theme) || {};
+  const f = theme.font || {};
+  const r = (f.roles && f.roles[name]) || null;
+  if (!r) return extra || "";
+  const c = theme.color || {};
+  const out = [];
+  const px = (v) => Math.round(v * TYPE_SCALE * 10) / 10 + "px";
+  if (r.size != null) out.push("font-size:" + px(r.size));
+  if (r.weight) out.push("font-weight:" + r.weight);
+  if (r.lineHeight != null) out.push("line-height:" + px(r.lineHeight));
+  if (r.letterSpacing != null) out.push("letter-spacing:" + r.letterSpacing + "px");
+  if (r.italic) out.push("font-style:italic");
+  if (r.transform) out.push("text-transform:" + r.transform);
+  if (r.align) out.push("text-align:" + r.align);
+  if (r.color) out.push("color:" + (c[r.color] || r.color));
+  out.push("font-family:" + (r.family === "display" ? SERIF : SANS));
+  if (r.marginTop != null) out.push("margin-top:" + r.marginTop + "px");
+  if (r.marginBottom != null) out.push("margin-bottom:" + r.marginBottom + "px");
+  if (r.marginVertical != null) {
+    out.push("margin-top:" + r.marginVertical + "px", "margin-bottom:" + r.marginVertical + "px");
+  }
+  return out.join(";") + (extra ? ";" + extra : "");
 }
 
 function label(v) {
@@ -288,44 +339,47 @@ function node(n) {
       return '<div style="height:1px;background:var(--border);margin:12px 0"></div>';
 
     case "Heading":
-      return '<h2 style="color:var(--text);font-size:26px;font-weight:600;line-height:1.18;margin:0 0 14px;' + s + '">' + txt + "</h2>";
+      return '<h2 style="margin:0;' + role("heading", "color:var(--text)") + ";" + s + '">' + txt + "</h2>";
 
     case "Hero":
-      return '<div style="margin-bottom:16px"><div style="color:var(--text);font-size:30px;font-weight:700;letter-spacing:-.5px">' +
-        esc(label(p.title)) + '</div><div style="color:var(--muted);font-size:15px;margin-top:4px">' +
+      return '<div style="margin-bottom:16px"><div style="' + role("h1", "color:var(--text)") + '">' +
+        esc(label(p.title)) + '</div><div style="margin-top:4px;' + role("muted") + '">' +
         esc(label(p.subtitle)) + "</div></div>";
 
     case "Overline":
-      return '<div style="color:var(--label);font-size:11px;letter-spacing:3px;text-transform:uppercase;font-weight:500;margin-bottom:9px;' + s + '">' + txt + "</div>";
+      return '<div style="' + role("overline", "color:var(--label)") + ";" + s + '">' + txt + "</div>";
 
     case "Paragraph": case "Quote":
-      return '<p style="color:var(--body);margin:0 0 12px;' + s + '">' + txt + "</p>";
+      return '<p style="margin:0;' + role(n.type === "Quote" ? "quoteBlock" : "paragraph", "color:var(--body)") +
+        ";" + s + '">' + txt + "</p>";
 
     case "Text":
-      return '<span' + bind(press) + ' style="color:var(--text);' + (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
+      // `variant` names a role — the same switch the phone makes.
+      return '<span' + bind(press) + ' style="' + role(p.variant || "body", "color:var(--text)") + ";" +
+        (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
 
     case "Badge": case "Chip":
       return '<span' + bind(press) + ' style="display:inline-block;border:1px solid var(--border);border-radius:999px;' +
-        'padding:5px 11px;font-size:12.5px;color:var(--body);' + (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
+        'padding:5px 11px;' + role(n.type === "Badge" ? "badge" : "chip", "color:var(--body)") + ";" + (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
 
     case "Button": {
       const primary = p.variant !== "secondary" && p.variant !== "ghost";
       return '<button' + bind(press) + ' style="display:block;width:100%;border:0;cursor:pointer;' +
         (primary ? "background:var(--accent);color:#000" : "background:transparent;color:var(--text);border:1px solid var(--border)") +
-        ';border-radius:14px;padding:14px 18px;font-size:16px;font-weight:600;margin:6px 0;' + s + '">' +
+        ';border-radius:14px;padding:14px 18px;margin:6px 0;' + role(primary ? "button" : "buttonSecondary") + ";" + s + '">' +
         (txt || "Continue") + "</button>";
     }
 
     case "Row2": case "KeyValue":
       return '<div' + bind(press) + ' style="display:flex;justify-content:space-between;gap:14px;padding:12px 0;' +
         "border-bottom:1px solid var(--border)" + (press ? ";cursor:pointer" : "") + '">' +
-        '<span style="color:var(--label)">' + esc(label(p.label)) + "</span>" +
-        '<span style="color:var(--text);font-weight:500">' + esc(label(p.value)) + "</span></div>";
+        '<span style="' + role("row", "color:var(--label)") + '">' + esc(label(p.label)) + "</span>" +
+        '<span style="' + role("rowValue", "color:var(--text)") + '">' + esc(label(p.value)) + "</span></div>";
 
     case "StatCard":
       return '<div style="background:var(--card);border-radius:14px;padding:15px;flex:1;min-width:0;' + s + '">' +
-        '<div style="color:var(--label);font-size:11px;letter-spacing:1.6px;text-transform:uppercase">' + esc(label(p.label)) + "</div>" +
-        '<div style="color:var(--text);font-size:30px;font-weight:700;margin-top:5px">' + esc(p.value) + "</div></div>";
+        '<div style="' + role("label", "color:var(--label);text-transform:uppercase") + '">' + esc(label(p.label)) + "</div>" +
+        '<div style="margin-top:5px;' + role("h1", "color:var(--text)") + '">' + esc(p.value) + "</div></div>";
 
     case "TextField": {
       const path = (n.bind && n.bind.value) || "";
