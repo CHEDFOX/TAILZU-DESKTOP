@@ -249,21 +249,105 @@ function currentTone() { return accountTone || cfg.tone; }
 // domain that is ours rather than a localhost port or a custom scheme.
 const REDIRECT_URL = "https://tailzu.space/auth/callback";
 
+// GOOGLE WILL NOT SIGN YOU IN INSIDE A WINDOW WE OWN.
+//
+// Their policy is disallowed_useragent: an OAuth consent screen loaded in an
+// embedded browser is refused, by design, because the app hosting it can read
+// everything typed into it. Apple is less strict but heading the same way. So
+// the window above works for one provider and fails for the other, and the
+// failure arrives as Google's own "this browser may not be secure" page, which
+// reads as our bug.
+//
+// The way a desktop app is supposed to do this: send the person to their REAL
+// browser, where they are probably already signed in, and catch the redirect on
+// a loopback address only this machine can reach.
+//
+// Google never sees this address. The provider redirects to Supabase, and
+// Supabase redirects to `redirect_to` — so the only allow-list this has to be
+// on is Supabase's own, under URL Configuration.
+const LOOPBACK_PORT = 8788;
+const LOOPBACK_URL = "http://127.0.0.1:" + LOOPBACK_PORT + "/cb";
+
+const CLOSE_PAGE =
+  "<!doctype html><meta charset=utf-8><title>Tailzu</title>" +
+  "<body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;" +
+  "background:#0b0b0f;color:rgba(255,255,255,.85);font:15px -apple-system,Segoe UI,system-ui,sans-serif\">" +
+  "<p>Signed in. You can close this tab and go back to Tailzu.</p>";
+
+/**
+ * The system-browser half of the flow. Resolves with the authorization code.
+ *
+ * One request, then the server is gone. It binds to 127.0.0.1 rather than
+ * 0.0.0.0 so nothing off this machine can reach it even for the seconds it is
+ * up, and it times out rather than listening forever for a person who wandered
+ * off mid sign-in.
+ */
+function awaitLoopbackCode(openUrl) {
+  const http = require("http");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const server = http.createServer((req, res) => {
+      let u;
+      try { u = new URL(req.url, LOOPBACK_URL); } catch { u = null; }
+      if (!u || u.pathname !== "/cb") { res.writeHead(404).end(); return; }
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(CLOSE_PAGE);
+      const err = u.searchParams.get("error_description") || u.searchParams.get("error");
+      const code = u.searchParams.get("code");
+      done(err ? new Error(err) : code ? null : new Error("no authorization code"), code);
+    });
+    const done = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { server.close(); } catch { /* already closing */ }
+      err ? reject(err) : resolve(value);
+    };
+    const timer = setTimeout(() => done(new Error("timed out waiting for the browser")), 5 * 60 * 1000);
+    server.on("error", (e) => done(e));
+    server.listen(LOOPBACK_PORT, "127.0.0.1", () => {
+      shell.openExternal(openUrl).catch((e) => done(e));
+    });
+  });
+}
+
 const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 /** Run one provider sign-in. Resolves with a Supabase session, or throws. */
-function oauthSignIn(provider) {
+function authorizeUrl(provider, challenge, redirect) {
+  return SUPABASE_URL + "/auth/v1/authorize" +
+    "?provider=" + encodeURIComponent(provider) +
+    "&redirect_to=" + encodeURIComponent(redirect) +
+    "&code_challenge=" + challenge +
+    "&code_challenge_method=s256";
+}
+
+async function oauthSignIn(provider) {
   if (provider !== "apple" && provider !== "google") {
-    return Promise.reject(new Error("unsupported provider"));
+    throw new Error("unsupported provider");
   }
   const verifier = b64url(crypto.randomBytes(32));
   const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
-  const url = SUPABASE_URL + "/auth/v1/authorize" +
-    "?provider=" + encodeURIComponent(provider) +
-    "&redirect_to=" + encodeURIComponent(REDIRECT_URL) +
-    "&code_challenge=" + challenge +
-    "&code_challenge_method=s256";
 
+  // The real browser first, for both providers. It is the one Google accepts,
+  // and it is the one where the person is already signed in.
+  try {
+    const code = await awaitLoopbackCode(authorizeUrl(provider, challenge, LOOPBACK_URL));
+    return await exchangeCode(code, verifier);
+  } catch (err) {
+    // A port we cannot bind is the only failure worth retrying differently —
+    // anything else (cancelled, denied, timed out) is an answer, and asking
+    // again in a window Google refuses would only replace it with a worse one.
+    const portBusy = err && (err.code === "EADDRINUSE" || err.code === "EACCES");
+    if (!portBusy) throw err;
+  }
+  return oauthEmbedded(provider, verifier, challenge);
+}
+
+/** The old path: our own window. Kept for the case where the loopback port is
+ *  taken, where it is better than nothing — and it still works for Apple. */
+function oauthEmbedded(provider, verifier, challenge) {
+  const url = authorizeUrl(provider, challenge, REDIRECT_URL);
   return new Promise((resolve, reject) => {
     // Its own partition, wiped on close: a sign-in window that keeps cookies
     // is a sign-in window that silently reuses whoever signed in last, with no
