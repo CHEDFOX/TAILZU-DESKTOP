@@ -727,8 +727,11 @@ app.whenReady().then(() => {
   // So: try the fallbacks. Each is chosen to be unlikely to be owned, and
   // whichever takes becomes the hotkey for this run and is written back to the
   // config so the next run starts where this one ended up.
-  const candidates = [cfg.hotkey, "CommandOrControl+Alt+Space",
-                      "CommandOrControl+Shift+F12", "CommandOrControl+Alt+D"];
+  // Ctrl+Alt+Space is NOT on this list. Claude's desktop app takes it, and a
+  // fallback that lands on another assistant's prompt bar is worse than no
+  // fallback: the key appears to work and belongs to someone else.
+  const candidates = [cfg.hotkey, "CommandOrControl+Shift+F12",
+                      "CommandOrControl+Alt+Shift+Space", "CommandOrControl+Alt+D"];
   let bound = null;
   for (const key of candidates) {
     if (!key) continue;
