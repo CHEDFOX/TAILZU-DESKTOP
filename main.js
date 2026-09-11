@@ -695,6 +695,29 @@ ipcMain.on("live-partial", (_e, payload) => {
 });
 
 // ---- App lifecycle -----------------------------------------------------------
+// ONE TAILZU, NOT AS MANY AS THE ICON IS CLICKED.
+//
+// There was no instance lock, and this app has no window. So double-clicking
+// the desktop shortcut while it was already in the tray started a SECOND copy
+// that drew nothing — and the first symptom of that is not a duplicate, it is
+// the hotkey: the second copy asks Windows for the same accelerator, Windows
+// says it is taken, and the notification blames "another app". The other app
+// was Tailzu.
+//
+// From the outside both halves look like a broken shortcut: click, nothing
+// opens, and a warning about a key that worked yesterday.
+//
+// Now a second launch hands the click to the copy that is already running, and
+// that copy opens the window — which is the only sensible answer to someone
+// who just asked for the app and is looking at a desktop.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    try { openAppWindow(); } catch { /* the tray is still there either way */ }
+  });
+}
+
 app.whenReady().then(() => {
   // Menu-bar / tray-only app — no dock icon on macOS.
   if (process.platform === "darwin" && app.dock) app.dock.hide();
