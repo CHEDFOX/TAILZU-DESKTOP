@@ -715,11 +715,43 @@ app.whenReady().then(() => {
     new Notification({ title: "Tailzu — config problem", body: configError }).show();
   }
 
-  const ok = globalShortcut.register(cfg.hotkey, toggleDictation);
-  if (!ok) {
+  // A HOTKEY THAT DOES NOT REGISTER LEAVES NO APP AT ALL.
+  //
+  // There is no window here by design: the tray and the hotkey are the whole
+  // surface. So when Windows says another process already owns
+  // Ctrl+Shift+Space — an IME usually does — the app is running, invisible,
+  // and unusable, and the only thing it said about it was a notification that
+  // disappears in a few seconds telling you to edit a file you have never
+  // opened.
+  //
+  // So: try the fallbacks. Each is chosen to be unlikely to be owned, and
+  // whichever takes becomes the hotkey for this run and is written back to the
+  // config so the next run starts where this one ended up.
+  const candidates = [cfg.hotkey, "CommandOrControl+Alt+Space",
+                      "CommandOrControl+Shift+F12", "CommandOrControl+Alt+D"];
+  let bound = null;
+  for (const key of candidates) {
+    if (!key) continue;
+    try {
+      if (globalShortcut.register(key, toggleDictation)) { bound = key; break; }
+    } catch { /* an unparseable accelerator is just another failed candidate */ }
+  }
+
+  if (bound && bound !== cfg.hotkey) {
+    const taken = cfg.hotkey;
+    cfg.hotkey = bound;
+    try { saveConfig({ hotkey: bound }); } catch { /* config we cannot write is not fatal */ }
+    refreshTray();
     new Notification({
       title: "Tailzu",
-      body: `Couldn't register the hotkey ${cfg.hotkey} (another app may own it). Change it in config.json.`,
+      body: `${taken} is taken by another app, so dictation is on ${bound}. Change it under Edit config.`,
+    }).show();
+  } else if (!bound) {
+    // Nothing took. The tray is the only way in, so say that rather than
+    // naming a key that does not work.
+    new Notification({
+      title: "Tailzu",
+      body: "No hotkey could be registered. Use Dictate in the tray menu, and set a free one under Edit config.",
     }).show();
   }
 
