@@ -476,7 +476,9 @@ function buildMenu() {
         saveConfig({ autoStart: item.checked });
         // Registering the dev electron binary as a login item is useless noise;
         // only meaningful for the installed app.
-        if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: item.checked });
+        if (app.isPackaged) {
+          app.setLoginItemSettings({ openAtLogin: item.checked, args: ["--hidden"] });
+        }
       },
     },
     { type: "separator" },
@@ -718,6 +720,12 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+/** Started by Windows at login rather than by a person clicking something. */
+function startedHidden() {
+  if (process.argv.includes("--hidden")) return true;
+  try { return app.getLoginItemSettings().wasOpenedAtLogin === true; } catch { return false; }
+}
+
 app.whenReady().then(() => {
   // Menu-bar / tray-only app — no dock icon on macOS.
   if (process.platform === "darwin" && app.dock) app.dock.hide();
@@ -792,7 +800,21 @@ app.whenReady().then(() => {
   const keepFresh = setInterval(() => { void refreshSession(); }, 10 * 60 * 1000);
   app.on("will-quit", () => clearInterval(keepFresh));
 
-  if (app.isPackaged && cfg.autoStart) app.setLoginItemSettings({ openAtLogin: true });
+  if (app.isPackaged && cfg.autoStart) {
+    app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] });
+  }
+
+  // CLICKING AN ICON HAS TO DO SOMETHING.
+  //
+  // The tray and the hotkey are this app's real surface, and for a long time
+  // they were its only surface: launching it opened nothing at all. That is
+  // defensible for a background utility and indefensible for an icon on a
+  // desktop, because the two are indistinguishable from a program that failed
+  // to start — which is exactly how it kept being reported.
+  //
+  // So a launch opens the window. A login start does not, because nobody asked
+  // for it then; that is what the --hidden argument registered above is for.
+  if (!startedHidden()) openAppWindow();
 });
 
 app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in the tray
