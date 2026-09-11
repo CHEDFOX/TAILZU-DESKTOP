@@ -742,14 +742,60 @@ async function verifyPhone(phone, token) {
   await setSession(r);
 }
 
-/** Whether phone sign-in is on, straight from the flag the phones read. The
- *  bootstrap runs on the fallback token here, which is all this needs. */
+/**
+ * The bootstrap the GATE needs, fetched once.
+ *
+ * Two things on the sign-in screen come from the server — whether phone
+ * sign-in is on, and the art behind the form — and both are needed before
+ * there is a session. That is exactly why they ride in the boot flags rather
+ * than in a screen: bootstrap is the only channel that reaches an app with
+ * nobody signed into it. It runs on the fallback token here, which is all
+ * either of them needs.
+ *
+ * Cached because it used to be called per question, and two callers meant two
+ * round trips to answer one screen.
+ */
+let preBoot = null;
+function gateBoot() {
+  if (!preBoot) preBoot = bootstrap().catch(() => null);
+  return preBoot;
+}
+
 async function phoneEnabled() {
-  try {
-    const b = await bootstrap();
-    const v = (b.flags || {})["auth.enablePhone"];
-    return v === true || v === "true";
-  } catch { return false; }
+  const b = await gateBoot();
+  const v = b && (b.flags || {})["auth.enablePhone"];
+  return v === true || v === "true";
+}
+
+/**
+ * Dress the sign-in screen with the uploaded art.
+ *
+ * `auth.background` is what the phones draw, and this window showed nothing at
+ * all — so the first screen of the product looked like a different product on
+ * the desktop. Same key, same upload, no second asset to keep in step.
+ *
+ * The code step gets its own art when one has been uploaded and falls back to
+ * the entry's when it has not, which is the rule the phones follow.
+ */
+async function dressGate(step) {
+  const b = await gateBoot();
+  const flags = (b && b.flags) || {};
+  const spec = (step === "code" && flags["auth.background.code"]) || flags["auth.background"];
+  const host = $("gatebg");
+  if (!host) return;
+  if (!spec || !spec.url) { host.innerHTML = ""; return; }
+  const gate = $("gate");
+  if (gate && spec.background) gate.style.background = spec.background;
+  const fit = spec.fit === "contain" ? "contain" : "cover";
+  const isVideo = /^video\//.test(String(spec.contentType || "")) ||
+                  /\.(mp4|mov|m4v|webm)(\?|$)/i.test(spec.url);
+  // Rebuilding the element on every step would restart the clip mid sign-in,
+  // so a source that has not changed is left alone.
+  if (host.dataset.src === spec.url) return;
+  host.dataset.src = spec.url;
+  host.innerHTML = isVideo
+    ? '<video src="' + esc(spec.url) + '" autoplay muted loop playsinline style="object-fit:' + fit + '"></video>'
+    : '<img src="' + esc(spec.url) + '" alt="" style="object-fit:' + fit + '">';
 }
 
 (async function start() {
@@ -805,11 +851,13 @@ async function phoneEnabled() {
       }
       $("stepEmail").hidden = true;
       $("stepCode").hidden = false;
+      void dressGate("code");
       code.focus();
     } catch (e) { fail(e); } finally { $("sendCode").disabled = false; }
   });
   $("backToEmail").addEventListener("click", () => {
     $("stepEmail").hidden = false; $("stepCode").hidden = true; err.textContent = "";
+    void dressGate("entry");
   });
 
   // Apple / Google. The main process owns the window and the code exchange;
@@ -837,6 +885,7 @@ async function phoneEnabled() {
   // works while this is in flight.
   if (!SESSION) {
     phoneEnabled().then((on) => { if (on) $("methods").hidden = false; });
+    void dressGate("entry");
   }
   $("verify").addEventListener("click", async () => {
     err.textContent = "";

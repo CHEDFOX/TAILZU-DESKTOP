@@ -57,8 +57,17 @@
   .pad { max-width:640px; margin:0 auto; padding:30px 24px 90px; }
 
   /* ── sign in ───────────────────────────────────────────────────────────── */
-  #gate { height:100%; display:flex; align-items:center; justify-content:center; padding:24px; }
-  .gatebox { width:100%; max-width:352px; }
+  #gate { position:relative; height:100%; display:flex; align-items:center; justify-content:center; padding:24px; }
+  /* The sign-in art, the same upload the phones show. It sits UNDER the box and
+     takes no clicks, so a field is never covered by a decoration. The scrim is
+     what keeps the form readable over art nobody has seen yet. */
+  #gatebg { position:absolute; inset:0; overflow:hidden; z-index:0; pointer-events:none; }
+  #gatebg > img, #gatebg > video { width:100%; height:100%; object-fit:cover; display:block; }
+  #gatebg::after {
+    content:""; position:absolute; inset:0;
+    background:linear-gradient(180deg, rgba(0,0,0,.35) 0%, rgba(0,0,0,.72) 55%, rgba(0,0,0,.88) 100%);
+  }
+  .gatebox { position:relative; z-index:1; width:100%; max-width:352px; }
   .gatebox h1 { font-size:34px; font-weight:700; color:var(--text); margin:0 0 6px; letter-spacing:-.6px; }
   .gatebox p.sub { margin:0 0 26px; color:var(--muted); }
   .field {
@@ -110,6 +119,7 @@
 </head>
 <body>
   <div id="gate" hidden>
+    <div id="gatebg" aria-hidden="true"></div>
     <div class="gatebox">
       <h1>Tailzu</h1>
       <p class="sub">Sign in the same way you do on your phone — your voices, history and words come with you.</p>
