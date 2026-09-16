@@ -811,6 +811,14 @@ function startedHidden() {
 }
 
 app.whenReady().then(() => {
+  // WHO THE NOTIFICATIONS ARE FROM.
+  //
+  // Windows titles a notification with the app's user-model id, and an
+  // Electron app that never sets one is announced as "electron.app.Tailzu" —
+  // which reads as a developer's leftover rather than as the product. Packaged
+  // builds get this from the installer; saying it here covers the unpackaged
+  // run too, and costs nothing when it is already right.
+  if (process.platform === "win32") app.setAppUserModelId("space.tailzu.desktop");
   // Menu-bar / tray-only app — no dock icon on macOS.
   if (process.platform === "darwin" && app.dock) app.dock.hide();
 
