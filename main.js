@@ -826,8 +826,28 @@ app.whenReady().then(() => {
   tray = new Tray(trayIcon());
   refreshTray();
 
+  // THE WINDOW OPENS BEFORE ANYTHING THAT CAN FAIL.
+  //
+  // This used to be the last line of the ready handler, after the hotkey
+  // registration, a notification and a login-item write. Any of those throwing
+  // rejects the promise and the line never runs — leaving a tray icon and no
+  // window, which is indistinguishable from an app that failed to start and is
+  // precisely how it keeps being reported.
+  //
+  // A launch is someone asking to see the app. That should not be contingent
+  // on whether a hotkey was available or whether Windows felt like accepting a
+  // notification.
+  //
+  // A login start still opens nothing — nobody asked for it then; that is what
+  // the --hidden argument is for.
+  if (!startedHidden()) {
+    try { openAppWindow(); } catch { /* the tray is still a way in */ }
+  }
+
   if (configError) {
-    new Notification({ title: "Tailzu — config problem", body: configError }).show();
+    try {
+      new Notification({ title: "Tailzu — config problem", body: configError }).show();
+    } catch { /* a notification the OS refuses must not take the app down */ }
   }
 
   // A HOTKEY THAT DOES NOT REGISTER LEAVES NO APP AT ALL.
@@ -885,20 +905,12 @@ app.whenReady().then(() => {
   app.on("will-quit", () => clearInterval(keepFresh));
 
   if (app.isPackaged && cfg.autoStart) {
-    app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] });
+    // Registry writes fail on locked-down machines. That is a setting not
+    // taking effect, not a reason for the app to be missing.
+    try {
+      app.setLoginItemSettings({ openAtLogin: true, args: ["--hidden"] });
+    } catch { /* autostart is a convenience; the app is not */ }
   }
-
-  // CLICKING AN ICON HAS TO DO SOMETHING.
-  //
-  // The tray and the hotkey are this app's real surface, and for a long time
-  // they were its only surface: launching it opened nothing at all. That is
-  // defensible for a background utility and indefensible for an icon on a
-  // desktop, because the two are indistinguishable from a program that failed
-  // to start — which is exactly how it kept being reported.
-  //
-  // So a launch opens the window. A login start does not, because nobody asked
-  // for it then; that is what the --hidden argument registered above is for.
-  if (!startedHidden()) openAppWindow();
 });
 
 app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in the tray
