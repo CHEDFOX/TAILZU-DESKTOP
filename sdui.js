@@ -155,6 +155,16 @@ function capabilities() {
     actions: ACTIONS,
     templates: [],
     device: {
+      // WHAT THIS IS, as opposed to what it can draw.
+      //
+      // `platform` above is a drawing question and answers "iOS". This is the
+      // other one: there is no keyboard extension to add here, and the
+      // microphone is granted by the OS outside the app, so the two setup
+      // steps have nothing to ask a window. The server used to answer
+      // `onboarding_keyboard` and this file quietly threw the answer away —
+      // the renderer overruling the creator. It tells the truth instead and
+      // gets the right screen back.
+      formFactor: "desktop",
       width: window.innerWidth, height: window.innerHeight, scale: window.devicePixelRatio || 1,
       colorScheme: "dark", locale: navigator.language || "en-US", reduceMotion: false, rtl: false,
     },
@@ -900,11 +910,21 @@ async function render() {
   applyTheme(BOOT.theme);
   TABS = BOOT.navigation && BOOT.navigation.kind === "tabs" ? BOOT.navigation.tabs : [];
   renderTabs();
-  TAB_ID = TABS.length ? TABS[0].id : "";
-  // Never the intro or onboarding: those answer questions this user already
-  // answered on their phone, and the desktop cannot enable a keyboard anyway.
-  const first = TABS.length ? TABS[0].screenId : "home";
-  STACK = [{ screenId: first }];
+  // WHERE THE SERVER SAYS, when the server says somewhere this window has.
+  //
+  // We report `formFactor: "desktop"` now, so the intro and the two setup
+  // steps are not offered to us at all and `initialScreenId` is a tab. This
+  // still checks, because a backend older than that field answers
+  // `onboarding_keyboard` — and a window has no keyboard to enable, so
+  // landing there would be a dead end with no way out. Anything that is not
+  // one of our tabs falls back to the first one.
+  //
+  // The tab id is taken from the SAME tab, not from TABS[0]: a bar lighting
+  // one tab while another's screen is drawn is worse than a bar that is
+  // simply wrong, because the first tap on it does nothing.
+  const landing = TABS.find((t) => (t.screenId || t.id) === BOOT.initialScreenId) || TABS[0];
+  TAB_ID = landing ? landing.id : "";
+  STACK = [{ screenId: landing ? (landing.screenId || landing.id) : "home" }];
   await paint();
 }
 

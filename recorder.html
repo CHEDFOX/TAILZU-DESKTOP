@@ -82,10 +82,43 @@
         clearTimeout(wsWatchdog);
         stopTracks();
       }
+      // getMic already writes a sentence for the cases a user can act on, so
+      // those are passed through as they are. Anything else keeps the "mic:"
+      // label, which is the honest thing to say about a failure we cannot name.
+      function micMessage(err) {
+        const m = (err && err.message) ? err.message : String(err);
+        return m.indexOf("microphone") === 0 || m.indexOf("no microphone") === 0 ? m : "mic: " + m;
+      }
+
       async function getMic() {
-        return navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+        } catch (err) {
+          // THERE IS NO PERMISSION SCREEN HERE, AND THERE SHOULD NOT BE.
+          //
+          // Electron already grants the microphone to its own page (main.js
+          // setPermissionRequestHandler), so an in-app step would have nothing
+          // to ask. The gate that is left belongs to the operating system, and
+          // no screen we draw can open it — only a sentence that says which
+          // settings panel to go to. Chromium's own wording ("Permission
+          // denied by system") names the problem and not the fix.
+          const name = (err && err.name) || "";
+          const mac = navigator.platform.indexOf("Mac") === 0;
+          if (name === "NotAllowedError" || name === "SecurityError") {
+            throw new Error(mac
+              ? "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu"
+              : "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access");
+          }
+          if (name === "NotFoundError" || name === "OverconstrainedError") {
+            throw new Error("no microphone found — plug one in, then try again");
+          }
+          if (name === "NotReadableError") {
+            throw new Error("microphone is in use by another app");
+          }
+          throw err;
+        }
       }
 
       // ---- Per-tone refine routing (mirrors the mobile app/src/api.ts) -------
@@ -126,7 +159,7 @@
           mediaRecorder.start();
         } catch (err) {
           stopTracks();
-          emitError(sid, "mic: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, micMessage(err));
         }
       }
 
@@ -242,7 +275,7 @@
             ws.send(downsampleTo16k(e.inputBuffer.getChannelData(0), inRate));
           };
         } catch (err) {
-          emitError(sid, "mic: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, micMessage(err));
           teardownLive();
         }
       }
