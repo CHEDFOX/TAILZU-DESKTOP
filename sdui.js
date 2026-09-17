@@ -41,11 +41,22 @@ const COMPONENTS = [
   "Quote", "Badge", "KeyValue", "Hero", "Switch", "SegmentedControl",
   "StatCard", "BarChart", "LineChart", "Sparkline", "PieChart", "DonutChart",
   "ProgressRing", "Gauge", "WordMeter", "Video", "Audio", "Grid",
+  // Drawn here as well as on the phones. Every one of these was falling
+  // through to `default`, which renders a node's CHILDREN and drops the node —
+  // so a Gradient, an SVG or a scrim simply did not appear, and the window was
+  // not a smaller version of the app but the app with its icons, its scrims
+  // and its one button missing.
+  "SVG", "Gradient", "BlurBackground", "FlipText", "Modal", "ProgressBar",
+  "SwipeAction", "NeuralField",
 ];
 const ACTIONS = [
   "navigate", "back", "switchTab", "callEndpoint", "setState", "toggleState",
   "toggleInArray", "refresh", "openUrl", "toast", "haptic", "sequence",
   "delay", "reloadScreen",
+  // navigateBack is the important one: the catalog names it fifteen times and
+  // this renderer knew only "back", so every back control in the window was
+  // drawn, clickable, and did nothing.
+  "navigateBack", "dismiss", "clearState", "appendState", "condition",
 ];
 
 let ENV = null;          // baseUrl, fallbackToken, tone, language
@@ -53,6 +64,16 @@ let SESSION = null;      // { access_token, refresh_token, expires_at }
 let BOOT = null;
 let TABS = [];
 let STACK = [];          // [{ screenId, params }]
+/**
+ * Flip lines waiting for their ticker.
+ *
+ * Collected while a screen renders and started once it is in the DOM —
+ * rendering returns a string here, so there is no element to attach to until
+ * the paint lands. Cleared on every paint so a screen that is gone cannot keep
+ * turning words over in a document that no longer holds it.
+ */
+let FLIPS = [];
+let FLIP_TIMERS = [];
 let STATE = {};          // per-screen state, replaced on every navigation
 let TAB_ID = "";
 
@@ -124,6 +145,11 @@ function capabilities() {
     // The catalog branches on this. Desktop is closest to iOS in what it can
     // draw and shares none of the Android keyboard's constraints, so it takes
     // the iOS tree rather than inventing a third the server has never seen.
+    //
+    // WIDTH IS A SEPARATE QUESTION, and it is answered by device.width below.
+    // Saying "ios" was true about what this can draw and silent about how much
+    // room it has, so the server laid a phone column down the middle of a
+    // window. It reads the viewport now.
     platform: "ios",
     components: COMPONENTS,
     actions: ACTIONS,
@@ -452,11 +478,99 @@ function node(n) {
       return '<div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin:8px 0">' +
         '<div style="width:' + Math.max(0, Math.min(100, Number(p.value) || 0)) + '%;height:100%;background:var(--accent)"></div></div>';
 
+    // ---- what the phones draw that a window can draw too -----------------
+    //
+    // These were all falling through to `default`, which renders a node's
+    // CHILDREN and drops the node itself. For a Gradient or an SVG that means
+    // nothing appears at all; for the greeting it meant no word; for the way
+    // into training it meant no control. The desktop was not a smaller version
+    // of the app, it was the app with its scrims, its icons, its chevrons and
+    // its one button missing.
+
+    case "SVG": {
+      // One path, viewBox and all, straight through. Every chevron, arrow,
+      // cross and tab glyph in the catalog is one of these.
+      const vb = esc(p.viewBox || "0 0 24 24");
+      const fill = p.fill && p.fill !== "none" ? esc(tok(p.fill)) : "none";
+      const stroke = p.stroke ? esc(tok(p.stroke)) : "none";
+      return '<svg viewBox="' + vb + '" style="' + s + ';display:block" ' +
+        'fill="' + fill + '" stroke="' + stroke + '" ' +
+        'stroke-width="' + (Number(p.strokeWidth) || 2) + '" ' +
+        'stroke-linecap="' + esc(p.strokeLinecap || "round") + '" ' +
+        'stroke-linejoin="' + esc(p.strokeLinejoin || "round") + '">' +
+        '<path d="' + esc(p.d || "") + '"></path></svg>';
+    }
+
+    case "Gradient": {
+      const cols = (p.colors || []).map((c) => tok(c));
+      const locs = p.locations || [];
+      const stops = cols.map((c, i) =>
+        esc(c) + (locs[i] != null ? " " + Math.round(locs[i] * 100) + "%" : "")).join(",");
+      const dir = p.direction === "horizontal" ? "to right" : "to bottom";
+      return '<div style="' + s + ';background:linear-gradient(' + dir + "," + stops + ')"></div>';
+    }
+
+    case "BlurBackground":
+      // A real backdrop blur — the one thing a browser does better than the
+      // phones, and for free.
+      return '<div style="' + s + ';backdrop-filter:blur(' +
+        Math.round((Number(p.intensity) || 60) / 3) + 'px);-webkit-backdrop-filter:blur(' +
+        Math.round((Number(p.intensity) || 60) / 3) + 'px)">' + kids + "</div>";
+
+    case "ProgressBar":
+      return '<div style="' + s + ';height:3px;border-radius:2px;background:var(--border);overflow:hidden">' +
+        '<div class="tz-indet" style="height:100%;background:var(--accent)"></div></div>';
+
+    case "FlipText": {
+      // The greeting. Same words, same interval, same idea — one turns into
+      // the next and nothing else on the line moves.
+      const words = (p.words || []).map((w) => esc(String(w)));
+      if (!words.length) return "";
+      const id = "flip" + (node._n = (node._n || 0) + 1);
+      FLIPS.push({ id: id, words: words, ms: Math.max(900, Number(p.intervalMs) || 2600) });
+      return '<span id="' + id + '" style="' + s + ';transition:opacity .25s">' + words[0] + "</span>";
+    }
+
+    case "Modal":
+      // Open state lives in the screen's own state, exactly as on the phone.
+      if (!truthy(stateAt((n.bind && n.bind.open) || ""))) return "";
+      return '<div class="tz-modal"><div class="tz-sheet" style="' + s + '">' + kids + "</div></div>";
+
+    case "SwipeAction": {
+      // THE WAY IN. On a phone it is dragged, because a live microphone
+      // deserves a held intention. A mouse has no thumb to rest, so here it is
+      // the same object as a button — same label, same colours, same amber far
+      // end — and a click commits it. The gesture was never the point; the
+      // deliberateness was, and a click on a pill this size is deliberate.
+      const h = Number(p.height) || 58;
+      return '<button class="tz-press" data-ev="onComplete" style="' + s +
+        ";position:relative;height:" + h + "px;border-radius:" + (Number(p.radius) || 999) + "px" +
+        ";background:" + esc(tok(p.background || "#0B0B0D")) +
+        ";border:" + (p.borderWidth ? p.borderWidth + "px solid " + esc(tok(p.borderColor)) : "none") +
+        ";color:" + esc(tok(p.color || "#fff")) +
+        ";font-size:" + (Number(p.fontSize) || 12) + "px;font-weight:" + (p.weight || 700) +
+        ";letter-spacing:" + (Number(p.tracking) || 1.8) + 'px;width:100%;cursor:pointer">' +
+        esc(label(p.label || "")) +
+        '<span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:' +
+        (Number(p.disc) || 46) + "px;height:" + (Number(p.disc) || 46) +
+        "px;border-radius:50%;background:" + esc(tok(p.targetBackground || "#C9862B")) +
+        ';opacity:.45"></span></button>';
+    }
+
+    case "NeuralField":
+      // The page it draws is HTML and canvas. This IS a browser — it needs no
+      // bridge, no WebView and no stand-in; the same file the phone loads
+      // renders here natively.
+      return '<iframe class="tz-field" style="' + s +
+        ';border:0;background:#000" src="neuralField.html"></iframe>';
+
     // Everything the phones draw natively and this window has no business
-    // imitating — the keyboard preview, the mic toggle, the particle mark.
-    // Their children still render, so a card built around one is not lost,
-    // and a node that shipped a fallback gets it — the same rule the phone
-    // renderer follows, so the server can keep emitting one tree for both.
+    // imitating — the keyboard preview (there is no keyboard to configure
+    // here), the mic toggle and the spoken session (this app records through
+    // its own tray hotkey, not an in-page control). Their children still
+    // render, so a card built around one is not lost, and a node that shipped
+    // a fallback gets it — the same rule the phone renderer follows, so the
+    // server can keep emitting one tree for both.
     default:
       return kids || (n.fallback ? node(n.fallback) : "");
   }
@@ -554,10 +668,31 @@ async function run(action) {
   if (typeof action === "string") return run((CURRENT_ACTIONS || {})[action]);
   switch (action.kind) {
     case "navigate": go(action.screenId, action.params); return;
-    case "back": back(); return;
+    // TWO NAMES FOR ONE THING, and only one was answered. The catalog says
+    // "navigateBack" — fifteen times, on every back control in the four inside
+    // screens — and this understood only "back". So every one of those arrows
+    // was drawn, was clickable, and did nothing; an action this switch does not
+    // know falls through in silence, which is how it stayed invisible.
+    case "back": case "navigateBack": case "dismiss": back(); return;
     case "switchTab": switchTab(action.tabId); return;
     case "reloadScreen": case "refresh": await paint(true); return;
     case "setState": setStatePath(action.path, resolveValue(action.value)); repaint(); return;
+    case "clearState": setStatePath(action.path, undefined); repaint(); return;
+    case "appendState": {
+      const cur = stateAt(action.path);
+      const arr = Array.isArray(cur) ? cur.slice() : [];
+      arr.push(resolveValue(action.value));
+      setStatePath(action.path, arr);
+      repaint();
+      return;
+    }
+    // The same evaluator the tree's visibleIf uses, so a condition means the
+    // same thing whether it gates a node or an action.
+    case "condition": {
+      const branch = visible(action.if) ? action.then : action.else;
+      if (branch) await run(branch);
+      return;
+    }
     case "toggleState": setStatePath(action.path, !truthy(stateAt(action.path))); repaint(); return;
     case "toggleInArray": {
       const cur = stateAt(action.path);
@@ -666,15 +801,26 @@ async function paint(force) {
   repaint(screen);
 }
 
+/** First node in the tree carrying this event, and the action it names. */
+function findEvent(n, name) {
+  if (!n || typeof n !== "object") return null;
+  if (n.on && n.on[name]) return n.on[name];
+  for (const c of n.children || []) { const r = findEvent(c, name); if (r) return r; }
+  return null;
+}
+
 let CURRENT_SCREEN = null;
 function repaint(screen) {
   if (screen) CURRENT_SCREEN = screen;
   const sc = CURRENT_SCREEN;
   if (!sc) return;
   handlers = [];
+  // Whatever was turning words over belongs to the DOM about to be replaced.
+  stopFlips();
   const html = sc.root ? node(sc.root) : '<div class="pad">' + (sc.blocks || []).map(node).join("") + "</div>";
   const view = $("view");
   view.innerHTML = html;
+  startFlips();
 
   handlers.forEach((h) => {
     const el = view.querySelector('[data-h="' + h.id + '"]');
@@ -684,6 +830,12 @@ function repaint(screen) {
     const path = el.getAttribute("data-bind");
     if (!path) return;
     el.addEventListener("input", () => { setStatePath(path, el.value); });
+  });
+  // A committed pill. `onComplete` is the phones' name for it and the catalog
+  // sends the same tree to both, so the name is honoured rather than renamed.
+  view.querySelectorAll("[data-ev='onComplete']").forEach((el) => {
+    const ref = (sc.root && findEvent(sc.root, "onComplete")) || null;
+    if (ref) el.addEventListener("click", () => { void run(ref); });
   });
   view.querySelectorAll("[data-toggle]").forEach((el) => {
     const path = el.getAttribute("data-toggle");
@@ -698,6 +850,38 @@ function repaint(screen) {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+
+/** Stop every flip line. Called before a paint replaces the DOM under them. */
+function stopFlips() {
+  FLIP_TIMERS.forEach(clearInterval);
+  FLIP_TIMERS = [];
+  FLIPS = [];
+}
+
+/**
+ * Start the flip lines this paint produced.
+ *
+ * A crossfade rather than the phones' 3D turn: the turn there is a native
+ * transform on a native text node, and a browser doing the same thing over a
+ * blurred backdrop repaints the whole stacking context. The word still changes
+ * language, which is the part anyone notices.
+ */
+function startFlips() {
+  FLIPS.forEach((f) => {
+    const el = document.getElementById(f.id);
+    if (!el || f.words.length < 2) return;
+    let i = 0;
+    FLIP_TIMERS.push(setInterval(() => {
+      el.style.opacity = "0";
+      setTimeout(() => {
+        i = (i + 1) % f.words.length;
+        el.textContent = f.words[i];
+        el.style.opacity = "1";
+      }, 250);
+    }, f.ms));
+  });
+  FLIPS = [];
+}
 
 function renderTabs() {
   $("tabs").innerHTML = TABS.map((t) =>
