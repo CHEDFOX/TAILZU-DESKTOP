@@ -74,6 +74,11 @@ const ACTIONS = [
   // this renderer knew only "back", so every back control in the window was
   // drawn, clickable, and did nothing.
   "navigateBack", "dismiss", "clearState", "appendState", "condition",
+  // Buying. There is no store on a desktop, so these open RevenueCat's Web
+  // Billing checkout in the user's browser and then ask the server again.
+  // Declared, because a capability list that omits them is the server being
+  // told this window cannot take a payment — and it now can.
+  "iap.subscribe", "iap.showPaywall", "iap.restore",
 ];
 
 let ENV = null;          // baseUrl, fallbackToken, tone, language
@@ -1079,6 +1084,92 @@ function pcm16k(f32, inRate) {
 }
 
 // ---------------------------------------------------------------------------
+// Paying
+// ---------------------------------------------------------------------------
+
+/**
+ * Who this is, for the checkout link.
+ *
+ * The Supabase access token is a JWT and `sub` is the user id. Read without
+ * verifying, deliberately: this is used to address a checkout page, never to
+ * authorise anything. Every request that matters still carries the token
+ * itself and is verified by a server that has the key.
+ */
+function userId() {
+  const t = SESSION && SESSION.access_token;
+  if (!t) return "";
+  try {
+    const body = t.split(".")[1];
+    const json = atob(body.replace(/-/g, "+").replace(/_/g, "/"));
+    return String(JSON.parse(json).sub || "");
+  } catch { return ""; }
+}
+
+/**
+ * Open RevenueCat's Web Billing checkout, in the user's own browser.
+ *
+ * Not in this window. A checkout is a place people expect to recognise — a
+ * real address bar, a padlock, a saved card — and an app-shaped frame around
+ * somebody's card details is the shape of every phishing page ever built. It
+ * is also the only way the browser's own autofill and 3-D Secure work.
+ *
+ * The id goes in the path because that is how RevenueCat attributes a Web
+ * Billing purchase to an app user, which is what makes the entitlement follow
+ * the account instead of the machine.
+ */
+function buyOnWeb() {
+  const base = String((BOOT && BOOT.flags && BOOT.flags["paywall.web.url"]) || "").replace(/\/+$/, "");
+  const uid = userId();
+  if (!base || !uid) {
+    // Said plainly rather than swallowed. A dead button is the bug this whole
+    // case exists to fix, and a silent failure here would just move it.
+    toast(base ? "Sign in first to subscribe." : "Subscriptions aren't set up for the desktop app yet.");
+    return;
+  }
+  window.tailzuApp.openExternal(base + "/" + encodeURIComponent(uid));
+  toast("Finish in your browser — this window updates when you're back.");
+  // They are about to leave. The answer arrives by webhook while they are
+  // gone, so the moment they come back is the moment to ask again.
+  WATCH_ENTITLEMENT = true;
+}
+
+/**
+ * Ask the server whether this account is paid, and repaint if it changed.
+ *
+ * The server is the only thing that knows — the entitlement is a row against
+ * the account, written by RevenueCat's webhook. A client that decided this for
+ * itself would be a client anyone could edit into a subscriber.
+ */
+let WATCH_ENTITLEMENT = false;
+async function refreshEntitlement(loud) {
+  const was = !!(BOOT && BOOT.flags && BOOT.flags["quota.entitled"]);
+  try {
+    BOOT = await bootstrap();
+  } catch {
+    if (loud) toast("Couldn't reach the backend.");
+    return;
+  }
+  const now = !!(BOOT.flags && BOOT.flags["quota.entitled"]);
+  if (now && !was) {
+    WATCH_ENTITLEMENT = false;
+    toast("You're subscribed. Thank you.");
+    await paint(true);
+  } else if (loud) {
+    toast(now ? "Your subscription is active." : "No subscription found on this account.");
+  }
+}
+
+// BACK FROM THE BROWSER. The purchase completes somewhere else entirely and
+// tells the server, not this window — so returning to it is the only signal
+// there is that the answer may have changed. Only after a checkout was opened:
+// re-bootstrapping on every focus would be a request every time somebody
+// alt-tabs.
+window.addEventListener("focus", () => {
+  if (!WATCH_ENTITLEMENT || !SESSION) return;
+  void refreshEntitlement(false);
+});
+
+// ---------------------------------------------------------------------------
 // The sign-in screen
 // ---------------------------------------------------------------------------
 
@@ -1364,6 +1455,28 @@ async function run(action, eventValue) {
     case "haptic": return;                      // no equivalent, and none faked
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(action.url); return;
+
+    // ── buying ────────────────────────────────────────────────────────────
+    // Every row on the paywall fires one of these, and this window answered
+    // none of them: the screen drew, the rows clicked, and nothing happened —
+    // the same silence `navigateBack` used to fall into.
+    //
+    // RevenueCat has no desktop SDK, so there is no store to call. Web Billing
+    // is its own checkout, opened in the user's browser, and the identity
+    // already lines up — the app user id is the Supabase user id on both
+    // sides, so paying here writes the same entitlements row a phone purchase
+    // writes, and someone who paid on their phone is already entitled here.
+    case "iap.subscribe":
+    case "iap.showPaywall":
+      return buyOnWeb();
+
+    // NOTHING TO RESTORE FROM, and nothing that needs restoring. On a phone
+    // this asks the store to re-attach a purchase made on another device. Here
+    // the server already knows: entitlement is a row against this account, not
+    // a receipt on this machine. So the honest action is to go and ask it.
+    case "iap.restore":
+      await refreshEntitlement(true);
+      return;
     case "sequence":
       for (const a of action.actions || []) await run(a);
       return;
