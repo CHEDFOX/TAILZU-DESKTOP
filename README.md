@@ -40,7 +40,7 @@ npm start
 | key | meaning |
 | --- | --- |
 | `baseUrl` | your backend, e.g. `https://api.tailzu.space` |
-| `token` | a static token from the backend's `STATIC_BEARER_TOKENS` |
+| `token` | development only — a static token from the backend's `STATIC_BEARER_TOKENS`. It cannot be used to dictate: recording requires a signed-in account. |
 | `language` | `auto` or a code like `en` / `hi` / `es` |
 | `hotkey` | toggle accelerator, default `CommandOrControl+Shift+Space` |
 | `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (also in the tray menu) |
@@ -56,6 +56,10 @@ can't leak into an installer.
 
 ## Use it
 
+Dictation needs an account, the same as on the phones — open the window from
+the tray and sign in. The hotkey answers a signed-out machine by opening that
+window rather than recording into a history no account owns.
+
 - **Toggle**: press the hotkey → speak → press again.
 - **Hold-to-talk** (`hold: true`): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you
@@ -65,7 +69,9 @@ can't leak into an installer.
 
 ## Permissions (one-time)
 
-- **Microphone** — granted on first record.
+- **Microphone** — granted on first record. The app holds it for its own page,
+  so the only gate left is the OS one: Windows **Settings → Privacy & security
+  → Microphone**, macOS its own prompt. A blocked mic names the panel to open.
 - **macOS auto-paste** — enable Tailzu under **System Settings → Privacy &
   Security → Accessibility** (without it, text is still on the clipboard).
 - **macOS hold-to-talk** — the key hook also needs **Input Monitoring**.
@@ -88,8 +94,9 @@ service, no store review. Notes:
 - The installer is **unsigned**, so Windows SmartScreen shows "Windows protected
   your PC" — click **More info → Run anyway**. Code-signing certificates remove
   that later.
-- The installed app starts with **no token** — open the tray → "Edit config…",
-  paste `baseUrl` + `token`, save, then Quit + relaunch.
+- The installed app starts **signed out** — open the tray → "Open Tailzu" and
+  sign in with the same account as the phone. Only `baseUrl` needs to be in
+  config.json, and a packaged build already carries the right one.
 - macOS `.dmg` must be built on a Mac (electron-builder can't cross-build mac
   from Windows). Notarization is a later step for public distribution.
 

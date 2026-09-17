@@ -529,13 +529,20 @@ function trayIcon() {
 
 function refreshTray() {
   if (!tray) return;
-  tray.setToolTip(recording ? "Tailzu — listening…" : "Tailzu — ready");
+  tray.setToolTip(recording ? "Tailzu — listening…"
+    : signedIn() ? "Tailzu — ready" : "Tailzu — sign in to dictate");
   tray.setContextMenu(buildMenu());
 }
 
 function buildMenu() {
   return Menu.buildFromTemplate([
-    { label: recording ? "◉ Listening — press hotkey to stop" : "Dictate", click: toggleDictation },
+    // Says what the press will actually do. A plain "Dictate" on a signed-out
+    // machine promises something the click cannot deliver.
+    {
+      label: recording ? "◉ Listening — press hotkey to stop"
+        : signedIn() ? "Dictate" : "Sign in to dictate…",
+      click: toggleDictation,
+    },
     { label: "Open Tailzu", click: openAppWindow },
     { type: "separator" },
     {
@@ -668,19 +675,87 @@ ipcMain.on("app:token", (_e, t) => {
 ipcMain.on("app:changed", () => { void refreshAccountTone(); });
 
 // ---- Dictation toggle --------------------------------------------------------
+
+/** DICTATION NEEDS AN ACCOUNT, exactly as it does on the phones.
+ *
+ *  Every path into recording comes through toggleDictation — the hotkey,
+ *  hold-to-talk, the tray item, the window's "Dictate now" — so this is the one
+ *  place that has to ask.
+ *
+ *  It was open, because `cfg.token` carries a fallback that authenticates a
+ *  signed-out machine against a synthetic user. That made the desktop the one
+ *  surface where you could dictate without registering, and put the words
+ *  somewhere their owner could never read them: a history no account owns.
+ *
+ *  Refusing silently would be worse than the hole. A hotkey that does nothing
+ *  reads as a broken hotkey, so this says what is wrong and opens the one
+ *  window that can fix it. */
+let lastSignInNudge = 0;
+function requireAccount() {
+  if (signedIn()) return true;
+  openAppWindow();          // lands on the gate — render() shows it when there is no session
+  // ONCE, NOT ONCE PER KEY REPEAT. Hold-to-talk calls this from `keydown`,
+  // which auto-repeats for as long as the key is down — so an unthrottled
+  // notification here would answer a two-second hold with a stack of twenty
+  // identical toasts.
+  const now = Date.now();
+  if (now - lastSignInNudge > 5000) {
+    lastSignInNudge = now;
+    new Notification({
+      title: "Tailzu",
+      body: "Sign in to dictate — your words belong to your account.",
+    }).show();
+  }
+  return false;
+}
+
+/** Hand the recorder a token that is actually alive.
+ *
+ *  tokenNow() is synchronous by design — the hotkey path cannot afford a
+ *  round-trip on every press — but a machine left alone overnight wakes with a
+ *  spent access token, and spending it costs the whole dictation: you speak,
+ *  and the answer is "HTTP 401" after the fact.
+ *
+ *  So the refresh happens only when the token is actually stale, which is once
+ *  an hour at worst and never on a press that follows another. The session id
+ *  is re-checked after the await: a second press can arrive while the POST is
+ *  in flight, and starting a capture the user has already cancelled would leave
+ *  the mic open with the tray saying "ready". */
+async function startRecording(sid) {
+  if (tokenStale()) await refreshSession();
+  // Superseded while we waited — either stopped, or replaced by a newer press.
+  if (!recording || sid !== activeSession) return;
+  // The refresh may have failed, which means the session is gone rather than
+  // merely old. Stop instead of recording into a void.
+  if (!signedIn()) {
+    recording = false;
+    hideOverlay();   // toggleDictation already raised it for a live session
+    refreshTray();
+    requireAccount();
+    return;
+  }
+  sendToRecorder("start-recording", {
+    // The account's token, always: dictation requires one, so there is no
+    // longer a fallback path that writes to a user nobody can read.
+    baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
+    tone: currentTone(), live: cfg.live, session: sid,
+  });
+}
+
 function toggleDictation() {
+  // Only the START is gated. A stop must always go through, or a refusal that
+  // arrives mid-dictation (a session expiring while the mic is open) would
+  // strand the recorder running with no way to end it.
+  if (!recording && !requireAccount()) return;
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
-    sendToRecorder("start-recording", {
-      // The account's token when there is one, so a dictation from the hotkey
-      // lands in the same history the window shows instead of on the static
-      // synthetic user the fallback token resolves to.
-      baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
-      tone: currentTone(), live: cfg.live, session: activeSession,
-    });
+    // Overlay BEFORE the start call: when the token is fresh startRecording
+    // runs to completion synchronously, and a failure inside it hides an
+    // overlay that this line had not raised yet.
     if (cfg.live) { showOverlay(); overlayText(""); }
+    void startRecording(activeSession);
   } else {
     sendToRecorder("stop-recording", { session: activeSession });
   }
