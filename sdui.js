@@ -48,7 +48,24 @@ const COMPONENTS = [
   // and its one button missing.
   "SVG", "Gradient", "BlurBackground", "FlipText", "Modal", "ProgressBar",
   "SwipeAction", "NeuralField",
+  // The Train tab, in full. The conversation is a real repeater here now, and
+  // the mic records in the page rather than through the tray's global hotkey —
+  // so the refine screen is the same screen it is on a phone, not a notice
+  // saying it needs an update.
+  "ChatThread", "VoiceToggle", "VoiceButton",
+  // The spoken session: a socket to the same transcribe stream the tray uses,
+  // the same converse endpoint, and the browser's own synthesiser for the
+  // reply. The phone version spends half its length on audio-session
+  // categories so the reply leaves the speaker rather than the earpiece; a
+  // window has neither, so none of that exists here.
+  "VoiceSession",
 ];
+// NOT declared: ScreenHoldTouches. The window does not implement it, and
+// claiming a component to unlock a layout is how a capability list stops
+// meaning anything. The backend reaches the same conclusion from
+// `formFactor: "desktop"` and for the true reason — the flag exists because a
+// scroll view steals the touches of a child being DRAGGED, and nothing here is
+// dragged: the pill is a click, because a mouse has no thumb to rest.
 const ACTIONS = [
   "navigate", "back", "switchTab", "callEndpoint", "setState", "toggleState",
   "toggleInArray", "refresh", "openUrl", "toast", "haptic", "sequence",
@@ -598,6 +615,37 @@ function node(n) {
       return '<iframe class="tz-field" style="' + s +
         ';border:0;background:#000" src="neuralField.html"></iframe>';
 
+    // THE CONVERSATION. SDUI has no repeater, so the Train tab's thread is one
+    // node that reads an array out of state and draws it — the same contract
+    // the phones implement, and the reason the server can append a row and
+    // have both surfaces show it.
+    //
+    // This window used to fall through to `default` and draw the node's
+    // fallback: a line saying the conversation needed an update, on a build
+    // that was perfectly capable of holding one.
+    case "ChatThread":
+      return chatThread(n, p, s);
+
+    // The mic, in the page. Not the tray's: that one records globally and
+    // pastes into whatever app has focus, which is the wrong verb entirely for
+    // a control that is supposed to fill the field beside it. The window has
+    // its own microphone permission, so it records here and writes the
+    // transcript into the bound path, exactly as the phones do.
+    //
+    // VoiceToggle and VoiceButton differ on the phones by how they are held.
+    // A mouse has no hold, so both are a click, and the catalog's fallback
+    // from one to the other costs nothing.
+    case "VoiceToggle":
+    case "VoiceButton":
+      return voiceButton(n, p, s);
+
+    // The spoken session. Renders nothing — it owns the audio loop and writes
+    // what it knows into the screen's state, so everything around it stays
+    // ordinary backend JSON. Started on the first paint that contains it.
+    case "VoiceSession":
+      startSession(n);
+      return "";
+
     // Everything the phones draw natively and this window has no business
     // imitating — the keyboard preview (there is no keyboard to configure
     // here), the mic toggle and the spoken session (this app records through
@@ -608,6 +656,372 @@ function node(n) {
     default:
       return kids || (n.fallback ? node(n.fallback) : "");
   }
+}
+
+/**
+ * The Train tab's conversation.
+ *
+ * Every visual value is a prop with a default, so the server moves all of it
+ * without a build — the same rule the phone component follows, and the reason
+ * `colors` can arrive half-filled and still land.
+ *
+ * Rows, whatever the server appended:
+ *   { role: "ask",      text }            what the app asked
+ *   { role: "mine",     text }            what the user answered
+ *   { role: "note",     text }            a centred aside ("Learned: dry")
+ *   { role: "variants", options: [...] }  three readings to choose between
+ */
+const CHAT_D = {
+  askBg: "rgba(255,255,255,0.06)", askBorder: "rgba(255,255,255,0.09)",
+  askText: "rgba(255,255,255,0.9)", mineBg: "#FFFFFF", mineText: "#000000",
+  noteText: "#E8A23C", noteBg: "rgba(232,162,60,0.1)", noteBorder: "rgba(232,162,60,0.26)",
+  variantBg: "rgba(255,255,255,0.05)", variantBorder: "rgba(255,255,255,0.1)",
+  variantText: "rgba(255,255,255,0.92)", angleText: "rgba(255,255,255,0.4)",
+  pickedBg: "rgba(232,162,60,0.13)", pickedBorder: "#E8A23C",
+  labelText: "rgba(255,255,255,0.38)", radius: 16, gap: 11,
+};
+
+/** Which option was taken in which row, for the screen currently painted.
+ *  Keyed by row index: a thread only ever grows, so an index is stable. */
+let CHAT_PICKED = {};
+
+function chatThread(n, p, s) {
+  const c = { ...CHAT_D, ...(p.colors || {}) };
+  const rows = (() => { const r = stateAt((n.bind && n.bind.thread) || ""); return Array.isArray(r) ? r : []; })();
+  const pickLabel = label(p.pickLabel) || "Tap the one that sounds like you";
+
+  const bubble = (r, i) => {
+    if (r.role === "mine") {
+      return '<div style="align-self:flex-end;max-width:82%;background:' + esc(tok(c.mineBg)) +
+        ";padding:10px 14px;border-radius:" + c.radius + "px;border-bottom-right-radius:5px" +
+        ';font-size:14.5px;line-height:21px;color:' + esc(tok(c.mineText)) + '">' + esc(r.text || "") + "</div>";
+    }
+    if (r.role === "note") {
+      return '<div style="align-self:center;background:' + esc(tok(c.noteBg)) + ";border:1px solid " +
+        esc(tok(c.noteBorder)) + ";border-radius:999px;padding:5px 11px;font-size:11px;letter-spacing:.5px;color:" +
+        esc(tok(c.noteText)) + '">' + esc(r.text || "") + "</div>";
+    }
+    if (r.role === "variants") {
+      const options = Array.isArray(r.options) ? r.options.filter((o) => o && o.text) : [];
+      if (!options.length) return "";
+      const chose = CHAT_PICKED[i];
+      const opts = options.map((o, j) => {
+        const isPicked = chose === j;
+        const dimmed = chose != null && !isPicked;
+        return '<button class="tz-press" data-pick="' + i + ":" + j + '"' +
+          (chose != null ? " disabled" : "") +
+          ' style="display:block;width:100%;text-align:left;cursor:' + (chose != null ? "default" : "pointer") +
+          ";background:" + esc(tok(isPicked ? c.pickedBg : c.variantBg)) +
+          ";border:1px solid " + esc(tok(isPicked ? c.pickedBorder : c.variantBorder)) +
+          ";border-radius:14px;padding:11px 13px;opacity:" + (dimmed ? ".3" : "1") + '">' +
+          (o.angle
+            ? '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;color:' +
+              esc(tok(isPicked ? c.pickedBorder : c.angleText)) + '">' + esc(o.angle) + "</div>"
+            : "") +
+          '<div style="font-size:14px;line-height:21px;color:' + esc(tok(c.variantText)) + '">' +
+          esc(o.text) + "</div></button>";
+      }).join("");
+      return '<div style="display:flex;flex-direction:column;gap:7px">' +
+        '<div style="font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;color:' +
+        esc(tok(c.labelText)) + '">' + esc(r.label || pickLabel) + "</div>" + opts + "</div>";
+    }
+    // Anything else is something the app said.
+    return '<div style="align-self:flex-start;max-width:88%;background:' + esc(tok(c.askBg)) +
+      ";border:1px solid " + esc(tok(c.askBorder)) + ";padding:12px 14px;border-radius:" + c.radius +
+      "px;border-bottom-left-radius:5px;font-size:14.5px;line-height:22px;color:" +
+      esc(tok(c.askText)) + '">' + esc(r.text || "") + "</div>";
+  };
+
+  return '<div data-chat="1" style="' + s + ";flex:1;min-height:0;overflow-y:auto;display:flex" +
+    ";flex-direction:column;gap:" + c.gap + 'px;padding-bottom:10px">' +
+    rows.map(bubble).join("") + "</div>";
+}
+
+/**
+ * The in-page microphone.
+ *
+ * Click to start, click again to stop. The clip goes to the same
+ * /v1/transcribe-clean the tray uses, the text is written into the bound path,
+ * and `onChange` fires — which is the moment the server's action refines it.
+ * A failure fires `onError` with the real reason, because a permission denial
+ * and a dead connection are not the same problem and must not read alike.
+ */
+let MIC = null;   // { rec, stream, path, node } while a capture is open
+
+function voiceButton(n, p, s) {
+  const size = Number(p.size) || 44;
+  const on = !!(MIC && MIC.path === ((n.bind && n.bind.value) || ""));
+  return '<button class="tz-press" data-mic="' + esc((n.bind && n.bind.value) || "") + '"' +
+    ' aria-pressed="' + on + '" title="' + (on ? "Stop and transcribe" : "Record") + '"' +
+    ' style="' + s + ";flex:none;width:" + size + "px;height:" + size + "px;border-radius:50%;cursor:pointer" +
+    ";border:0;display:flex;align-items:center;justify-content:center;background:" +
+    esc(tok(on ? "#e0556b" : (p.background || "#E8A23C"))) + '">' +
+    // A filled circle while live, the mic glyph at rest. Drawn rather than
+    // loaded: the phones use an uploaded icon, and a window that waited on
+    // that upload would show an empty button until somebody made one.
+    (on
+      ? '<span style="width:' + Math.round(size * 0.34) + "px;height:" + Math.round(size * 0.34) +
+        'px;border-radius:3px;background:#fff"></span>'
+      : '<svg width="' + Math.round(size * 0.46) + '" height="' + Math.round(size * 0.46) +
+        '" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2" stroke-linecap="round">' +
+        '<rect x="9" y="2" width="6" height="12" rx="3" fill="#000" stroke="none"/>' +
+        '<path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>') +
+    "</button>";
+}
+
+async function micStart(path, n) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]
+    .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    MIC = null;
+    try {
+      if (!chunks.length) throw new Error("no audio captured");
+      const type = rec.mimeType || "audio/webm";
+      const fd = new FormData();
+      fd.append("audio", new Blob(chunks, { type }), "audio." + (type.indexOf("ogg") !== -1 ? "ogg" : "webm"));
+      fd.append("targetApp", "Desktop");
+      fd.append("language", String(n.props?.language || "auto"));
+      const res = await fetch(ENV.baseUrl + "/v1/transcribe-clean", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + (await bearer()) },
+        body: fd,
+      });
+      if (!res.ok) throw new Error("transcribe → " + res.status);
+      const j = await res.json();
+      const text = String(j.cleanedText || j.transcript || j.text || "").trim();
+      if (!text) throw new Error("no speech detected");
+      if (path) setStatePath(path, text);
+      repaint();
+      const ch = n.on && n.on.onChange;
+      if (ch) await run(ch, text);
+    } catch (err) {
+      repaint();
+      const eh = n.on && n.on.onError;
+      const msg = (err && err.message) ? err.message : String(err);
+      if (eh) await run(eh, msg); else toast(msg);
+    }
+  };
+  rec.start();
+  MIC = { rec, stream, path, node: n };
+  repaint();
+}
+
+/**
+ * A SPOKEN CONVERSATION, the same loop the phones run.
+ *
+ * Renders nothing. It owns the audio and writes what it knows into the screen's
+ * state, so the screen around it stays ordinary backend JSON — a bubble bound
+ * to `level`, a line bound to `line`, a button that posts `$state.turns`.
+ *
+ * One turn at a time:
+ *
+ *   listening   a socket to /v1/transcribe-stream fills in text as you talk.
+ *               A pause of silenceMs with something said ends the turn, and
+ *               the mic closes — it must be shut while the app talks, or it
+ *               transcribes its own voice.
+ *   thinking    the conversation so far goes to `path`; a reply comes back.
+ *   speaking    the browser says it. When it finishes, listening resumes.
+ *
+ * Turn-based, not full duplex — you cannot talk over it — which is the same
+ * limit the phones have, for the same reason.
+ *
+ * The phone version spends half its length on AVAudioSession categories, so
+ * the reply comes out of the speaker rather than the earpiece. A window has no
+ * earpiece and no categories, and all of that simply does not exist here.
+ */
+const LEVEL_TICK_MS = 90, LEVEL_ON_SPEECH = 0.8, LEVEL_FLOOR = 0.15, LEVEL_DECAY = 0.86;
+
+let SESSION_RUN = null;   // the live loop, or null
+
+function startSession(n) {
+  if (SESSION_RUN) return;                 // already running for this screen
+  const p = deepResolve(n.props || {});
+  const r = {
+    alive: true,
+    endpoint: String(p.path || "/v1/train/converse"),
+    silenceMs: Math.max(600, Number(p.silenceMs) || 1500),
+    maxTurns: Math.max(2, Number(p.maxTurns) || 40),
+    language: p.language ? String(p.language) : "auto",
+    statePath: String(p.statePath || "sessionState"),
+    levelPath: String(p.levelPath || "level"),
+    linePath: String(p.linePath || "line"),
+    turnsPath: String(p.turnsPath || "turns"),
+    node: n, turns: [], committed: "", partial: "",
+    ws: null, stream: null, ctx: null, proc: null, src: null,
+    decay: null, silence: null, level: 0,
+  };
+  SESSION_RUN = r;
+
+  const put = (path, v) => { if (path) setStatePath(path, v); };
+  const setState_ = (v) => { put(r.statePath, v); repaint(); };
+  const setLevel = (v) => { r.level = v; put(r.levelPath, v); };
+  const say = (role, text) => {
+    r.turns = r.turns.concat([{ role, text }]);
+    put(r.turnsPath, r.turns);
+    put(r.linePath, text);
+    repaint();
+  };
+  const fail = (m) => {
+    if (!r.alive) return;
+    teardown(r);
+    setState_("error");
+    const eh = n.on && n.on.onError;
+    if (eh) void run(eh, m); else toast(m);
+  };
+
+  const armSilence = () => {
+    clearTimeout(r.silence);
+    r.silence = setTimeout(() => {
+      const said = (r.committed + " " + r.partial).trim();
+      // A pause with nothing in it is a pause, not a turn. Keep listening.
+      if (!said) { armSilence(); return; }
+      closeMic(r);
+      say("user", said);
+      void respond();
+    }, r.silenceMs);
+  };
+  const heard = () => { setLevel(LEVEL_ON_SPEECH); armSilence(); };
+
+  async function listen() {
+    if (!r.alive) return;
+    if (r.turns.length >= r.maxTurns * 2) { setState_("idle"); setLevel(0); return; }
+    r.committed = ""; r.partial = "";
+    setState_("listening");
+    setLevel(LEVEL_FLOOR);
+    // The level has no amplitude behind it — the socket hands over text, not
+    // PCM. So it rises on the arrival of words and decays between them, which
+    // is a true signal about speech even though it is not loudness.
+    r.decay = setInterval(() => {
+      if (r.level > LEVEL_FLOOR) setLevel(Math.max(LEVEL_FLOOR, r.level * LEVEL_DECAY));
+    }, LEVEL_TICK_MS);
+    try {
+      r.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      if (!r.alive) { closeMic(r); return; }
+      const token = await bearer();
+      r.ws = new WebSocket(ENV.baseUrl.replace(/^http/, "ws") + "/v1/transcribe-stream");
+      r.ws.binaryType = "arraybuffer";
+      // A browser socket cannot set an Authorization header; the protocol
+      // carries the token in the start frame, which the server accepts.
+      r.ws.onopen = () => r.ws && r.ws.send(JSON.stringify({
+        type: "start", token, targetApp: "Desktop", language: r.language,
+        sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
+      }));
+      r.ws.onmessage = (ev) => {
+        if (!r.alive) return;
+        let m; try { m = JSON.parse(ev.data); } catch { return; }
+        if (m.type === "partial") { r.partial = m.text || ""; heard(); }
+        else if (m.type === "final") {
+          if (m.text && m.text.trim()) r.committed = (r.committed + " " + m.text.trim()).trim();
+          r.partial = ""; heard();
+        } else if (m.type === "error") fail(m.message || "The microphone stopped.");
+      };
+      r.ws.onerror = () => { /* onclose follows */ };
+      r.ctx = new AudioContext();
+      r.src = r.ctx.createMediaStreamSource(r.stream);
+      r.proc = r.ctx.createScriptProcessor(4096, 1, 1);
+      r.src.connect(r.proc);
+      r.proc.connect(r.ctx.destination);
+      const inRate = r.ctx.sampleRate;
+      r.proc.onaudioprocess = (e) => {
+        if (!r.alive || !r.ws || r.ws.readyState !== 1) return;
+        r.ws.send(pcm16k(e.inputBuffer.getChannelData(0), inRate));
+      };
+      armSilence();
+    } catch (err) {
+      fail(err && err.name === "NotAllowedError"
+        ? "microphone blocked — allow it in your system settings"
+        : ((err && err.message) ? err.message : "Couldn't start listening."));
+    }
+  }
+
+  async function respond() {
+    if (!r.alive) return;
+    setState_("thinking");
+    setLevel(0.12);
+    try {
+      const res = await api(r.endpoint, { turns: r.turns, language: r.language });
+      if (!r.alive) return;
+      const reply = String((res && res.reply) || "").trim();
+      if (!reply) { void listen(); return; }
+      say("assistant", reply);
+      setState_("speaking");
+      setLevel(0.5);
+      speak(reply, () => { if (r.alive) void listen(); });
+    } catch (err) {
+      fail((err && err.message) ? err.message : "Couldn't reach the conversation.");
+    }
+  }
+
+  /** Out loud, then back to listening. A browser with no voices installed
+   *  resolves immediately rather than hanging the loop on an utterance that
+   *  will never fire `onend`. */
+  function speak(text, done) {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) { done(); return; }
+      synth.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      if (r.language && r.language !== "auto") u.lang = r.language;
+      u.onend = done;
+      u.onerror = done;
+      synth.speak(u);
+      // Some engines drop an utterance silently. A ceiling proportional to the
+      // reply keeps a dead synthesiser from ending the conversation.
+      setTimeout(() => { if (r.alive && stateAt(r.statePath) === "speaking") done(); },
+        Math.min(30000, 2000 + text.length * 90));
+    } catch { done(); }
+  }
+
+  void listen();
+}
+
+/** Close the microphone and its socket, leaving the loop able to open another. */
+function closeMic(r) {
+  clearInterval(r.decay); r.decay = null;
+  clearTimeout(r.silence); r.silence = null;
+  try { r.proc && (r.proc.onaudioprocess = null, r.proc.disconnect()); } catch {}
+  try { r.src && r.src.disconnect(); } catch {}
+  try { r.ctx && r.ctx.close(); } catch {}
+  r.proc = r.src = r.ctx = null;
+  if (r.ws) { r.ws.onmessage = r.ws.onclose = r.ws.onerror = null; try { r.ws.close(); } catch {} r.ws = null; }
+  if (r.stream) { r.stream.getTracks().forEach((t) => t.stop()); r.stream = null; }
+}
+
+/** End the conversation for good. Called when the screen goes away — a loop
+ *  that outlives its screen keeps a live microphone open behind a window the
+ *  user believes they have left. */
+function stopSession() {
+  if (!SESSION_RUN) return;
+  SESSION_RUN.alive = false;
+  closeMic(SESSION_RUN);
+  try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch {}
+  SESSION_RUN = null;
+}
+
+/** Float samples at the device rate → 16 kHz signed 16-bit, which is what the
+ *  transcribe socket expects. Linear interpolation; the same routine the tray
+ *  recorder uses, so both paths sound identical to the server. */
+function pcm16k(f32, inRate) {
+  const ratio = inRate / 16000;
+  const outLen = Math.floor(f32.length / ratio);
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const idx = i * ratio, i0 = Math.floor(idx), i1 = Math.min(i0 + 1, f32.length - 1);
+    const frac = idx - i0;
+    let v = f32[i0] * (1 - frac) + f32[i1] * frac;
+    v = Math.max(-1, Math.min(1, v));
+    out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  return out.buffer;
 }
 
 function wordMeter(p) {
@@ -692,14 +1106,24 @@ function toast(msg) {
   toast._t = setTimeout(() => t.classList.remove("on"), 2600);
 }
 
+/** What the control that fired the current action handed over.
+ *
+ *  The catalog writes "$event" where a handler needs it — the transcript a mic
+ *  produced, the error a session raised — and this window resolved it to the
+ *  literal string "$event". So a failed dictation toasted the word "$event" at
+ *  the user instead of saying what went wrong. */
+let EVENT = undefined;
+
 function resolveValue(v) {
   if (typeof v === "string" && v.indexOf("$state.") === 0) return stateAt(v.slice(7));
+  if (v === "$event") return EVENT;
   return v;
 }
 
-async function run(action) {
+async function run(action, eventValue) {
   if (!action) return;
-  if (typeof action === "string") return run((CURRENT_ACTIONS || {})[action]);
+  if (arguments.length > 1) EVENT = eventValue;
+  if (typeof action === "string") return run((CURRENT_ACTIONS || {})[action], ...(arguments.length > 1 ? [eventValue] : []));
   switch (action.kind) {
     case "navigate": go(action.screenId, action.params); return;
     // TWO NAMES FOR ONE THING, and only one was answered. The catalog says
@@ -815,6 +1239,11 @@ function switchTab(tabId) {
 async function paint(force) {
   const cur = STACK[STACK.length - 1];
   if (!cur) return;
+  // A LOOP THAT OUTLIVES ITS SCREEN HOLDS A LIVE MICROPHONE BEHIND A WINDOW
+  // THE USER BELIEVES THEY HAVE LEFT. Ended here, before the next screen can
+  // start one of its own.
+  stopSession();
+  if (MIC) { try { MIC.rec.stop(); } catch {} MIC = null; }
   const view = $("view");
   if (force || !paint._last || paint._last !== cur.screenId) {
     view.innerHTML = '<div class="pad" style="color:var(--label)">Loading…</div>';
@@ -829,6 +1258,8 @@ async function paint(force) {
     return;
   }
   STATE = Object.assign({}, screen.state || {});
+  // Picks belong to the thread that was on screen. A new screen has none.
+  CHAT_PICKED = {};
   CURRENT_ACTIONS = screen.actions || {};
   $("title").textContent = label(screen.title) || "";
   $("back").hidden = STACK.length <= 1;
@@ -836,6 +1267,80 @@ async function paint(force) {
 }
 
 /** First node in the tree carrying this event, and the action it names. */
+/** Find a node by type anywhere in a tree. The chat and the mic need their own
+ *  node back — for the paths the server named on it, and for its handlers —
+ *  and the renderer returns strings, so there is nothing to close over. */
+function findNode(n, type) {
+  if (!n || typeof n !== "object") return null;
+  if (n.type === type) return n;
+  for (const c of n.children || []) { const r = findNode(c, type); if (r) return r; }
+  return null;
+}
+
+/**
+ * Picking a variant.
+ *
+ * Handled here rather than by the server, for the same reason the phones
+ * handle it locally: the click has to answer instantly and a round trip
+ * cannot. The choice is written to paths the SERVER names, then `onSelect`
+ * fires — so the server still decides what a pick MEANS, it just does not have
+ * to be present for the row to respond.
+ */
+function wireChat(view, sc) {
+  const host = view.querySelector("[data-chat]");
+  if (!host) return;
+  const n = findNode(sc.root, "ChatThread");
+  if (!n) return;
+  const p = deepResolve(n.props || {});
+  const rows = (() => { const r = stateAt((n.bind && n.bind.thread) || ""); return Array.isArray(r) ? r : []; })();
+
+  view.querySelectorAll("[data-pick]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const [i, j] = el.getAttribute("data-pick").split(":").map(Number);
+      const options = (rows[i] && rows[i].options || []).filter((o) => o && o.text);
+      const taken = options[j];
+      if (!taken) return;
+      // Snapshot in the order the server's pick endpoint expects: what was
+      // taken, then the two that were not.
+      const others = options.filter((_, k) => k !== j);
+      setStatePath(String(p.chosenPath || "_chosen"), taken.text || "");
+      setStatePath(String(p.anglePath || "_angle"), taken.angle || "");
+      setStatePath(String(p.rejectedAPath || "_rejA"), (others[0] && others[0].text) || "");
+      setStatePath(String(p.rejectedBPath || "_rejB"), (others[1] && others[1].text) || "");
+      CHAT_PICKED[i] = j;
+      repaint();
+      if (n.on && n.on.onSelect) await run(n.on.onSelect, taken.text || "");
+    });
+  });
+
+  // A new row below the fold is a row nobody sees. After the paint, so the
+  // rows have measured — scrolling before that lands short.
+  requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
+}
+
+function wireMic(view, sc) {
+  view.querySelectorAll("[data-mic]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      // Stop first: a second click on a live button is "stop", not "start
+      // another one on top of the one already running".
+      if (MIC) { try { MIC.rec.stop(); } catch { MIC = null; repaint(); } return; }
+      const path = el.getAttribute("data-mic") || "";
+      const n = findNode(sc.root, "VoiceToggle") || findNode(sc.root, "VoiceButton");
+      try {
+        await micStart(path, n || {});
+      } catch (err) {
+        MIC = null;
+        repaint();
+        const eh = n && n.on && n.on.onError;
+        const msg = (err && err.name === "NotAllowedError")
+          ? "microphone blocked — allow it in your system settings"
+          : ((err && err.message) ? err.message : String(err));
+        if (eh) await run(eh, msg); else toast(msg);
+      }
+    });
+  });
+}
+
 function findEvent(n, name) {
   if (!n || typeof n !== "object") return null;
   if (n.on && n.on[name]) return n.on[name];
@@ -876,6 +1381,8 @@ function repaint(screen) {
     if (!path) return;
     el.addEventListener("click", () => { setStatePath(path, !truthy(stateAt(path))); repaint(); });
   });
+  wireChat(view, sc);
+  wireMic(view, sc);
   document.querySelectorAll("#tabs .tab").forEach((b) => {
     b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID));
   });
