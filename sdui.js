@@ -963,6 +963,7 @@ function startSession(n) {
     levelPath: String(p.levelPath || "level"),
     linePath: String(p.linePath || "line"),
     turnsPath: String(p.turnsPath || "turns"),
+    greeting: String(p.greeting || "").trim(),
     node: n, turns: [], committed: "", partial: "",
     ws: null, stream: null, ctx: null, proc: null, src: null,
     decay: null, silence: null, level: 0,
@@ -999,7 +1000,7 @@ function startSession(n) {
   };
   const heard = () => { setLevel(LEVEL_ON_SPEECH); armSilence(); };
 
-  async function listen() {
+  async function listen(warmed) {
     if (!r.alive) return;
     if (r.turns.length >= r.maxTurns * 2) { setState_("idle"); setLevel(0); return; }
     r.committed = ""; r.partial = "";
@@ -1012,9 +1013,13 @@ function startSession(n) {
       if (r.level > LEVEL_FLOOR) setLevel(Math.max(LEVEL_FLOOR, r.level * LEVEL_DECAY));
     }, LEVEL_TICK_MS);
     try {
-      r.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
+      // The microphone opened behind the greeting, when there was one. A
+      // warm-up that failed falls through to asking again, so a denial is
+      // still reported by the same path rather than silently.
+      r.stream = (warmed ? await warmed : null) ||
+        await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
       if (!r.alive) { closeMic(r); return; }
       const token = await bearer();
       r.ws = new WebSocket(ENV.baseUrl.replace(/^http/, "ws") + "/v1/transcribe-stream");
@@ -1091,7 +1096,38 @@ function startSession(n) {
     } catch { done(); }
   }
 
-  void listen();
+  /**
+   * THE WARM-UP HAPPENS BEHIND THE GREETING, NOT BEFORE IT.
+   *
+   * This used to open by listening, so asking for the microphone and opening
+   * the socket happened in silence with the screen already up — and the first
+   * thing the app said arrived only after the user had spoken into that
+   * silence and waited out a round trip. That reads as broken, not as
+   * thinking.
+   *
+   * The greeting arrives written, composed by the server from the name and
+   * what has actually been learned, so it is said at once and the warm-up goes
+   * underneath it. A window has no audio-session category to fight, so here
+   * the microphone itself can be opened early: by the time the sentence ends
+   * the stream is live and the handover is a state change rather than a wait.
+   */
+  if (r.greeting) {
+    r.turns = [{ role: "assistant", text: r.greeting }];
+    put(r.turnsPath, r.turns);
+    put(r.linePath, r.greeting);
+    setState_("speaking");
+    setLevel(0.5);
+    // Not awaited. The point is that it opens WHILE the sentence is spoken.
+    const warm = navigator.mediaDevices
+      .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .catch(() => null);
+    speak(r.greeting, () => {
+      if (!r.alive) { void warm.then((st) => st && st.getTracks().forEach((t) => t.stop())); return; }
+      void listen(warm);
+    });
+  } else {
+    void listen();
+  }
 }
 
 /** Close the microphone and its socket, leaving the loop able to open another. */
