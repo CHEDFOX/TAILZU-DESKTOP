@@ -159,45 +159,88 @@
     .tz-indet{width:33%;animation:tz-indet 1.1s ease-in-out infinite}
     .tz-press{transition:opacity .12s}
     .tz-press:active{opacity:.82}
+
+    /* ---- the sign-in screen --------------------------------------------- */
+    /* Drawn from the server's auth.screen, the same tree the phones render.
+       Everything that decides how it LOOKS is a prop on that tree; these are
+       only the mechanics a browser needs to make the shapes work. */
+    /* A row flying in. The phones spring it; this is the same delay, travel
+       and overshoot, as a keyframe. Held at its start until the delay is up,
+       or five rows flash at full size and then fly. */
+    @keyframes tz-rise{
+      from{opacity:0;transform:translateY(var(--rise-y,100px)) scale(var(--rise-s,.86))}
+      60%{opacity:1;transform:translateY(-6px) scale(1.012)}
+      to{opacity:1;transform:none}
+    }
+    .tz-rise{animation:tz-rise .78s cubic-bezier(.19,1,.22,1) both}
+    @media (prefers-reduced-motion:reduce){ .tz-rise{animation:none} }
+    /* A repaint WITHIN a phase must not fly the rows in again. The screen is
+       repainted on every keystroke — there is one description of what it looks
+       like, rather than a set of imperative edits that have to agree — so the
+       entrance is a property of arriving at a phase, not of being painted. */
+    #gateForm[data-still="1"] .tz-rise{animation:none}
+
+    /* The pill: one method, and the pill IS the field. */
+    .tz-pill{position:relative;display:flex;align-items:center;width:100%;overflow:hidden}
+    .tz-pillin{
+      flex:1;min-width:0;height:100%;background:none;border:0;outline:none;
+      font:inherit;color:var(--text);
+    }
+    .tz-pillin::placeholder{color:rgba(255,255,255,.32)}
+    .tz-dial{
+      position:absolute;left:5px;width:72px;height:calc(100% - 10px);border-radius:999px;
+      background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+      color:var(--text);font:inherit;font-size:14px;text-align:center;outline:none;
+    }
+    /* The disc. It sits left as a badge and moves to the right end, in the
+       brand's dimmer amber, once there is something to send — which is the
+       phone's gesture stated as a position rather than a drag. */
+    .tz-disc{
+      position:absolute;top:50%;transform:translateY(-50%);
+      display:flex;align-items:center;justify-content:center;
+      border-radius:50%;border:1px solid transparent;
+      transition:left .34s cubic-bezier(.19,1,.22,1),right .34s cubic-bezier(.19,1,.22,1),
+                 background .2s,opacity .12s;
+    }
+    .tz-disc:active{opacity:.82}
+    .tz-disc.tz-busy{opacity:.5;pointer-events:none}
+    .tz-disc:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    @media (prefers-reduced-motion:reduce){ .tz-disc{transition:none} }
+
+    /* A wrong code, said without words. */
+    @keyframes tz-shake{
+      0%,100%{transform:translateX(0)} 20%{transform:translateX(8px)}
+      45%{transform:translateX(-8px)} 70%{transform:translateX(4px)}
+    }
+    .tz-shake{animation:tz-shake .26s}
+
+    .tz-social{
+      display:flex;align-items:center;justify-content:center;flex:none;
+      border-radius:50%;cursor:pointer;
+      background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.13);
+    }
+    .tz-social:hover{border-color:rgba(255,255,255,.3)}
+    .tz-social[disabled]{opacity:.45;cursor:default}
   </style>
 </head>
 <body>
   <div id="gate" hidden>
     <div id="gatebg" aria-hidden="true"></div>
     <div class="gatebox">
+      <!-- SERVER-DRAWN. This used to be the screen: tabs, two fields, a big
+           amber button and two wide social rows, all written here — while the
+           phones rendered `auth.screen` from the boot flags. So the first
+           screen of the product was the one screen that looked like a
+           different product, and the only one whose arrangement still needed
+           an installer to change. The same tree paints into #gateForm now.
+
+           The heading, the note and the error line stay markup: the first two
+           are copy the server fills in (desktop.shell.gate), and the third has
+           to be able to say "couldn't reach the backend" on a launch where no
+           tree ever arrived. -->
       <h1 id="gateTitle">Tailzu</h1>
       <p class="sub" id="gateSub">Sign in the same way you do on your phone — your voices, history and words come with you.</p>
-      <div id="stepEmail">
-        <div class="methods" id="methods" hidden>
-          <button data-m="email" id="tabEmail" aria-pressed="true">Email</button>
-          <button data-m="phone" id="tabPhone" aria-pressed="false">Phone</button>
-        </div>
-        <input class="field" id="email" type="email" placeholder="you@example.com"
-               autocomplete="email" autocapitalize="none" spellcheck="false">
-        <div class="phonerow" id="phoneRow" hidden>
-          <input class="field dial" id="dial" value="+1" inputmode="tel" maxlength="5" aria-label="Country code">
-          <input class="field" id="phone" type="tel" placeholder="555 000 1234"
-                 autocomplete="tel" inputmode="tel" spellcheck="false">
-        </div>
-        <button class="cta" id="sendCode">Send code</button>
-
-        <div class="or" id="gateOr">or</div>
-        <div class="oauth">
-          <button id="appleBtn">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.46 1.58-1.51 3.14-.9 1.36-1.84 2.71-3.32 2.71-1.48 0-1.86-.88-3.56-.88-1.66 0-2.25.91-3.6.91-1.36 0-2.3-1.27-3.22-2.61-1.87-2.61-3.34-7.53-1.42-10.86.95-1.66 2.65-2.7 4.5-2.73 1.4-.03 2.72.95 3.58.95.85 0 2.45-1.18 4.12-1.01.7.03 2.67.28 3.93 2.13-.1.06-2.35 1.37-2.33 4.07.03 3.22 2.83 4.29 2.86 4.31z"/></svg>
-            <span id="appleLabel">Continue with Apple</span>
-          </button>
-          <button id="googleBtn">
-            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-            <span id="googleLabel">Continue with Google</span>
-          </button>
-        </div>
-      </div>
-      <div id="stepCode" hidden>
-        <input class="field" id="code" inputmode="numeric" placeholder="6-digit code" maxlength="6" autocomplete="one-time-code">
-        <button class="cta" id="verify">Sign in</button>
-        <button class="lnk" id="backToEmail" style="margin-top:8px;padding-left:0">Start over</button>
-      </div>
+      <div id="gateForm"></div>
       <div class="err" id="gateErr"></div>
       <p class="note" id="gateNote">Dictation needs an account, the same as on your phone.</p>
     </div>

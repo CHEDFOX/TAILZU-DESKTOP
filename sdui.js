@@ -353,7 +353,13 @@ function visible(c) {
 
 /** Style keys → CSS. The SDUI names come first, then the RN-flavoured aliases
  *  the newer screens author with; both are in the tree and both must resolve. */
-const NUMERIC_OK = /opacity|flex|flex-grow|flex-shrink|z-index|font-weight|line-height|aspect-ratio/;
+// Properties that take a bare number in CSS. LINE-HEIGHT IS NOT ONE OF THEM
+// here: CSS reads a bare line-height as a MULTIPLE of the font size, and the
+// catalog writes it the way React Native does — in points. So `lineHeight: 15`
+// on a 10.5px line became a 157px line box, and the consent notice under the
+// sign-in pills had its two lines a third of a screen apart. Every screen that
+// sets one was affected; it was only obvious where the text wrapped.
+const NUMERIC_OK = /opacity|flex|flex-grow|flex-shrink|z-index|font-weight|aspect-ratio/;
 const MAP = {
   direction: "flex-direction", align: "align-items", justify: "justify-content",
   radius: "border-radius", background: "background-color", gap: "gap",
@@ -669,6 +675,30 @@ function node(n) {
     case "VoiceSession":
       startSession(n);
       return "";
+
+    // ── the sign-in screen ────────────────────────────────────────────────
+    // The gate was the last hand-built screen in this window: its own markup,
+    // its own buttons, its own arrangement, while the phones drew theirs from
+    // `auth.screen` in the boot flags. So the first screen of the product was
+    // the one screen that looked like a different product, and every change to
+    // it was a change to an installer.
+    case "AuthPhase":
+      return (n.props?.phases || []).indexOf(AUTH.phase) === -1 ? "" : kids;
+
+    case "Rise":
+      return riseNode(n, p, s, kids);
+
+    case "SwipePill":
+      return swipePill(p, s);
+
+    case "CodeEntry":
+      return codeEntry(p, s);
+
+    case "AppleSignIn":
+      return socialButton("apple", p, s);
+
+    case "GoogleSignIn":
+      return socialButton("google", p, s);
 
     // Everything the phones draw natively and this window has no business
     // imitating — the keyboard preview (there is no keyboard to configure
@@ -1046,6 +1076,152 @@ function pcm16k(f32, inRate) {
     out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
   }
   return out.buffer;
+}
+
+// ---------------------------------------------------------------------------
+// The sign-in screen
+// ---------------------------------------------------------------------------
+
+/**
+ * THE GATE IS A SCREEN LIKE THE OTHERS NOW.
+ *
+ * It was the last one in this window that was not: its own markup in app.html,
+ * its own tabs and its own big amber button, while the phones drew theirs from
+ * `auth.screen` — the pills you swipe, the two round social buttons, the code
+ * pill, the staggered rise. The first screen of the product was the one screen
+ * that looked like a different product, and the only one whose wording and
+ * arrangement still needed an installer.
+ *
+ * The same tree renders here. What differs is what a mouse can do: there is no
+ * thumb to rest on a badge, so the pill commits on a click of its disc or on
+ * Enter — the same rule SwipeAction already follows on the training tab. The
+ * gesture was never the point; the deliberateness was.
+ *
+ * The auth LOGIC stays where it was, in the handlers below. These components
+ * read this object and call into it; they do not know how to sign anybody in.
+ */
+const AUTH = {
+  phase: "entry",         // entry | sending | verify | verifying
+  method: "email",        // which pill was committed
+  email: "",
+  dial: "+1",
+  phone: "",
+  sentTo: "",
+  code: "",
+  codeLength: 6,
+  codeError: false,
+  error: "",
+  /** Which pill is open for typing. Only one at a time: opening the second
+   *  should close the first, or the screen has two carets in it. */
+  open: "",
+};
+
+/** A row that flies in. The phones spring it; a window has no spring, so this
+ *  is the same delay, the same travel and the same overshoot, in CSS. */
+function riseNode(n, p, s, kids) {
+  const delay = Number(p.delayMs) || 0;
+  const from = Number(p.fromY) || 0;
+  const scale = Number(p.scaleFrom) || 1;
+  return '<div class="tz-rise" style="' + s +
+    ";--rise-y:" + from + "px;--rise-s:" + scale +
+    ";animation-delay:" + delay + 'ms">' + kids + "</div>";
+}
+
+/** One sign-in method. The pill IS the field: click it and the caret lands
+ *  inside, type, then the disc at the right end commits. */
+function swipePill(p, s) {
+  const method = p.method === "phone" ? "phone" : "email";
+  if (method === "phone" && !AUTH.phoneOn) return "";
+  const h = Number(p.height) || 56;
+  const open = AUTH.open === method;
+  const value = method === "phone" ? AUTH.phone : AUTH.email;
+  const ready = method === "phone" ? /^\+?\d{7,15}$/.test((AUTH.dial + value).replace(/[^\d+]/g, ""))
+                                   : /.+@.+\..+/.test(value.trim());
+  const badge = h - 10;
+  const label = String((method === "phone" ? p.phoneLabel : p.emailLabel) ||
+    (method === "phone" ? "Phone number" : "Email address"));
+  // The disc: at the left as a badge while the pill is closed, at the right in
+  // the brand's dimmer amber once there is something to send.
+  // In flight: the row still draws, because the tree shows the same children
+  // for "entry" and "sending" — but a second click would send a second code.
+  const busy = AUTH.phase !== "entry";
+  const disc = '<span class="tz-disc' + (busy ? " tz-busy" : "") + '" data-commit="' + method + '"' +
+    ' role="button" tabindex="0" aria-label="Continue"' + (busy ? ' aria-disabled="true"' : "") +
+    ' style="width:' + badge + "px;height:" + badge + "px;" +
+    (ready
+      ? "right:5px;background:" + esc(tok(p.targetBackground || "#C9862B")) +
+        ";border-color:transparent;cursor:pointer"
+      : "left:5px;background:" + esc(tok(p.badgeBackground || "rgba(255,255,255,0.10)")) +
+        ";border-color:" + esc(tok(p.badgeBorderColor || "rgba(255,255,255,0.18)"))) + '">' +
+    (ready
+      ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' +
+        esc(tok(p.targetIconColor || "#000000")) +
+        '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M5 12h13M12 5l7 7-7 7"/></svg>'
+      : methodGlyph(method)) + "</span>";
+  const dial = method === "phone" && open
+    ? '<input class="tz-dial" data-dial="1" value="' + esc(AUTH.dial) + '" maxlength="5"' +
+      ' inputmode="tel" aria-label="Country code">'
+    : "";
+  return '<div class="tz-pill" style="' + s + ";height:" + h + "px;border-radius:" +
+    (Number(p.radius) || h / 2) + "px;background:" + esc(tok(p.background || "rgba(255,255,255,0.06)")) +
+    ";border:1px solid " + esc(tok(p.borderColor || "rgba(255,255,255,0.10)")) + '">' +
+    disc + dial +
+    '<input class="tz-pillin" data-pill="' + method + '"' +
+    // TEXT, not email. Chromium refuses setSelectionRange on an email input,
+    // and the caret has to be restored by hand after every repaint — so the
+    // stricter type costs the field its cursor. inputmode still summons the
+    // right keyboard and autocomplete still offers the right address.
+    ' type="' + (method === "phone" ? "tel" : "text") + '"' +
+    ' inputmode="' + (method === "phone" ? "tel" : "email") + '"' +
+    ' placeholder="' + esc(label) + '" aria-label="' + esc(label) + '"' +
+    ' autocomplete="' + (method === "phone" ? "tel" : "email") + '"' +
+    ' spellcheck="false" value="' + esc(value) + '"' +
+    ' style="padding-left:' + (open ? (method === "phone" ? 96 : 20) : h + 6) + "px" +
+    ";padding-right:" + (ready ? h + 6 : 18) + "px" +
+    ";font-size:" + (Number(p.fontSize) || 15) + "px" +
+    ";color:" + esc(tok(p.textColor || "rgba(255,255,255,0.96)")) + '"></div>';
+}
+
+function methodGlyph(method) {
+  return method === "phone"
+    ? '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="1.8" stroke-linecap="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg>'
+    : '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="1.8" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>';
+}
+
+/** The code step: one pill, the digits spaced out, dots for what is missing. */
+function codeEntry(p, s) {
+  const h = Number(p.height) || 56;
+  const len = AUTH.codeLength;
+  const shown = AUTH.code.padEnd(len, "·").split("").join(" ");
+  const done = AUTH.code.length === len;
+  return '<div class="tz-pill' + (AUTH.codeError ? " tz-shake" : "") + '" data-codebox="1" style="' + s +
+    ";height:" + h + "px;border-radius:" + (h / 2) + "px;cursor:text" +
+    ";background:rgba(255,255,255,0.06);border:1px solid " +
+    (AUTH.codeError ? "var(--danger)" : done ? esc(tok("#C9862B")) : "rgba(255,255,255,0.10)") + '">' +
+    // A real input, held invisible over the pill: the browser's own autofill
+    // for a one-time code only offers itself to a field it can see.
+    '<input data-code="1" inputmode="numeric" autocomplete="one-time-code"' +
+    ' maxlength="' + len + '" value="' + esc(AUTH.code) + '" aria-label="Enter the code we sent you"' +
+    ' style="position:absolute;inset:0;width:100%;height:100%;opacity:0;border:0;background:none">' +
+    '<span style="width:100%;text-align:center;pointer-events:none;font-variant-numeric:tabular-nums' +
+    ";letter-spacing:" + (Number(p.letterSpacing) || 8) + "px" +
+    ";font-size:" + (Number(p.fontSize) || 17) + "px" +
+    ';color:rgba(255,255,255,0.96)">' + esc(shown) + "</span></div>";
+}
+
+/** Apple and Google, as the round icon buttons the phones draw — not the wide
+ *  labelled rows this window used to have. */
+function socialButton(provider, p, s) {
+  const size = Number(p.size) || 52;
+  const mark = provider === "apple"
+    ? '<svg width="' + Math.round(size * 0.42) + '" height="' + Math.round(size * 0.42) +
+      '" viewBox="0 0 24 24"><path fill="#fff" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.46 1.58-1.51 3.14-.9 1.36-1.84 2.71-3.32 2.71-1.48 0-1.86-.88-3.56-.88-1.66 0-2.25.91-3.6.91-1.36 0-2.3-1.27-3.22-2.61-1.87-2.61-3.34-7.53-1.42-10.86.95-1.66 2.65-2.7 4.5-2.73 1.4-.03 2.72.95 3.58.95.85 0 2.45-1.18 4.12-1.01.7.03 2.67.28 3.93 2.13-.1.06-2.35 1.37-2.33 4.07.03 3.22 2.83 4.29 2.86 4.31z"/></svg>'
+    : '<svg width="' + Math.round(size * 0.40) + '" height="' + Math.round(size * 0.40) +
+      '" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+  return '<button class="tz-social tz-press" data-oauth="' + provider + '"' +
+    ' aria-label="Continue with ' + (provider === "apple" ? "Apple" : "Google") + '"' +
+    ' style="' + s + ";width:" + size + "px;height:" + size + 'px">' + mark + "</button>";
 }
 
 function wordMeter(p) {
@@ -1596,14 +1772,12 @@ function paintChrome(shell) {
   if (!shell) return;
   const text = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.textContent = v; };
   const hint = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.placeholder = v; };
+  // The form itself is the server's auth.screen now — its labels are props on
+  // that tree, not ids in this document. What is left here is the copy AROUND
+  // it: the heading, and the line under everything.
   const g = shell.gate || {};
   text("gateTitle", g.title);       text("gateSub", g.subtitle);
-  text("tabEmail", g.emailTab);     text("tabPhone", g.phoneTab);
-  hint("email", g.emailPlaceholder); hint("phone", g.phonePlaceholder);
-  text("sendCode", g.sendCode);     text("gateOr", g.or);
-  text("appleLabel", g.apple);      text("googleLabel", g.google);
-  hint("code", g.codePlaceholder);  text("verify", g.verify);
-  text("backToEmail", g.startOver); text("gateNote", g.note);
+  text("gateNote", g.note);
   const r = shell.rail || {};
   text("railBrand", r.brand);       text("dictate", r.dictate);
   text("settingsLink", r.settings); text("signOut", r.signOut);
@@ -1792,6 +1966,213 @@ async function dressGate(step) {
     : '<img src="' + esc(spec.url) + '" alt="" style="object-fit:' + fit + '">';
 }
 
+/**
+ * Paint the sign-in screen from the server's tree, and wire what it drew.
+ *
+ * Called on every change to AUTH, which is the whole state machine: a phase, a
+ * typed value, a code. Repainting the lot each time is cheap — it is six rows —
+ * and it means there is exactly one description of what the screen looks like
+ * at any moment, rather than a set of imperative edits that have to agree.
+ *
+ * The rise animation is the one thing a full repaint would ruin: rows would fly
+ * in again on every keystroke. So it runs once per PHASE, and repaints within a
+ * phase are marked so the CSS sits them still.
+ */
+let AUTH_TREE = null;
+let AUTH_RISEN = "";
+
+function paintGate() {
+  const host = $("gateForm");
+  if (!host || !AUTH_TREE) return;
+  const fresh = AUTH_RISEN !== AUTH.phase;
+  AUTH_RISEN = AUTH.phase;
+  host.dataset.still = fresh ? "0" : "1";
+  host.innerHTML = node(AUTH_TREE);
+  $("gateErr").textContent = AUTH.error;
+  wireGate();
+}
+
+function wireGate() {
+  const host = $("gateForm");
+
+  // Typing. The pill is the field, so its input writes straight into AUTH —
+  // WITHOUT a repaint, which would take the caret with it. The disc's position
+  // is the only thing that depends on the value, so it is moved by hand.
+  host.querySelectorAll("[data-pill]").forEach((el) => {
+    const m = el.getAttribute("data-pill");
+    el.addEventListener("focus", () => {
+      if (AUTH.open === m) return;
+      AUTH.open = m; AUTH.error = "";
+      paintGate();
+      const again = host.querySelector('[data-pill="' + m + '"]');
+      if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+    });
+    el.addEventListener("input", () => {
+      if (m === "phone") AUTH.phone = el.value; else AUTH.email = el.value;
+      refreshDisc(m);
+    });
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit(m); });
+  });
+  const dial = host.querySelector("[data-dial]");
+  if (dial) {
+    dial.addEventListener("input", () => { AUTH.dial = dial.value; refreshDisc("phone"); });
+    dial.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit("phone"); });
+  }
+
+  host.querySelectorAll("[data-commit]").forEach((el) => {
+    const m = el.getAttribute("data-commit");
+    el.addEventListener("click", () => { void commit(m); });
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); void commit(m); }
+    });
+  });
+
+  const box = host.querySelector("[data-codebox]");
+  const codeIn = host.querySelector("[data-code]");
+  if (box && codeIn) {
+    box.addEventListener("click", () => codeIn.focus());
+    codeIn.addEventListener("input", () => {
+      AUTH.code = codeIn.value.replace(/\D/g, "").slice(0, AUTH.codeLength);
+      codeIn.value = AUTH.code;
+      AUTH.codeError = false;
+      AUTH.error = "";
+      paintGate();
+      const again = $("gateForm").querySelector("[data-code]");
+      if (again) again.focus();
+      // Six digits is the whole answer — there is nothing else to press.
+      if (AUTH.code.length === AUTH.codeLength) void submitCode();
+    });
+    codeIn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && AUTH.code.length === AUTH.codeLength) void submitCode();
+    });
+    // The caret belongs here the moment the step opens — this IS the step.
+    setTimeout(() => { const c = $("gateForm").querySelector("[data-code]"); if (c) c.focus(); }, 320);
+  }
+
+  host.querySelectorAll("[data-oauth]").forEach((el) => {
+    el.addEventListener("click", () => { void oauth(el.getAttribute("data-oauth")); });
+  });
+}
+
+/**
+ * THE WAY BACK FROM THE CODE STEP.
+ *
+ * The phones have a corner arrow and a swipe from the left edge. This tree
+ * carries neither, and a window has the gesture everybody already uses to back
+ * out of anything: Escape. Without it a typo in the address was a dead end —
+ * the code never arrives and there is nothing on the screen to press.
+ *
+ * The typed address is kept. Coming back to correct one character should not
+ * clear the field.
+ */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if ($("gate").hidden || AUTH.phase !== "verify") return;
+  AUTH.phase = "entry";
+  AUTH.code = "";
+  AUTH.codeError = false;
+  AUTH.error = "";
+  paintGate();
+  void dressGate("entry");
+});
+
+/**
+ * Send the code. The phones swipe a badge to get here; a mouse has no thumb to
+ * rest, so the disc is clicked and Enter does the same — the rule SwipeAction
+ * already follows on the training tab.
+ */
+async function commit(method) {
+  if (AUTH.phase !== "entry") return;   // already sending
+  AUTH.error = "";
+  try {
+    let to;
+    if (method === "phone") {
+      to = (AUTH.dial + AUTH.phone).replace(/[^\d+]/g, "");
+      if (!/^\+\d{7,15}$/.test(to)) throw new Error("Enter a number with its country code, like +1 555 000 1234.");
+    } else {
+      to = AUTH.email.trim();
+      if (!/.+@.+\..+/.test(to)) throw new Error("Enter your email address.");
+    }
+    AUTH.phase = "sending";
+    paintGate();
+    if (method === "phone") await signInPhone(to); else await signIn(to);
+    AUTH.method = method;
+    AUTH.sentTo = to;
+    AUTH.code = "";
+    AUTH.codeError = false;
+    AUTH.phase = "verify";
+    paintGate();
+    void dressGate("code");
+  } catch (e) {
+    AUTH.phase = "entry";
+    AUTH.error = String((e && e.message) || e || "");
+    paintGate();
+  }
+}
+
+/** Answer with whichever address the code actually went to. */
+async function submitCode() {
+  if (AUTH.phase !== "verify") return;
+  AUTH.phase = "verifying";
+  AUTH.error = "";
+  paintGate();
+  try {
+    if (AUTH.method === "phone") await verifyPhone(AUTH.sentTo, AUTH.code);
+    else await verify(AUTH.sentTo, AUTH.code);
+    await render();
+  } catch (e) {
+    // The code was wrong, not the screen. Stay on the step, say so, shake it,
+    // and clear it — retyping six digits over six wrong ones is worse than
+    // starting them again.
+    AUTH.phase = "verify";
+    AUTH.codeError = true;
+    AUTH.code = "";
+    AUTH.error = String((e && e.message) || e || "");
+    paintGate();
+  }
+}
+
+/** Apple / Google. The main process owns the window, the PKCE secret and the
+ *  code exchange; this only asks and reacts. */
+async function oauth(provider) {
+  AUTH.error = "";
+  const host = $("gateForm");
+  host.querySelectorAll("[data-oauth]").forEach((b) => { b.disabled = true; });
+  try {
+    const r = await window.tailzuApp.oauth(provider);
+    if (!r || !r.ok) {
+      // Closing the window is a decision, not a failure worth shouting about.
+      if (r && r.error === "cancelled") return;
+      throw new Error((r && r.error) || "Sign-in failed.");
+    }
+    SESSION = r.session;
+    location.reload();
+  } catch (e) {
+    AUTH.error = String((e && e.message) || e || "");
+    paintGate();
+  } finally {
+    const again = $("gateForm");
+    if (again) again.querySelectorAll("[data-oauth]").forEach((b) => { b.disabled = false; });
+  }
+}
+
+/** The disc alone, so typing does not repaint the caret out of the field. */
+function refreshDisc(method) {
+  const host = $("gateForm");
+  const el = host && host.querySelector('[data-commit="' + method + '"]');
+  if (!el) return;
+  const ready = method === "phone"
+    ? /^\+?\d{7,15}$/.test((AUTH.dial + AUTH.phone).replace(/[^\d+]/g, ""))
+    : /.+@.+\..+/.test(AUTH.email.trim());
+  if (el.dataset.ready === String(ready)) return;
+  el.dataset.ready = String(ready);
+  // Re-rendered rather than restyled: at the right end it is an arrow, at the
+  // left it is the method's own glyph, and those are different drawings.
+  paintGate();
+  const again = $("gateForm").querySelector('[data-pill="' + method + '"]');
+  if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+}
+
 (async function start() {
   ENV = await window.tailzuApp.env();
   SESSION = ENV.session || null;
@@ -1807,93 +2188,14 @@ async function dressGate(step) {
     location.reload();
   });
 
-  const email = $("email"), code = $("code"), err = $("gateErr");
-  const fail = (e) => { err.textContent = String((e && e.message) || e || ""); };
-
-  // Which of email / phone the code was sent to, so the verify step knows
-  // which endpoint to answer with.
-  let method = "email";
-  let sentTo = "";
-  const dialled = () => ($("dial").value.trim() + $("phone").value.trim()).replace(/[^\d+]/g, "");
-
-  $("methods").addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    method = b.dataset.m;
-    Array.prototype.forEach.call($("methods").children, (x) => {
-      x.setAttribute("aria-pressed", String(x.dataset.m === method));
-    });
-    $("email").hidden = method !== "email";
-    $("phoneRow").hidden = method !== "phone";
-    err.textContent = "";
-    (method === "email" ? email : $("phone")).focus();
-  });
-
-  $("sendCode").addEventListener("click", async () => {
-    err.textContent = "";
-    $("sendCode").disabled = true;
-    try {
-      if (method === "phone") {
-        const v = dialled();
-        if (!/^\+\d{7,15}$/.test(v)) throw new Error("Enter a number with its country code, like +1 555 000 1234.");
-        await signInPhone(v);
-        sentTo = v;
-      } else {
-        const v = email.value.trim();
-        if (!v) throw new Error("Enter your email address.");
-        await signIn(v);
-        sentTo = v;
-      }
-      $("stepEmail").hidden = true;
-      $("stepCode").hidden = false;
-      void dressGate("code");
-      code.focus();
-    } catch (e) { fail(e); } finally { $("sendCode").disabled = false; }
-  });
-  $("backToEmail").addEventListener("click", () => {
-    $("stepEmail").hidden = false; $("stepCode").hidden = true; err.textContent = "";
-    void dressGate("entry");
-  });
-
-  // Apple / Google. The main process owns the window and the code exchange;
-  // this only asks and reacts.
-  const oauth = async (provider, btn) => {
-    err.textContent = "";
-    $("appleBtn").disabled = $("googleBtn").disabled = true;
-    try {
-      const r = await window.tailzuApp.oauth(provider);
-      if (!r || !r.ok) {
-        // Closing the window is a decision, not a failure worth shouting about.
-        if (r && r.error === "cancelled") return;
-        throw new Error((r && r.error) || "Sign-in failed.");
-      }
-      SESSION = r.session;
-      location.reload();
-    } catch (e) { fail(e); } finally {
-      $("appleBtn").disabled = $("googleBtn").disabled = false;
-    }
-  };
-  $("appleBtn").addEventListener("click", () => oauth("apple"));
-  $("googleBtn").addEventListener("click", () => oauth("google"));
-
-  // Ask the backend, once, whether phone is live. Everything else on the gate
-  // works while this is in flight.
   if (!SESSION) {
-    phoneEnabled().then((on) => { if (on) $("methods").hidden = false; });
+    const b = await gateBoot();
+    const flags = (b && b.flags) || {};
+    AUTH.phoneOn = flags["auth.enablePhone"] === true || flags["auth.enablePhone"] === "true";
+    AUTH_TREE = flags["auth.screen"] || null;
+    paintGate();
     void dressGate("entry");
   }
-  $("verify").addEventListener("click", async () => {
-    err.textContent = "";
-    $("verify").disabled = true;
-    try {
-      // Answer with whichever address the code actually went to.
-      if (method === "phone") await verifyPhone(sentTo, code.value.trim());
-      else await verify(sentTo || email.value.trim(), code.value.trim());
-      await render();
-    } catch (e) { fail(e); } finally { $("verify").disabled = false; }
-  });
-  email.addEventListener("keydown", (e) => { if (e.key === "Enter") $("sendCode").click(); });
-  $("phone").addEventListener("keydown", (e) => { if (e.key === "Enter") $("sendCode").click(); });
-  code.addEventListener("keydown", (e) => { if (e.key === "Enter") $("verify").click(); });
 
   try {
     await render();
