@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // to refresh sessions as well.
   token: (t) => ipcRenderer.send("app:token", t),
   changed: () => ipcRenderer.send("app:changed"),
+  // The bootstrap's `desktop.shell` — the tray's and the notifications' copy.
+  // Only the window speaks to the backend, so it passes the block along to the
+  // process that owns the menu bar.
+  shell: (v) => ipcRenderer.send("app:shell", v),
   // Apple / Google. The renderer cannot open a window or hold the PKCE
   // secret, so it asks and gets back a session or an error string.
   oauth: (provider) => ipcRenderer.invoke("app:oauth", provider),

@@ -190,6 +190,30 @@ async function api(path, body, method) {
 }
 
 const bootstrap = () => api("/v1/app/bootstrap", { capabilities: capabilities(), launchCount: 1 });
+
+/**
+ * The same bootstrap, asked WITHOUT a credential.
+ *
+ * The gate is the one screen drawn before there is an account, so it was the
+ * one screen whose words could not come from the server — leaving the sign-in
+ * copy, and the theme it renders in, frozen in whatever installer you happen to
+ * be running. The route takes auth as optional, so the window can simply ask as
+ * a stranger and get back the theme and the chrome, with none of the user's
+ * anything attached (there is no user to attach).
+ *
+ * Deliberately NOT sending the static fallback token. It resolves to a
+ * synthetic account, and a launch that never signs in should not be billed a
+ * bootstrap against somebody — even a somebody nobody is.
+ */
+async function bootstrapAnon() {
+  const res = await fetch(ENV.baseUrl + "/v1/app/bootstrap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ capabilities: capabilities(), launchCount: 1 }),
+  });
+  if (!res.ok) throw new Error("bootstrap → " + res.status);
+  return res.json();
+}
 const fetchScreen = (screenId, params) =>
   api("/v1/app/screen", {
     screenId, params, capabilities: capabilities(),
@@ -901,13 +925,66 @@ function renderTabs() {
   });
 }
 
+/**
+ * THE CHROME, FROM THE SERVER.
+ *
+ * The screens in this window were already server-drawn; the frame around them
+ * was not. The gate's heading, its buttons, the rail down the left — all
+ * literals in app.html, so correcting one word of them meant cutting an
+ * installer and getting every user to run it.
+ *
+ * Every key is optional. A missing one leaves the markup's own word in place,
+ * which is what a build older than a key, or newer than a deploy, will hit.
+ */
+function paintChrome(shell) {
+  if (!shell) return;
+  const text = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.textContent = v; };
+  const hint = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.placeholder = v; };
+  const g = shell.gate || {};
+  text("gateTitle", g.title);       text("gateSub", g.subtitle);
+  text("tabEmail", g.emailTab);     text("tabPhone", g.phoneTab);
+  hint("email", g.emailPlaceholder); hint("phone", g.phonePlaceholder);
+  text("sendCode", g.sendCode);     text("gateOr", g.or);
+  text("appleLabel", g.apple);      text("googleLabel", g.google);
+  hint("code", g.codePlaceholder);  text("verify", g.verify);
+  text("backToEmail", g.startOver); text("gateNote", g.note);
+  const r = shell.rail || {};
+  text("railBrand", r.brand);       text("dictate", r.dictate);
+  text("settingsLink", r.settings); text("signOut", r.signOut);
+  text("back", r.back);
+}
+
+/** The tray's copy lives in the main process, which never talks to the backend.
+ *  The window is the only thing here holding a connection, so it passes the
+ *  block along and main caches it for the launches that start offline. */
+function shareChrome(shell) {
+  if (!shell) return;
+  paintChrome(shell);
+  try { window.tailzuApp.shell(shell); } catch { /* tray only */ }
+}
+
 async function render() {
   const signedIn = !!(SESSION && SESSION.access_token);
   $("gate").hidden = signedIn;
   $("shell").hidden = !signedIn;
-  if (!signedIn) return;
+  if (!signedIn) {
+    // Ask as a stranger, so the gate is drawn by the same server that draws
+    // everything behind it. A failure here is not fatal: the markup already
+    // carries every word, and someone signing in on a dead connection has a
+    // bigger problem than the heading being one release old.
+    // gateBoot() memoises it, and the art and the phone-method switch already
+    // read the same answer — so this is the one request, not a second.
+    const anon = await gateBoot();
+    if (anon) {
+      BOOT = anon;                 // role() resolves typography against it too
+      applyTheme(anon.theme);
+      shareChrome(anon.flags && anon.flags["desktop.shell"]);
+    }
+    return;
+  }
   BOOT = await bootstrap();
   applyTheme(BOOT.theme);
+  shareChrome(BOOT.flags && BOOT.flags["desktop.shell"]);
   TABS = BOOT.navigation && BOOT.navigation.kind === "tabs" ? BOOT.navigation.tabs : [];
   renderTabs();
   // WHERE THE SERVER SAYS, when the server says somewhere this window has.
@@ -961,7 +1038,11 @@ async function verifyPhone(phone, token) {
  */
 let preBoot = null;
 function gateBoot() {
-  if (!preBoot) preBoot = bootstrap().catch(() => null);
+  // ASKED AS A STRANGER. This runs before there is an account, and it used to
+  // go out under the static fallback token — which resolves to a synthetic
+  // user, so every launch that never signed in was charged a bootstrap against
+  // somebody. Auth is optional on the route, so it simply asks without one.
+  if (!preBoot) preBoot = bootstrapAnon().catch(() => null);
   return preBoot;
 }
 

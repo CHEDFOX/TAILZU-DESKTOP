@@ -82,12 +82,30 @@
         clearTimeout(wsWatchdog);
         stopTracks();
       }
-      // getMic already writes a sentence for the cases a user can act on, so
-      // those are passed through as they are. Anything else keeps the "mic:"
-      // label, which is the honest thing to say about a failure we cannot name.
+      // A server-drawn sentence, handed over with the session. Falls back to
+      // the built-in wording when a launch never reached the backend.
+      const STRING_FALLBACKS = {
+        micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu",
+        micBlockedWindows: "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access",
+        micMissing: "no microphone found — plug one in, then try again",
+        micBusy: "microphone is in use by another app",
+        noSpeech: "no speech detected — check your microphone",
+      };
+      function str(key) {
+        const v = cfg.strings && cfg.strings[key];
+        return (typeof v === "string" && v.trim()) ? v : STRING_FALLBACKS[key];
+      }
+
       function micMessage(err) {
         const m = (err && err.message) ? err.message : String(err);
-        return m.indexOf("microphone") === 0 || m.indexOf("no microphone") === 0 ? m : "mic: " + m;
+        // A sentence getMic already wrote is passed through as it is; anything
+        // else keeps the "mic:" label, which is the honest thing to say about a
+        // failure we cannot name. Compared against the resolved strings rather
+        // than a prefix, so server-drawn copy in any wording still matches.
+        for (const k of ["micBlockedMac", "micBlockedWindows", "micMissing", "micBusy"]) {
+          if (m === str(k)) return m;
+        }
+        return "mic: " + m;
       }
 
       async function getMic() {
@@ -104,18 +122,20 @@
           // no screen we draw can open it — only a sentence that says which
           // settings panel to go to. Chromium's own wording ("Permission
           // denied by system") names the problem and not the fix.
+          // The sentences come with the session (cfg.strings), so the panel
+          // this names can be corrected from the backend — Microsoft moves
+          // that menu between Windows releases, and a wrong direction baked
+          // into an installer is a wrong direction forever.
           const name = (err && err.name) || "";
           const mac = navigator.platform.indexOf("Mac") === 0;
           if (name === "NotAllowedError" || name === "SecurityError") {
-            throw new Error(mac
-              ? "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu"
-              : "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access");
+            throw new Error(str(mac ? "micBlockedMac" : "micBlockedWindows"));
           }
           if (name === "NotFoundError" || name === "OverconstrainedError") {
-            throw new Error("no microphone found — plug one in, then try again");
+            throw new Error(str("micMissing"));
           }
           if (name === "NotReadableError") {
-            throw new Error("microphone is in use by another app");
+            throw new Error(str("micBusy"));
           }
           throw err;
         }
@@ -211,7 +231,7 @@
           } else {
             // Both empty: the mic captured silence (wrong input device, muted
             // mic, or OS permission). Say so instead of a no-op.
-            emitError(sid, "no speech detected — check your microphone (Windows: Settings → System → Sound → Input)");
+            emitError(sid, str("noSpeech"));
           }
         } catch (err) {
           emitError(sid, "upload: " + (err && err.message ? err.message : String(err)));

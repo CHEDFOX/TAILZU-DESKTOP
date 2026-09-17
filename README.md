@@ -67,6 +67,23 @@ window rather than recording into a history no account owns.
   partial text is never typed into your target app.
 - **Tone**: pick in the tray menu; applied to every dictation.
 
+## What comes from the backend
+
+Everything the window draws, and now everything around it. Screens are the same
+catalog JSON the phones render. The theme, the typography and the sign-in art
+come from the same keys the phones read. The gate's copy, the rail, the tray
+menu and every notification come from `flags["desktop.shell"]`, sent only to a
+client that reports `device.formFactor: "desktop"`.
+
+So a wording change is a backend deploy and a cache bump — no installer. This
+matters more here than on the phones: there is no OTA channel on desktop, and a
+release is a download the user has to notice, accept past SmartScreen, and run.
+
+The app keeps a default for every one of those strings and caches the last
+answer in `shell.json` beside `config.json`, because the tray is built before
+any network call can have returned. Server wins when it lands; the defaults
+carry a first run with no connection.
+
 ## Permissions (one-time)
 
 - **Microphone** — granted on first record. The app holds it for its own page,

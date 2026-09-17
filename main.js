@@ -59,6 +59,120 @@ function saveSession(v) {
   } catch { /* a session that will not persist still works for this run */ }
 }
 
+// ---- Server-drawn chrome -----------------------------------------------------
+// THE WINDOW'S SCREENS WERE SERVER-DRAWN. EVERYTHING AROUND THEM WAS NOT.
+//
+// The tray menu and the notifications were literals in this file, so changing a
+// word of them meant cutting an installer — and on desktop a release is a
+// download the user has to notice, accept past SmartScreen, and run. Copy in the
+// binary is copy that can never be fixed.
+//
+// So the backend sends it (`flags["desktop.shell"]`) and this renders it. Three
+// things make that safe in a process that starts before any network:
+//
+//   1. DEFAULTS below. The tray is built during `ready`, long before a bootstrap
+//      can have answered, and a first run offline still needs words in it.
+//   2. A CACHE on disk, so the second launch opens with the last answer rather
+//      than the built-in one.
+//   3. A DEEP MERGE, so a server that sends half the keys — an older deploy, or
+//      a new key this build has never heard of — leaves the rest intact instead
+//      of blanking the menu.
+const shellPath = app.isPackaged
+  ? path.join(app.getPath("userData"), "shell.json")
+  : path.join(__dirname, "shell.json");
+
+const SHELL_DEFAULTS = {
+  tray: {
+    dictate: "Dictate",
+    listening: "◉ Listening — press hotkey to stop",
+    signInToDictate: "Sign in to dictate…",
+    open: "Open Tailzu",
+    tone: "Tone",
+    toneThisDevice: "this device",
+    liveCaptions: "Live captions while dictating",
+    startAtLogin: "Start at login",
+    hotkey: "Hotkey",
+    holdToTalk: "Hold-to-talk: hold",
+    holdUnavailable: "unavailable",
+    holdOff: "Hold-to-talk: off (set \"hold\": true in config)",
+    backend: "Backend",
+    signedIn: "Signed in — dictation lands on your account",
+    editConfig: "Edit config…",
+    quit: "Quit Tailzu",
+    tooltipReady: "Tailzu — ready",
+    tooltipListening: "Tailzu — listening…",
+    tooltipSignIn: "Tailzu — sign in to dictate",
+  },
+  notify: {
+    title: "Tailzu",
+    signIn: "Sign in to dictate — your words belong to your account.",
+    holdUnavailable: "Hold-to-talk unavailable (uiohook-napi didn't load) — using the toggle hotkey.",
+    micBlockedWindows: "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access",
+    micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu",
+    micMissing: "no microphone found — plug one in, then try again",
+    micBusy: "microphone is in use by another app",
+    noSpeech: "no speech detected — check your microphone",
+    unknownHoldKey: "Unknown holdKey \"{key}\" — use a key name like F9, F10, F12.",
+    dictationFailed: "Dictation failed: {message}",
+    hotkeyTaken: "{taken} is taken by another app, so dictation is on {bound}. Change it under Edit config.",
+    noHotkey: "No hotkey could be registered. Use Dictate in the tray menu, and set a free one under Edit config.",
+  },
+};
+
+/** Defaults under the server's answer, one level into each section. Only
+ *  non-empty strings win: a key the server omits, or sends blank, keeps the
+ *  built-in word rather than painting an empty menu row. */
+function mergeShell(base, incoming) {
+  const out = {};
+  for (const section of Object.keys(base)) {
+    out[section] = { ...base[section] };
+    const from = incoming && incoming[section];
+    if (!from || typeof from !== "object") continue;
+    for (const [k, v] of Object.entries(from)) {
+      if (typeof v === "string" && v.trim()) out[section][k] = v;
+    }
+  }
+  return out;
+}
+
+let SHELL = (() => {
+  try { return mergeShell(SHELL_DEFAULTS, JSON.parse(fs.readFileSync(shellPath, "utf8"))); }
+  catch { return mergeShell(SHELL_DEFAULTS, null); }
+})();
+
+/** One string, by "section.key". Unknown keys return "" rather than throwing —
+ *  a menu built from a typo should be missing a word, not missing a menu. */
+function t(pathStr) {
+  const [section, key] = String(pathStr).split(".");
+  return (SHELL[section] && SHELL[section][key]) || "";
+}
+
+/** The same string with {placeholders} filled in. A variable the server did
+ *  not leave a slot for is simply not shown — better a sentence missing a
+ *  detail than a sentence with "{bound}" in it. */
+function fmt(pathStr, vars) {
+  return t(pathStr).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+}
+
+/** Every native notification goes through here, so the title is server-drawn
+ *  once rather than at nine call sites. */
+function notify(body) {
+  if (!body) return;
+  new Notification({ title: t("notify.title") || "Tailzu", body }).show();
+}
+
+/** The window hands over what the bootstrap sent. Cached for the next launch,
+ *  and the tray is rebuilt so the change is visible without a restart. */
+function adoptShell(incoming) {
+  if (!incoming || typeof incoming !== "object") return;
+  SHELL = mergeShell(SHELL_DEFAULTS, incoming);
+  try {
+    fs.mkdirSync(path.dirname(shellPath), { recursive: true });
+    fs.writeFileSync(shellPath, JSON.stringify(incoming, null, 2));
+  } catch { /* a cache that will not persist still works for this run */ }
+  refreshTray();
+}
+
 let configError = null; // surfaced as a notification once the app is ready
 function loadConfig() {
   let file = {};
@@ -529,8 +643,8 @@ function trayIcon() {
 
 function refreshTray() {
   if (!tray) return;
-  tray.setToolTip(recording ? "Tailzu — listening…"
-    : signedIn() ? "Tailzu — ready" : "Tailzu — sign in to dictate");
+  tray.setToolTip(recording ? t("tray.tooltipListening")
+    : signedIn() ? t("tray.tooltipReady") : t("tray.tooltipSignIn"));
   tray.setContextMenu(buildMenu());
 }
 
@@ -539,14 +653,14 @@ function buildMenu() {
     // Says what the press will actually do. A plain "Dictate" on a signed-out
     // machine promises something the click cannot deliver.
     {
-      label: recording ? "◉ Listening — press hotkey to stop"
-        : signedIn() ? "Dictate" : "Sign in to dictate…",
+      label: recording ? t("tray.listening")
+        : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
-    { label: "Open Tailzu", click: openAppWindow },
+    { label: t("tray.open"), click: openAppWindow },
     { type: "separator" },
     {
-      label: `Tone: ${currentTone()}${signedIn() ? "" : " (this device)"}`,
+      label: `${t("tray.tone")}: ${currentTone()}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
       // The account's tone may be a voice the user created, which is not in
       // this list — include it so the menu can show it selected rather than
       // showing five unticked rows and implying none is active.
@@ -556,12 +670,12 @@ function buildMenu() {
       })),
     },
     {
-      label: "Live captions while dictating",
+      label: t("tray.liveCaptions"),
       type: "checkbox", checked: cfg.live,
       click: (item) => saveConfig({ live: item.checked }),
     },
     {
-      label: "Start at login",
+      label: t("tray.startAtLogin"),
       type: "checkbox", checked: cfg.autoStart,
       click: (item) => {
         saveConfig({ autoStart: item.checked });
@@ -573,26 +687,26 @@ function buildMenu() {
       },
     },
     { type: "separator" },
-    { label: `Hotkey: ${cfg.hotkey}`, enabled: false },
+    { label: `${t("tray.hotkey")}: ${cfg.hotkey}`, enabled: false },
     {
       label: cfg.hold
-        ? `Hold-to-talk: hold ${cfg.holdKey}${holdActive ? "" : " (unavailable)"}`
-        : "Hold-to-talk: off (set \"hold\": true in config)",
+        ? `${t("tray.holdToTalk")} ${cfg.holdKey}${holdActive ? "" : ` (${t("tray.holdUnavailable")})`}`
+        : t("tray.holdOff"),
       enabled: false,
     },
-    { label: `Backend: ${cfg.baseUrl}`, enabled: false },
+    { label: `${t("tray.backend")}: ${cfg.baseUrl}`, enabled: false },
     // Which credential is ACTUALLY in use — ends the "which token is it using"
     // guessing when auth fails. Signed in, that is the account; saying "dev"
     // there sent people to edit a config.json that is not the thing being sent.
     {
       label: signedIn()
-        ? "Signed in — dictation lands on your account"
+        ? t("tray.signedIn")
         : `Token: ${cfg.token === "dev" ? "dev (no config!)" : cfg.token.slice(0, 8) + "…"}`,
       enabled: false,
     },
-    { label: "Edit config…", click: openConfig },
+    { label: t("tray.editConfig"), click: openConfig },
     { type: "separator" },
-    { label: "Quit Tailzu", click: () => app.quit() },
+    { label: t("tray.quit"), click: () => app.quit() },
   ]);
 }
 
@@ -673,6 +787,7 @@ ipcMain.on("app:token", (_e, t) => {
 // Anything the window wrote could have been the tone. Cheaper to re-read than
 // to have the window guess which of its writes mattered.
 ipcMain.on("app:changed", () => { void refreshAccountTone(); });
+ipcMain.on("app:shell", (_e, v) => adoptShell(v));
 
 // ---- Dictation toggle --------------------------------------------------------
 
@@ -701,10 +816,7 @@ function requireAccount() {
   const now = Date.now();
   if (now - lastSignInNudge > 5000) {
     lastSignInNudge = now;
-    new Notification({
-      title: "Tailzu",
-      body: "Sign in to dictate — your words belong to your account.",
-    }).show();
+    notify(t("notify.signIn"));
   }
   return false;
 }
@@ -739,6 +851,10 @@ async function startRecording(sid) {
     // longer a fallback path that writes to a user nobody can read.
     baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
     tone: currentTone(), live: cfg.live, session: sid,
+    // The sentences it shows when capture fails. Sent with the session rather
+    // than read from a file over there: the recorder is a page with no disk of
+    // its own, and this way it always has the copy this launch resolved.
+    strings: SHELL.notify,
   });
 }
 
@@ -772,10 +888,7 @@ function setupHoldToTalk() {
     const { uIOhook, UiohookKey } = require("uiohook-napi");
     const code = UiohookKey[cfg.holdKey];
     if (!code) {
-      new Notification({
-        title: "Tailzu",
-        body: `Unknown holdKey "${cfg.holdKey}" — use a key name like F9, F10, F12.`,
-      }).show();
+      notify(fmt("notify.unknownHoldKey", { key: cfg.holdKey }));
       return;
     }
     // keydown auto-repeats while held; the !recording / recording guards make
@@ -786,10 +899,7 @@ function setupHoldToTalk() {
     uiohookRef = uIOhook;
     holdActive = true;
   } catch {
-    new Notification({
-      title: "Tailzu",
-      body: "Hold-to-talk unavailable (uiohook-napi didn't load) — using the toggle hotkey.",
-    }).show();
+    notify(t("notify.holdUnavailable"));
   }
 }
 
@@ -846,7 +956,7 @@ ipcMain.on("dictation-result", (_e, payload) => {
 ipcMain.on("dictation-error", (_e, payload) => {
   const { session, message } = payload || {};
   settleSession(session);
-  new Notification({ title: "Tailzu", body: "Dictation failed: " + message }).show();
+  notify(fmt("notify.dictationFailed", { message }));
 });
 
 // Live partials from the recorder → overlay captions (current session only).
@@ -963,17 +1073,11 @@ app.whenReady().then(() => {
     cfg.hotkey = bound;
     try { saveConfig({ hotkey: bound }); } catch { /* config we cannot write is not fatal */ }
     refreshTray();
-    new Notification({
-      title: "Tailzu",
-      body: `${taken} is taken by another app, so dictation is on ${bound}. Change it under Edit config.`,
-    }).show();
+    notify(fmt("notify.hotkeyTaken", { taken, bound }));
   } else if (!bound) {
     // Nothing took. The tray is the only way in, so say that rather than
     // naming a key that does not work.
-    new Notification({
-      title: "Tailzu",
-      body: "No hotkey could be registered. Use Dictate in the tray menu, and set a free one under Edit config.",
-    }).show();
+    notify(t("notify.noHotkey"));
   }
 
   setupHoldToTalk();
