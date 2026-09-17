@@ -485,7 +485,16 @@ function node(n) {
 
     case "Text":
       // `variant` names a role — the same switch the phone makes.
-      return '<span' + bind(press) + ' style="' + role(p.variant || "body", "color:var(--text)") + ";" +
+      //
+      // WHITE-SPACE: PRE-WRAP, because React Native keeps the spaces a string
+      // was written with and HTML does not. It collapses a run of them, and
+      // trims them entirely at the edges of a flex item — so the consent line,
+      // which is one sentence split into parts because two of its words are
+      // links, rendered as "our Terms and" with the spaces eaten and the words
+      // jammed together. pre-wrap keeps them and still wraps, which is what
+      // the phones do with the same tree.
+      return '<span' + bind(press) + ' style="white-space:pre-wrap;' +
+        role(p.variant || "body", "color:var(--text)") + ";" +
         (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
 
     case "Badge": case "Chip":
@@ -1890,10 +1899,7 @@ function repaint(screen) {
   view.innerHTML = html;
   startFlips();
 
-  handlers.forEach((h) => {
-    const el = view.querySelector('[data-h="' + h.id + '"]');
-    if (el) el.addEventListener("click", () => { void run(h.action); });
-  });
+  bindHandlers(view);
   view.querySelectorAll("[data-bind]").forEach((el) => {
     const path = el.getAttribute("data-bind");
     if (!path) return;
@@ -2192,9 +2198,30 @@ function paintGate() {
   const fresh = AUTH_RISEN !== AUTH.phase;
   AUTH_RISEN = AUTH.phase;
   host.dataset.still = fresh ? "0" : "1";
+  // `handlers` is a module-level list that node() appends to as it renders an
+  // `on.onPress`. repaint() clears it before drawing a screen; this draws
+  // outside repaint(), so it has to clear it too — or the gate accumulates a
+  // screen's worth of stale entries and binds by an id that has moved.
+  handlers = [];
   host.innerHTML = node(AUTH_TREE);
   $("gateErr").textContent = AUTH.error;
+  bindHandlers(host);
   wireGate();
+}
+
+/**
+ * Attach what node() registered while rendering.
+ *
+ * This only ever ran inside repaint(), so a press written into the SERVER'S
+ * auth tree drew its attribute and got no listener — the consent line's Terms
+ * and Privacy Policy would have been underlined, looked tappable, and done
+ * nothing. Exactly the failure `navigateBack` used to be.
+ */
+function bindHandlers(root) {
+  handlers.forEach((h) => {
+    const el = root.querySelector('[data-h="' + h.id + '"]');
+    if (el) el.addEventListener("click", () => { void run(h.action); });
+  });
 }
 
 function wireGate() {
