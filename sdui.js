@@ -371,10 +371,38 @@ const MAP = {
 };
 const ALIGN = { start: "flex-start", end: "flex-end", center: "center", between: "space-between", around: "space-around", stretch: "stretch", baseline: "baseline" };
 
+/**
+ * REACT NATIVE SHORTHANDS THAT CSS HAS NEVER HEARD OF.
+ *
+ * `paddingHorizontal` became `padding-horizontal`, which every browser drops
+ * without a word. The catalog writes these constantly — the paywall's rows,
+ * the You tab's cards, the auth screen's margins — so the window had been
+ * quietly rendering a large part of the app with no padding at all, and it
+ * looked like a slightly cramped design rather than a bug.
+ *
+ * Each expands to the pair it means, written BEFORE the rest of the style so
+ * an explicit `paddingLeft` alongside one still wins, exactly as it does on
+ * the phones.
+ */
+const RN_PAIRS = {
+  paddingHorizontal: ["padding-left", "padding-right"],
+  paddingVertical: ["padding-top", "padding-bottom"],
+  marginHorizontal: ["margin-left", "margin-right"],
+  marginVertical: ["margin-top", "margin-bottom"],
+};
+
 function css(st) {
   if (!st) return "";
   const out = [];
+  // The pairs first, so a specific side named alongside one overrides it.
+  for (const k of Object.keys(RN_PAIRS)) {
+    const v = tok(st[k]);
+    if (v == null) continue;
+    const val = typeof v === "number" ? v + "px" : String(v);
+    for (const prop of RN_PAIRS[k]) out.push(prop + ":" + val);
+  }
   for (const k of Object.keys(st)) {
+    if (RN_PAIRS[k]) continue;
     let v = tok(st[k]);
     if (v == null) continue;
     let prop = MAP[k] || k.replace(/[A-Z]/g, (ch) => "-" + ch.toLowerCase());
@@ -411,7 +439,21 @@ function node(n) {
       return '<div class="pad" style="' + s + '">' + kids + "</div>";
 
     case "Stack": case "Row": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
-      return '<div' + bind(press) + ' style="display:flex;flex-direction:' +
+      // POSITION:RELATIVE, AND IT IS LOAD-BEARING.
+      //
+      // React Native paints children in the order they are written. CSS does
+      // not: a POSITIONED element paints above a static one however early it
+      // comes. So the shape the catalog uses for every full-bleed screen —
+      // absolute art, absolute scrim, then the content — put the art and the
+      // scrim ON TOP of the content here. The paywall rendered its plans,
+      // centred and correctly placed, entirely underneath its own backdrop.
+      //
+      // Making every in-flow stack relative restores the order the tree
+      // means. It also fixes the containing block: an absolutely-positioned
+      // child now measures against its own parent, which is what it does on
+      // the phones and not what it was doing here.
+      return '<div' + bind(press) + ' style="' +
+        (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
         (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
 
@@ -1576,7 +1618,32 @@ async function paint(force) {
   CURRENT_ACTIONS = screen.actions || {};
   $("title").textContent = label(screen.title) || "";
   $("back").hidden = STACK.length <= 1;
+  applyChrome(screen);
   repaint(screen);
+}
+
+/**
+ * A SCREEN THAT OWNS THE WINDOW.
+ *
+ * `hideChrome` and `hideHeader` are how the catalog says "this screen is the
+ * whole surface" — the paywall says it, and so does the history view with its
+ * own back chevron. Neither word appeared anywhere in this renderer, so the
+ * paywall drew inside the rail and under the crumb: full-bleed art in a strip,
+ * beside a nav bar it had asked not to have.
+ *
+ * Two more things a full-bleed screen needs that a padded column does not. Its
+ * root asks for `flex: 1`, which means nothing inside a plain block — so the
+ * view becomes a flex column for it and the root can actually fill. And it
+ * scrolls no more: a screen the size of the window has nothing to scroll, and
+ * an overflow container would let one stray absolute child add a scrollbar to
+ * a screen with no content below the fold.
+ */
+function applyChrome(screen) {
+  const bare = screen.hideChrome === true;
+  const shell = $("shell"), view = $("view");
+  shell.dataset.chrome = bare ? "0" : "1";
+  $("crumb").hidden = bare || screen.hideHeader === true;
+  view.dataset.full = bare ? "1" : "0";
 }
 
 /** First node in the tree carrying this event, and the action it names. */

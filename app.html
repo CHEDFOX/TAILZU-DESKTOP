@@ -56,6 +56,13 @@
   #back { background:none; border:0; color:var(--muted); cursor:pointer; padding:4px 8px; border-radius:7px; }
   #back:hover { background:var(--card); color:var(--text); }
   #view { flex:1; overflow-y:auto; overflow-x:hidden; position:relative; z-index:1; }
+  /* A screen that said hideChrome owns the window: no rail, no crumb, no
+     scroll, and a flex column so a root asking for flex:1 can actually fill
+     something. [hidden] alone cannot hide the rail — its own display:flex
+     outranks it — which is why this is an attribute and not a property. */
+  #shell[data-chrome="0"] #rail { display:none; }
+  #crumb[hidden] { display:none; }
+  #view[data-full="1"] { overflow:hidden; display:flex; flex-direction:column; }
   .pad { max-width:640px; margin:0 auto; padding:30px 24px 90px; }
 
   /* ── sign in ───────────────────────────────────────────────────────────── */
