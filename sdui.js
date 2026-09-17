@@ -608,12 +608,36 @@ function node(n) {
         ';opacity:.45"></span></button>';
     }
 
-    case "NeuralField":
+    case "NeuralField": {
       // The page it draws is HTML and canvas. This IS a browser — it needs no
       // bridge, no WebView and no stand-in; the same file the phone loads
       // renders here natively.
-      return '<iframe class="tz-field" style="' + s +
-        ';border:0;background:#000" src="neuralField.html"></iframe>';
+      //
+      // WITH THE SAME NUMBERS. It used to load the file bare, and the file is
+      // generated with `growth` absent — which the page reads as 1. So the
+      // window drew a fully grown network for everybody, on day one and month
+      // six alike, and the claim this screen makes (that the thing inside gets
+      // bigger every time you talk to it) was false in the one place it is
+      // visible. alpha went the same way: the field sat at full strength on a
+      // screen that wanted it dimmed behind the copy.
+      //
+      // Those two are per screen and per person; everything else in the page's
+      // config is geometry and identical everywhere. So they travel in the
+      // query string and the rest stays baked.
+      const q = "?alpha=" + encodeURIComponent(Number(p.alpha != null ? p.alpha : 1)) +
+        "&growth=" + encodeURIComponent(Number(p.growth != null ? p.growth : 1));
+      FIELD_BINDS = n.bind || null;
+      FIELD_PROPS = p;
+      // A PLACEHOLDER, not the iframe itself. Every repaint replaces this
+      // view's innerHTML, and an iframe written into that string is a NEW
+      // iframe: the page reloads, forty thousand curves are baked again, and
+      // the animation restarts from nothing. The Train tab repaints on every
+      // phase of a live session, so the one screen where the field is supposed
+      // to react was the one screen where it kept starting over.
+      //
+      // The real iframe is created once and moved in here after each paint.
+      return '<div data-field="' + esc(q) + '" class="tz-field" style="' + s + '"></div>';
+    }
 
     // THE CONVERSATION. SDUI has no repeater, so the Train tab's thread is one
     // node that reads an array out of state and draws it — the same contract
@@ -1318,6 +1342,130 @@ function wireChat(view, sc) {
   requestAnimationFrame(() => { host.scrollTop = host.scrollHeight; });
 }
 
+/**
+ * THE FIELD IS TOLD WHAT THE SCREEN IS DOING, and it only runs when somebody
+ * is looking at it.
+ *
+ * Both were missing here. The iframe was loaded and then left alone, so the
+ * network never reacted to a live session — it pulsed the same idle pattern
+ * while the user was mid-sentence, where the phone's leans toward the centre
+ * on "listening" and outward on "speaking". And it kept drawing at sixty
+ * frames a second behind a window that had been put away, which on a tray app
+ * is most of its life.
+ *
+ * The page takes both over the same channel the phones use: postMessage into
+ * `window.tz`. Same message names, same quantising of the level — twenty steps
+ * is finer than the eye and turns sixty messages a second into a trickle.
+ */
+let FIELD_BINDS = null;   // { state, level, training } paths the server named
+let FIELD_PROPS = null;
+let FIELD_LAST = "";
+
+let FIELD_EL = null;      // the one iframe, kept across paints
+
+function fieldSend(msg) {
+  if (!FIELD_EL || !FIELD_EL.contentWindow) return;
+  try { FIELD_EL.contentWindow.postMessage(msg, "*"); } catch { /* not loaded yet */ }
+}
+
+/** Whatever the screen currently says, in the page's vocabulary. */
+function fieldState() {
+  const b = FIELD_BINDS || {};
+  const p = FIELD_PROPS || {};
+  const at = (key) => (b[key] ? stateAt(b[key]) : p[key]);
+  const lvl = Math.min(1, Math.max(0, Number(at("level")) || 0));
+  return {
+    state: String(at("state") || "idle"),
+    level: Math.round(lvl * 20) / 20,
+    training: at("training") === true || at("training") === "true",
+  };
+}
+
+function wireField(view) {
+  const slot = view.querySelector("[data-field]");
+  if (!slot) {
+    // The screen that owned it is gone. Drop the iframe with it rather than
+    // keep a canvas alive for a screen nobody is on.
+    if (FIELD_EL) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
+    FIELD_BINDS = FIELD_PROPS = null; FIELD_LAST = "";
+    return;
+  }
+  const q = slot.getAttribute("data-field") || "";
+  // Reuse only when it is the same field. A different alpha or growth is a
+  // different drawing — both are baked when the page loads — so that one does
+  // reload, which is right: it is a change, not a repaint.
+  if (FIELD_EL && FIELD_EL.dataset.q !== q) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
+  if (!FIELD_EL) {
+    // MOUNTED ONCE, OUTSIDE THE VIEW, AND NEVER MOVED.
+    //
+    // Reparenting an iframe reloads the document inside it in every browser
+    // that matters, so "keep it and move it into the new markup" is the same
+    // reload by another name. It lives beside the view instead, as a layer,
+    // and the paint only tells it where to be.
+    FIELD_EL = document.createElement("iframe");
+    FIELD_EL.dataset.q = q;
+    FIELD_EL.setAttribute(
+      "style",
+      "position:absolute;border:0;background:#000;pointer-events:none;z-index:0",
+    );
+    FIELD_EL.addEventListener("load", () => {
+      FIELD_LAST = "";
+      push();
+      fieldSend({ run: !document.hidden });
+    });
+    FIELD_EL.src = "neuralField.html" + q;
+    // FIRST child of #main, so it paints under #view (which carries z-index:1).
+    // The field is the art behind the copy; appended last it would cover the
+    // title and the button it exists to sit behind.
+    const host = view.parentElement || document.body;
+    host.insertBefore(FIELD_EL, host.firstChild);
+  }
+  place();
+
+  /** Sit exactly where this paint put the slot. Measured against the layer's
+   *  offset parent, so scrolling the view carries the field with it. */
+  function place() {
+    const host = FIELD_EL.offsetParent || document.body;
+    const a = slot.getBoundingClientRect(), b = host.getBoundingClientRect();
+    FIELD_EL.style.left = (a.left - b.left) + "px";
+    FIELD_EL.style.top = (a.top - b.top) + "px";
+    FIELD_EL.style.width = a.width + "px";
+    FIELD_EL.style.height = a.height + "px";
+    // A slot with no size yet means the paint has not laid out. Stay hidden
+    // rather than flash a black rectangle in the corner.
+    FIELD_EL.style.visibility = a.width && a.height ? "visible" : "hidden";
+  }
+
+  function push() {
+    const msg = fieldState();
+    const key = JSON.stringify(msg);
+    if (key === FIELD_LAST) return;      // nothing changed; do not wake the page
+    FIELD_LAST = key;
+    fieldSend(msg);
+  }
+  push();
+
+  // The slot moves when the view scrolls or the window is resized, and the
+  // layer is not in the flow, so it has to be told. Replaced on every paint so
+  // a listener never outlives the slot it measures.
+  if (FIELD_TRACK) FIELD_TRACK();
+  const onMove = () => place();
+  view.addEventListener("scroll", onMove, { passive: true });
+  window.addEventListener("resize", onMove);
+  FIELD_TRACK = () => {
+    view.removeEventListener("scroll", onMove);
+    window.removeEventListener("resize", onMove);
+    FIELD_TRACK = null;
+  };
+  requestAnimationFrame(place);   // after layout has settled
+}
+let FIELD_TRACK = null;
+
+// A tray app spends most of its life put away. The page stops its loop outright
+// and resumes where it was — the field is a simulation of state, not a
+// timeline, so a pause costs it nothing.
+document.addEventListener("visibilitychange", () => fieldSend({ run: !document.hidden }));
+
 function wireMic(view, sc) {
   view.querySelectorAll("[data-mic]").forEach((el) => {
     el.addEventListener("click", async () => {
@@ -1383,6 +1531,7 @@ function repaint(screen) {
   });
   wireChat(view, sc);
   wireMic(view, sc);
+  wireField(view);
   document.querySelectorAll("#tabs .tab").forEach((b) => {
     b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID));
   });

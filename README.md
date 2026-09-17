@@ -75,6 +75,14 @@ come from the same keys the phones read. The gate's copy, the rail, the tray
 menu and every notification come from `flags["desktop.shell"]`, sent only to a
 client that reports `device.formFactor: "desktop"`.
 
+The neural field is the one drawing that ships as a file rather than as JSON:
+it is ~400 lines of canvas the phones build at runtime and this window loads in
+an iframe. `npm run field` regenerates it from the app's own source, so the two
+cannot drift silently. The per-screen values it needs — how far back it sits
+(`alpha`) and how much of the network has been earned (`growth`) — travel in
+the iframe's query string, because those are the only two that are not the same
+on every screen.
+
 So a wording change is a backend deploy and a cache bump — no installer. This
 matters more here than on the phones: there is no OTA channel on desktop, and a
 release is a download the user has to notice, accept past SmartScreen, and run.
