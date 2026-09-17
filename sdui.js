@@ -1159,8 +1159,33 @@ function userId() {
  * Billing purchase to an app user, which is what makes the entitlement follow
  * the account instead of the machine.
  */
+/**
+ * WHERE THE USER ID GOES IN THE LINK, and why this is not guessed here.
+ *
+ * RevenueCat has more than one shape of purchase link, and they do not carry
+ * the app user id the same way: a hosted paywall link takes it as a trailing
+ * path segment, a Web Purchase Link takes it as an `app_user_id` query
+ * parameter, and which one you have depends on the billing engine behind it.
+ *
+ * Getting it wrong is the worst possible failure, because it LOOKS like
+ * success. The checkout opens, the card is charged, the webhook arrives, and
+ * the server logs `no Supabase user id on the event` — money taken, nothing
+ * granted. The entitlements code names that case explicitly for a reason.
+ *
+ * So the shape is part of the configured link rather than an assumption in
+ * this file. Put `{app_user_id}` wherever it belongs and it is substituted
+ * there. Without a placeholder it is appended as the query parameter, which is
+ * what RevenueCat documents for a Web Purchase Link — and which survives a URL
+ * that already carries a query, where blind path-appending would not.
+ */
+function withUser(url, uid) {
+  const id = encodeURIComponent(uid);
+  if (url.indexOf("{app_user_id}") !== -1) return url.replace(/\{app_user_id\}/g, id);
+  return url + (url.indexOf("?") === -1 ? "?" : "&") + "app_user_id=" + id;
+}
+
 function buyOnWeb() {
-  const base = String((BOOT && BOOT.flags && BOOT.flags["paywall.web.url"]) || "").replace(/\/+$/, "");
+  const base = String((BOOT && BOOT.flags && BOOT.flags["paywall.web.url"]) || "").trim();
   const uid = userId();
   if (!base || !uid) {
     // Said plainly rather than swallowed. A dead button is the bug this whole
@@ -1168,7 +1193,7 @@ function buyOnWeb() {
     toast(base ? "Sign in first to subscribe." : "Subscriptions aren't set up for the desktop app yet.");
     return;
   }
-  window.tailzuApp.openExternal(base + "/" + encodeURIComponent(uid));
+  window.tailzuApp.openExternal(withUser(base, uid));
   toast("Finish in your browser — this window updates when you're back.");
   // They are about to leave. The answer arrives by webhook while they are
   // gone, so the moment they come back is the moment to ask again.
