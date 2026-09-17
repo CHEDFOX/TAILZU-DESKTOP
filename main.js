@@ -566,7 +566,11 @@ let appWin = null;
 function openAppWindow() {
   if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); return; }
   appWin = new BrowserWindow({
-    width: 980, height: 760, minWidth: 380, minHeight: 520,
+    // Wide enough for the sign-in art and the form to stand side by side. At
+    // 980 the art's own rule and a 300px form were fighting over the same
+    // eighty pixels; the layout still re-centres below `wideAt` for anyone who
+    // drags it narrower.
+    width: 1120, height: 780, minWidth: 380, minHeight: 520,
     title: "Tailzu",
     backgroundColor: "#000000",
     autoHideMenuBar: true,

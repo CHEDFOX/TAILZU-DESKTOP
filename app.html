@@ -59,17 +59,42 @@
   .pad { max-width:640px; margin:0 auto; padding:30px 24px 90px; }
 
   /* ── sign in ───────────────────────────────────────────────────────────── */
-  #gate { position:relative; height:100%; display:flex; align-items:center; justify-content:center; padding:24px; }
+  /* THE ART IS A COMPOSITION, NOT A TEXTURE.
+     The mark and the headline are PLACED in it, and a form centred in the
+     window lands on top of both. A phone never has that problem — the art is a
+     backdrop behind one column — but a window is wide enough for the two to
+     stand beside each other, and wide enough for them to collide.
+     Where the form goes is decided by the server (desktop.shell.gateLayout),
+     because the art is an upload: a new one with its subject on the right is a
+     number to change and a cache bump, not an installer. These are only the
+     values the first frame paints with. */
+  #gate {
+    position:relative; height:100%; display:flex; align-items:center;
+    justify-content:center; padding:24px;
+    --gate-col:50%;              /* the form column's centre, across the window */
+  }
   /* The sign-in art, the same upload the phones show. It sits UNDER the box and
-     takes no clicks, so a field is never covered by a decoration. The scrim is
-     what keeps the form readable over art nobody has seen yet. */
+     takes no clicks, so a field is never covered by a decoration. */
   #gatebg { position:absolute; inset:0; overflow:hidden; z-index:0; pointer-events:none; }
   #gatebg > img, #gatebg > video { width:100%; height:100%; object-fit:cover; display:block; }
+  /* Darkening under the FORM, not over the whole picture. The old scrim ran
+     top-to-bottom at 88% by the foot, which is right for art that is a texture
+     and wrong for art that has a headline in it: it crushed the part the art
+     was composed around. */
   #gatebg::after {
     content:""; position:absolute; inset:0;
     background:linear-gradient(180deg, rgba(0,0,0,.35) 0%, rgba(0,0,0,.72) 55%, rgba(0,0,0,.88) 100%);
   }
+  /* Two columns: the darkening moves under the form and off the picture. */
+  #gatebg[data-scrim="1"]::after { background:var(--gate-scrim); }
   .gatebox { position:relative; z-index:1; width:100%; max-width:352px; }
+  /* Two columns. The box is placed by its own centre, so one number from the
+     server positions it whatever the window is doing. */
+  #gate[data-cols="1"] { justify-content:flex-start; }
+  #gate[data-cols="1"] .gatebox {
+    max-width:var(--gate-w, 300px);
+    margin-left:calc(var(--gate-col) - var(--gate-w, 300px) / 2);
+  }
   .gatebox h1 { font-size:34px; font-weight:700; color:var(--text); margin:0 0 6px; letter-spacing:-.6px; }
   .gatebox p.sub { margin:0 0 26px; color:var(--muted); }
   .field {

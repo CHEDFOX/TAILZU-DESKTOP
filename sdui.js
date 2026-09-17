@@ -1608,7 +1608,60 @@ function paintChrome(shell) {
   text("railBrand", r.brand);       text("dictate", r.dictate);
   text("settingsLink", r.settings); text("signOut", r.signOut);
   text("back", r.back);
+  applyGateLayout(shell.gateLayout);
 }
+
+/**
+ * STAND BESIDE THE ART, NOT ON IT.
+ *
+ * The sign-in art places a mark and a headline, and the form was centred in
+ * the window — which is exactly where both of those are. On a wide window the
+ * form takes a column of its own instead, at a position the server names,
+ * because the art is an upload and the next one may be composed the other way
+ * round.
+ *
+ * Below `wideAt` there is no second column to take, so it re-centres. Nothing
+ * here runs at all for a server that sends no block: the window keeps the
+ * centred layout it had.
+ */
+let GATE_LAYOUT = null;
+
+function applyGateLayout(l) {
+  if (l && typeof l === "object") GATE_LAYOUT = l;
+  const g = $("gate");
+  if (!g || !GATE_LAYOUT) return;
+  const L = GATE_LAYOUT;
+  const wide = window.innerWidth >= (Number(L.wideAt) || 860);
+  const twoCol = wide && (L.align === "right" || L.align === "left");
+  g.dataset.cols = twoCol ? "1" : "0";
+  if (twoCol) {
+    const col = Math.min(0.95, Math.max(0.05, Number(L.column) || 0.5));
+    // Mirrored for "left", so one number describes either side.
+    g.style.setProperty("--gate-col", ((L.align === "left" ? 1 - col : col) * 100) + "%");
+    g.style.setProperty("--gate-w", (Number(L.columnWidth) || 300) + "px");
+  } else {
+    g.style.removeProperty("--gate-col");
+    g.style.removeProperty("--gate-w");
+  }
+  // The scrim belongs to the layout: it darkens where the FORM is, and the
+  // form only sits there when there is room for two columns.
+  const bg = $("gatebg");
+  if (bg) {
+    bg.dataset.scrim = twoCol && typeof L.scrim === "string" && L.scrim.trim() ? "1" : "0";
+    if (bg.dataset.scrim === "1") bg.style.setProperty("--gate-scrim", L.scrim);
+    else bg.style.removeProperty("--gate-scrim");
+  }
+  // The art in these uploads already says "Code sent." and "Say it right.", so
+  // the window's own heading and subtitle would be the same words twice. An
+  // explicit switch, not an empty string: blank means "keep what you have"
+  // everywhere else in this block, and it has to keep meaning that.
+  const hide = (id, show) => { const el = $(id); if (el) el.hidden = show === false; };
+  hide("gateTitle", L.showTitle);
+  hide("gateSub", L.showSubtitle);
+}
+
+// A window that is resized across `wideAt` changes which layout applies.
+window.addEventListener("resize", () => applyGateLayout());
 
 /** The tray's copy lives in the main process, which never talks to the backend.
  *  The window is the only thing here holding a connection, so it passes the
