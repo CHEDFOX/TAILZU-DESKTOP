@@ -201,6 +201,11 @@ function loadConfig() {
     tone: (file.tone || "none").toLowerCase(),
     // Live captions: stream audio and show partials in an overlay while talking.
     live: file.live === true,
+    // Flush on a pause instead of ending on one. A thinking pause and a
+    // finished sentence look identical to a level meter, so nothing here
+    // tries to tell them apart: a pause writes out what was said and the
+    // mic stays open. Pausing costs nothing, which is what makes it safe.
+    pauseFlush: file.pauseFlush !== false,
     // Hold-to-talk: hold `holdKey`, release to finish. Uses a low-level key hook.
     hold: file.hold === true,
     holdKey: file.holdKey || "F9",
@@ -1085,6 +1090,26 @@ ipcMain.on("dictation-result", (_e, payload) => {
   clipboard.writeText(t);
   // Small delay so the clipboard write settles before the paste keystroke.
   setTimeout(pasteIntoFocusedApp, 120);
+});
+
+// A chunk of a session that is still running: paste it and leave the mic open.
+// settleSession is deliberately NOT called — that is the entire difference
+// between flushing on a pause and stopping on one.
+ipcMain.on("dictation-segment", (_e, payload) => {
+  const { session, text, failed } = payload || {};
+  if (failed) { notify(fmt("notify.dictationFailed", { message: "segment lost — still listening" })); return; }
+  const t = (text || "").trim();
+  if (!t) return;
+  clipboard.writeText(t);
+  setTimeout(pasteIntoFocusedApp, 120);
+  if (session === activeSession && cfg.live) overlayText("");
+});
+
+// Nobody said anything for a long time. Close the mic rather than leave it
+// open on a desk somebody walked away from.
+ipcMain.on("dictation-idle", (_e, payload) => {
+  const { session } = payload || {};
+  if (session === activeSession && recording) toggleDictation();
 });
 
 ipcMain.on("dictation-error", (_e, payload) => {

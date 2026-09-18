@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld("tailzu", {
   onStart: (cb) => ipcRenderer.on("start-recording", (_e, cfg) => cb(cfg)),
   onStop: (cb) => ipcRenderer.on("stop-recording", () => cb()),
   // recorder → main
+  // A finished chunk of a session that is STILL RUNNING. Separate from
+  // `result` because the main process must paste it without ending the
+  // session — the whole point of flushing on a pause.
+  segment: (text) => ipcRenderer.send("dictation-segment", text),
+  // Nobody has said anything for a long time. The mic closes itself.
+  idle: (p) => ipcRenderer.send("dictation-idle", p),
   result: (text) => ipcRenderer.send("dictation-result", text),
   error: (msg) => ipcRenderer.send("dictation-error", msg),
   partial: (text) => ipcRenderer.send("live-partial", text),

@@ -54,6 +54,71 @@
         live ? stopLive(session) : stopBatch(session);
       });
 
+      // ---- Pause-flush -------------------------------------------------------
+      // A PAUSE IS NOT AN ENDING, AND TREATING IT AS ONE IS WHY AUTO-STOP FAILS.
+      //
+      // Stopping on silence cuts people off while they think, because a
+      // thinking pause and a finished sentence look identical from here. So a
+      // pause flushes instead: what has been said so far is written out, the
+      // mic stays open, and the session ends when the user says so.
+      //
+      // Pausing therefore costs nothing — nothing ends, nothing is lost — and
+      // the text appears as you go rather than all at once at the end.
+      const FLUSH_SILENCE_MS = 1200;   // long enough to be a breath, not a gap
+      const MIN_SEGMENT_MS = 700;      // never flush a cough
+      const IDLE_END_MS = 25000;       // walked away: close the mic ourselves
+      const SPEECH_LEVEL = 0.012;      // RMS floor; room tone sits well under
+
+      let levelCtx = null, levelTimer = null, analyser = null;
+      let speaking = false, lastSpeechAt = 0, segmentStartedAt = 0, flushing = false;
+
+      function watchLevel(sid) {
+        try {
+          levelCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const src = levelCtx.createMediaStreamSource(stream);
+          analyser = levelCtx.createAnalyser();
+          analyser.fftSize = 512;
+          src.connect(analyser);
+        } catch { return; }   // no meter is survivable: it just never flushes
+        const buf = new Float32Array(analyser.fftSize);
+        segmentStartedAt = lastSpeechAt = Date.now();
+        levelTimer = setInterval(() => {
+          if (sid !== session || !analyser) return;
+          analyser.getFloatTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          const rms = Math.sqrt(sum / buf.length);
+          const now = Date.now();
+          if (rms > SPEECH_LEVEL) { speaking = true; lastSpeechAt = now; return; }
+          const quietFor = now - lastSpeechAt;
+          // Flush only if they actually said something since the last one.
+          if (speaking && quietFor > FLUSH_SILENCE_MS
+              && now - segmentStartedAt > MIN_SEGMENT_MS) {
+            speaking = false;
+            flushSegment(sid);
+          } else if (!speaking && quietFor > IDLE_END_MS) {
+            window.tailzu.idle({ session: sid });
+          }
+        }, 120);
+      }
+
+      function stopWatchingLevel() {
+        if (levelTimer) { clearInterval(levelTimer); levelTimer = null; }
+        if (levelCtx) { try { levelCtx.close(); } catch {} levelCtx = null; }
+        analyser = null;
+        speaking = false;
+      }
+
+      /** End this segment and start the next one on the SAME microphone. The
+       *  stream is never touched, so there is no permission blink, no device
+       *  re-acquire, and no gap where speech would be lost. */
+      function flushSegment(sid) {
+        if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+        flushing = true;
+        try { mediaRecorder.stop(); } catch { flushing = false; }
+      }
+
+      function emitSegment(sid, text) { window.tailzu.segment({ session: sid, text: text }); }
       function emitResult(sid, text) { window.tailzu.result({ session: sid, text: text }); }
       function emitError(sid, message) { window.tailzu.error({ session: sid, message: message }); }
       function emitPartial(sid, text) { window.tailzu.partial({ session: sid, text: text }); }
@@ -175,12 +240,47 @@
           const mimeType = pickMime();
           mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
           mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-          mediaRecorder.onstop = () => { stopTracks(); uploadBatch(sid); };
+          mediaRecorder.onstop = () => onRecorderStopped(sid, mimeType);
           mediaRecorder.start();
+          if (cfg.pauseFlush !== false) watchLevel(sid);
         } catch (err) {
           stopTracks();
           emitError(sid, micMessage(err));
         }
+      }
+
+      /** A recorder stopped. Which kind of stop it was decides everything:
+       *  a flush hands off to a fresh recorder on the same mic, a real stop
+       *  closes the microphone. Confusing the two either leaves the mic hot
+       *  forever or ends the session on the first pause. */
+      function onRecorderStopped(sid, mimeType) {
+        const wasFlush = flushing;
+        flushing = false;
+        const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+        const segment = chunks.slice();
+        chunks = [];
+
+        if (wasFlush && sid === session && stream) {
+          // Next segment first, so the microphone is live again before the
+          // upload starts. Anything said during the round trip is captured.
+          try {
+            mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+            mediaRecorder.onstop = () => onRecorderStopped(sid, mimeType);
+            mediaRecorder.start();
+            segmentStartedAt = Date.now();
+          } catch (err) {
+            stopTracks(); stopWatchingLevel();
+            emitError(sid, "could not continue recording: " + String(err));
+            return;
+          }
+          void uploadBatch(sid, segment, type, true);
+          return;
+        }
+
+        stopWatchingLevel();
+        stopTracks();
+        void uploadBatch(sid, segment, type, false);
       }
 
       function stopBatch(sid) {
@@ -197,12 +297,17 @@
         }
       }
 
-      async function uploadBatch(sid) {
+      async function uploadBatch(sid, parts, type, isSegment) {
         try {
-          if (!chunks.length) { emitError(sid, "no audio captured"); return; }
-          const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
+          if (!parts || !parts.length) {
+            // A flush with nothing in it is ordinary — they paused twice, or
+            // the segment was all room tone. Only a FINAL stop with no audio
+            // is worth telling anyone about.
+            if (!isSegment) emitError(sid, "no audio captured");
+            return;
+          }
           const ext = type.includes("ogg") ? "ogg" : "webm";
-          const blob = new Blob(chunks, { type });
+          const blob = new Blob(parts, { type });
           const fd = new FormData();
           fd.append("audio", blob, "audio." + ext);
           fd.append("targetApp", "Desktop");
@@ -222,18 +327,27 @@
           const json = await res.json();
           const cleaned = (json.cleanedText || "").trim();
           const transcript = (json.transcript || json.text || "").trim();
+          // A segment pastes and leaves the session running; a final result
+          // pastes and ends it. Same text, different meaning to the main
+          // process, and it must not learn the difference by guessing.
+          const deliver = isSegment ? emitSegment : emitResult;
           if (cleaned) {
-            emitResult(sid, cleaned);
+            deliver(sid, cleaned);
           } else if (transcript) {
             // Cleanup returned nothing but STT heard real words — paste the raw
             // transcript rather than silently pasting nothing.
-            emitResult(sid, transcript);
-          } else {
+            deliver(sid, transcript);
+          } else if (!isSegment) {
             // Both empty: the mic captured silence (wrong input device, muted
-            // mic, or OS permission). Say so instead of a no-op.
+            // mic, or OS permission). Say so instead of a no-op — but only for
+            // a real stop. A silent segment is just a pause, and a toast for
+            // every pause would be unusable.
             emitError(sid, str("noSpeech"));
           }
         } catch (err) {
+          // A failed SEGMENT must not end the session: the mic is still open
+          // and they are probably still talking. Tell them, keep going.
+          if (isSegment) { window.tailzu.segment({ session: sid, text: "", failed: true }); return; }
           emitError(sid, "upload: " + (err && err.message ? err.message : String(err)));
         }
       }
