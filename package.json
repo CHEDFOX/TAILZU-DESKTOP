@@ -11,7 +11,8 @@
     "postinstall": "electron-builder install-app-deps",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "dist:mac:signed": "electron-builder --mac --publish never -c.mac.notarize.teamId=$APPLE_TEAM_ID"
   },
   "optionalDependencies": {
     "uiohook-napi": "^1.5.4"
@@ -41,6 +42,10 @@
       "icon": "assets/icon.png",
       "artifactName": "Tailzu.${ext}",
       "x64ArchFiles": "**/*.node",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
         "LSUIElement": true
