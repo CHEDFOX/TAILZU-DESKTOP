@@ -6,6 +6,8 @@
 //
 // Modes:
 //   toggle (default)  press hotkey → record… → press again → paste
+//   double-tap        tap cfg.tapKey twice (Ctrl) → talk → tap twice → paste
+//                     (the default; one finger, no chord, nothing to hold)
 //   hold              hold cfg.holdKey (e.g. F9) → talk → release → paste
 //                     (needs uiohook-napi; degrades to toggle if unavailable)
 //   live: true        streams audio to /v1/transcribe-stream and shows live
@@ -95,6 +97,8 @@ const SHELL_DEFAULTS = {
     holdToTalk: "Hold-to-talk: hold",
     holdUnavailable: "unavailable",
     holdOff: "Hold-to-talk: off (set \"hold\": true in config)",
+    tapToTalk: "Double-tap {key} to dictate",
+    tapOff: "Double-tap: off (set \"tap\": true in config)",
     backend: "Backend",
     signedIn: "Signed in — dictation lands on your account",
     editConfig: "Edit config…",
@@ -113,6 +117,8 @@ const SHELL_DEFAULTS = {
     micBusy: "microphone is in use by another app",
     noSpeech: "no speech detected — check your microphone",
     unknownHoldKey: "Unknown holdKey \"{key}\" — use a key name like F9, F10, F12.",
+    tapUnavailable: "Double-tap unavailable (uiohook-napi didn't load) — using the hotkey.",
+    unknownTapKey: "Unknown tapKey \"{key}\" — use Ctrl, Alt, Shift or Meta.",
     dictationFailed: "Dictation failed: {message}",
     hotkeyTaken: "{taken} is taken by another app, so dictation is on {bound}. Change it under Edit config.",
     noHotkey: "No hotkey could be registered. Use Dictate in the tray menu, and set a free one under Edit config.",
@@ -198,6 +204,18 @@ function loadConfig() {
     // Hold-to-talk: hold `holdKey`, release to finish. Uses a low-level key hook.
     hold: file.hold === true,
     holdKey: file.holdKey || "F9",
+    // DOUBLE-TAP TO DICTATE, and the default way in.
+    //
+    // The chord was CommandOrControl+Shift+Space: three keys, both pinkies,
+    // and on macOS one key away from Spotlight. Dictation is the thing this
+    // app does, so reaching for it should cost one finger.
+    //
+    // A double-tap cannot collide with anything, which is why it is safe to
+    // put on a key every shortcut already uses: no application binds "Ctrl
+    // twice, quickly, with nothing in between", and the guards below make
+    // sure Ctrl+C never looks like one.
+    tap: file.tap !== false,
+    tapKey: file.tapKey || "Ctrl",
     // Launch Tailzu when you log in (applies to the installed app).
     autoStart: file.autoStart === true,
   };
@@ -523,6 +541,7 @@ let recorderWin = null;
 let overlayWin = null;
 let recording = false;
 let holdActive = false;
+let tapActive = false;
 let uiohookRef = null;
 // Monotonic dictation-session id. Every start mints a new id; the renderer
 // echoes it in result/error/partial. State (recording flag, overlay) only
@@ -691,6 +710,15 @@ function buildMenu() {
       },
     },
     { type: "separator" },
+    // The double-tap first, because it is the way in now and the chord is the
+    // fallback. A row that says the gesture is unavailable matters more than
+    // one naming a key that works.
+    {
+      label: cfg.tap
+        ? `${fmt("tray.tapToTalk", { key: cfg.tapKey })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`
+        : t("tray.tapOff"),
+      enabled: false,
+    },
     { label: `${t("tray.hotkey")}: ${cfg.hotkey}`, enabled: false },
     {
       label: cfg.hold
@@ -886,24 +914,96 @@ function toggleDictation() {
 // globalShortcut has no key-up events, so hold-to-talk needs uiohook-napi. It's
 // an optional native dep with prebuilt binaries; if it fails to load we degrade
 // to the toggle hotkey and say so once.
-function setupHoldToTalk() {
-  if (!cfg.hold) return;
+/** A tap is this short. Longer and the key was being HELD — as a modifier. */
+const TAP_MAX_HOLD_MS = 350;
+/** Two taps this close are one gesture. Comfortably slower than a deliberate
+ *  double-tap, far faster than two separate uses of the key. */
+const TAP_GAP_MS = 400;
+
+/** Both the left and right key for a side-agnostic name ("Ctrl" → either one).
+ *  Nobody thinks of them as different keys, and which one is under the hand
+ *  depends on what the other hand is doing. */
+function tapCodes(name, UiohookKey) {
+  const exact = UiohookKey[name];
+  const right = UiohookKey[`${name}Right`];
+  return [exact, right].filter((c) => typeof c === "number");
+}
+
+function setupKeyHook() {
+  if (!cfg.hold && !cfg.tap) return;
+  let uIOhook, UiohookKey;
   try {
-    const { uIOhook, UiohookKey } = require("uiohook-napi");
+    ({ uIOhook, UiohookKey } = require("uiohook-napi"));
+  } catch {
+    if (cfg.hold) notify(t("notify.holdUnavailable"));
+    if (cfg.tap) notify(t("notify.tapUnavailable"));
+    return;
+  }
+
+  if (cfg.hold) {
     const code = UiohookKey[cfg.holdKey];
     if (!code) {
       notify(fmt("notify.unknownHoldKey", { key: cfg.holdKey }));
-      return;
+    } else {
+      // keydown auto-repeats while held; the !recording / recording guards make
+      // start fire once on press and stop once on release.
+      uIOhook.on("keydown", (e) => { if (e.keycode === code && !recording) toggleDictation(); });
+      uIOhook.on("keyup", (e) => { if (e.keycode === code && recording) toggleDictation(); });
+      holdActive = true;
     }
-    // keydown auto-repeats while held; the !recording / recording guards make
-    // start fire once on press and stop once on release.
-    uIOhook.on("keydown", (e) => { if (e.keycode === code && !recording) toggleDictation(); });
-    uIOhook.on("keyup", (e) => { if (e.keycode === code && recording) toggleDictation(); });
+  }
+
+  if (cfg.tap) {
+    const codes = tapCodes(cfg.tapKey, UiohookKey);
+    if (!codes.length) {
+      notify(fmt("notify.unknownTapKey", { key: cfg.tapKey }));
+    } else {
+      // TWO GUARDS, AND WITHOUT EITHER THIS KEY IS UNUSABLE.
+      //
+      // Ctrl is a modifier before it is anything else, so a naive "count the
+      // presses" would fire dictation on Ctrl+C Ctrl+V — the single most
+      // common pair of keystrokes there is.
+      //
+      //   `clean`  any other key going down while this one is held means it
+      //            was a chord, not a tap.
+      //   hold     a press longer than a moment was someone holding the
+      //            modifier, even if they never pressed a second key.
+      //
+      // Both have to pass, and a failed tap resets the pair rather than
+      // counting toward it.
+      let lastTapAt = 0;
+      let downAt = 0;
+      let clean = false;
+      uIOhook.on("keydown", (e) => {
+        if (codes.includes(e.keycode)) {
+          if (!downAt) { downAt = Date.now(); clean = true; }
+        } else {
+          clean = false;
+        }
+      });
+      uIOhook.on("keyup", (e) => {
+        if (!codes.includes(e.keycode)) return;
+        const held = Date.now() - downAt;
+        downAt = 0;
+        if (!clean || held > TAP_MAX_HOLD_MS) { lastTapAt = 0; return; }
+        const now = Date.now();
+        if (lastTapAt && now - lastTapAt <= TAP_GAP_MS) {
+          lastTapAt = 0;
+          toggleDictation();
+        } else {
+          lastTapAt = now;
+        }
+      });
+      tapActive = true;
+    }
+  }
+
+  try {
     uIOhook.start();
     uiohookRef = uIOhook;
-    holdActive = true;
   } catch {
-    notify(t("notify.holdUnavailable"));
+    holdActive = false;
+    tapActive = false;
   }
 }
 
@@ -1084,7 +1184,7 @@ app.whenReady().then(() => {
     notify(t("notify.noHotkey"));
   }
 
-  setupHoldToTalk();
+  setupKeyHook();
 
   // Come up already knowing who is signed in and what tone they chose, so the
   // first thing in the menu is right before the window has ever been opened.
