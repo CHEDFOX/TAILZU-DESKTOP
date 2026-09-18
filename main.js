@@ -6,7 +6,7 @@
 //
 // Modes:
 //   toggle (default)  press hotkey → record… → press again → paste
-//   double-tap        tap cfg.tapKey twice (Ctrl) → talk → tap twice → paste
+//   double-tap        tap Ctrl twice, or Alt twice → talk → tap twice → paste
 //                     (the default; one finger, no chord, nothing to hold)
 //   hold              hold cfg.holdKey (e.g. F9) → talk → release → paste
 //                     (needs uiohook-napi; degrades to toggle if unavailable)
@@ -215,7 +215,17 @@ function loadConfig() {
     // twice, quickly, with nothing in between", and the guards below make
     // sure Ctrl+C never looks like one.
     tap: file.tap !== false,
-    tapKey: file.tapKey || "Ctrl",
+    // MORE THAN ONE, AND EACH ON ITS OWN. Whichever hand is free should be
+    // able to start dictation, so both are live and neither is a chord —
+    // Ctrl twice, or Alt twice. Ctrl then Alt is not a gesture: a pair has to
+    // be the SAME key, or two unrelated modifier presses would start
+    // recording.
+    //
+    // A single string still works, so an existing config.json keeps meaning
+    // what it meant.
+    tapKeys: (Array.isArray(file.tapKeys) ? file.tapKeys
+      : file.tapKey ? [file.tapKey]
+      : ["Ctrl", "Alt"]).map(String),
     // Launch Tailzu when you log in (applies to the installed app).
     autoStart: file.autoStart === true,
   };
@@ -715,7 +725,7 @@ function buildMenu() {
     // one naming a key that works.
     {
       label: cfg.tap
-        ? `${fmt("tray.tapToTalk", { key: cfg.tapKey })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`
+        ? `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(" or ") })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`
         : t("tray.tapOff"),
       enabled: false,
     },
@@ -954,9 +964,19 @@ function setupKeyHook() {
   }
 
   if (cfg.tap) {
-    const codes = tapCodes(cfg.tapKey, UiohookKey);
+    // Each name becomes its own watcher with its own pair-timer, so a pair is
+    // always the same key twice. One shared timer would fire on Ctrl-then-Alt,
+    // which is not a gesture anyone is making on purpose.
+    const groups = cfg.tapKeys
+      .map((name) => ({ name, codes: tapCodes(name, UiohookKey) }))
+      .filter((g) => {
+        if (g.codes.length) return true;
+        notify(fmt("notify.unknownTapKey", { key: g.name }));
+        return false;
+      });
+    const codes = groups.flatMap((g) => g.codes);
     if (!codes.length) {
-      notify(fmt("notify.unknownTapKey", { key: cfg.tapKey }));
+      /* every name was unknown — each already said so */
     } else {
       // TWO GUARDS, AND WITHOUT EITHER THIS KEY IS UNUSABLE.
       //
@@ -971,27 +991,37 @@ function setupKeyHook() {
       //
       // Both have to pass, and a failed tap resets the pair rather than
       // counting toward it.
-      let lastTapAt = 0;
-      let downAt = 0;
-      let clean = false;
+      const state = new Map(groups.map((g) => [g.name, { lastTapAt: 0, downAt: 0, clean: false }]));
+      const groupFor = (keycode) => groups.find((g) => g.codes.includes(keycode));
+
       uIOhook.on("keydown", (e) => {
-        if (codes.includes(e.keycode)) {
-          if (!downAt) { downAt = Date.now(); clean = true; }
-        } else {
-          clean = false;
+        const g = groupFor(e.keycode);
+        if (!g) {
+          // Something else went down. Every key in flight was part of a chord,
+          // not a tap — including the one on the OTHER watcher, because
+          // Alt+Ctrl+T must not leave either half half-armed.
+          for (const s of state.values()) s.clean = false;
+          return;
         }
+        const s = state.get(g.name);
+        if (!s.downAt) { s.downAt = Date.now(); s.clean = true; }
       });
+
       uIOhook.on("keyup", (e) => {
-        if (!codes.includes(e.keycode)) return;
-        const held = Date.now() - downAt;
-        downAt = 0;
-        if (!clean || held > TAP_MAX_HOLD_MS) { lastTapAt = 0; return; }
+        const g = groupFor(e.keycode);
+        if (!g) return;
+        const s = state.get(g.name);
+        const held = Date.now() - s.downAt;
+        s.downAt = 0;
+        if (!s.clean || held > TAP_MAX_HOLD_MS) { s.lastTapAt = 0; return; }
         const now = Date.now();
-        if (lastTapAt && now - lastTapAt <= TAP_GAP_MS) {
-          lastTapAt = 0;
+        if (s.lastTapAt && now - s.lastTapAt <= TAP_GAP_MS) {
+          s.lastTapAt = 0;
           toggleDictation();
         } else {
-          lastTapAt = now;
+          s.lastTapAt = now;
+          // A tap on one key is not half a pair on another.
+          for (const [name, other] of state) if (name !== g.name) other.lastTapAt = 0;
         }
       });
       tapActive = true;
