@@ -22,6 +22,7 @@ const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { createTapDetector } = require("./tapDetector.js");
 
 // ---- Config -----------------------------------------------------------------
 // Dev: desktop/config.json (next to this file). Packaged: the asar is read-only,
@@ -951,11 +952,6 @@ function toggleDictation() {
 // globalShortcut has no key-up events, so hold-to-talk needs uiohook-napi. It's
 // an optional native dep with prebuilt binaries; if it fails to load we degrade
 // to the toggle hotkey and say so once.
-/** A tap is this short. Longer and the key was being HELD — as a modifier. */
-const TAP_MAX_HOLD_MS = 350;
-/** Two taps this close are one gesture. Comfortably slower than a deliberate
- *  double-tap, far faster than two separate uses of the key. */
-const TAP_GAP_MS = 400;
 
 /** Both the left and right key for a side-agnostic name ("Ctrl" → either one).
  *  Nobody thinks of them as different keys, and which one is under the hand
@@ -1005,52 +1001,20 @@ function setupKeyHook() {
     if (!codes.length) {
       /* every name was unknown — each already said so */
     } else {
-      // TWO GUARDS, AND WITHOUT EITHER THIS KEY IS UNUSABLE.
-      //
-      // Ctrl is a modifier before it is anything else, so a naive "count the
-      // presses" would fire dictation on Ctrl+C Ctrl+V — the single most
-      // common pair of keystrokes there is.
-      //
-      //   `clean`  any other key going down while this one is held means it
-      //            was a chord, not a tap.
-      //   hold     a press longer than a moment was someone holding the
-      //            modifier, even if they never pressed a second key.
-      //
-      // Both have to pass, and a failed tap resets the pair rather than
-      // counting toward it.
-      const state = new Map(groups.map((g) => [g.name, { lastTapAt: 0, downAt: 0, clean: false }]));
-      const groupFor = (keycode) => groups.find((g) => g.codes.includes(keycode));
-
-      uIOhook.on("keydown", (e) => {
-        const g = groupFor(e.keycode);
-        if (!g) {
-          // Something else went down. Every key in flight was part of a chord,
-          // not a tap — including the one on the OTHER watcher, because
-          // Alt+Ctrl+T must not leave either half half-armed.
-          for (const s of state.values()) s.clean = false;
-          return;
-        }
-        const s = state.get(g.name);
-        if (!s.downAt) { s.downAt = Date.now(); s.clean = true; }
+      // The guards, and what each of them is for, live in tapDetector.js —
+      // split out because the way this key misfires is a sequence of events
+      // with timings, and a global key hook cannot be asked to reproduce one
+      // on demand. It can be tested; this file cannot.
+      const nameFor = (keycode) => {
+        const g = groups.find((x) => x.codes.includes(keycode));
+        return g ? g.name : null;
+      };
+      const taps = createTapDetector({
+        names: groups.map((g) => g.name),
+        onPair: () => toggleDictation(),
       });
-
-      uIOhook.on("keyup", (e) => {
-        const g = groupFor(e.keycode);
-        if (!g) return;
-        const s = state.get(g.name);
-        const held = Date.now() - s.downAt;
-        s.downAt = 0;
-        if (!s.clean || held > TAP_MAX_HOLD_MS) { s.lastTapAt = 0; return; }
-        const now = Date.now();
-        if (s.lastTapAt && now - s.lastTapAt <= TAP_GAP_MS) {
-          s.lastTapAt = 0;
-          toggleDictation();
-        } else {
-          s.lastTapAt = now;
-          // A tap on one key is not half a pair on another.
-          for (const [name, other] of state) if (name !== g.name) other.lastTapAt = 0;
-        }
-      });
+      uIOhook.on("keydown", (e) => taps.keyDown(nameFor(e.keycode)));
+      uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode)));
       tapActive = true;
     }
   }
