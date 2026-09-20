@@ -2490,7 +2490,7 @@ function refreshDisc(method) {
   ENV = await window.tailzuApp.env();
   SESSION = ENV.session || null;
 
-  $("dictate").addEventListener("click", () => { window.tailzuApp.dictate(); toast("Listening — press your hotkey to stop"); });
+  $("dictate").addEventListener("click", () => { window.tailzuApp.dictate(); toast("Listening — " + (ENV.hotkey || "your hotkey") + " stops"); });
   $("settingsLink").addEventListener("click", () => go("settings"));
   $("back").addEventListener("click", back);
   $("signOut").addEventListener("click", async () => {

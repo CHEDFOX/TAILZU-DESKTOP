@@ -86,7 +86,7 @@ const shellPath = app.isPackaged
 const SHELL_DEFAULTS = {
   tray: {
     dictate: "Dictate",
-    listening: "◉ Listening — press hotkey to stop",
+    listening: "◉ Listening — {key} stops",
     signInToDictate: "Sign in to dictate…",
     open: "Open Tailzu",
     tone: "Tone",
@@ -158,6 +158,16 @@ function t(pathStr) {
  *  detail than a sentence with "{bound}" in it. */
 function fmt(pathStr, vars) {
   return t(pathStr).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+}
+
+/** The bound hotkey as a person reads it. The accelerator is Electron's
+ *  spelling, and "CommandOrControl+Shift+F12" is not a key anyone looks for
+ *  — and the key in use is often not the one in the config, because the
+ *  first choice was taken and a fallback took its place. Wherever the app
+ *  says "press the hotkey", it names this. */
+function prettyKey(accel) {
+  return String(accel || "").replace("CommandOrControl", process.platform === "darwin" ? "⌘" : "Ctrl")
+    .replace("Command", "⌘").replace("Control", "Ctrl");
 }
 
 /** Every native notification goes through here, so the title is server-drawn
@@ -697,7 +707,7 @@ function buildMenu() {
     // Says what the press will actually do. A plain "Dictate" on a signed-out
     // machine promises something the click cannot deliver.
     {
-      label: recording ? t("tray.listening")
+      label: recording ? fmt("tray.listening", { key: prettyKey(cfg.hotkey) })
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
@@ -740,7 +750,7 @@ function buildMenu() {
         : t("tray.tapOff"),
       enabled: false,
     },
-    { label: `${t("tray.hotkey")}: ${cfg.hotkey}`, enabled: false },
+    { label: `${t("tray.hotkey")}: ${prettyKey(cfg.hotkey)}`, enabled: false },
     {
       label: cfg.hold
         ? `${t("tray.holdToTalk")} ${cfg.holdKey}${holdActive ? "" : ` (${t("tray.holdUnavailable")})`}`
@@ -787,6 +797,9 @@ ipcMain.handle("app:env", () => ({
   session: authSession,
   tone: cfg.tone,
   language: cfg.language,
+  // The key that is actually bound, so the window can name it rather than
+  // say "your hotkey" to someone whose first choice was taken.
+  hotkey: prettyKey(cfg.hotkey),
 }));
 ipcMain.handle("app:setSession", (_e, v) => {
   // The window signed in or out. The tray shares the session, so it adopts it
@@ -1238,7 +1251,7 @@ app.whenReady().then(() => {
     cfg.hotkey = bound;
     try { saveConfig({ hotkey: bound }); } catch { /* config we cannot write is not fatal */ }
     refreshTray();
-    notify(fmt("notify.hotkeyTaken", { taken, bound }));
+    notify(fmt("notify.hotkeyTaken", { taken: prettyKey(taken), bound: prettyKey(bound) }));
   } else if (!bound) {
     // Nothing took. The tray is the only way in, so say that rather than
     // naming a key that does not work.
