@@ -800,6 +800,9 @@ ipcMain.handle("app:env", () => ({
   // The key that is actually bound, so the window can name it rather than
   // say "your hotkey" to someone whose first choice was taken.
   hotkey: prettyKey(cfg.hotkey),
+  // Which desktop this is. The server draws Sign in with Apple on a Mac and
+  // leaves it out on the others; the window only reports, it never decides.
+  os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
 }));
 ipcMain.handle("app:setSession", (_e, v) => {
   // The window signed in or out. The tray shares the session, so it adopts it

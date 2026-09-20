@@ -187,6 +187,9 @@ function capabilities() {
       // the renderer overruling the creator. It tells the truth instead and
       // gets the right screen back.
       formFactor: "desktop",
+      // Which desktop, from the main process — a window cannot tell on its
+      // own, and the gate's buttons depend on it.
+      os: (ENV && ENV.os) || "",
       width: window.innerWidth, height: window.innerHeight, scale: window.devicePixelRatio || 1,
       colorScheme: "dark", locale: navigator.language || "en-US", reduceMotion: false, rtl: false,
     },
