@@ -278,8 +278,12 @@ function applyTheme(theme) {
  * thing that makes it read as one product — survives the change of surface.
  */
 const TYPE_SCALE = 1.08;
-const SERIF = 'Georgia,"Times New Roman",serif';
-const SANS = '-apple-system,"Segoe UI",system-ui,sans-serif';
+// Single quotes inside, because these land in double-quoted style
+// attributes: a "Segoe UI" in there closed the attribute early and cut off
+// everything role() wrote after it — including the node's own style, so
+// every Text lost its margins and colours from the tree ("0words").
+const SERIF = "Georgia,'Times New Roman',serif";
+const SANS = "-apple-system,'Segoe UI',system-ui,sans-serif";
 
 function role(name, extra) {
   const theme = (BOOT && BOOT.theme) || {};
@@ -438,7 +442,25 @@ function node(n) {
     case "Screen":
       return '<div class="pad" style="' + s + '">' + kids + "</div>";
 
-    case "Stack": case "Row": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
+    case "Row":
+      // A SETTINGS ROW, as the phones draw it: the label on the left, a value
+      // and a chevron on the right, a hairline under. This window read every
+      // Row as a horizontal stack and drew the children it does not have —
+      // so Settings was a heading over nothing, and the server's fallback
+      // Button never applied because the window had said it could draw a
+      // Row. A Row with no label is still the layout row, below.
+      if (p.label != null || p.value != null) {
+        const chevron = p.chevron !== false;
+        return '<div' + bind(press) + ' style="display:flex;align-items:center;padding:17px 0;' +
+          (p.divider === false ? "" : "border-bottom:1px solid var(--border);") +
+          (press ? "cursor:pointer;" : "") + s + '">' +
+          '<span style="flex:1;' + role("row", "font-size:16px;color:" + (p.danger ? "var(--danger)" : "var(--text)")) + '">' + esc(p.label || "") + "</span>" +
+          (p.value ? '<span style="' + role("rowValue", "font-size:15px;color:var(--muted)") + (chevron ? ";margin-right:8px" : "") + '">' + esc(p.value) + "</span>" : "") +
+          (chevron ? '<span style="' + role("rowChevron", "font-size:20px;color:var(--muted)") + ';margin-top:-2px">›</span>' : "") +
+          "</div>";
+      }
+      // falls through
+    case "Stack": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
       // POSITION:RELATIVE, AND IT IS LOAD-BEARING.
       //
       // React Native paints children in the order they are written. CSS does
@@ -2227,6 +2249,17 @@ async function dressGate(step) {
  */
 let AUTH_TREE = null;
 let AUTH_RISEN = "";
+
+/** The gate's error line, written from outside the sign-in state machine.
+ *  A launch that never reached the backend has no tree to paint, so this
+ *  writes the line directly: paintGate() draws nothing without one, and
+ *  "couldn't reach the backend" is the one sentence that screen has to be
+ *  able to say. */
+function fail(msg) {
+  AUTH.error = String(msg || "");
+  const el = $("gateErr");
+  if (el) el.textContent = AUTH.error;
+}
 
 function paintGate() {
   const host = $("gateForm");

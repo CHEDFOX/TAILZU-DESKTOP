@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:; connect-src https:; font-src 'self'">
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:; connect-src https:; font-src 'self'; frame-src 'self'">
 <title>Tailzu</title>
 <style>
   /* Theme values are overwritten from the server's tokens the moment bootstrap
@@ -23,6 +23,11 @@
   button { font:inherit; color:inherit; }
 
   /* ── shell ─────────────────────────────────────────────────────────────── */
+  /* The gate and the shell are both flex boxes by id, and an id outranks
+     the browser's own [hidden] rule — so `hidden` alone left the empty
+     gate standing at full height and pushed the signed-in shell below the
+     window, where overflow:hidden on the body swallowed it. */
+  #gate[hidden], #shell[hidden] { display:none; }
   #shell { display:flex; height:100%; }
   #rail {
     width:210px; flex:none; border-right:1px solid var(--border);

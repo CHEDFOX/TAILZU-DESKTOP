@@ -623,7 +623,13 @@ function openAppWindow() {
  *  files, so anything else is a bug or an injection attempt. */
 function hardenWindow(win) {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  // A reload is a navigation to the page's own URL, and the guard was
+  // swallowing it too — so "Sign out", which clears the session and reloads
+  // the window to land on the gate, cleared the session and did nothing
+  // anyone could see. The page may go back to itself; nowhere else.
+  win.webContents.on("will-navigate", (e, url) => {
+    if (url !== win.webContents.getURL()) e.preventDefault();
+  });
 }
 
 /** Send an IPC message to the recorder, deferring until the page has loaded.
