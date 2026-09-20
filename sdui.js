@@ -1365,8 +1365,11 @@ function swipePill(p, s) {
   const badge = h - 10;
   const label = String((method === "phone" ? p.phoneLabel : p.emailLabel) ||
     (method === "phone" ? "Phone number" : "Email address"));
-  // The disc: at the left as a badge while the pill is closed, at the right in
-  // the brand's dimmer amber once there is something to send.
+  // The disc: at the left as a badge while the pill is closed; at the right
+  // end the moment the pill opens — dim until there is something to send,
+  // then the brand's amber with an arrow. It used to stay on the left until
+  // the address was complete, which put it over the first letters of what
+  // was being typed, and on the phone pill over the dial.
   // In flight: the row still draws, because the tree shows the same children
   // for "entry" and "sending" — but a second click would send a second code.
   const busy = AUTH.phase !== "entry";
@@ -1376,7 +1379,7 @@ function swipePill(p, s) {
     (ready
       ? "right:5px;background:" + esc(tok(p.targetBackground || "#C9862B")) +
         ";border-color:transparent;cursor:pointer"
-      : "left:5px;background:" + esc(tok(p.badgeBackground || "rgba(255,255,255,0.10)")) +
+      : (open ? "right:5px;" : "left:5px;") + "background:" + esc(tok(p.badgeBackground || "rgba(255,255,255,0.10)")) +
         ";border-color:" + esc(tok(p.badgeBorderColor || "rgba(255,255,255,0.18)"))) + '">' +
     (ready
       ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' +
@@ -1403,7 +1406,7 @@ function swipePill(p, s) {
     ' autocomplete="' + (method === "phone" ? "tel" : "email") + '"' +
     ' spellcheck="false" value="' + esc(value) + '"' +
     ' style="padding-left:' + (open ? (method === "phone" ? 96 : 20) : h + 6) + "px" +
-    ";padding-right:" + (ready ? h + 6 : 18) + "px" +
+    ";padding-right:" + (open ? h + 6 : 18) + "px" +
     ";font-size:" + (Number(p.fontSize) || 15) + "px" +
     ";color:" + esc(tok(p.textColor || "rgba(255,255,255,0.96)")) + '"></div>';
 }
@@ -2337,9 +2340,18 @@ function wireGate() {
       codeIn.value = AUTH.code;
       AUTH.codeError = false;
       AUTH.error = "";
-      paintGate();
-      const again = $("gateForm").querySelector("[data-code]");
-      if (again) again.focus();
+      // DRAWN BY HAND, NOT REPAINTED. A repaint replaced the input under the
+      // caret with a fresh one, focused with its caret at the front — so the
+      // next digit landed before the last, and the code read backwards; and
+      // the focus did not always survive the swap, so every digit could cost
+      // a click on the pill. The digits, the border and the error line are
+      // the only things that change, and each is written in place.
+      const shown = box.querySelector("span");
+      if (shown) shown.textContent = AUTH.code.padEnd(AUTH.codeLength, "\u00b7").split("").join(" ");
+      box.classList.remove("tz-shake");
+      box.style.borderColor = AUTH.code.length === AUTH.codeLength ? tok("#C9862B") : "rgba(255,255,255,0.10)";
+      $("gateErr").textContent = "";
+      codeIn.setSelectionRange(AUTH.code.length, AUTH.code.length);
       // Six digits is the whole answer — there is nothing else to press.
       if (AUTH.code.length === AUTH.codeLength) void submitCode();
     });
