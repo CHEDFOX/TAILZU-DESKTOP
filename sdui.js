@@ -1254,11 +1254,11 @@ function withUser(url, uid) {
   return url + (url.indexOf("?") === -1 ? "?" : "&") + "app_user_id=" + id;
 }
 
-/** Where a live subscription can actually be changed, if we know. */
+/** What to call the place a subscription lives. */
 const MANAGE_AT = {
-  "billing.manage.apple": "You subscribed through the App Store — change it there, under Apple ID \u2192 Subscriptions.",
-  "billing.manage.google": "You subscribed through Google Play — change it there, under Payments \u2192 Subscriptions.",
-  "billing.manage.web": "You already subscribe on the web. Write to support@tailzu.space to change your plan.",
+  "billing.manage.apple": "the App Store",
+  "billing.manage.google": "Google Play",
+  "billing.manage.web": "the web",
 };
 
 function buyOnWeb() {
@@ -1268,25 +1268,34 @@ function buyOnWeb() {
   //
   // One account reaches a phone and a window, and the two stores cannot see
   // each other: buying here while an App Store subscription is live bills them
-  // twice for one entitlement, and neither store will notice or refund it.
-  // The Settings row that offers this is already hidden from a subscriber — but
-  // a hidden row is not a guard. The paywall is also reached by running out of
+  // twice for one entitlement, and neither store notices or refunds it. The
+  // Settings row that offers this is already hidden from a subscriber — but a
+  // hidden row is not a guard. The paywall is also reached by running out of
   // words, by a screen the server sends, and by a BOOT that went stale while
   // the window sat open, and every one of those ends here.
   //
-  // Where to go instead is not ours to choose. Apple lets nothing but Apple
-  // cancel an App Store subscription, so the only honest answer names the
-  // store that sold it.
-  //
-  // NOT A BLOCK ON EVERY SUBSCRIBER, THOUGH. Moving from the monthly plan to
+  // NOT A BLOCK ON EVERY SUBSCRIBER, though. Moving from the monthly plan to
   // the annual one is the same purchase on the same store, and the store
   // handles the swap and the proration itself — refusing that would leave
   // somebody stuck on the plan they are trying to spend more on. The line is
-  // the STORE, not the subscription: same store, let it through; another
-  // store, and it is a second subscription however it is worded.
+  // the STORE, not the subscription.
+  //
+  // AND IT SENDS THEM THERE RATHER THAN DESCRIBING IT. They clicked a button
+  // that means "change my plan"; answering with the route to somebody else's
+  // settings screen leaves them to do the finding, which is the part that
+  // becomes a support email. The server sends the address, so the click still
+  // ends where changing a plan is possible.
   if (flags["billing.entitled"] && !flags["billing.manage.web"]) {
-    const where = Object.keys(MANAGE_AT).find((k) => flags[k]);
-    toast(where ? MANAGE_AT[where] : "You already have a subscription on this account.");
+    const key = Object.keys(MANAGE_AT).find((k) => flags[k]);
+    const url = String(flags["billing.manage.url"] || "");
+    if (key && url) {
+      window.tailzuApp.openExternal(url);
+      toast("Your subscription is with " + MANAGE_AT[key] + " — opening it. It covers every device.");
+    } else {
+      toast(key
+        ? "Your subscription is with " + MANAGE_AT[key] + ". Change or cancel it there — it covers every device."
+        : "This account already has an active subscription.");
+    }
     return;
   }
   const base = String(flags["paywall.web.url"] || "").trim();
