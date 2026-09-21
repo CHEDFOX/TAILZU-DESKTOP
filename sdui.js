@@ -1254,8 +1254,35 @@ function withUser(url, uid) {
   return url + (url.indexOf("?") === -1 ? "?" : "&") + "app_user_id=" + id;
 }
 
+/** Where a live subscription can actually be changed, if we know. */
+const MANAGE_AT = {
+  "billing.manage.apple": "You subscribed through the App Store — change it there, under Apple ID \u2192 Subscriptions.",
+  "billing.manage.google": "You subscribed through Google Play — change it there, under Payments \u2192 Subscriptions.",
+  "billing.manage.web": "You already subscribe on the web. Write to support@tailzu.space to change your plan.",
+};
+
 function buyOnWeb() {
-  const base = String((BOOT && BOOT.flags && BOOT.flags["paywall.web.url"]) || "").trim();
+  const flags = (BOOT && BOOT.flags) || {};
+  // A SECOND SUBSCRIPTION IS THE ONE MISTAKE THIS WINDOW CAN MAKE WITH
+  // SOMEBODY'S MONEY.
+  //
+  // One account reaches a phone and a window, and the two stores cannot see
+  // each other: buying here while an App Store subscription is live bills them
+  // twice for one entitlement, and neither store will notice or refund it.
+  // The Settings row that offers this is already hidden from a subscriber — but
+  // a hidden row is not a guard. The paywall is also reached by running out of
+  // words, by a screen the server sends, and by a BOOT that went stale while
+  // the window sat open, and every one of those ends here.
+  //
+  // Where to go instead is not ours to choose. Apple lets nothing but Apple
+  // cancel an App Store subscription, so the only honest answer names the
+  // store that sold it.
+  if (flags["billing.entitled"]) {
+    const where = Object.keys(MANAGE_AT).find((k) => flags[k]);
+    toast(where ? MANAGE_AT[where] : "You already have a subscription on this account.");
+    return;
+  }
+  const base = String(flags["paywall.web.url"] || "").trim();
   const uid = userId();
   if (!base || !uid) {
     // Said plainly rather than swallowed. A dead button is the bug this whole
