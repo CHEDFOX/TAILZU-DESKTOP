@@ -1277,7 +1277,14 @@ function buyOnWeb() {
   // Where to go instead is not ours to choose. Apple lets nothing but Apple
   // cancel an App Store subscription, so the only honest answer names the
   // store that sold it.
-  if (flags["billing.entitled"]) {
+  //
+  // NOT A BLOCK ON EVERY SUBSCRIBER, THOUGH. Moving from the monthly plan to
+  // the annual one is the same purchase on the same store, and the store
+  // handles the swap and the proration itself — refusing that would leave
+  // somebody stuck on the plan they are trying to spend more on. The line is
+  // the STORE, not the subscription: same store, let it through; another
+  // store, and it is a second subscription however it is worded.
+  if (flags["billing.entitled"] && !flags["billing.manage.web"]) {
     const where = Object.keys(MANAGE_AT).find((k) => flags[k]);
     toast(where ? MANAGE_AT[where] : "You already have a subscription on this account.");
     return;
@@ -1291,7 +1298,9 @@ function buyOnWeb() {
     return;
   }
   window.tailzuApp.openExternal(withUser(base, uid));
-  toast("Finish in your browser — this window updates when you're back.");
+  toast(flags["billing.entitled"]
+    ? "Change your plan in the browser — this window updates when you're back."
+    : "Finish in your browser — this window updates when you're back.");
   // They are about to leave. The answer arrives by webhook while they are
   // gone, so the moment they come back is the moment to ask again.
   WATCH_ENTITLEMENT = true;
