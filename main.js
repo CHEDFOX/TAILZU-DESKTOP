@@ -1152,6 +1152,28 @@ app.whenReady().then(() => {
   // Menu-bar / tray-only app — no dock icon on macOS.
   if (process.platform === "darwin" && app.dock) app.dock.hide();
 
+  // THE WINDOW ANSWERS TO NO KEYS BUT ITS OWN.
+  //
+  // With no menu set, Electron installs its default one, and every shortcut in
+  // it stays live in the app window even with the bar hidden: Ctrl+R reloads
+  // the page and drops whatever screen was open, Ctrl+Shift+I opens developer
+  // tools on a signed-in session, Ctrl+plus and minus zoom a layout drawn at
+  // one size, Ctrl+W closes the window, F11 goes full screen — and Alt, one of
+  // the two double-tap keys, shows and hides a File/Edit/View bar every time
+  // it is tapped. None of that is this app.
+  //
+  // macOS keeps two things: the app menu, for ⌘Q, and an Edit menu — copy and
+  // paste into a text field go through the menu there, and without it an email
+  // address cannot be pasted into the sign-in box. Windows and Linux edit text
+  // natively and need neither.
+  //
+  // TAILZU_DEVTOOLS=1 keeps Electron's menu, for whoever is building this.
+  if (process.env.TAILZU_DEVTOOLS !== "1") {
+    Menu.setApplicationMenu(process.platform === "darwin"
+      ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }])
+      : null);
+  }
+
   // Auto-grant mic to our own local pages ONLY. Scoping to file:// means any
   // future remote content loaded by mistake can never inherit silent mic access.
   session.defaultSession.setPermissionRequestHandler((wc, permission, done) => {

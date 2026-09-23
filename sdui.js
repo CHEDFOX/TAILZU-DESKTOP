@@ -1744,6 +1744,10 @@ async function paint(force) {
   if (MIC) { try { MIC.rec.stop(); } catch {} MIC = null; }
   const view = $("view");
   if (force || !paint._last || paint._last !== cur.screenId) {
+    // The field goes with the screen it belonged to, BEFORE the placeholder:
+    // the placeholder is transparent, and a field left standing under it is
+    // the neural network flashing up over the next tab while it loads.
+    dropField();
     view.innerHTML = '<div class="pad" style="color:var(--label)">Loading…</div>';
   }
   paint._last = cur.screenId;
@@ -1880,20 +1884,53 @@ function fieldState() {
   };
 }
 
+/** The screen that owned the field is gone, or going. Drop the iframe with it
+ *  rather than keep a canvas alive for a screen nobody is on — and rather than
+ *  leave it standing under whatever the view shows next. */
+function dropField() {
+  if (FIELD_TRACK) FIELD_TRACK();
+  if (FIELD_EL) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
+  FIELD_BINDS = FIELD_PROPS = null; FIELD_LAST = "";
+}
+
+/**
+ * NOTHING BETWEEN THE FIELD AND THE VIEW MAY BE OPAQUE.
+ *
+ * On the phones the field is a child of the screen, so it paints over the
+ * screen's own background, as a child does. Here it is a layer UNDER the whole
+ * view — which is what keeps it from reloading on every paint — and that turns
+ * the painting order over: the screen's background now sits on top of it. The
+ * Train screen's root is solid black, so the field ran at full size, every
+ * frame, behind a black sheet, and the only time anyone saw it was the instant
+ * a tab change swapped the sheet out.
+ *
+ * So the order is put back by hand: every background between the slot and the
+ * view is lifted off, and the one nearest the field — the one it would have
+ * been drawn over on a phone — becomes the iframe's own ground. Siblings that
+ * come after the field (the scrim, the copy, the button) still sit above it,
+ * exactly as the tree says. Re-done on every paint, since every paint writes
+ * the backgrounds back.
+ */
+function uncoverField(slot, view) {
+  let ground = "";
+  for (let el = slot.parentElement; el && el !== view; el = el.parentElement) {
+    const bg = getComputedStyle(el).backgroundColor;
+    if (!bg || bg === "transparent" || /rgba\([^)]*,\s*0\)$/.test(bg)) continue;
+    if (!ground) ground = bg;
+    el.style.backgroundColor = "transparent";
+  }
+  return ground;
+}
+
 function wireField(view) {
   const slot = view.querySelector("[data-field]");
-  if (!slot) {
-    // The screen that owned it is gone. Drop the iframe with it rather than
-    // keep a canvas alive for a screen nobody is on.
-    if (FIELD_EL) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
-    FIELD_BINDS = FIELD_PROPS = null; FIELD_LAST = "";
-    return;
-  }
+  if (!slot) { dropField(); return; }
   const q = slot.getAttribute("data-field") || "";
   // Reuse only when it is the same field. A different alpha or growth is a
   // different drawing — both are baked when the page loads — so that one does
   // reload, which is right: it is a change, not a repaint.
   if (FIELD_EL && FIELD_EL.dataset.q !== q) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
+  const ground = uncoverField(slot, view);
   if (!FIELD_EL) {
     // MOUNTED ONCE, OUTSIDE THE VIEW, AND NEVER MOVED.
     //
@@ -1913,12 +1950,16 @@ function wireField(view) {
       fieldSend({ run: !document.hidden });
     });
     FIELD_EL.src = "neuralField.html" + q;
+    FIELD_EL.style.visibility = "hidden";   // until place() has measured the slot
     // FIRST child of #main, so it paints under #view (which carries z-index:1).
     // The field is the art behind the copy; appended last it would cover the
     // title and the button it exists to sit behind.
     const host = view.parentElement || document.body;
     host.insertBefore(FIELD_EL, host.firstChild);
   }
+  // The screen's own colour under the field, as on the phones; the window's
+  // ground when the screen names none.
+  FIELD_EL.style.background = ground || "var(--bg)";
   place();
 
   /** Sit exactly where this paint put the slot. Measured against the layer's
