@@ -229,7 +229,15 @@ function strokeFibre(g,f,a,w){
   f.twigs.forEach(function(t){
     g.beginPath();g.moveTo(t[0],t[1]);g.quadraticCurveTo(t[2],t[3],t[4],t[5]);g.stroke();
     g.beginPath();g.arc(t[4],t[5],w*1.1,0,TAU);g.fill()})}
-function fibreLook(f){var nz=(f.z+1)/2;return [lerp(0.13,0.36,nz)*(CFG.alpha||1),lerp(0.3,0.7,nz)]}
+/* HOW FAR BACK IT SITS, LIVE. alpha used to be baked into the plates, so a
+   screen that wanted the field brighter than the one before had to throw the
+   whole drawing away and bake it again — a black frame, then a new network,
+   at the one moment (slide to begin) that should be continuous. Now the plates
+   are baked at full strength and alpha is applied as the frame is drawn, and
+   it EASES to wherever it was last told to go: the field brightens into a
+   session over a quarter of a second instead of being replaced. */
+var A_TO=CFG.alpha==null?1:clamp(Number(CFG.alpha),0,1),A=A_TO;
+function fibreLook(f){var nz=(f.z+1)/2;return [lerp(0.13,0.36,nz),lerp(0.3,0.7,nz)]}
 
 function bake(){
   SLABS.forEach(function(S,i){
@@ -243,20 +251,21 @@ function bake(){
     hubs.forEach(function(h){if(h.z<S.lo||h.z>=S.hi)return;
       var nz=(h.z+1)/2,col=hsl(h.hue,85,66),
           gl=g.createRadialGradient(h.x,h.y,0,h.x,h.y,h.r*1.7);
-      gl.addColorStop(0,rgba(hsl(h.hue,80,62),(h.core?0.10:0.03*h.weight)*(CFG.alpha||1)));
+      gl.addColorStop(0,rgba(hsl(h.hue,80,62),h.core?0.10:0.03*h.weight));
       gl.addColorStop(1,rgba(col,0));
       g.fillStyle=gl;g.beginPath();g.arc(h.x,h.y,h.r*1.7,0,TAU);g.fill();
-      g.strokeStyle=rgba(col,lerp(0.18,0.4,nz)*(CFG.alpha||1));
+      g.strokeStyle=rgba(col,lerp(0.18,0.4,nz));
       h.tufts.forEach(function(t){g.beginPath();g.moveTo(t.pts[0],t.pts[1]);
         var k;for(k=2;k<t.pts.length;k+=2)g.lineTo(t.pts[k],t.pts[k+1]);
         g.lineWidth=t.w;g.stroke()});
-      g.fillStyle=rgba(hsl(h.hue,70,80),lerp(0.3,0.65,nz)*(CFG.alpha||1));
+      g.fillStyle=rgba(hsl(h.hue,70,80),lerp(0.3,0.65,nz));
       var k2;for(k2=0;k2<h.dots.length;k2+=3){
         g.beginPath();g.arc(h.dots[k2],h.dots[k2+1],h.dots[k2+2]*lerp(0.7,1.2,nz),0,TAU);g.fill()}});
     if(CAN_FILTER&&S.blur>0.05){
       var t2=document.createElement("canvas");t2.width=c.width;t2.height=c.height;
       var tg=t2.getContext("2d");tg.filter="blur("+(S.blur*S.scale*DPR)+"px)";tg.drawImage(c,0,0);
       g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,c.width,c.height);g.drawImage(t2,0,0)}});
+  bakedW=W;bakedH=H;bakedDPR=DPR;
   dirty=false}
 function bakeOne(f){
   var i=-1,k;for(k=0;k<SLABS.length;k++)if(f.z>=SLABS[k].lo&&f.z<SLABS[k].hi){i=k;break}
@@ -312,6 +321,13 @@ window.tz=function(msg){
       if(t&&!training){var i;for(i=0;i<5;i++)sproutFibre()}
       training=t;if(!t)setMode("idle")}
     if(d.run!=null)setRun(!!d.run);
+    /* The two per-screen numbers, retuned in place. A screen that wants the
+       field brighter or dimmer says so and it eases there; one that knows the
+       network has grown rebuilds it under the last frame, which stays on the
+       canvas until the new one is ready — never a black frame between. */
+    if(d.alpha!=null)A_TO=clamp(Number(d.alpha),0,1);
+    if(d.growth!=null){var g2=clamp(Number(d.growth),0,1),g0=CFG.growth==null?1:clamp(Number(CFG.growth),0,1);
+      if(Math.abs(g2-g0)>0.004&&W&&H){CFG.growth=g2;build();bake()}}
   }catch(e){}};
 document.addEventListener("message",function(e){window.tz(e.data)});
 window.addEventListener("message",function(e){window.tz(e.data)});
@@ -319,6 +335,7 @@ window.addEventListener("message",function(e){window.tz(e.data)});
 var last=performance.now(),t0=0;
 function update(dt){
   t0+=dt;modeT+=dt;sway=t0*0.07;
+  A+=(A_TO-A)*Math.min(1,dt*5);if(Math.abs(A_TO-A)<0.002)A=A_TO;
   var i;
   for(i=growing.length-1;i>=0;i--){var f=growing[i];
     f.len=Math.min(1,f.len+f.rate*(training?1:0.15)*dt);
@@ -344,7 +361,7 @@ function render(){
   ctx.clearRect(0,0,W,H);
   SLABS.forEach(function(S,i){
     var dx=Math.sin(sway+i*0.6)*S.par,dy=Math.cos(sway*0.8+i*0.9)*S.par*0.5;
-    ctx.save();ctx.translate(W/2+dx,H/2+dy);
+    ctx.save();ctx.globalAlpha=A;ctx.translate(W/2+dx,H/2+dy);
     ctx.drawImage(plates[i],-W/2,-H/2,W,H);ctx.restore()});
   hubs.forEach(function(h){
     var heat=Math.min(1,h.heat+h.charge*0.35);if(heat<0.04)return;
@@ -355,7 +372,7 @@ function render(){
     ctx.fillStyle=ga;ctx.beginPath();ctx.arc(h.x,h.y,R,0,TAU);ctx.fill()});
   ctx.lineCap="round";ctx.lineJoin="round";
   growing.forEach(function(f){
-    var l=fibreLook(f);strokeFibre(ctx,f,l[0]*1.6,l[1]*1.3);
+    var l=fibreLook(f);strokeFibre(ctx,f,l[0]*1.6*A,l[1]*1.3);
     var p=fibrePoint(f,f.len),g=ctx.createRadialGradient(p[0],p[1],0,p[0],p[1],9);
     g.addColorStop(0,rgba(SIG,0.5));g.addColorStop(1,rgba(SIG,0));
     ctx.fillStyle=g;ctx.beginPath();ctx.arc(p[0],p[1],9,0,TAU);ctx.fill();
@@ -421,15 +438,40 @@ function step(now){
   update(Math.min(0.05,dt));render();
   if(!painted){painted=true;try{window.ReactNativeWebView&&window.ReactNativeWebView.postMessage("painted")}catch(e){}}}
 
+/* A SMALL RESIZE IS NOT A NEW NETWORK.
+   Any change of size used to rebuild the whole thing — forty thousand new
+   curves, baked again — which is half a second with nothing else moving, and
+   a different network on the other side of it. A scrollbar appearing costs
+   fifteen pixels, and that was enough. So a change of under a quarter, at
+   the same pixel density, scales what is already built to the new size and
+   lets the plates stretch with it: nothing is rebuilt, nothing is baked, and
+   the same network is simply a little wider. Measured against the size the
+   plates were BAKED at, so small changes cannot add up to a blurry drawing —
+   a quarter's drift from the last bake is a real resize, and rebuilds. */
+var bakedW=0,bakedH=0,bakedDPR=0;
+function scalePts(a,sx,sy){var i;for(i=0;i<a.length;i+=2){a[i]*=sx;a[i+1]*=sy}}
+function scaleGeometry(sx,sy){
+  var sr=(sx+sy)/2;
+  hubs.forEach(function(h){h.x*=sx;h.y*=sy;h.r*=sr;
+    h.tufts.forEach(function(t){scalePts(t.pts,sx,sy)});
+    var k;for(k=0;k<h.dots.length;k+=3){h.dots[k]*=sx;h.dots[k+1]*=sy;h.dots[k+2]*=sr}});
+  tracts.forEach(function(t){scalePts(t.path,sx,sy);t.spread*=sr});
+  var all=fibres.concat(growing);
+  all.forEach(function(f){scalePts(f.pts,sx,sy);
+    f.twigs.forEach(function(t){scalePts(t,sx,sy)})});
+  highways.forEach(function(hw){scalePts(hw,sx,sy);hw.step*=sr})}
 function layout(){
   var w=cv.clientWidth,h=cv.clientHeight;
   if(!w||!h)return;
-  var changed=Math.abs(w-W)>1||Math.abs(h-H)>1;
-  W=w;H=h;DPR=Math.min(window.devicePixelRatio||1,2);
+  var dpr=Math.min(window.devicePixelRatio||1,2),
+      sx=W?w/W:1,sy=H?h/H:1,
+      small=bakedW&&dpr===bakedDPR&&Math.abs(w/bakedW-1)<0.25&&Math.abs(h/bakedH-1)<0.25;
+  W=w;H=h;DPR=dpr;
   cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);
   ctx.setTransform(DPR,0,0,DPR,0,0);
   if(!grainPat)grainPat=ctx.createPattern(grain,"repeat");
-  if(changed){build();bake()}}
+  if(!small){build();bake()}
+  else if(Math.abs(sx-1)>1e-4||Math.abs(sy-1)>1e-4)scaleGeometry(sx,sy)}
 window.addEventListener("resize",layout);
 layout();raf=requestAnimationFrame(step);
 })();

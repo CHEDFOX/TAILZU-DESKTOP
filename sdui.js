@@ -1743,22 +1743,43 @@ async function paint(force) {
   stopSession();
   if (MIC) { try { MIC.rec.stop(); } catch {} MIC = null; }
   const view = $("view");
-  if (force || !paint._last || paint._last !== cur.screenId) {
-    // The field goes with the screen it belonged to, BEFORE the placeholder:
-    // the placeholder is transparent, and a field left standing under it is
-    // the neural network flashing up over the next tab while it loads.
-    dropField();
+  // THE SCREEN THAT IS UP STAYS UP UNTIL THE NEXT ONE IS READY.
+  //
+  // This used to blank the view to "Loading…" the instant a navigation began,
+  // so every screen change was three frames the eye could count: the old
+  // screen gone, grey text on black, the new screen. On slide-to-begin that
+  // was the blink between the pill and the session. Now the old screen holds
+  // while the next is fetched and is replaced in ONE frame when it lands. The
+  // word "Loading…" appears only if the fetch is genuinely slow — and it is
+  // opaque, so nothing under the view can show through it.
+  const seq = paint._seq = (paint._seq || 0) + 1;
+  const fresh = force || !paint._last || paint._last !== cur.screenId;
+  let slow = 0;
+  if (!paint._last) {
     view.innerHTML = '<div class="pad" style="color:var(--label)">Loading…</div>';
+  } else if (fresh) {
+    slow = setTimeout(() => {
+      if (seq !== paint._seq) return;
+      dropField();
+      view.innerHTML = '<div class="pad" style="color:var(--label);background:var(--bg);min-height:100%">Loading…</div>';
+    }, 700);
   }
   paint._last = cur.screenId;
   let screen;
   try {
     screen = await fetchScreen(cur.screenId, cur.params);
   } catch (err) {
+    clearTimeout(slow);
+    if (seq !== paint._seq) return;
+    dropField();
     view.innerHTML = '<div class="pad"><p style="color:var(--danger)">Couldn\'t load this screen.</p>' +
       '<p style="color:var(--label);font-size:13px">' + esc(String(err.message || err)) + "</p></div>";
     return;
   }
+  clearTimeout(slow);
+  // A newer navigation started while this one was in flight. Its screen is
+  // the one that should land; this one would paint over it a moment later.
+  if (seq !== paint._seq) return;
   STATE = Object.assign({}, screen.state || {});
   // Picks belong to the thread that was on screen. A new screen has none.
   CHAT_PICKED = {};
@@ -1926,10 +1947,19 @@ function wireField(view) {
   const slot = view.querySelector("[data-field]");
   if (!slot) { dropField(); return; }
   const q = slot.getAttribute("data-field") || "";
-  // Reuse only when it is the same field. A different alpha or growth is a
-  // different drawing — both are baked when the page loads — so that one does
-  // reload, which is right: it is a change, not a repaint.
-  if (FIELD_EL && FIELD_EL.dataset.q !== q) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
+  // THE SAME FIELD, RETUNED, never a new one. A screen that wants it brighter
+  // (the session, after the entry) or that knows the network has grown says
+  // so over the same channel as the state, and the page eases or rebuilds in
+  // place. Reloading the iframe for a new alpha was the black frame in the
+  // middle of slide-to-begin.
+  if (FIELD_EL && FIELD_EL.dataset.q !== q) {
+    FIELD_EL.dataset.q = q;
+    const qs = new URLSearchParams(q);
+    const tune = {};
+    if (qs.has("alpha")) tune.alpha = Number(qs.get("alpha"));
+    if (qs.has("growth")) tune.growth = Number(qs.get("growth"));
+    fieldSend(tune);
+  }
   const ground = uncoverField(slot, view);
   if (!FIELD_EL) {
     // MOUNTED ONCE, OUTSIDE THE VIEW, AND NEVER MOVED.
@@ -2047,6 +2077,22 @@ function repaint(screen) {
   const html = sc.root ? node(sc.root) : '<div class="pad">' + (sc.blocks || []).map(node).join("") + "</div>";
   const view = $("view");
   view.innerHTML = html;
+  // A NEW SCREEN ARRIVES, IT DOES NOT SNAP. The first paint of a screen fades
+  // its content in over the field, which stays where it was; a repaint of the
+  // same screen — a state change mid-session — is instant, as it must be.
+  if (repaint._id !== sc.screenId && view.firstElementChild) {
+    view.firstElementChild.classList.add("tz-swap");
+  }
+  repaint._id = sc.screenId;
+  // A ROOT THAT ASKS TO FILL GETS SOMETHING TO FILL. The phones lay every
+  // screen in a flex column, so a root with `flex: 1` is the height of the
+  // screen there. In a plain block that number means nothing, and a root
+  // whose children are all placed absolutely — the live session: the field,
+  // the caption, the end button — has no height of its own and collapsed to
+  // zero: black, and a field with nowhere to be. The view becomes a column
+  // for such a root, and only for such a root; a padded page is left alone.
+  const root = view.firstElementChild;
+  view.dataset.flex = root && parseFloat(getComputedStyle(root).flexGrow) > 0 ? "1" : "0";
   startFlips();
 
   bindHandlers(view);
