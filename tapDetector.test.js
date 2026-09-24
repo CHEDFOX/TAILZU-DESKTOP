@@ -16,12 +16,70 @@ function rig(names = ["Ctrl", "Alt"]) {
   return {
     fired,
     wait: (ms) => { clock += ms; },
-    down: (n) => d.keyDown(n),
-    up: (n) => d.keyUp(n),
+    down: (n, code) => d.keyDown(n, code),
+    up: (n, code) => d.keyUp(n, code),
+    /** a mouse button, or the wheel */
+    click: () => d.other(),
     /** press and release a key, held for `ms` */
     tap(n, ms = 40) { d.keyDown(n); clock += ms; d.keyUp(n); },
   };
 }
+
+// ---- the mouse, and keys already down ---------------------------------------
+// The ones that made ordinary use of Ctrl start dictation: nothing here presses
+// a second key while Ctrl is held, and every one of them used to pass.
+
+test("Ctrl+click on two things is not a double-tap", () => {
+  const r = rig();
+  r.down("Ctrl"); r.wait(30); r.click(); r.wait(40); r.up("Ctrl");
+  r.wait(220);
+  r.down("Ctrl"); r.wait(30); r.click(); r.wait(40); r.up("Ctrl");
+  assert.deepStrictEqual(r.fired, []);
+});
+
+test("Ctrl+wheel twice, to zoom, is not a double-tap", () => {
+  const r = rig();
+  r.down("Ctrl"); r.wait(20); r.click(); r.click(); r.wait(30); r.up("Ctrl");
+  r.wait(150);
+  r.down("Ctrl"); r.wait(20); r.click(); r.wait(30); r.up("Ctrl");
+  assert.deepStrictEqual(r.fired, []);
+});
+
+test("a click between two taps means they were two things", () => {
+  const r = rig();
+  r.tap("Ctrl"); r.wait(100); r.click(); r.wait(100); r.tap("Ctrl");
+  assert.deepStrictEqual(r.fired, []);
+});
+
+test("a letter between two taps means they were two things", () => {
+  const r = rig();
+  r.tap("Ctrl"); r.wait(80); r.down(null, 30); r.up(null, 30); r.wait(80); r.tap("Ctrl");
+  assert.deepStrictEqual(r.fired, []);
+});
+
+test("Ctrl pressed while Shift is already down is a chord", () => {
+  const r = rig();
+  r.down(null, 42);                 // shift, first
+  r.wait(60);
+  r.tap("Ctrl"); r.wait(120); r.tap("Ctrl");
+  r.up(null, 42);
+  assert.deepStrictEqual(r.fired, []);
+});
+
+test("a release the hook never saw does not lock the gesture out for good", () => {
+  const r = rig();
+  r.down(null, 42);                 // and its keyup went to another window
+  r.wait(9000);
+  r.tap("Ctrl"); r.wait(120); r.tap("Ctrl");
+  assert.deepStrictEqual(r.fired, ["Ctrl"]);
+});
+
+test("the gesture still works right after a click elsewhere", () => {
+  const r = rig();
+  r.click(); r.wait(300);
+  r.tap("Ctrl"); r.wait(120); r.tap("Ctrl");
+  assert.deepStrictEqual(r.fired, ["Ctrl"]);
+});
 
 test("two quick taps fire once", () => {
   const r = rig();

@@ -745,11 +745,13 @@ function buildMenu() {
     // The double-tap first, because it is the way in now and the chord is the
     // fallback. A row that says the gesture is unavailable matters more than
     // one naming a key that works.
+    // A switch, not a notice: the gesture lives on the most-used key on the
+    // board, and whoever it gets in the way of needs to turn it off from here,
+    // not from a config file.
     {
-      label: cfg.tap
-        ? `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(" or ") })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`
-        : t("tray.tapOff"),
-      enabled: false,
+      label: `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(" or ") })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
+      type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
+      click: (item) => saveConfig({ tap: item.checked }),
     },
     { label: `${t("tray.hotkey")}: ${prettyKey(cfg.hotkey)}`, enabled: false },
     {
@@ -963,7 +965,6 @@ function tapCodes(name, UiohookKey) {
 }
 
 function setupKeyHook() {
-  if (!cfg.hold && !cfg.tap) return;
   let uIOhook, UiohookKey;
   try {
     ({ uIOhook, UiohookKey } = require("uiohook-napi"));
@@ -986,7 +987,10 @@ function setupKeyHook() {
     }
   }
 
-  if (cfg.tap) {
+  // THE DOUBLE-TAP IS WATCHED WHENEVER THE HOOK LOADS, and gated on cfg.tap at
+  // the moment of each pair, so the tray can switch it off and on without a
+  // restart. A gesture that misfires needs an off switch within reach.
+  {
     // Each name becomes its own watcher with its own pair-timer, so a pair is
     // always the same key twice. One shared timer would fire on Ctrl-then-Alt,
     // which is not a gesture anyone is making on purpose.
@@ -994,7 +998,7 @@ function setupKeyHook() {
       .map((name) => ({ name, codes: tapCodes(name, UiohookKey) }))
       .filter((g) => {
         if (g.codes.length) return true;
-        notify(fmt("notify.unknownTapKey", { key: g.name }));
+        if (cfg.tap) notify(fmt("notify.unknownTapKey", { key: g.name }));
         return false;
       });
     const codes = groups.flatMap((g) => g.codes);
@@ -1011,10 +1015,14 @@ function setupKeyHook() {
       };
       const taps = createTapDetector({
         names: groups.map((g) => g.name),
-        onPair: () => toggleDictation(),
+        onPair: () => { if (cfg.tap) toggleDictation(); },
       });
-      uIOhook.on("keydown", (e) => taps.keyDown(nameFor(e.keycode)));
-      uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode)));
+      uIOhook.on("keydown", (e) => taps.keyDown(nameFor(e.keycode), e.keycode));
+      uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode), e.keycode));
+      // Ctrl+click and Ctrl+wheel are the commonest uses of the key that press
+      // no other key at all. To the detector the mouse is another key.
+      uIOhook.on("mousedown", () => taps.other());
+      uIOhook.on("wheel", () => taps.other());
       tapActive = true;
     }
   }
