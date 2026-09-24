@@ -2184,7 +2184,11 @@ function paintChrome(shell) {
   // it: the heading, and the line under everything.
   const g = shell.gate || {};
   text("gateTitle", g.title);       text("gateSub", g.subtitle);
+  // The note is the one line that may be absent: shown only when the server
+  // has something to say under the form, hidden rather than left as an empty
+  // paragraph with a margin.
   text("gateNote", g.note);
+  $("gateNote").hidden = !$("gateNote").textContent.trim();
   const r = shell.rail || {};
   text("railBrand", r.brand);       text("dictate", r.dictate);
   text("settingsLink", r.settings); text("signOut", r.signOut);

@@ -263,7 +263,9 @@
       <p class="sub" id="gateSub">Sign in the same way you do on your phone — your voices, history and words come with you.</p>
       <div id="gateForm"></div>
       <div class="err" id="gateErr"></div>
-      <p class="note" id="gateNote">Dictation needs an account, the same as on your phone.</p>
+      <!-- Empty unless the server sends a line. The form asks for the account;
+           it does not need a sentence underneath saying that it does. -->
+      <p class="note" id="gateNote" hidden></p>
     </div>
   </div>
 
