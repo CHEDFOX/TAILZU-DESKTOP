@@ -23,6 +23,9 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { createTapDetector } = require("./tapDetector.js");
+// The server's values for everything below that used to be a literal. Each
+// call names its key and keeps the old literal as the fallback — see knobs.js.
+const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
 
 // ---- Config -----------------------------------------------------------------
 // Dev: desktop/config.json (next to this file). Packaged: the asar is read-only,
@@ -60,6 +63,45 @@ function saveSession(v) {
       fs.unlinkSync(sessionPath);
     }
   } catch { /* a session that will not persist still works for this run */ }
+}
+
+// ---- The bootstrap, in this process too ---------------------------------------
+// THE MAIN PROCESS ASKS THE SERVER ITSELF.
+//
+// It used to learn what the backend said only when the window relayed it — and
+// this is a tray app, so for most launches (every login-item start among them)
+// there is no window. Everything this process decides — the hotkey it falls
+// back to, how a tap is timed, what a notification says, whether dictation is
+// out of words — is a knob now, and a knob only the window could fetch would
+// be a knob that holds only after someone opens the window.
+//
+// So it POSTs /v1/app/bootstrap at launch and on a timer, caches the answer
+// beside config.json, and reads that cache before anything else in this file
+// runs: the second launch starts with the server's values, offline or not.
+const bootPath = path.join(app.getPath("userData"), "bootstrap.json");
+// What this install remembers about itself: how many times it has launched
+// (the server's onboarding and prompts count launches, as on the phones) and
+// which update it has already announced.
+const localStatePath = path.join(app.getPath("userData"), "desktop-state.json");
+
+function readJson(p) {
+  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; }
+}
+function writeJson(p, v) {
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(v, null, 2));
+  } catch { /* a cache that will not persist still works for this run */ }
+}
+
+let BOOT = readJson(bootPath);
+setKnobs(BOOT);
+const localState = readJson(localStatePath) || {};
+function saveLocalState() { writeJson(localStatePath, localState); }
+
+/** The knobs as the windows need them: the last bootstrap's labels and flags. */
+function knobsPayload() {
+  return { labels: (BOOT && BOOT.labels) || {}, flags: (BOOT && BOOT.flags) || {} };
 }
 
 // ---- Server-drawn chrome -----------------------------------------------------
@@ -126,26 +168,38 @@ const SHELL_DEFAULTS = {
   },
 };
 
-/** Defaults under the server's answer, one level into each section. Only
- *  non-empty strings win: a key the server omits, or sends blank, keeps the
- *  built-in word rather than painting an empty menu row. */
+/** Defaults under the server's answer, one level into each section — EVERY
+ *  section the server sends, not only the two this process draws (gate, rail
+ *  and gateLayout ride in the same block). A string wins only when it is not
+ *  blank: a key the server omits, or sends blank, keeps the built-in word
+ *  rather than painting an empty menu row. Anything else the server sends (a
+ *  number, a switch) is taken as it is, unless it would replace a word. */
 function mergeShell(base, incoming) {
   const out = {};
-  for (const section of Object.keys(base)) {
-    out[section] = { ...base[section] };
-    const from = incoming && incoming[section];
-    if (!from || typeof from !== "object") continue;
-    for (const [k, v] of Object.entries(from)) {
-      if (typeof v === "string" && v.trim()) out[section][k] = v;
+  const from = incoming && typeof incoming === "object" ? incoming : {};
+  const sections = new Set(Object.keys(base).concat(Object.keys(from)));
+  for (const section of sections) {
+    const defaults = base[section] || {};
+    out[section] = { ...defaults };
+    const src = from[section];
+    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
+    for (const [k, v] of Object.entries(src)) {
+      if (typeof v === "string") { if (v.trim()) out[section][k] = v; }
+      else if (v != null && typeof defaults[k] !== "string") out[section][k] = v;
     }
   }
   return out;
 }
 
-let SHELL = (() => {
-  try { return mergeShell(SHELL_DEFAULTS, JSON.parse(fs.readFileSync(shellPath, "utf8"))); }
-  catch { return mergeShell(SHELL_DEFAULTS, null); }
-})();
+/** The `desktop.shell` block out of a bootstrap, if it carries one. */
+function shellOf(boot) {
+  const s = boot && boot.flags && boot.flags["desktop.shell"];
+  return s && typeof s === "object" ? s : null;
+}
+
+// The cached bootstrap first; shell.json is the cache an older build wrote,
+// read only so the first launch after an upgrade is not a launch with none.
+let SHELL = mergeShell(SHELL_DEFAULTS, shellOf(BOOT) || readJson(shellPath));
 
 /** One string, by "section.key". Unknown keys return "" rather than throwing —
  *  a menu built from a typo should be missing a word, not missing a menu. */
@@ -172,22 +226,119 @@ function prettyKey(accel) {
 }
 
 /** Every native notification goes through here, so the title is server-drawn
- *  once rather than at nine call sites. */
-function notify(body) {
+ *  once rather than at nine call sites. `onClick`, when given, is what a click
+ *  on it does (an update notice opens the download). */
+const clickable = new Set();   // held so a click handler is not collected before it fires
+function notify(body, onClick) {
   if (!body) return;
-  new Notification({ title: t("notify.title") || "Tailzu", body }).show();
+  const n = new Notification({ title: t("notify.title") || txt("desktop.notify.title", "Tailzu"), body });
+  if (onClick) {
+    clickable.add(n);
+    n.on("click", () => { clickable.delete(n); onClick(); });
+    n.on("close", () => clickable.delete(n));
+  }
+  n.show();
 }
 
-/** The window hands over what the bootstrap sent. Cached for the next launch,
- *  and the tray is rebuilt so the change is visible without a restart. */
-function adoptShell(incoming) {
-  if (!incoming || typeof incoming !== "object") return;
-  SHELL = mergeShell(SHELL_DEFAULTS, incoming);
-  try {
-    fs.mkdirSync(path.dirname(shellPath), { recursive: true });
-    fs.writeFileSync(shellPath, JSON.stringify(incoming, null, 2));
-  } catch { /* a cache that will not persist still works for this run */ }
+/**
+ * A new bootstrap — fetched here, or handed over by the window. Cached for the
+ * next launch, pointed at by the knobs, and everything that reads them is
+ * brought up to date without a restart: the chrome, the config defaults, the
+ * tray, the other windows, and whether this build is still one the server
+ * wants running.
+ */
+function adoptBoot(boot) {
+  if (!boot || typeof boot !== "object") return;
+  BOOT = boot;
+  setKnobs(boot);
+  SHELL = mergeShell(SHELL_DEFAULTS, shellOf(boot));
+  writeJson(bootPath, boot);
+  reloadConfigFromKnobs();
   refreshTray();
+  broadcastKnobs();
+  checkForUpdate();
+}
+
+/** The knobs, to every window of ours that is up. A window still loading asks
+ *  for them itself once it has (app:knobs), so none is skipped for long. */
+function broadcastKnobs() {
+  const k = knobsPayload();
+  for (const w of [appWin, recorderWin, overlayWin]) {
+    if (w && !w.isDestroyed() && !w.webContents.isLoading()) w.webContents.send("knobs", k);
+  }
+}
+
+/** POST /v1/app/bootstrap as this desktop, with the account's token when
+ *  there is one. One request at a time; a failure keeps the cache. */
+let bootInFlight = null;
+function refreshBoot() {
+  if (bootInFlight) return bootInFlight;
+  bootInFlight = (async () => {
+    try {
+      adoptBoot(await apiJson("/v1/app/bootstrap", {
+        method: "POST",
+        body: JSON.stringify({
+          capabilities: {
+            platform: "web",
+            appVersion: app.getVersion(),
+            device: { formFactor: "desktop", os: process.platform },
+          },
+          launchCount: Number(localState.launchCount) || 1,
+        }),
+      }));
+    } catch { /* offline, or the server hiccupped: the cached answer stands */ }
+    finally { bootInFlight = null; }
+  })();
+  return bootInFlight;
+}
+
+/** Ask again on the server's own schedule. Re-read every time, so a changed
+ *  interval takes effect on the next round; zero or less switches it off. */
+let bootTimer = null;
+function scheduleBootRefresh() {
+  clearTimeout(bootTimer);
+  const every = num("desktop.bootstrap.refreshMs", 600000);
+  if (!(every > 0)) return;
+  bootTimer = setTimeout(() => { void refreshBoot().then(scheduleBootRefresh); }, every);
+}
+
+// ---- Updates ---------------------------------------------------------------
+// There is no auto-updater, so the server says which build is current and
+// which is the oldest it still supports, and this says so to the user.
+
+/** Dotted numbers, compared as numbers: 0.1.10 is newer than 0.1.9. A part
+ *  that is not a number counts as 0, so "1.2" equals "1.2.0". */
+function compareVersions(a, b) {
+  const pa = String(a || "").split("."), pb = String(b || "").split(".");
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = parseInt(pa[i], 10) || 0, y = parseInt(pb[i], 10) || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+let requiredAnnounced = "";   // once per launch: a required update keeps asking
+function checkForUpdate() {
+  const u = obj("desktop.update", { latest: "", min: "", url: "", notes: "" });
+  const current = app.getVersion();
+  const latest = String(u.latest || ""), min = String(u.min || "");
+  const url = typeof u.url === "string" && /^https?:\/\//i.test(u.url) ? u.url : "";
+  const open = url ? () => { shell.openExternal(url).catch(() => {}); } : null;
+  const vars = { current, latest: latest || min, min, notes: String(u.notes || "") };
+  if (min && compareVersions(current, min) < 0) {
+    if (requiredAnnounced === min) return;
+    requiredAnnounced = min;
+    notify(txt("desktop.notify.updateRequired",
+      "This version of Tailzu ({current}) is no longer supported. Click to download the update.", vars), open);
+    return;
+  }
+  // Gentler, and once per version: someone who has seen that 0.2.0 is out
+  // does not need telling again every ten minutes.
+  if (latest && compareVersions(current, latest) < 0 && localState.updateAnnounced !== latest) {
+    localState.updateAnnounced = latest;
+    saveLocalState();
+    notify(txt("desktop.notify.updateAvailable", "Tailzu {latest} is available. Click to download it.", vars), open);
+  }
 }
 
 let configError = null; // surfaced as a notification once the app is ready
@@ -197,29 +348,32 @@ function loadConfig() {
     file = JSON.parse(fs.readFileSync(configPath, "utf8"));
   } catch (err) {
     // Distinguish "no config yet" (fine — env/defaults) from "config EXISTS but
-    // is broken JSON" — silently falling back to token "dev" on a typo made a
-    // client-side 401 undiagnosable. Surface it loudly instead.
-    if (fs.existsSync(configPath)) configError = "config.json is invalid JSON: " + err.message;
+    // is broken JSON" — silently falling back to defaults on a typo made a
+    // client-side problem undiagnosable. Surface it loudly instead.
+    if (fs.existsSync(configPath)) {
+      configError = txt("desktop.notify.configInvalid", "config.json is invalid JSON: {error}", { error: err.message });
+    }
   }
+  // A key the user wrote in config.json wins; a key they did not is the
+  // server's default (a knob), which is the old literal until it says otherwise.
+  const flag = (v, key) => (typeof v === "boolean" ? v : key);
   return {
     baseUrl: (process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space").trim(),
-    // trim: a token pasted with a stray space/newline fails auth invisibly.
-    token: String(process.env.TAILZU_TOKEN || file.token || "dev").trim(),
-    language: process.env.TAILZU_LANGUAGE || file.language || "auto",
+    language: process.env.TAILZU_LANGUAGE || file.language || str("desktop.language.default", "auto"),
     // Electron accelerator string. CommandOrControl = ⌘ on macOS, Ctrl on Win/Linux.
-    hotkey: process.env.TAILZU_HOTKEY || file.hotkey || "CommandOrControl+Shift+Space",
+    hotkey: process.env.TAILZU_HOTKEY || file.hotkey || str("desktop.hotkey.default", "CommandOrControl+Shift+Space"),
     // Refine tone sent with every dictation. Same ids the mobile app uses.
-    tone: (file.tone || "none").toLowerCase(),
+    tone: (file.tone || str("desktop.tone.default", "none")).toLowerCase(),
     // Live captions: stream audio and show partials in an overlay while talking.
-    live: file.live === true,
+    live: flag(file.live, bool("desktop.live.default", false)),
     // Flush on a pause instead of ending on one. A thinking pause and a
     // finished sentence look identical to a level meter, so nothing here
     // tries to tell them apart: a pause writes out what was said and the
     // mic stays open. Pausing costs nothing, which is what makes it safe.
-    pauseFlush: file.pauseFlush !== false,
+    pauseFlush: flag(file.pauseFlush, bool("desktop.pauseFlush.default", true)),
     // Hold-to-talk: hold `holdKey`, release to finish. Uses a low-level key hook.
-    hold: file.hold === true,
-    holdKey: file.holdKey || "F9",
+    hold: flag(file.hold, bool("desktop.hold.default", false)),
+    holdKey: file.holdKey || str("desktop.hold.key", "F9"),
     // DOUBLE-TAP TO DICTATE, and the default way in.
     //
     // The chord was CommandOrControl+Shift+Space: three keys, both pinkies,
@@ -230,7 +384,7 @@ function loadConfig() {
     // put on a key every shortcut already uses: no application binds "Ctrl
     // twice, quickly, with nothing in between", and the guards below make
     // sure Ctrl+C never looks like one.
-    tap: file.tap !== false,
+    tap: flag(file.tap, bool("desktop.tap.default", true)),
     // MORE THAN ONE, AND EACH ON ITS OWN. Whichever hand is free should be
     // able to start dictation, so both are live and neither is a chord —
     // Ctrl twice, or Alt twice. Ctrl then Alt is not a gesture: a pair has to
@@ -241,12 +395,20 @@ function loadConfig() {
     // what it meant.
     tapKeys: (Array.isArray(file.tapKeys) ? file.tapKeys
       : file.tapKey ? [file.tapKey]
-      : ["Ctrl", "Alt"]).map(String),
+      : list("desktop.tap.keys", ["Ctrl", "Alt"])).map(String),
     // Launch Tailzu when you log in (applies to the installed app).
-    autoStart: file.autoStart === true,
+    autoStart: flag(file.autoStart, bool("desktop.autoStart.default", false)),
   };
 }
 let cfg = loadConfig();
+
+/** The config again, after the server's defaults moved. What was WIRED at
+ *  startup — the registered hotkey and the key hook's keys — stays as it was
+ *  bound, or the tray would name keys that do not do anything until restart. */
+function reloadConfigFromKnobs() {
+  const wired = { hotkey: cfg.hotkey, hold: cfg.hold, holdKey: cfg.holdKey, tapKeys: cfg.tapKeys };
+  cfg = Object.assign(loadConfig(), wired);
+}
 
 /** Merge a patch into config.json and reload cfg (tray writes settings here). */
 function saveConfig(patch) {
@@ -262,7 +424,24 @@ function saveConfig(patch) {
   refreshTray();
 }
 
-const TONES = ["none", "formal", "casual", "very-casual", "excited"];
+/** The tones the tray offers, as { id, label } — the id is what is stored and
+ *  sent, the label is what the menu shows. A bare string from the server is
+ *  its own label. */
+function tones() {
+  return list("desktop.tones", [
+    { id: "none", label: "none" },
+    { id: "formal", label: "formal" },
+    { id: "casual", label: "casual" },
+    { id: "very-casual", label: "very-casual" },
+    { id: "excited", label: "excited" },
+  ]).map((x) => (typeof x === "string" ? { id: x, label: x } : x))
+    .filter((x) => x && typeof x.id === "string" && x.id)
+    .map((x) => ({ id: x.id, label: typeof x.label === "string" && x.label ? x.label : x.id }));
+}
+function toneLabel(id) {
+  const hit = tones().find((x) => x.id === id);
+  return hit ? hit.label : id;
+}
 
 // ---- Tone, once ------------------------------------------------------------
 // The account's `personality.activeTone` is the tone. The phone keyboard reads
@@ -289,7 +468,7 @@ let refreshing = null;             // in-flight refresh, so N callers make 1 POS
 function tokenStale() {
   if (!authSession || !authSession.access_token) return false;
   const exp = Number(authSession.expires_at || 0);
-  return exp <= 0 || exp - 60 <= Math.floor(Date.now() / 1000);
+  return exp <= 0 || exp - num("desktop.auth.refreshSkewSec", 60) <= Math.floor(Date.now() / 1000);
 }
 
 /** Signed in, as far as this process can tell. */
@@ -301,9 +480,13 @@ function signedIn() { return !!(authSession && authSession.access_token); }
  * Dictation calls this on the hotkey path, where a network round-trip would
  * cost the user the first word of their sentence. Freshness is kept by
  * refreshSession() running ahead of time, not by blocking here.
+ *
+ * Null when nobody is signed in. There is no static fallback any more: a
+ * request without an account goes out with no Authorization header at all,
+ * rather than as a synthetic user whose history nobody can read.
  */
 function tokenNow() {
-  return (authSession && authSession.access_token) || cfg.token;
+  return (authSession && authSession.access_token) || null;
 }
 
 /** Swap in a new session (from a refresh, or from the window signing in). */

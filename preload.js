@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld("tailzu", {
   partial: (text) => ipcRenderer.send("live-partial", text),
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
+  // The server's knobs ({ labels, flags } of the last bootstrap), for a page
+  // that loads knobs.js. Pulled once on load, then pushed on every change.
+  knobs: () => ipcRenderer.invoke("app:knobs"),
+  onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
 });
 
 // The app window's own bridge, kept separate from the recorder's so neither
@@ -33,10 +37,17 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // to refresh sessions as well.
   token: (t) => ipcRenderer.send("app:token", t),
   changed: () => ipcRenderer.send("app:changed"),
-  // The bootstrap's `desktop.shell` — the tray's and the notifications' copy.
-  // Only the window speaks to the backend, so it passes the block along to the
-  // process that owns the menu bar.
-  shell: (v) => ipcRenderer.send("app:shell", v),
+  // Every bootstrap the window receives — its labels and flags, which carry
+  // `desktop.shell` (the tray's and the notifications' copy) and every knob.
+  // The main process fetches its own too; this only ever makes it fresher.
+  boot: (v) => ipcRenderer.send("app:boot", v),
+  // The knobs the main process holds (its cached bootstrap), so the window's
+  // first paint uses the server's words even before its own bootstrap lands.
+  knobs: () => ipcRenderer.invoke("app:knobs"),
+  onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
+  // The main process asking the window to show a screen — the paywall, when
+  // dictation is refused for being out of words.
+  onNavigate: (cb) => ipcRenderer.on("app:navigate", (_e, screenId) => cb(screenId)),
   // Apple / Google. The renderer cannot open a window or hold the PKCE
   // secret, so it asks and gets back a session or an error string.
   oauth: (provider) => ipcRenderer.invoke("app:oauth", provider),

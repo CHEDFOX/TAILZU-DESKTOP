@@ -47,18 +47,31 @@ const TAP_MIN_GAP_MS = 70;
  *  would make the gesture impossible until the next restart. */
 const OTHER_KEY_TTL_MS = 8000;
 
+/** An option as given: a number, or a function read at the moment it is
+ *  needed — main.js passes the server's knobs that way, so a retuned
+ *  threshold applies to the next tap rather than the next launch. */
+function option(v, fallback) {
+  const n = typeof v === "function" ? v() : v;
+  return typeof n === "number" && Number.isFinite(n) ? n : fallback;
+}
+
 /**
  * @param {object} opts
  * @param {string[]} opts.names       group names to watch ("Ctrl", "Alt")
  * @param {(name: string) => void} opts.onPair  called once per double-tap
  * @param {() => number} [opts.now]   injectable clock, for the tests
+ * @param {number|(() => number)} [opts.maxHoldMs]     default TAP_MAX_HOLD_MS
+ * @param {number|(() => number)} [opts.gapMs]         default TAP_GAP_MS
+ * @param {number|(() => number)} [opts.minGapMs]      default TAP_MIN_GAP_MS
+ * @param {number|(() => number)} [opts.otherKeyTtlMs] default OTHER_KEY_TTL_MS
  */
 function createTapDetector(opts) {
   const onPair = opts.onPair;
   const now = opts.now || Date.now;
-  const maxHold = opts.maxHoldMs == null ? TAP_MAX_HOLD_MS : opts.maxHoldMs;
-  const gap = opts.gapMs == null ? TAP_GAP_MS : opts.gapMs;
-  const minGap = opts.minGapMs == null ? TAP_MIN_GAP_MS : opts.minGapMs;
+  const maxHold = () => option(opts.maxHoldMs, TAP_MAX_HOLD_MS);
+  const gap = () => option(opts.gapMs, TAP_GAP_MS);
+  const minGap = () => option(opts.minGapMs, TAP_MIN_GAP_MS);
+  const otherTtl = () => option(opts.otherKeyTtlMs, OTHER_KEY_TTL_MS);
 
   // One state per name, so a pair is always the SAME key twice. One shared
   // timer would fire on Ctrl-then-Alt, which is not a gesture anyone is making
@@ -70,7 +83,8 @@ function createTapDetector(opts) {
   const others = new Map();
 
   function othersHeld(t) {
-    for (const [code, at] of others) if (t - at > OTHER_KEY_TTL_MS) others.delete(code);
+    const ttl = otherTtl();
+    for (const [code, at] of others) if (t - at > ttl) others.delete(code);
     return others.size > 0;
   }
   /** Something that was not this key happened. Whatever was in flight was a
@@ -90,7 +104,7 @@ function createTapDetector(opts) {
     }
     const s = state.get(name);
     if (!s) return;
-    if (s.upAt && t - s.upAt < minGap) {
+    if (s.upAt && t - s.upAt < minGap()) {
       // The key is repeating under a finger that never lifted. Everything until
       // it is genuinely released is the same press.
       s.repeating = true;
@@ -116,11 +130,11 @@ function createTapDetector(opts) {
     const held = s.downAt ? t - s.downAt : Infinity;
     s.downAt = 0;
     s.upAt = t;
-    if (s.repeating || !s.clean || held > maxHold) {
+    if (s.repeating || !s.clean || held > maxHold()) {
       s.lastTapAt = 0;
       return;
     }
-    if (s.lastTapAt && t - s.lastTapAt <= gap) {
+    if (s.lastTapAt && t - s.lastTapAt <= gap()) {
       s.lastTapAt = 0;
       onPair(name);
       return;

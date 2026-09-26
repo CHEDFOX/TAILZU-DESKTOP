@@ -202,3 +202,48 @@ test("a key we do not watch is ignored entirely", () => {
   r.tap(null);
   assert.deepStrictEqual(r.fired, []);
 });
+
+// ---- thresholds from the server ----------------------------------------------
+// main.js passes each threshold as a function reading the server's knobs, so a
+// retuned value applies on the next tap. A number still works, and anything
+// that is not a finite number keeps the built-in default.
+
+test("a threshold given as a function is read on every tap", () => {
+  let clock = 1_000_000;
+  let gap = 400;
+  const fired = [];
+  const d = createTapDetector({
+    names: ["Ctrl"], now: () => clock, onPair: (n) => fired.push(n), gapMs: () => gap,
+  });
+  const tap = () => { d.keyDown("Ctrl"); clock += 40; d.keyUp("Ctrl"); };
+  tap(); clock += 300; tap();
+  assert.deepStrictEqual(fired, ["Ctrl"], "300ms apart is a pair under a 400ms gap");
+  gap = 200;
+  clock += 1000;
+  tap(); clock += 300; tap();
+  assert.deepStrictEqual(fired, ["Ctrl"], "and not a pair once the gap is retuned to 200ms");
+});
+
+test("a threshold that is not a number falls back to the default", () => {
+  let clock = 1_000_000;
+  const fired = [];
+  const d = createTapDetector({
+    names: ["Ctrl"], now: () => clock, onPair: (n) => fired.push(n), gapMs: () => undefined, maxHoldMs: NaN,
+  });
+  const tap = () => { d.keyDown("Ctrl"); clock += 40; d.keyUp("Ctrl"); };
+  tap(); clock += 120; tap();
+  assert.deepStrictEqual(fired, ["Ctrl"]);
+});
+
+test("a stuck key is forgotten after otherKeyTtlMs", () => {
+  let clock = 1_000_000;
+  const fired = [];
+  const d = createTapDetector({
+    names: ["Ctrl"], now: () => clock, onPair: (n) => fired.push(n), otherKeyTtlMs: () => 1000,
+  });
+  d.keyDown(null, 42);          // its release never arrives
+  clock += 1500;
+  const tap = () => { d.keyDown("Ctrl"); clock += 40; d.keyUp("Ctrl"); };
+  tap(); clock += 120; tap();
+  assert.deepStrictEqual(fired, ["Ctrl"], "the lost key no longer counts as held");
+});
