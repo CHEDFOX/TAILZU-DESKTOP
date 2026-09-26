@@ -256,7 +256,7 @@ function adoptBoot(boot) {
   reloadConfigFromKnobs();
   refreshTray();
   broadcastKnobs();
-  checkForUpdate();
+  try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed adopt */ }
 }
 
 /** The knobs, to every window of ours that is up. A window still loading asks

@@ -103,7 +103,21 @@ notarization worked.
 
 ## What this does not do yet
 
-There is no auto-update. Every release is a fresh download from the page, and
-users who installed an older build have no way to know. electron-updater plus
-a published feed is the answer when the installed base is large enough to care;
-until then, the version in Settings is how anyone tells what they have.
+There is no auto-update. Every release is a fresh download from the page.
+electron-updater plus a published feed is the answer when the installed base is
+large enough to care.
+
+Until then the server tells installed builds about a release. Bump `version` in
+`desktop/package.json` before `npm run dist` (every build reports it as
+`appVersion` in its bootstrap), publish, then set the flag from the control
+console:
+
+```
+desktop.update = { "latest": "0.1.2", "min": "", "url": "https://tailzu.space/download", "notes": "" }
+```
+
+- A build older than `latest` gets one notification per version, and a click
+  on it opens `url`.
+- A build older than `min` is told on every launch that it is no longer
+  supported. Raise `min` only when an old build would actually break against
+  the backend — it is the loud one.

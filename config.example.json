@@ -1,11 +1,3 @@
 {
-  "baseUrl": "https://api.tailzu.space",
-  "token": "PASTE_YOUR_STATIC_TOKEN_HERE",
-  "language": "auto",
-  "hotkey": "CommandOrControl+Shift+Space",
-  "tone": "none",
-  "live": false,
-  "hold": false,
-  "holdKey": "F9",
-  "autoStart": false
+  "baseUrl": "https://api.tailzu.space"
 }

@@ -24,6 +24,7 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
   (WebAudio→16 kHz PCM→WebSocket) capture paths.
 - **overlay.html** — the floating live-caption strip.
 - **preload.js** — the tiny IPC bridge.
+- **knobs.js** — the server's values for everything above (see below).
 
 ## Run it (dev)
 
@@ -31,28 +32,36 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
 cd desktop
 npm install
 npm run icon          # generate tray + app icons (one-time)
-cp config.example.json config.json   # then edit config.json
+cp config.example.json config.json   # optional — only baseUrl is needed
 npm start
 ```
 
 ## config.json
 
+Every key is optional. A key you leave out takes the **server's** default (the
+knob named in brackets, sent in the bootstrap); a key you write wins over it.
+So the example config carries only `baseUrl` — copying more of this table into
+it would pin those values against anything the server later changes.
+
 | key | meaning |
 | --- | --- |
 | `baseUrl` | your backend, e.g. `https://api.tailzu.space` |
-| `token` | development only — a static token from the backend's `STATIC_BEARER_TOKENS`. It cannot be used to dictate: recording requires a signed-in account. |
-| `language` | `auto` or a code like `en` / `hi` / `es` |
-| `hotkey` | toggle accelerator, default `CommandOrControl+Shift+Space` |
-| `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (also in the tray menu) |
-| `live` | `true` → live captions while dictating (streaming) |
-| `hold` | `true` → hold-to-talk on `holdKey` (needs uiohook-napi to load) |
-| `holdKey` | key name for hold-to-talk, e.g. `F9`, `F10` |
-| `autoStart` | launch at login (installed app; also in the tray menu) |
+| `language` | `auto` or a code like `en` / `hi` / `es` (`desktop.language.default`) |
+| `hotkey` | toggle accelerator (`desktop.hotkey.default`, `CommandOrControl+Shift+Space`); if it is taken, `desktop.hotkey.fallbacks` are tried in order |
+| `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (`desktop.tone.default`; also in the tray menu) |
+| `live` | `true` → live captions while dictating (`desktop.live.default`) |
+| `pauseFlush` | `false` → a pause no longer writes out what was said so far (`desktop.pauseFlush.default`) |
+| `hold` | `true` → hold-to-talk on `holdKey` (`desktop.hold.default`; needs uiohook-napi) |
+| `holdKey` | key name for hold-to-talk, e.g. `F9` (`desktop.hold.key`) |
+| `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`) |
+| `autoStart` | launch at login (`desktop.autoStart.default`; installed app; also in the tray menu) |
+
+There is no `token` any more. Signed out, nothing is sent with an
+Authorization header; dictation needs a signed-in account.
 
 For the **installed** app, config lives in the per-user data dir (Windows:
 `%APPDATA%\tailzu-desktop\config.json`) — use the tray's "Edit config…" to open
-it. The dev `desktop/config.json` is git-ignored and never packaged, so tokens
-can't leak into an installer.
+it. The dev `desktop/config.json` is git-ignored and never packaged.
 
 ## Use it
 
@@ -75,22 +84,49 @@ come from the same keys the phones read. The gate's copy, the rail, the tray
 menu and every notification come from `flags["desktop.shell"]`, sent only to a
 client that reports `device.formFactor: "desktop"`.
 
+**And everything else the app would otherwise decide itself is a knob.**
+`knobs.js` is the desktop's copy of the phones' `app/src/sdui/knobs.ts`:
+`txt(key, fallback)` reads `bootstrap.labels`, and `num` / `bool` / `str` /
+`color` / `list` / `obj` read `bootstrap.flags`. The literal next to each key is
+the value that used to be hardcoded, kept only for a launch that has never
+reached the server. `tools/knobs/extract.mjs` scans `desktop/*.js` and
+`*.html` for those calls, and the backend sends every key it finds, so each is
+visible and changeable from the control console. Keys are named
+`desktop.<area>.<name>` — hotkey fallbacks, tap timings, recorder thresholds,
+window sizes, notification copy, the overlay's look, the window's toasts.
+
+The main process fetches the bootstrap itself — at launch, including a hidden
+login-item start, and every `desktop.bootstrap.refreshMs` — as
+`{ platform: "web", appVersion, device: { formFactor: "desktop", os } }` with
+the account's bearer when signed in. The answer is cached in `bootstrap.json`
+in the user-data folder and read before anything else at startup, so the second
+launch opens with the server's values, offline or not. The app window also hands
+over every bootstrap it receives, and the main process relays the knobs to the
+recorder and the caption overlay.
+
 The neural field is the one drawing that ships as a file rather than as JSON:
 it is ~400 lines of canvas the phones build at runtime and this window loads in
 an iframe. `npm run field` regenerates it from the app's own source, so the two
-cannot drift silently. The per-screen values it needs — how far back it sits
-(`alpha`) and how much of the network has been earned (`growth`) — travel in
-the iframe's query string, because those are the only two that are not the same
-on every screen.
+cannot drift silently. What the phones bake in from the node's props travels in
+the iframe's query string: `alpha` and `growth` on their own (they retune the
+field in place), and every other prop the server sends as one `cfg` JSON
+parameter laid over the baked geometry.
 
-So a wording change is a backend deploy and a cache bump — no installer. This
-matters more here than on the phones: there is no OTA channel on desktop, and a
-release is a download the user has to notice, accept past SmartScreen, and run.
+So a wording or tuning change is a backend deploy and a cache bump — no
+installer. This matters more here than on the phones: there is no OTA channel on
+desktop, and a release is a download the user has to notice, accept past
+SmartScreen, and run.
 
-The app keeps a default for every one of those strings and caches the last
-answer in `shell.json` beside `config.json`, because the tray is built before
-any network call can have returned. Server wins when it lands; the defaults
-carry a first run with no connection.
+### Quota and updates
+
+- **Out of words.** When the bootstrap says `quota.exceeded`, the hotkey does
+  not open the mic: the window opens on `quota.screenId` (the paywall) and a
+  notification says why (`desktop.notify.wordsOut`).
+- **Updates.** `flags["desktop.update"] = { latest, min, url, notes }`. Below
+  `min`, every launch says the build is no longer supported
+  (`desktop.notify.updateRequired`); below `latest`, it says once per version
+  that an update is out (`desktop.notify.updateAvailable`). Clicking either
+  opens `url`.
 
 ## Permissions (one-time)
 
@@ -127,6 +163,7 @@ service, no store review. Notes:
 
 ## Roadmap (not in this MVP)
 
-- Settings UI + Supabase sign-in (replacing config.json)
-- Auto-update (electron-updater)
+- Settings UI (replacing config.json)
+- Auto-update (electron-updater) — until then the server announces updates
+  through `desktop.update`
 - Word-replay / history browser backed by /v1/history
