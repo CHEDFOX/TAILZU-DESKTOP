@@ -13,10 +13,10 @@
  * drawing the phones do.
  *
  * The cfg baked in here is only the GEOMETRY — regions, colours, bloom, focal
- * length — which is identical on every screen the field appears on. The two
- * values that are not, `alpha` and `growth`, are read by the page from its own
- * query string, because they are per screen and per person and this file has
- * no way to know either.
+ * length — and it is only the FALLBACK: the window passes whatever the node's
+ * props say as a `cfg` query parameter, which the page lays over it (see
+ * RUNTIME_CFG below). `alpha` and `growth` are read from their own parameters,
+ * because they are per screen and per person and retune the field in place.
  */
 const fs = require("fs");
 const path = require("path");
@@ -68,10 +68,37 @@ if (unexpected.length) {
   process.exit(1);
 }
 
-const html = template.replace(/\$\{JSON\.stringify\(cfg\)\}/g, JSON.stringify(CFG))
+// THE REST OF THE CONFIG, AT RUNTIME TOO. The phones bake every prop the
+// server sends into the page; this file is baked once, so the window passes
+// the node's other props (regions, colours, bloom, focal, maxPulses…) as one
+// JSON `cfg` query parameter, and this snippet lays them over the baked CFG
+// before anything reads it. Absent — the phones, or a node that sends none —
+// and the baked geometry stands exactly as generated. Injected here rather
+// than in neuralFieldPage.ts because only this surface loads the page from a
+// file.
+const RUNTIME_CFG =
+  "\n/* DESKTOP: the node's props at runtime (sdui.js passes them as ?cfg=JSON);\n" +
+  "   the baked values above are the fallback. Injected by desktop/gen-field.js. */\n" +
+  "try{var QC=new URLSearchParams(location.search).get(\"cfg\");\n" +
+  "  if(QC){var RC=JSON.parse(QC),kc,vc;\n" +
+  "    for(kc in RC){if(!Object.prototype.hasOwnProperty.call(RC,kc))continue;vc=RC[kc];\n" +
+  "      if(vc==null)continue;\n" +
+  "      if(kc===\"regions\"&&!(Array.isArray(vc)&&vc.length))continue;\n" +
+  "      if(typeof vc===\"string\"&&vc.trim()!==\"\"&&!isNaN(vc))vc=Number(vc);\n" +
+  "      CFG[kc]=vc}}\n" +
+  "}catch(e){}";
+
+let html = template.replace(/\$\{JSON\.stringify\(cfg\)\}/g, JSON.stringify(CFG))
   // Escapes that only exist because the source is a template literal.
   .replace(/\\`/g, "`")
   .replace(/\\\$/g, "$");
+
+const cfgLine = /^var CFG = .*;$/m;
+if (!cfgLine.test(html)) {
+  console.error("gen-field: could not find the `var CFG = …;` line to follow with the runtime config.");
+  process.exit(1);
+}
+html = html.replace(cfgLine, (line) => line + RUNTIME_CFG);
 
 fs.writeFileSync(OUT, html);
 console.log("gen-field: wrote " + path.relative(process.cwd(), OUT) + " (" + html.length + " bytes)");

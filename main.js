@@ -495,7 +495,8 @@ function adoptSession(raw) {
     ? {
         access_token: raw.access_token,
         refresh_token: raw.refresh_token || (authSession && authSession.refresh_token) || null,
-        expires_at: raw.expires_at || Math.floor(Date.now() / 1000) + (raw.expires_in || 3600),
+        expires_at: raw.expires_at ||
+          Math.floor(Date.now() / 1000) + (raw.expires_in || num("desktop.auth.tokenLifetimeSec", 3600)),
       }
     : null;
   saveSession(authSession);
@@ -528,12 +529,12 @@ async function refreshSession() {
 
 async function apiJson(path, init) {
   await refreshSession();
-  const send = () => fetch(cfg.baseUrl + path, Object.assign({
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: "Bearer " + tokenNow(),
-    },
-  }, init || {}));
+  const send = () => {
+    const headers = { "Content-Type": "application/json" };
+    const tok = tokenNow();
+    if (tok) headers.Authorization = "Bearer " + tok;
+    return fetch(cfg.baseUrl + path, Object.assign({ headers }, init || {}));
+  };
   let res = await send();
   // A 401 means the token is spent whatever its stated expiry said — a clock
   // that drifted, a session revoked elsewhere. Force one renewal and retry,
@@ -585,10 +586,10 @@ function currentTone() { return accountTone || cfg.tone; }
 //
 // Nothing is caught by loading the redirect. The moment the browser tries to
 // GO to it we read the code off the URL and cancel the request, so the page at
-// REDIRECT_URL is never fetched and does not have to exist. It only has to be
-// on the provider's allow-list, which is why it is a real https URL on a
+// the redirect URL is never fetched and does not have to exist. It only has to
+// be on the provider's allow-list, which is why it is a real https URL on a
 // domain that is ours rather than a localhost port or a custom scheme.
-const REDIRECT_URL = "https://tailzu.space/auth/callback";
+function redirectUrl() { return str("desktop.oauth.redirectUrl", "https://tailzu.space/auth/callback"); }
 
 // GOOGLE WILL NOT SIGN YOU IN INSIDE A WINDOW WE OWN.
 //
@@ -606,14 +607,21 @@ const REDIRECT_URL = "https://tailzu.space/auth/callback";
 // Google never sees this address. The provider redirects to Supabase, and
 // Supabase redirects to `redirect_to` — so the only allow-list this has to be
 // on is Supabase's own, under URL Configuration.
-const LOOPBACK_PORT = 8788;
-const LOOPBACK_URL = "http://127.0.0.1:" + LOOPBACK_PORT + "/cb";
+function loopbackPort() { return num("desktop.oauth.loopbackPort", 8788); }
+function loopbackUrl() { return "http://127.0.0.1:" + loopbackPort() + "/cb"; }
 
-const CLOSE_PAGE =
-  "<!doctype html><meta charset=utf-8><title>Tailzu</title>" +
-  "<body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;" +
-  "background:#0b0b0f;color:rgba(255,255,255,.85);font:15px -apple-system,Segoe UI,system-ui,sans-serif\">" +
-  "<p>Signed in. You can close this tab and go back to Tailzu.</p>";
+const escHtml = (s) =>
+  String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** The page the browser shows once it has handed the code over. */
+function closePage() {
+  return "<!doctype html><meta charset=utf-8><title>" + escHtml(txt("desktop.oauth.pageTitle", "Tailzu")) + "</title>" +
+    "<body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;" +
+    "background:" + escHtml(color("desktop.oauth.pageBg", "#0b0b0f")) +
+    ";color:" + escHtml(color("desktop.oauth.pageText", "rgba(255,255,255,.85)")) +
+    ";font:15px -apple-system,Segoe UI,system-ui,sans-serif\">" +
+    "<p>" + escHtml(txt("desktop.oauth.pageBody", "Signed in. You can close this tab and go back to Tailzu.")) + "</p>";
+}
 
 /**
  * The system-browser half of the flow. Resolves with the authorization code.
@@ -625,17 +633,19 @@ const CLOSE_PAGE =
  */
 function awaitLoopbackCode(openUrl) {
   const http = require("http");
+  const port = loopbackPort();
+  const base = "http://127.0.0.1:" + port + "/cb";
   return new Promise((resolve, reject) => {
     let settled = false;
     const server = http.createServer((req, res) => {
       let u;
-      try { u = new URL(req.url, LOOPBACK_URL); } catch { u = null; }
+      try { u = new URL(req.url, base); } catch { u = null; }
       if (!u || u.pathname !== "/cb") { res.writeHead(404).end(); return; }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(CLOSE_PAGE);
+      res.end(closePage());
       const err = u.searchParams.get("error_description") || u.searchParams.get("error");
       const code = u.searchParams.get("code");
-      done(err ? new Error(err) : code ? null : new Error("no authorization code"), code);
+      done(err ? new Error(err) : code ? null : new Error(txt("desktop.oauth.noCode", "no authorization code")), code);
     });
     const done = (err, value) => {
       if (settled) return;
@@ -644,9 +654,11 @@ function awaitLoopbackCode(openUrl) {
       try { server.close(); } catch { /* already closing */ }
       err ? reject(err) : resolve(value);
     };
-    const timer = setTimeout(() => done(new Error("timed out waiting for the browser")), 5 * 60 * 1000);
+    const timer = setTimeout(
+      () => done(new Error(txt("desktop.oauth.timedOut", "timed out waiting for the browser"))),
+      num("desktop.oauth.timeoutMs", 300000));
     server.on("error", (e) => done(e));
-    server.listen(LOOPBACK_PORT, "127.0.0.1", () => {
+    server.listen(port, "127.0.0.1", () => {
       shell.openExternal(openUrl).catch((e) => done(e));
     });
   });
@@ -665,7 +677,7 @@ function authorizeUrl(provider, challenge, redirect) {
 
 async function oauthSignIn(provider) {
   if (provider !== "apple" && provider !== "google") {
-    throw new Error("unsupported provider");
+    throw new Error(txt("desktop.oauth.unsupported", "unsupported provider"));
   }
   const verifier = b64url(crypto.randomBytes(32));
   const challenge = b64url(crypto.createHash("sha256").update(verifier).digest());
@@ -673,7 +685,7 @@ async function oauthSignIn(provider) {
   // The real browser first, for both providers. It is the one Google accepts,
   // and it is the one where the person is already signed in.
   try {
-    const code = await awaitLoopbackCode(authorizeUrl(provider, challenge, LOOPBACK_URL));
+    const code = await awaitLoopbackCode(authorizeUrl(provider, challenge, loopbackUrl()));
     return await exchangeCode(code, verifier);
   } catch (err) {
     // A port we cannot bind is the only failure worth retrying differently —
@@ -688,7 +700,8 @@ async function oauthSignIn(provider) {
 /** The old path: our own window. Kept for the case where the loopback port is
  *  taken, where it is better than nothing — and it still works for Apple. */
 function oauthEmbedded(provider, verifier, challenge) {
-  const url = authorizeUrl(provider, challenge, REDIRECT_URL);
+  const redirect = redirectUrl();
+  const url = authorizeUrl(provider, challenge, redirect);
   return new Promise((resolve, reject) => {
     // Its own partition, wiped on close: a sign-in window that keeps cookies
     // is a sign-in window that silently reuses whoever signed in last, with no
@@ -696,7 +709,9 @@ function oauthEmbedded(provider, verifier, challenge) {
     const part = "oauth-" + Date.now();
     const ses = session.fromPartition(part, { cache: false });
     const win = new BrowserWindow({
-      width: 480, height: 680, title: "Sign in", backgroundColor: "#000000",
+      width: num("desktop.oauth.width", 480), height: num("desktop.oauth.height", 680),
+      title: txt("desktop.oauth.title", "Sign in"),
+      backgroundColor: color("desktop.window.background", "#000000"),
       autoHideMenuBar: true, parent: appWin && !appWin.isDestroyed() ? appWin : undefined,
       modal: false,
       webPreferences: { partition: part, contextIsolation: true, nodeIntegration: false },
@@ -714,14 +729,14 @@ function oauthEmbedded(provider, verifier, challenge) {
 
     // Read the code the instant the browser reaches for the redirect, and stop
     // the request there.
-    ses.webRequest.onBeforeRequest({ urls: [REDIRECT_URL + "*"] }, (details, cb) => {
+    ses.webRequest.onBeforeRequest({ urls: [redirect + "*"] }, (details, cb) => {
       cb({ cancel: true });
       let u;
-      try { u = new URL(details.url); } catch { return finish(new Error("bad redirect")); }
+      try { u = new URL(details.url); } catch { return finish(new Error(txt("desktop.oauth.badRedirect", "bad redirect"))); }
       const err = u.searchParams.get("error_description") || u.searchParams.get("error");
       if (err) return finish(new Error(err));
       const code = u.searchParams.get("code");
-      if (!code) return finish(new Error("no authorization code"));
+      if (!code) return finish(new Error(txt("desktop.oauth.noCode", "no authorization code")));
       exchangeCode(code, verifier).then((r) => finish(null, r), (e) => finish(e));
     });
 
@@ -740,7 +755,7 @@ async function exchangeCode(code, verifier) {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok || !json.access_token) {
-    throw new Error(json.error_description || json.msg || json.error || "sign-in failed");
+    throw new Error(json.error_description || json.msg || json.error || txt("desktop.oauth.failed", "sign-in failed"));
   }
   return json;
 }
@@ -791,16 +806,39 @@ function createRecorderWindow() {
 // app, closing the window means "put it away", and rebuilding it on every open
 // would throw away the boot it already has.
 let appWin = null;
-function openAppWindow() {
-  if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); return; }
+// A screen the window should show as soon as it can — set when the main
+// process asks for one (the paywall, when dictation is out of words) before
+// the page is there to be told. Handed over by app:env or on load.
+let pendingScreen = null;
+// Quitting, as opposed to closing the window: the close handler below hides
+// the window instead of closing it, and a hide in the middle of app.quit()
+// cancels the quit — which left "Quit Tailzu" doing nothing once the window
+// had been opened.
+let quitting = false;
+app.on("before-quit", () => { quitting = true; });
+
+/** Show the window; with a screen id, on that screen. Menu items call this
+ *  with a MenuItem, so only a string counts as a screen. */
+function openAppWindow(screenId) {
+  const target = typeof screenId === "string" && screenId ? screenId : null;
+  if (appWin && !appWin.isDestroyed()) {
+    appWin.show(); appWin.focus();
+    if (target) {
+      if (appWin.webContents.isLoading()) pendingScreen = target;
+      else appWin.webContents.send("app:navigate", target);
+    }
+    return;
+  }
+  if (target) pendingScreen = target;
   appWin = new BrowserWindow({
     // Wide enough for the sign-in art and the form to stand side by side. At
     // 980 the art's own rule and a 300px form were fighting over the same
     // eighty pixels; the layout still re-centres below `wideAt` for anyone who
     // drags it narrower.
-    width: 1120, height: 780, minWidth: 380, minHeight: 520,
-    title: "Tailzu",
-    backgroundColor: "#000000",
+    width: num("desktop.window.width", 1120), height: num("desktop.window.height", 780),
+    minWidth: num("desktop.window.minWidth", 380), minHeight: num("desktop.window.minHeight", 520),
+    title: txt("desktop.window.title", "Tailzu"),
+    backgroundColor: color("desktop.window.background", "#000000"),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -809,7 +847,21 @@ function openAppWindow() {
     },
   });
   hardenWindow(appWin);
-  appWin.on("close", (e) => { e.preventDefault(); appWin.hide(); });
+  // "hide" puts it away and keeps its boot (a tray app's close means that);
+  // "close" really closes it, and the tray builds a fresh one next time.
+  appWin.on("close", (e) => {
+    if (quitting || str("desktop.window.closeAction", "hide") === "close") return;
+    e.preventDefault();
+    appWin.hide();
+  });
+  // A screen asked for while the page was loading, and not yet collected by
+  // app:env, goes over as soon as the page can hear it.
+  appWin.webContents.on("did-finish-load", () => {
+    if (!pendingScreen || !appWin || appWin.isDestroyed()) return;
+    const id = pendingScreen;
+    pendingScreen = null;
+    appWin.webContents.send("app:navigate", id);
+  });
   appWin.loadFile("app.html");
 }
 
@@ -847,10 +899,11 @@ function sendToRecorder(channel, payload) {
 function showOverlay() {
   if (overlayWin && !overlayWin.isDestroyed()) { overlayWin.show(); return; }
   const wa = screen.getPrimaryDisplay().workArea;
+  const w = num("desktop.overlay.width", 560), h = num("desktop.overlay.height", 84);
   overlayWin = new BrowserWindow({
-    width: 560, height: 84,
-    x: Math.round(wa.x + (wa.width - 560) / 2),
-    y: wa.y + wa.height - 120,
+    width: w, height: h,
+    x: Math.round(wa.x + (wa.width - w) / 2),
+    y: wa.y + wa.height - num("desktop.overlay.bottomOffset", 120),
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, focusable: false, resizable: false, hasShadow: false,
     webPreferences: {
@@ -874,7 +927,8 @@ function trayIcon() {
   if (fs.existsSync(p)) {
     const img = nativeImage.createFromPath(p);
     // macOS menu-bar icons render best resized to ~18pt.
-    return process.platform === "darwin" ? img.resize({ width: 18, height: 18 }) : img;
+    const size = num("desktop.tray.iconSize", 18);
+    return process.platform === "darwin" ? img.resize({ width: size, height: size }) : img;
   }
   return nativeImage.createEmpty();
 }
@@ -895,17 +949,21 @@ function buildMenu() {
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
-    { label: t("tray.open"), click: openAppWindow },
+    { label: t("tray.open"), click: () => openAppWindow() },
     { type: "separator" },
     {
-      label: `${t("tray.tone")}: ${currentTone()}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
+      label: `${t("tray.tone")}: ${toneLabel(currentTone())}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
       // The account's tone may be a voice the user created, which is not in
       // this list — include it so the menu can show it selected rather than
       // showing five unticked rows and implying none is active.
-      submenu: Array.from(new Set(TONES.concat(accountTone ? [accountTone] : []))).map((t) => ({
-        label: t, type: "radio", checked: currentTone() === t,
-        click: () => { void setAccountTone(t); },
-      })),
+      submenu: (() => {
+        const rows = tones();
+        if (accountTone && !rows.some((x) => x.id === accountTone)) rows.push({ id: accountTone, label: accountTone });
+        return rows.map((x) => ({
+          label: x.label, type: "radio", checked: currentTone() === x.id,
+          click: () => { void setAccountTone(x.id); },
+        }));
+      })(),
     },
     {
       label: t("tray.liveCaptions"),
@@ -932,7 +990,7 @@ function buildMenu() {
     // board, and whoever it gets in the way of needs to turn it off from here,
     // not from a config file.
     {
-      label: `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(" or ") })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
+      label: `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(txt("desktop.tray.keyJoiner", " or ")) })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
       type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
       click: (item) => saveConfig({ tap: item.checked }),
     },
@@ -945,12 +1003,10 @@ function buildMenu() {
     },
     { label: `${t("tray.backend")}: ${cfg.baseUrl}`, enabled: false },
     // Which credential is ACTUALLY in use — ends the "which token is it using"
-    // guessing when auth fails. Signed in, that is the account; saying "dev"
-    // there sent people to edit a config.json that is not the thing being sent.
+    // guessing when auth fails. Signed in, that is the account; signed out
+    // there is none, because there is no static token to fall back on.
     {
-      label: signedIn()
-        ? t("tray.signedIn")
-        : `Token: ${cfg.token === "dev" ? "dev (no config!)" : cfg.token.slice(0, 8) + "…"}`,
+      label: signedIn() ? t("tray.signedIn") : txt("desktop.tray.signedOut", "Not signed in"),
       enabled: false,
     },
     { label: t("tray.editConfig"), click: openConfig },
@@ -966,7 +1022,7 @@ function openConfig() {
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.copyFileSync(path.join(__dirname, "config.example.json"), configPath);
     } catch {
-      fs.writeFileSync(configPath, JSON.stringify({ baseUrl: cfg.baseUrl, token: "", hotkey: cfg.hotkey }, null, 2));
+      fs.writeFileSync(configPath, JSON.stringify({ baseUrl: cfg.baseUrl, hotkey: cfg.hotkey }, null, 2));
     }
   }
   shell.openPath(configPath);
@@ -977,19 +1033,32 @@ function openConfig() {
 // ability to store one. It never gets fs, and it never gets the config file
 // path — a renderer that can write arbitrary paths is a renderer that can be
 // talked into writing arbitrary paths.
-ipcMain.handle("app:env", () => ({
-  baseUrl: cfg.baseUrl,
-  fallbackToken: cfg.token,
-  session: authSession,
-  tone: cfg.tone,
-  language: cfg.language,
-  // The key that is actually bound, so the window can name it rather than
-  // say "your hotkey" to someone whose first choice was taken.
-  hotkey: prettyKey(cfg.hotkey),
-  // Which desktop this is. The server draws Sign in with Apple on a Mac and
-  // leaves it out on the others; the window only reports, it never decides.
-  os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
-}));
+ipcMain.handle("app:env", () => {
+  const navigate = pendingScreen;
+  pendingScreen = null;
+  return {
+    baseUrl: cfg.baseUrl,
+    session: authSession,
+    tone: cfg.tone,
+    language: cfg.language,
+    // The key that is actually bound, so the window can name it rather than
+    // say "your hotkey" to someone whose first choice was taken.
+    hotkey: prettyKey(cfg.hotkey),
+    // Which desktop this is. The server draws Sign in with Apple on a Mac and
+    // leaves it out on the others; the window only reports, it never decides.
+    os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
+    // What the window reports in its own bootstrap: the build (package.json's
+    // version, which the page cannot read) and how many times this install
+    // has launched, counted once per launch here so both surfaces agree.
+    appVersion: app.getVersion(),
+    launchCount: Number(localState.launchCount) || 1,
+    // The cached knobs, so the first paint is already the server's.
+    knobs: knobsPayload(),
+    // A screen the main process asked for before the page could hear it.
+    navigate,
+  };
+});
+ipcMain.handle("app:knobs", () => knobsPayload());
 ipcMain.handle("app:setSession", (_e, v) => {
   // The window signed in or out. The tray shares the session, so it adopts it
   // here rather than learning about it on the next token push.
@@ -1042,7 +1111,16 @@ ipcMain.on("app:token", (_e, t) => {
 // Anything the window wrote could have been the tone. Cheaper to re-read than
 // to have the window guess which of its writes mattered.
 ipcMain.on("app:changed", () => { void refreshAccountTone(); });
-ipcMain.on("app:shell", (_e, v) => adoptShell(v));
+// Every bootstrap the window receives — labels and flags, `desktop.shell`
+// among them. Newer than this process's own fetch more often than not.
+ipcMain.on("app:boot", (_e, v) => {
+  if (!v || typeof v !== "object") return;
+  const labels = v.labels && typeof v.labels === "object" ? v.labels : {};
+  const flags = v.flags && typeof v.flags === "object" ? v.flags : {};
+  // Over the cached response, so what only this process's fetch carries
+  // (theme, navigation, media) is not dropped from the cache.
+  adoptBoot(Object.assign({}, BOOT || {}, { labels, flags }));
+});
 
 // ---- Dictation toggle --------------------------------------------------------
 
@@ -1052,10 +1130,11 @@ ipcMain.on("app:shell", (_e, v) => adoptShell(v));
  *  hold-to-talk, the tray item, the window's "Dictate now" — so this is the one
  *  place that has to ask.
  *
- *  It was open, because `cfg.token` carries a fallback that authenticates a
- *  signed-out machine against a synthetic user. That made the desktop the one
- *  surface where you could dictate without registering, and put the words
- *  somewhere their owner could never read them: a history no account owns.
+ *  It was open, because a static fallback token authenticated a signed-out
+ *  machine against a synthetic user. That made the desktop the one surface
+ *  where you could dictate without registering, and put the words somewhere
+ *  their owner could never read them: a history no account owns. (That
+ *  fallback is gone entirely now; this is still the one place that asks.)
  *
  *  Refusing silently would be worse than the hole. A hotkey that does nothing
  *  reads as a broken hotkey, so this says what is wrong and opens the one
@@ -1069,9 +1148,30 @@ function requireAccount() {
   // notification here would answer a two-second hold with a stack of twenty
   // identical toasts.
   const now = Date.now();
-  if (now - lastSignInNudge > 5000) {
+  if (now - lastSignInNudge > num("desktop.notify.nudgeThrottleMs", 5000)) {
     lastSignInNudge = now;
     notify(t("notify.signIn"));
+  }
+  return false;
+}
+
+/** OUT OF WORDS IS ANSWERED BEFORE THE MIC OPENS, not after the upload.
+ *
+ *  The server already says so in the bootstrap (`quota.exceeded`). Recording
+ *  anyway meant talking for a minute and then being told, by a 429, that none
+ *  of it would be written — so the answer comes first: the window opens on the
+ *  screen the server names for it, and a notification says why. Throttled like
+ *  the sign-in nudge, for the same key-repeat reason. */
+let lastQuotaNudge = 0;
+function requireWords() {
+  if (!bool("quota.exceeded", false)) return true;
+  const now = Date.now();
+  if (now - lastQuotaNudge > num("desktop.notify.nudgeThrottleMs", 5000)) {
+    lastQuotaNudge = now;
+    openAppWindow(str("quota.screenId", "paywall"));
+    notify(txt("desktop.notify.wordsOut", "You're out of words this month."));
+  } else {
+    openAppWindow();
   }
   return false;
 }
@@ -1106,10 +1206,16 @@ async function startRecording(sid) {
     // longer a fallback path that writes to a user nobody can read.
     baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
     tone: currentTone(), live: cfg.live, session: sid,
+    // Was never forwarded, so the recorder read it as absent — and absent
+    // means on. Turning it off in config.json did nothing.
+    pauseFlush: cfg.pauseFlush,
     // The sentences it shows when capture fails. Sent with the session rather
     // than read from a file over there: the recorder is a page with no disk of
     // its own, and this way it always has the copy this launch resolved.
     strings: SHELL.notify,
+    // And every other number and word it uses (thresholds, mic constraints,
+    // error copy) — the knobs as of this press.
+    knobs: knobsPayload(),
   });
 }
 
@@ -1118,6 +1224,7 @@ function toggleDictation() {
   // arrives mid-dictation (a session expiring while the mic is open) would
   // strand the recorder running with no way to end it.
   if (!recording && !requireAccount()) return;
+  if (!recording && !requireWords()) return;
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
   recording = !recording;
   if (recording) {
@@ -1196,9 +1303,15 @@ function setupKeyHook() {
         const g = groups.find((x) => x.codes.includes(keycode));
         return g ? g.name : null;
       };
+      // The timings are the server's, read on every tap rather than once here,
+      // so retuning one does not wait for a restart.
       const taps = createTapDetector({
         names: groups.map((g) => g.name),
         onPair: () => { if (cfg.tap) toggleDictation(); },
+        maxHoldMs: () => num("desktop.tap.maxHoldMs", 350),
+        gapMs: () => num("desktop.tap.gapMs", 400),
+        minGapMs: () => num("desktop.tap.minGapMs", 70),
+        otherKeyTtlMs: () => num("desktop.tap.otherKeyTtlMs", 8000),
       });
       uIOhook.on("keydown", (e) => taps.keyDown(nameFor(e.keycode), e.keycode));
       uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode), e.keycode));
@@ -1240,8 +1353,9 @@ function notifyAccessibility() {
   if (warnedAccessibility) return;
   warnedAccessibility = true;
   new Notification({
-    title: "Tailzu needs Accessibility",
-    body: "Text was copied. To auto-paste, enable Tailzu under System Settings → Privacy & Security → Accessibility.",
+    title: txt("desktop.notify.accessibilityTitle", "Tailzu needs Accessibility"),
+    body: txt("desktop.notify.accessibilityBody",
+      "Text was copied. To auto-paste, enable Tailzu under System Settings → Privacy & Security → Accessibility."),
   }).show();
 }
 
@@ -1266,7 +1380,7 @@ ipcMain.on("dictation-result", (_e, payload) => {
   if (!t) return;
   clipboard.writeText(t);
   // Small delay so the clipboard write settles before the paste keystroke.
-  setTimeout(pasteIntoFocusedApp, 120);
+  setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
 });
 
 // A chunk of a session that is still running: paste it and leave the mic open.
@@ -1274,11 +1388,14 @@ ipcMain.on("dictation-result", (_e, payload) => {
 // between flushing on a pause and stopping on one.
 ipcMain.on("dictation-segment", (_e, payload) => {
   const { session, text, failed } = payload || {};
-  if (failed) { notify(fmt("notify.dictationFailed", { message: "segment lost — still listening" })); return; }
+  if (failed) {
+    notify(fmt("notify.dictationFailed", { message: txt("desktop.notify.segmentLost", "segment lost — still listening") }));
+    return;
+  }
   const t = (text || "").trim();
   if (!t) return;
   clipboard.writeText(t);
-  setTimeout(pasteIntoFocusedApp, 120);
+  setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
   if (session === activeSession && cfg.live) overlayText("");
 });
 
@@ -1293,6 +1410,9 @@ ipcMain.on("dictation-error", (_e, payload) => {
   const { session, message } = payload || {};
   settleSession(session);
   notify(fmt("notify.dictationFailed", { message }));
+  // The server refused for words: the cached `quota.exceeded` was stale, so
+  // ask again, and the next press is answered before the mic opens.
+  if (String(message || "").indexOf("quota_exceeded") !== -1) void refreshBoot();
 });
 
 // Live partials from the recorder → overlay captions (current session only).
@@ -1317,7 +1437,8 @@ ipcMain.on("live-partial", (_e, payload) => {
 // Now a second launch hands the click to the copy that is already running, and
 // that copy opens the window — which is the only sensible answer to someone
 // who just asked for the app and is looking at a desktop.
-if (!app.requestSingleInstanceLock()) {
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) {
   app.quit();
 } else {
   app.on("second-instance", () => {
@@ -1372,10 +1493,24 @@ app.whenReady().then(() => {
     done(local && (permission === "media" || permission === "audioCapture"));
   });
 
+  // One launch, counted once — here, where only the copy that holds the lock
+  // gets to, and before anything reports it.
+  if (primaryInstance) {
+    localState.launchCount = (Number(localState.launchCount) || 0) + 1;
+    saveLocalState();
+  }
+
   createRecorderWindow();
 
   tray = new Tray(trayIcon());
   refreshTray();
+
+  // ASK THE SERVER NOW, window or no window. A login-item start never opens
+  // one, and it is the launch that most needs the server's current answer —
+  // it may run for days. The cache already answered for the moments before
+  // this lands, and the timer keeps asking after it.
+  void refreshBoot().then(scheduleBootRefresh);
+  try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed launch */ }
 
   // THE WINDOW OPENS BEFORE ANYTHING THAT CAN FAIL.
   //
@@ -1397,7 +1532,7 @@ app.whenReady().then(() => {
 
   if (configError) {
     try {
-      new Notification({ title: "Tailzu — config problem", body: configError }).show();
+      new Notification({ title: txt("desktop.notify.configTitle", "Tailzu — config problem"), body: configError }).show();
     } catch { /* a notification the OS refuses must not take the app down */ }
   }
 
@@ -1416,11 +1551,12 @@ app.whenReady().then(() => {
   // Ctrl+Alt+Space is NOT on this list. Claude's desktop app takes it, and a
   // fallback that lands on another assistant's prompt bar is worse than no
   // fallback: the key appears to work and belongs to someone else.
-  const candidates = [cfg.hotkey, "CommandOrControl+Shift+F12",
-                      "CommandOrControl+Alt+Shift+Space", "CommandOrControl+Alt+D"];
+  const candidates = [cfg.hotkey].concat(list("desktop.hotkey.fallbacks", [
+    "CommandOrControl+Shift+F12", "CommandOrControl+Alt+Shift+Space", "CommandOrControl+Alt+D",
+  ]));
   let bound = null;
   for (const key of candidates) {
-    if (!key) continue;
+    if (!key || typeof key !== "string") continue;
     try {
       if (globalShortcut.register(key, toggleDictation)) { bound = key; break; }
     } catch { /* an unparseable accelerator is just another failed candidate */ }
@@ -1446,8 +1582,8 @@ app.whenReady().then(() => {
   // Keep the access token ahead of the hotkey. Renewing on a timer means
   // tokenNow() is valid when a key is pressed; renewing on demand would spend
   // a network round-trip out of the start of someone's sentence.
-  const keepFresh = setInterval(() => { void refreshSession(); }, 10 * 60 * 1000);
-  app.on("will-quit", () => clearInterval(keepFresh));
+  const keepFresh = setInterval(() => { void refreshSession(); }, num("desktop.auth.keepFreshMs", 600000));
+  app.on("will-quit", () => { clearInterval(keepFresh); clearTimeout(bootTimer); });
 
   if (app.isPackaged && cfg.autoStart) {
     // Registry writes fail on locked-down machines. That is a setting not

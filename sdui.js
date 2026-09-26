@@ -81,7 +81,16 @@ const ACTIONS = [
   "iap.subscribe", "iap.showPaywall", "iap.restore",
 ];
 
-let ENV = null;          // baseUrl, fallbackToken, tone, language
+/**
+ * The server's knobs (knobs.js, loaded before this file). Every literal this
+ * renderer used to decide for itself — a toast's words, how long a slow load
+ * waits before saying so, a switch's size — is read through these, with the
+ * old literal as the fallback. Fed every bootstrap this window receives, and
+ * the main process's cached copy before the first one lands.
+ */
+const K = window.TailzuKnobs;
+
+let ENV = null;          // baseUrl, tone, language, appVersion, launchCount, knobs
 let SESSION = null;      // { access_token, refresh_token, expires_at }
 let BOOT = null;
 let TABS = [];
@@ -114,21 +123,25 @@ async function sbFetch(path, body) {
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error_description || json.msg || json.error || `Auth failed (${res.status})`);
+  if (!res.ok) {
+    throw new Error(json.error_description || json.msg || json.error ||
+      K.txt("desktop.gate.authFailed", "Auth failed ({status})", { status: res.status }));
+  }
   return json;
 }
 
 /**
  * A valid access token, refreshing when the stored one has expired.
  *
- * Falls back to the static token so the window still renders SOMETHING before
- * sign-in rather than showing an error — the screens it can draw without an
- * account are the ones that need no account.
+ * Null when nobody is signed in, and the request then goes out with no
+ * Authorization header at all. There used to be a static fallback token here,
+ * which the backend resolves to a synthetic user — so a signed-out window
+ * asked for things as somebody nobody is.
  */
 async function bearer() {
-  if (!SESSION) return ENV.fallbackToken || "dev";
+  if (!SESSION) return null;
   const now = Math.floor(Date.now() / 1000);
-  if (SESSION.expires_at && SESSION.expires_at - 60 <= now && SESSION.refresh_token) {
+  if (SESSION.expires_at && SESSION.expires_at - K.num("desktop.auth.refreshSkewSec", 60) <= now && SESSION.refresh_token) {
     try {
       const r = await sbFetch("/auth/v1/token?grant_type=refresh_token", { refresh_token: SESSION.refresh_token });
       await setSession(r);
@@ -136,7 +149,7 @@ async function bearer() {
       // Refresh failed — the session is gone, not merely stale.
       await setSession(null);
       render();
-      return ENV.fallbackToken || "dev";
+      return null;
     }
   }
   // The tray reads the account's tone with this, so it always has the current
@@ -150,7 +163,8 @@ async function setSession(raw) {
     ? {
         access_token: raw.access_token,
         refresh_token: raw.refresh_token,
-        expires_at: raw.expires_at || Math.floor(Date.now() / 1000) + (raw.expires_in || 3600),
+        expires_at: raw.expires_at ||
+          Math.floor(Date.now() / 1000) + (raw.expires_in || K.num("desktop.auth.tokenLifetimeSec", 3600)),
       }
     : null;
   await window.tailzuApp.setSession(SESSION);
@@ -160,10 +174,18 @@ async function setSession(raw) {
 // Backend
 // ---------------------------------------------------------------------------
 
+/** A media query's answer, false where the window cannot say. */
+function prefers(q) {
+  try { return window.matchMedia(q).matches; } catch { return false; }
+}
+
 function capabilities() {
   return {
     schemaVersion: SCHEMA_VERSION,
-    appVersion: "desktop",
+    // The build, from package.json by way of the main process — the page
+    // cannot read the file. It used to say "desktop", which told the server
+    // which surface this was and nothing about which release.
+    appVersion: String((ENV && ENV.appVersion) || ""),
     // The catalog branches on this. Desktop is closest to iOS in what it can
     // draw and shares none of the Android keyboard's constraints, so it takes
     // the iOS tree rather than inventing a third the server has never seen.
@@ -191,16 +213,22 @@ function capabilities() {
       // own, and the gate's buttons depend on it.
       os: (ENV && ENV.os) || "",
       width: window.innerWidth, height: window.innerHeight, scale: window.devicePixelRatio || 1,
-      colorScheme: "dark", locale: navigator.language || "en-US", reduceMotion: false, rtl: false,
+      // What the OS is actually set to, not what this window would like.
+      colorScheme: prefers("(prefers-color-scheme: light)") ? "light" : "dark",
+      locale: navigator.language || "en-US",
+      reduceMotion: prefers("(prefers-reduced-motion: reduce)"),
+      rtl: false,
     },
   };
 }
 
 async function api(path, body, method) {
   const tok = await bearer();
+  const headers = { "Content-Type": "application/json" };
+  if (tok) headers.Authorization = "Bearer " + tok;
   const res = await fetch(ENV.baseUrl + path, {
     method: method || "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + tok },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
@@ -214,7 +242,27 @@ async function api(path, body, method) {
   return ct.indexOf("application/json") !== -1 ? res.json() : res.text();
 }
 
-const bootstrap = () => api("/v1/app/bootstrap", { capabilities: capabilities(), launchCount: 1 });
+/** How many times this install has launched — counted by the main process,
+ *  once per launch, so the window and the tray report the same number. */
+const launchCount = () => Number(ENV && ENV.launchCount) || 1;
+
+/**
+ * EVERY BOOTSTRAP THIS WINDOW RECEIVES points the knobs at itself and goes on
+ * to the main process — all of it, labels and flags, not only the tray's
+ * `desktop.shell` block. The main process fetches its own as well; this only
+ * ever makes its copy fresher.
+ */
+function received(boot) {
+  if (boot && typeof boot === "object") {
+    K.setKnobs(boot);
+    try { window.tailzuApp.boot({ labels: boot.labels || {}, flags: boot.flags || {} }); } catch { /* tray only */ }
+    paintFirst();
+  }
+  return boot;
+}
+
+const bootstrap = () =>
+  api("/v1/app/bootstrap", { capabilities: capabilities(), launchCount: launchCount() }).then(received);
 
 /**
  * The same bootstrap, asked WITHOUT a credential.
@@ -234,10 +282,10 @@ async function bootstrapAnon() {
   const res = await fetch(ENV.baseUrl + "/v1/app/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ capabilities: capabilities(), launchCount: 1 }),
+    body: JSON.stringify({ capabilities: capabilities(), launchCount: launchCount() }),
   });
   if (!res.ok) throw new Error("bootstrap → " + res.status);
-  return res.json();
+  return received(await res.json());
 }
 const fetchScreen = (screenId, params) =>
   api("/v1/app/screen", {
@@ -280,13 +328,15 @@ function applyTheme(theme) {
  * carried at a ratio rather than re-chosen, so the rhythm between them — the
  * thing that makes it read as one product — survives the change of surface.
  */
-const TYPE_SCALE = 1.08;
-// Single quotes inside, because these land in double-quoted style
+// The scale and the two stacks are knobs; read per call so a new bootstrap
+// retunes the next paint.
+//
+// Single quotes inside the stacks, because these land in double-quoted style
 // attributes: a "Segoe UI" in there closed the attribute early and cut off
 // everything role() wrote after it — including the node's own style, so
-// every Text lost its margins and colours from the tree ("0words").
-const SERIF = "Georgia,'Times New Roman',serif";
-const SANS = "-apple-system,'Segoe UI',system-ui,sans-serif";
+// every Text lost its margins and colours from the tree ("0words"). A stack
+// from the server gets the same treatment, for the same reason.
+const fontStack = (v) => String(v).replace(/"/g, "'");
 
 function role(name, extra) {
   const theme = (BOOT && BOOT.theme) || {};
@@ -295,7 +345,8 @@ function role(name, extra) {
   if (!r) return extra || "";
   const c = theme.color || {};
   const out = [];
-  const px = (v) => Math.round(v * TYPE_SCALE * 10) / 10 + "px";
+  const scale = K.num("desktop.type.scale", 1.08);
+  const px = (v) => Math.round(v * scale * 10) / 10 + "px";
   if (r.size != null) out.push("font-size:" + px(r.size));
   if (r.weight) out.push("font-weight:" + r.weight);
   if (r.lineHeight != null) out.push("line-height:" + px(r.lineHeight));
@@ -304,7 +355,9 @@ function role(name, extra) {
   if (r.transform) out.push("text-transform:" + r.transform);
   if (r.align) out.push("text-align:" + r.align);
   if (r.color) out.push("color:" + (c[r.color] || r.color));
-  out.push("font-family:" + (r.family === "display" ? SERIF : SANS));
+  out.push("font-family:" + fontStack(r.family === "display"
+    ? K.str("desktop.font.serif", "Georgia,'Times New Roman',serif")
+    : K.str("desktop.font.sans", "-apple-system,'Segoe UI',system-ui,sans-serif")));
   if (r.marginTop != null) out.push("margin-top:" + r.marginTop + "px");
   if (r.marginBottom != null) out.push("margin-bottom:" + r.marginBottom + "px");
   if (r.marginVertical != null) {
@@ -349,18 +402,56 @@ function lookup(ref) {
   return stateAt(ref);
 }
 
+/**
+ * The catalog's conditions — the same set the phones evaluate.
+ *
+ * A condition this window does not know is FALSE, not true: a node gated on
+ * something unrecognised stays hidden rather than appearing for everybody. And
+ * a malformed one (an operand missing) is false too, rather than a throw that
+ * blanks the whole screen — the rule the phone renderer follows.
+ */
 function visible(c) {
   if (!c) return true;
-  if (c.platform) return c.platform === "ios";
-  if (c.flag) return truthy(BOOT && BOOT.flags && BOOT.flags[c.flag]);
-  if (c.truthy) return truthy(lookup(c.truthy));
-  if (c.falsy) return !truthy(lookup(c.falsy));
-  if (c.eq) return String(lookup(c.eq[0])) === String(c.eq[1]);
-  if (c.neq) return String(lookup(c.neq[0])) !== String(c.neq[1]);
-  if (c.not) return !visible(c.not);
-  if (c.all) return c.all.every(visible);
-  if (c.any) return c.any.some(visible);
-  return true;
+  const flags = (BOOT && BOOT.flags) || {};
+  const same = (a, b) => String(a) === String(b);
+  try {
+    // The tree the server sends this window is the iOS one (see capabilities),
+    // and a condition can also name the desktop outright.
+    if (c.platform) return c.platform === "ios" || c.platform === "desktop";
+    if (c.flag) return truthy(flags[c.flag]);
+    if (c.truthy) return truthy(lookup(c.truthy));
+    if (c.falsy) return !truthy(lookup(c.falsy));
+    if (c.eq) return same(lookup(c.eq[0]), c.eq[1]);
+    if (c.neq) return !same(lookup(c.neq[0]), c.neq[1]);
+    if (c.gt) return Number(lookup(c.gt[0])) > Number(c.gt[1]);
+    if (c.gte) return Number(lookup(c.gte[0])) >= Number(c.gte[1]);
+    if (c.lt) return Number(lookup(c.lt[0])) < Number(c.lt[1]);
+    if (c.lte) return Number(lookup(c.lte[0])) <= Number(c.lte[1]);
+    if (c.in) return Array.isArray(c.in[1]) && c.in[1].some((x) => same(x, lookup(c.in[0])));
+    if (c.contains) {
+      // An ARRAY is tested for membership, not for a substring of its joined
+      // form — ["hinglish"] does not contain "hi". A string keeps substring
+      // semantics.
+      const v = lookup(c.contains[0]);
+      return Array.isArray(v)
+        ? v.some((x) => same(x, c.contains[1]))
+        : String(v == null ? "" : v).indexOf(String(c.contains[1])) !== -1;
+    }
+    if (c.startsWith) return String(lookup(c.startsWith[0]) ?? "").indexOf(String(c.startsWith[1])) === 0;
+    if (c.endsWith) {
+      const v = String(lookup(c.endsWith[0]) ?? ""), end = String(c.endsWith[1]);
+      return v.length >= end.length && v.slice(v.length - end.length) === end;
+    }
+    // Entitlement lives on the account, and the server already folds it into
+    // the boot flags; there is no store on this machine to ask.
+    if (c.entitled) return truthy(flags["quota.entitled"]) || truthy(flags["billing.entitled"]);
+    if (c.not) return !visible(c.not);
+    if (c.all) return c.all.every(visible);
+    if (c.any) return c.any.some(visible);
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /** Style keys → CSS. The SDUI names come first, then the RN-flavoured aliases
@@ -454,12 +545,16 @@ function node(n) {
       // Row. A Row with no label is still the layout row, below.
       if (p.label != null || p.value != null) {
         const chevron = p.chevron !== false;
-        return '<div' + bind(press) + ' style="display:flex;align-items:center;padding:17px 0;' +
+        return '<div' + bind(press) + ' style="display:flex;align-items:center;padding:' +
+          K.num("desktop.row.paddingV", 17) + 'px 0;' +
           (p.divider === false ? "" : "border-bottom:1px solid var(--border);") +
           (press ? "cursor:pointer;" : "") + s + '">' +
-          '<span style="flex:1;' + role("row", "font-size:16px;color:" + (p.danger ? "var(--danger)" : "var(--text)")) + '">' + esc(p.label || "") + "</span>" +
-          (p.value ? '<span style="' + role("rowValue", "font-size:15px;color:var(--muted)") + (chevron ? ";margin-right:8px" : "") + '">' + esc(p.value) + "</span>" : "") +
-          (chevron ? '<span style="' + role("rowChevron", "font-size:20px;color:var(--muted)") + ';margin-top:-2px">›</span>' : "") +
+          '<span style="flex:1;' + role("row", "font-size:" + K.num("desktop.row.fontSize", 16) + "px;color:" +
+            (p.danger ? "var(--danger)" : "var(--text)")) + '">' + esc(p.label || "") + "</span>" +
+          (p.value ? '<span style="' + role("rowValue", "font-size:" + K.num("desktop.row.valueSize", 15) + "px;color:var(--muted)") +
+            (chevron ? ";margin-right:" + K.num("desktop.row.valueGap", 8) + "px" : "") + '">' + esc(p.value) + "</span>" : "") +
+          (chevron ? '<span style="' + role("rowChevron", "font-size:" + K.num("desktop.row.chevronSize", 20) + "px;color:var(--muted)") +
+            ';margin-top:-2px">›</span>' : "") +
           "</div>";
       }
       // falls through
@@ -484,14 +579,15 @@ function node(n) {
 
     case "Card":
       return '<div' + bind(press) + ' style="background:var(--card);border:1px solid var(--border);' +
-        "border-radius:18px;padding:16px;margin-bottom:13px" + (press ? ";cursor:pointer" : "") + ";" + s + '">' +
+        "border-radius:" + K.num("desktop.card.radius", 18) + "px;padding:" + K.num("desktop.card.padding", 16) +
+        "px;margin-bottom:" + K.num("desktop.card.marginBottom", 13) + "px" + (press ? ";cursor:pointer" : "") + ";" + s + '">' +
         kids + (txt ? "<div>" + txt + "</div>" : "") + "</div>";
 
     case "Spacer":
-      return '<div style="height:' + (st.height || 8) + "px;flex:" + (st.flex || 0) + '"></div>';
+      return '<div style="height:' + (st.height || K.num("desktop.spacer.height", 8)) + "px;flex:" + (st.flex || 0) + '"></div>';
 
     case "Divider":
-      return '<div style="height:1px;background:var(--border);margin:12px 0"></div>';
+      return '<div style="height:1px;background:var(--border);margin:' + K.num("desktop.divider.margin", 12) + 'px 0"></div>';
 
     case "Heading":
       return '<h2 style="margin:0;' + role("heading", "color:var(--text)") + ";" + s + '">' + txt + "</h2>";
@@ -529,9 +625,11 @@ function node(n) {
     case "Button": {
       const primary = p.variant !== "secondary" && p.variant !== "ghost";
       return '<button' + bind(press) + ' style="display:block;width:100%;border:0;cursor:pointer;' +
-        (primary ? "background:var(--accent);color:#000" : "background:transparent;color:var(--text);border:1px solid var(--border)") +
-        ';border-radius:14px;padding:14px 18px;margin:6px 0;' + role(primary ? "button" : "buttonSecondary") + ";" + s + '">' +
-        (txt || "Continue") + "</button>";
+        (primary ? "background:var(--accent);color:" + K.color("desktop.button.primaryText", "#000")
+                 : "background:transparent;color:var(--text);border:1px solid var(--border)") +
+        ";border-radius:" + K.num("desktop.button.radius", 14) + "px;padding:" + K.str("desktop.button.padding", "14px 18px") +
+        ";margin:" + K.str("desktop.button.margin", "6px 0") + ";" + role(primary ? "button" : "buttonSecondary") + ";" + s + '">' +
+        (txt || esc(K.txt("desktop.button.label", "Continue"))) + "</button>";
     }
 
     case "Row2": case "KeyValue":
@@ -560,12 +658,15 @@ function node(n) {
     case "Switch": {
       const path = (n.bind && n.bind.value) || "";
       const on = truthy(path ? stateAt(path) : p.value);
+      const sw = K.obj("desktop.switch", {
+        width: 50, height: 30, knob: 24, inset: 3, offBackground: "rgba(255,255,255,.16)", knobColor: "#fff",
+      });
       return '<button' + bind(n.on && n.on.onChange ? n.on.onChange : press) +
         ' data-toggle="' + esc(path) + '" aria-pressed="' + on + '"' +
-        ' style="width:50px;height:30px;flex:none;border:0;border-radius:15px;cursor:pointer;position:relative;background:' +
-        (on ? "var(--accent)" : "rgba(255,255,255,.16)") + '">' +
-        '<span style="position:absolute;top:3px;left:' + (on ? 23 : 3) +
-        'px;width:24px;height:24px;border-radius:50%;background:#fff"></span></button>';
+        ' style="width:' + sw.width + "px;height:" + sw.height + "px;flex:none;border:0;border-radius:" + (sw.height / 2) +
+        "px;cursor:pointer;position:relative;background:" + (on ? "var(--accent)" : esc(sw.offBackground)) + '">' +
+        '<span style="position:absolute;top:' + sw.inset + "px;left:" + (on ? sw.width - sw.knob - sw.inset : sw.inset) +
+        "px;width:" + sw.knob + "px;height:" + sw.knob + "px;border-radius:50%;background:" + esc(sw.knobColor) + '"></span></button>';
     }
 
     case "List": {
@@ -597,12 +698,12 @@ function node(n) {
       const box =
         "width:" + dim(st.width, "100%") + ";" +
         (st.aspectRatio ? "aspect-ratio:" + st.aspectRatio + ";"
-                        : "height:" + dim(st.height, "160px") + ";") +
+                        : "height:" + dim(st.height, K.num("desktop.image.height", 160) + "px") + ";") +
         "min-height:0;" +
         // Filling a parent means the parent draws the corners and the spacing.
-        "border-radius:" + (st.borderRadius != null ? st.borderRadius : fills ? 0 : 16) + "px;" +
+        "border-radius:" + (st.borderRadius != null ? st.borderRadius : fills ? 0 : K.num("desktop.image.radius", 16)) + "px;" +
         "object-fit:" + (p.contentFit === "contain" ? "contain" : "cover") + ";" +
-        "display:block;" + (fills ? "margin:0;" : "margin:0 auto 14px;");
+        "display:block;" + (fills ? "margin:0;" : "margin:0 auto " + K.num("desktop.image.marginBottom", 14) + "px;");
       return n.type === "Video"
         ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + box + '"></video>'
         : '<img src="' + esc(src) + '" alt="" style="' + box + '">';
@@ -613,7 +714,8 @@ function node(n) {
     case "BarChart": return bars(p);
     case "Sparkline": case "LineChart": return bars({ series: p.series || p.data, color: p.color });
     case "ProgressRing": case "Gauge":
-      return '<div style="height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin:8px 0">' +
+      return '<div style="height:' + K.num("desktop.progress.height", 6) + "px;border-radius:" +
+        (K.num("desktop.progress.height", 6) / 2) + 'px;background:var(--border);overflow:hidden;margin:8px 0">' +
         '<div style="width:' + Math.max(0, Math.min(100, Number(p.value) || 0)) + '%;height:100%;background:var(--accent)"></div></div>';
 
     // ---- what the phones draw that a window can draw too -----------------
@@ -633,7 +735,7 @@ function node(n) {
       const stroke = p.stroke ? esc(tok(p.stroke)) : "none";
       return '<svg viewBox="' + vb + '" style="' + s + ';display:block" ' +
         'fill="' + fill + '" stroke="' + stroke + '" ' +
-        'stroke-width="' + (Number(p.strokeWidth) || 2) + '" ' +
+        'stroke-width="' + (Number(p.strokeWidth) || K.num("desktop.svg.strokeWidth", 2)) + '" ' +
         'stroke-linecap="' + esc(p.strokeLinecap || "round") + '" ' +
         'stroke-linejoin="' + esc(p.strokeLinejoin || "round") + '">' +
         '<path d="' + esc(p.d || "") + '"></path></svg>';
@@ -651,12 +753,18 @@ function node(n) {
     case "BlurBackground":
       // A real backdrop blur — the one thing a browser does better than the
       // phones, and for free.
-      return '<div style="' + s + ';backdrop-filter:blur(' +
-        Math.round((Number(p.intensity) || 60) / 3) + 'px);-webkit-backdrop-filter:blur(' +
-        Math.round((Number(p.intensity) || 60) / 3) + 'px)">' + kids + "</div>";
+    {
+      // The phones' intensity is 0..100; a CSS blur radius a third of it
+      // matches what they draw.
+      const blur = Math.round((Number(p.intensity) || K.num("desktop.blur.intensity", 60)) /
+        K.num("desktop.blur.divisor", 3));
+      return '<div style="' + s + ';backdrop-filter:blur(' + blur + 'px);-webkit-backdrop-filter:blur(' +
+        blur + 'px)">' + kids + "</div>";
+    }
 
     case "ProgressBar":
-      return '<div style="' + s + ';height:3px;border-radius:2px;background:var(--border);overflow:hidden">' +
+      return '<div style="' + s + ";height:" + K.num("desktop.progressBar.height", 3) +
+        'px;border-radius:2px;background:var(--border);overflow:hidden">' +
         '<div class="tz-indet" style="height:100%;background:var(--accent)"></div></div>';
 
     case "FlipText": {
@@ -665,8 +773,12 @@ function node(n) {
       const words = (p.words || []).map((w) => esc(String(w)));
       if (!words.length) return "";
       const id = "flip" + (node._n = (node._n || 0) + 1);
-      FLIPS.push({ id: id, words: words, ms: Math.max(900, Number(p.intervalMs) || 2600) });
-      return '<span id="' + id + '" style="' + s + ';transition:opacity .25s">' + words[0] + "</span>";
+      FLIPS.push({
+        id: id, words: words,
+        ms: Math.max(K.num("desktop.flip.minMs", 900), Number(p.intervalMs) || K.num("desktop.flip.intervalMs", 2600)),
+      });
+      return '<span id="' + id + '" style="' + s + ";transition:opacity " +
+        (K.num("desktop.flip.fadeMs", 250) / 1000) + 's">' + words[0] + "</span>";
     }
 
     case "Modal":
@@ -680,18 +792,23 @@ function node(n) {
       // the same object as a button — same label, same colours, same amber far
       // end — and a click commits it. The gesture was never the point; the
       // deliberateness was, and a click on a pill this size is deliberate.
-      const h = Number(p.height) || 58;
+      const d = K.obj("desktop.swipeAction", {
+        height: 58, radius: 999, background: "#0B0B0D", color: "#fff", fontSize: 12, weight: 700,
+        tracking: 1.8, disc: 46, target: "#C9862B",
+      });
+      const h = Number(p.height) || d.height;
+      const disc = Number(p.disc) || d.disc;
       return '<button class="tz-press" data-ev="onComplete" style="' + s +
-        ";position:relative;height:" + h + "px;border-radius:" + (Number(p.radius) || 999) + "px" +
-        ";background:" + esc(tok(p.background || "#0B0B0D")) +
+        ";position:relative;height:" + h + "px;border-radius:" + (Number(p.radius) || d.radius) + "px" +
+        ";background:" + esc(tok(p.background || d.background)) +
         ";border:" + (p.borderWidth ? p.borderWidth + "px solid " + esc(tok(p.borderColor)) : "none") +
-        ";color:" + esc(tok(p.color || "#fff")) +
-        ";font-size:" + (Number(p.fontSize) || 12) + "px;font-weight:" + (p.weight || 700) +
-        ";letter-spacing:" + (Number(p.tracking) || 1.8) + 'px;width:100%;cursor:pointer">' +
+        ";color:" + esc(tok(p.color || d.color)) +
+        ";font-size:" + (Number(p.fontSize) || d.fontSize) + "px;font-weight:" + (p.weight || d.weight) +
+        ";letter-spacing:" + (Number(p.tracking) || d.tracking) + 'px;width:100%;cursor:pointer">' +
         esc(label(p.label || "")) +
         '<span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:' +
-        (Number(p.disc) || 46) + "px;height:" + (Number(p.disc) || 46) +
-        "px;border-radius:50%;background:" + esc(tok(p.targetBackground || "#C9862B")) +
+        disc + "px;height:" + disc +
+        "px;border-radius:50%;background:" + esc(tok(p.targetBackground || d.target)) +
         ';opacity:.45"></span></button>';
     }
 
@@ -708,11 +825,20 @@ function node(n) {
       // visible. alpha went the same way: the field sat at full strength on a
       // screen that wanted it dimmed behind the copy.
       //
-      // Those two are per screen and per person; everything else in the page's
-      // config is geometry and identical everywhere. So they travel in the
-      // query string and the rest stays baked.
+      // Those two are per screen and per person, and retune the field in
+      // place. EVERYTHING ELSE THE SERVER SENDS goes too — regions, colours,
+      // bloom, focal length — as one `cfg` parameter the page lays over the
+      // geometry it has baked in, so a retune on the server reaches the window
+      // the way it reaches the phones, and a node that sends none of it gets
+      // the baked field exactly as before. The live values (state, level,
+      // training) are messages, not config, and stay out of the address.
+      const geo = {};
+      Object.keys(p).forEach((k) => {
+        if (FIELD_LIVE.indexOf(k) === -1 && p[k] != null) geo[k] = p[k];
+      });
       const q = "?alpha=" + encodeURIComponent(Number(p.alpha != null ? p.alpha : 1)) +
-        "&growth=" + encodeURIComponent(Number(p.growth != null ? p.growth : 1));
+        "&growth=" + encodeURIComponent(Number(p.growth != null ? p.growth : 1)) +
+        (Object.keys(geo).length ? "&cfg=" + encodeURIComponent(JSON.stringify(geo)) : "");
       FIELD_BINDS = n.bind || null;
       FIELD_PROPS = p;
       // A PLACEHOLDER, not the iframe itself. Every repaint replaces this
@@ -806,34 +932,42 @@ function node(n) {
  *   { role: "note",     text }            a centred aside ("Learned: dry")
  *   { role: "variants", options: [...] }  three readings to choose between
  */
-const CHAT_D = {
-  askBg: "rgba(255,255,255,0.06)", askBorder: "rgba(255,255,255,0.09)",
-  askText: "rgba(255,255,255,0.9)", mineBg: "#FFFFFF", mineText: "#000000",
-  noteText: "#E8A23C", noteBg: "rgba(232,162,60,0.1)", noteBorder: "rgba(232,162,60,0.26)",
-  variantBg: "rgba(255,255,255,0.05)", variantBorder: "rgba(255,255,255,0.1)",
-  variantText: "rgba(255,255,255,0.92)", angleText: "rgba(255,255,255,0.4)",
-  pickedBg: "rgba(232,162,60,0.13)", pickedBorder: "#E8A23C",
-  labelText: "rgba(255,255,255,0.38)", radius: 16, gap: 11,
-};
+/** The thread's defaults — under the node's own `colors`, over nothing. A
+ *  knob as a whole, so the server can move any of them for every screen at
+ *  once; the sizes ride along with the colours. */
+function chatDefaults() {
+  return K.obj("desktop.chat.style", {
+    askBg: "rgba(255,255,255,0.06)", askBorder: "rgba(255,255,255,0.09)",
+    askText: "rgba(255,255,255,0.9)", mineBg: "#FFFFFF", mineText: "#000000",
+    noteText: "#E8A23C", noteBg: "rgba(232,162,60,0.1)", noteBorder: "rgba(232,162,60,0.26)",
+    variantBg: "rgba(255,255,255,0.05)", variantBorder: "rgba(255,255,255,0.1)",
+    variantText: "rgba(255,255,255,0.92)", angleText: "rgba(255,255,255,0.4)",
+    pickedBg: "rgba(232,162,60,0.13)", pickedBorder: "#E8A23C",
+    labelText: "rgba(255,255,255,0.38)", radius: 16, gap: 11,
+    tail: 5, fontSize: 14.5, mineLineHeight: 21, askLineHeight: 22, noteSize: 11,
+    optionRadius: 14, optionSize: 14, optionLineHeight: 21, labelSize: 10.5,
+  });
+}
 
 /** Which option was taken in which row, for the screen currently painted.
  *  Keyed by row index: a thread only ever grows, so an index is stable. */
 let CHAT_PICKED = {};
 
 function chatThread(n, p, s) {
-  const c = { ...CHAT_D, ...(p.colors || {}) };
+  const c = { ...chatDefaults(), ...(p.colors || {}) };
   const rows = (() => { const r = stateAt((n.bind && n.bind.thread) || ""); return Array.isArray(r) ? r : []; })();
-  const pickLabel = label(p.pickLabel) || "Tap the one that sounds like you";
+  const pickLabel = label(p.pickLabel) || K.txt("desktop.chat.pickLabel", "Tap the one that sounds like you");
 
   const bubble = (r, i) => {
     if (r.role === "mine") {
       return '<div style="align-self:flex-end;max-width:82%;background:' + esc(tok(c.mineBg)) +
-        ";padding:10px 14px;border-radius:" + c.radius + "px;border-bottom-right-radius:5px" +
-        ';font-size:14.5px;line-height:21px;color:' + esc(tok(c.mineText)) + '">' + esc(r.text || "") + "</div>";
+        ";padding:10px 14px;border-radius:" + c.radius + "px;border-bottom-right-radius:" + c.tail + "px" +
+        ";font-size:" + c.fontSize + "px;line-height:" + c.mineLineHeight + "px;color:" + esc(tok(c.mineText)) + '">' +
+        esc(r.text || "") + "</div>";
     }
     if (r.role === "note") {
       return '<div style="align-self:center;background:' + esc(tok(c.noteBg)) + ";border:1px solid " +
-        esc(tok(c.noteBorder)) + ";border-radius:999px;padding:5px 11px;font-size:11px;letter-spacing:.5px;color:" +
+        esc(tok(c.noteBorder)) + ";border-radius:999px;padding:5px 11px;font-size:" + c.noteSize + "px;letter-spacing:.5px;color:" +
         esc(tok(c.noteText)) + '">' + esc(r.text || "") + "</div>";
     }
     if (r.role === "variants") {
@@ -848,22 +982,22 @@ function chatThread(n, p, s) {
           ' style="display:block;width:100%;text-align:left;cursor:' + (chose != null ? "default" : "pointer") +
           ";background:" + esc(tok(isPicked ? c.pickedBg : c.variantBg)) +
           ";border:1px solid " + esc(tok(isPicked ? c.pickedBorder : c.variantBorder)) +
-          ";border-radius:14px;padding:11px 13px;opacity:" + (dimmed ? ".3" : "1") + '">' +
+          ";border-radius:" + c.optionRadius + "px;padding:11px 13px;opacity:" + (dimmed ? ".3" : "1") + '">' +
           (o.angle
             ? '<div style="font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;color:' +
               esc(tok(isPicked ? c.pickedBorder : c.angleText)) + '">' + esc(o.angle) + "</div>"
             : "") +
-          '<div style="font-size:14px;line-height:21px;color:' + esc(tok(c.variantText)) + '">' +
+          '<div style="font-size:' + c.optionSize + "px;line-height:" + c.optionLineHeight + "px;color:" + esc(tok(c.variantText)) + '">' +
           esc(o.text) + "</div></button>";
       }).join("");
       return '<div style="display:flex;flex-direction:column;gap:7px">' +
-        '<div style="font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;color:' +
+        '<div style="font-size:' + c.labelSize + "px;letter-spacing:1.4px;text-transform:uppercase;color:" +
         esc(tok(c.labelText)) + '">' + esc(r.label || pickLabel) + "</div>" + opts + "</div>";
     }
     // Anything else is something the app said.
     return '<div style="align-self:flex-start;max-width:88%;background:' + esc(tok(c.askBg)) +
       ";border:1px solid " + esc(tok(c.askBorder)) + ";padding:12px 14px;border-radius:" + c.radius +
-      "px;border-bottom-left-radius:5px;font-size:14.5px;line-height:22px;color:" +
+      "px;border-bottom-left-radius:" + c.tail + "px;font-size:" + c.fontSize + "px;line-height:" + c.askLineHeight + "px;color:" +
       esc(tok(c.askText)) + '">' + esc(r.text || "") + "</div>";
   };
 
@@ -884,13 +1018,15 @@ function chatThread(n, p, s) {
 let MIC = null;   // { rec, stream, path, node } while a capture is open
 
 function voiceButton(n, p, s) {
-  const size = Number(p.size) || 44;
+  const size = Number(p.size) || K.num("desktop.voice.buttonSize", 44);
   const on = !!(MIC && MIC.path === ((n.bind && n.bind.value) || ""));
   return '<button class="tz-press" data-mic="' + esc((n.bind && n.bind.value) || "") + '"' +
-    ' aria-pressed="' + on + '" title="' + (on ? "Stop and transcribe" : "Record") + '"' +
+    ' aria-pressed="' + on + '" title="' +
+    esc(on ? K.txt("desktop.voice.stop", "Stop and transcribe") : K.txt("desktop.voice.record", "Record")) + '"' +
     ' style="' + s + ";flex:none;width:" + size + "px;height:" + size + "px;border-radius:50%;cursor:pointer" +
     ";border:0;display:flex;align-items:center;justify-content:center;background:" +
-    esc(tok(on ? "#e0556b" : (p.background || "#E8A23C"))) + '">' +
+    esc(tok(on ? K.color("desktop.voice.liveBackground", "#e0556b")
+               : (p.background || K.color("desktop.voice.background", "#E8A23C")))) + '">' +
     // A filled circle while live, the mic glyph at rest. Drawn rather than
     // loaded: the phones use an uploaded icon, and a window that waited on
     // that upload would show an empty button until somebody made one.
@@ -904,11 +1040,13 @@ function voiceButton(n, p, s) {
     "</button>";
 }
 
+/** What the microphone is asked for — the same knob the tray's recorder reads. */
+const micConstraints = () =>
+  K.obj("desktop.mic.constraints", { echoCancellation: true, noiseSuppression: true, autoGainControl: true });
+
 async function micStart(path, n) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
-  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
+  const mime = K.list("desktop.mic.mimeTypes", ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"])
     .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   const chunks = [];
@@ -917,21 +1055,22 @@ async function micStart(path, n) {
     stream.getTracks().forEach((t) => t.stop());
     MIC = null;
     try {
-      if (!chunks.length) throw new Error("no audio captured");
+      if (!chunks.length) throw new Error(K.txt("desktop.mic.noAudio", "no audio captured"));
       const type = rec.mimeType || "audio/webm";
       const fd = new FormData();
       fd.append("audio", new Blob(chunks, { type }), "audio." + (type.indexOf("ogg") !== -1 ? "ogg" : "webm"));
       fd.append("targetApp", "Desktop");
       fd.append("language", String(n.props?.language || "auto"));
+      const tok = await bearer();
       const res = await fetch(ENV.baseUrl + "/v1/transcribe-clean", {
         method: "POST",
-        headers: { Authorization: "Bearer " + (await bearer()) },
+        headers: tok ? { Authorization: "Bearer " + tok } : {},
         body: fd,
       });
       if (!res.ok) throw new Error("transcribe → " + res.status);
       const j = await res.json();
       const text = String(j.cleanedText || j.transcript || j.text || "").trim();
-      if (!text) throw new Error("no speech detected");
+      if (!text) throw new Error(K.txt("desktop.mic.noSpeech", "no speech detected"));
       if (path) setStatePath(path, text);
       repaint();
       const ch = n.on && n.on.onChange;
@@ -971,18 +1110,21 @@ async function micStart(path, n) {
  * the reply comes out of the speaker rather than the earpiece. A window has no
  * earpiece and no categories, and all of that simply does not exist here.
  */
-const LEVEL_TICK_MS = 90, LEVEL_ON_SPEECH = 0.8, LEVEL_FLOOR = 0.15, LEVEL_DECAY = 0.86;
-
 let SESSION_RUN = null;   // the live loop, or null
 
 function startSession(n) {
   if (SESSION_RUN) return;                 // already running for this screen
   const p = deepResolve(n.props || {});
+  // How the level bubble moves: how often it decays, how far a word lifts it,
+  // where it rests, and where it sits while the app thinks and speaks.
+  const LV = K.obj("desktop.voice.level", {
+    tickMs: 90, onSpeech: 0.8, floor: 0.15, decay: 0.86, thinking: 0.12, speaking: 0.5,
+  });
   const r = {
     alive: true,
-    endpoint: String(p.path || "/v1/train/converse"),
-    silenceMs: Math.max(600, Number(p.silenceMs) || 1500),
-    maxTurns: Math.max(2, Number(p.maxTurns) || 40),
+    endpoint: String(p.path || K.str("desktop.voice.endpoint", "/v1/train/converse")),
+    silenceMs: Math.max(K.num("desktop.voice.minSilenceMs", 600), Number(p.silenceMs) || K.num("desktop.voice.silenceMs", 1500)),
+    maxTurns: Math.max(K.num("desktop.voice.minTurns", 2), Number(p.maxTurns) || K.num("desktop.voice.maxTurns", 40)),
     language: p.language ? String(p.language) : "auto",
     statePath: String(p.statePath || "sessionState"),
     levelPath: String(p.levelPath || "level"),
@@ -1023,28 +1165,26 @@ function startSession(n) {
       void respond();
     }, r.silenceMs);
   };
-  const heard = () => { setLevel(LEVEL_ON_SPEECH); armSilence(); };
+  const heard = () => { setLevel(LV.onSpeech); armSilence(); };
 
   async function listen(warmed) {
     if (!r.alive) return;
     if (r.turns.length >= r.maxTurns * 2) { setState_("idle"); setLevel(0); return; }
     r.committed = ""; r.partial = "";
     setState_("listening");
-    setLevel(LEVEL_FLOOR);
+    setLevel(LV.floor);
     // The level has no amplitude behind it — the socket hands over text, not
     // PCM. So it rises on the arrival of words and decays between them, which
     // is a true signal about speech even though it is not loudness.
     r.decay = setInterval(() => {
-      if (r.level > LEVEL_FLOOR) setLevel(Math.max(LEVEL_FLOOR, r.level * LEVEL_DECAY));
-    }, LEVEL_TICK_MS);
+      if (r.level > LV.floor) setLevel(Math.max(LV.floor, r.level * LV.decay));
+    }, LV.tickMs);
     try {
       // The microphone opened behind the greeting, when there was one. A
       // warm-up that failed falls through to asking again, so a denial is
       // still reported by the same path rather than silently.
       r.stream = (warmed ? await warmed : null) ||
-        await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
+        await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
       if (!r.alive) { closeMic(r); return; }
       const token = await bearer();
       r.ws = new WebSocket(ENV.baseUrl.replace(/^http/, "ws") + "/v1/transcribe-stream");
@@ -1062,7 +1202,7 @@ function startSession(n) {
         else if (m.type === "final") {
           if (m.text && m.text.trim()) r.committed = (r.committed + " " + m.text.trim()).trim();
           r.partial = ""; heard();
-        } else if (m.type === "error") fail(m.message || "The microphone stopped.");
+        } else if (m.type === "error") fail(m.message || K.txt("desktop.voice.micStopped", "The microphone stopped."));
       };
       r.ws.onerror = () => { /* onclose follows */ };
       r.ctx = new AudioContext();
@@ -1078,15 +1218,15 @@ function startSession(n) {
       armSilence();
     } catch (err) {
       fail(err && err.name === "NotAllowedError"
-        ? "microphone blocked — allow it in your system settings"
-        : ((err && err.message) ? err.message : "Couldn't start listening."));
+        ? K.txt("desktop.voice.micBlocked", "microphone blocked — allow it in your system settings")
+        : ((err && err.message) ? err.message : K.txt("desktop.voice.startFailed", "Couldn't start listening.")));
     }
   }
 
   async function respond() {
     if (!r.alive) return;
     setState_("thinking");
-    setLevel(0.12);
+    setLevel(LV.thinking);
     try {
       const res = await api(r.endpoint, { turns: r.turns, language: r.language });
       if (!r.alive) return;
@@ -1094,10 +1234,10 @@ function startSession(n) {
       if (!reply) { void listen(); return; }
       say("assistant", reply);
       setState_("speaking");
-      setLevel(0.5);
+      setLevel(LV.speaking);
       speak(reply, () => { if (r.alive) void listen(); });
     } catch (err) {
-      fail((err && err.message) ? err.message : "Couldn't reach the conversation.");
+      fail((err && err.message) ? err.message : K.txt("desktop.voice.replyFailed", "Couldn't reach the conversation."));
     }
   }
 
@@ -1117,7 +1257,8 @@ function startSession(n) {
       // Some engines drop an utterance silently. A ceiling proportional to the
       // reply keeps a dead synthesiser from ending the conversation.
       setTimeout(() => { if (r.alive && stateAt(r.statePath) === "speaking") done(); },
-        Math.min(30000, 2000 + text.length * 90));
+        Math.min(K.num("desktop.voice.ttsMaxMs", 30000),
+          K.num("desktop.voice.ttsBaseMs", 2000) + text.length * K.num("desktop.voice.ttsPerCharMs", 90)));
     } catch { done(); }
   }
 
@@ -1141,10 +1282,10 @@ function startSession(n) {
     put(r.turnsPath, r.turns);
     put(r.linePath, r.greeting);
     setState_("speaking");
-    setLevel(0.5);
+    setLevel(LV.speaking);
     // Not awaited. The point is that it opens WHILE the sentence is spoken.
     const warm = navigator.mediaDevices
-      .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+      .getUserMedia({ audio: micConstraints() })
       .catch(() => null);
     speak(r.greeting, () => {
       if (!r.alive) { void warm.then((st) => st && st.getTracks().forEach((t) => t.stop())); return; }
@@ -1254,12 +1395,15 @@ function withUser(url, uid) {
   return url + (url.indexOf("?") === -1 ? "?" : "&") + "app_user_id=" + id;
 }
 
-/** What to call the place a subscription lives. */
-const MANAGE_AT = {
-  "billing.manage.apple": "the App Store",
-  "billing.manage.google": "Google Play",
-  "billing.manage.web": "the web",
-};
+/** What to call the place a subscription lives, by the flag that says it
+ *  lives there. */
+function manageAt() {
+  return {
+    "billing.manage.apple": K.txt("desktop.billing.storeApple", "the App Store"),
+    "billing.manage.google": K.txt("desktop.billing.storeGoogle", "Google Play"),
+    "billing.manage.web": K.txt("desktop.billing.storeWeb", "the web"),
+  };
+}
 
 function buyOnWeb() {
   const flags = (BOOT && BOOT.flags) || {};
@@ -1286,15 +1430,18 @@ function buyOnWeb() {
   // becomes a support email. The server sends the address, so the click still
   // ends where changing a plan is possible.
   if (flags["billing.entitled"] && !flags["billing.manage.web"]) {
-    const key = Object.keys(MANAGE_AT).find((k) => flags[k]);
+    const stores = manageAt();
+    const key = Object.keys(stores).find((k) => flags[k]);
     const url = String(flags["billing.manage.url"] || "");
     if (key && url) {
       window.tailzuApp.openExternal(url);
-      toast("Your subscription is with " + MANAGE_AT[key] + " — opening it. It covers every device.");
+      toast(K.txt("desktop.billing.opening", "Your subscription is with {store} — opening it. It covers every device.",
+        { store: stores[key] }));
     } else {
       toast(key
-        ? "Your subscription is with " + MANAGE_AT[key] + ". Change or cancel it there — it covers every device."
-        : "This account already has an active subscription.");
+        ? K.txt("desktop.billing.elsewhere",
+          "Your subscription is with {store}. Change or cancel it there — it covers every device.", { store: stores[key] })
+        : K.txt("desktop.billing.alreadyActive", "This account already has an active subscription."));
     }
     return;
   }
@@ -1303,13 +1450,14 @@ function buyOnWeb() {
   if (!base || !uid) {
     // Said plainly rather than swallowed. A dead button is the bug this whole
     // case exists to fix, and a silent failure here would just move it.
-    toast(base ? "Sign in first to subscribe." : "Subscriptions aren't set up for the desktop app yet.");
+    toast(base ? K.txt("desktop.billing.signInFirst", "Sign in first to subscribe.")
+               : K.txt("desktop.billing.unavailable", "Subscriptions aren't set up for the desktop app yet."));
     return;
   }
   window.tailzuApp.openExternal(withUser(base, uid));
   toast(flags["billing.entitled"]
-    ? "Change your plan in the browser — this window updates when you're back."
-    : "Finish in your browser — this window updates when you're back.");
+    ? K.txt("desktop.billing.changeInBrowser", "Change your plan in the browser — this window updates when you're back.")
+    : K.txt("desktop.billing.finishInBrowser", "Finish in your browser — this window updates when you're back."));
   // They are about to leave. The answer arrives by webhook while they are
   // gone, so the moment they come back is the moment to ask again.
   WATCH_ENTITLEMENT = true;
@@ -1328,16 +1476,17 @@ async function refreshEntitlement(loud) {
   try {
     BOOT = await bootstrap();
   } catch {
-    if (loud) toast("Couldn't reach the backend.");
+    if (loud) toast(K.txt("desktop.billing.offline", "Couldn't reach the backend."));
     return;
   }
   const now = !!(BOOT.flags && BOOT.flags["quota.entitled"]);
   if (now && !was) {
     WATCH_ENTITLEMENT = false;
-    toast("You're subscribed. Thank you.");
+    toast(K.txt("desktop.billing.subscribed", "You're subscribed. Thank you."));
     await paint(true);
   } else if (loud) {
-    toast(now ? "Your subscription is active." : "No subscription found on this account.");
+    toast(now ? K.txt("desktop.billing.active", "Your subscription is active.")
+              : K.txt("desktop.billing.none", "No subscription found on this account."));
   }
 }
 
@@ -1400,19 +1549,30 @@ function riseNode(n, p, s, kids) {
     ";animation-delay:" + delay + 'ms">' + kids + "</div>";
 }
 
+/** The sign-in pills' defaults, under whatever the auth tree's props say —
+ *  shared by the method pills, the code pill and the code pill's live border. */
+function pillDefaults() {
+  return K.obj("desktop.pill", {
+    height: 56, fontSize: 15, background: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.10)",
+    text: "rgba(255,255,255,0.96)", badge: "rgba(255,255,255,0.10)", badgeBorder: "rgba(255,255,255,0.18)",
+    target: "#C9862B", targetIcon: "#000000", codeFontSize: 17, codeSpacing: 8,
+  });
+}
+
 /** One sign-in method. The pill IS the field: click it and the caret lands
  *  inside, type, then the disc at the right end commits. */
 function swipePill(p, s) {
   const method = p.method === "phone" ? "phone" : "email";
   if (method === "phone" && !AUTH.phoneOn) return "";
-  const h = Number(p.height) || 56;
+  const D = pillDefaults();
+  const h = Number(p.height) || D.height;
   const open = AUTH.open === method;
   const value = method === "phone" ? AUTH.phone : AUTH.email;
   const ready = method === "phone" ? /^\+?\d{7,15}$/.test((AUTH.dial + value).replace(/[^\d+]/g, ""))
                                    : /.+@.+\..+/.test(value.trim());
   const badge = h - 10;
   const label = String((method === "phone" ? p.phoneLabel : p.emailLabel) ||
-    (method === "phone" ? "Phone number" : "Email address"));
+    (method === "phone" ? K.txt("desktop.gate.phoneLabel", "Phone number") : K.txt("desktop.gate.emailLabel", "Email address")));
   // The disc: at the left as a badge while the pill is closed; at the right
   // end the moment the pill opens — dim until there is something to send,
   // then the brand's amber with an arrow. It used to stay on the left until
@@ -1422,26 +1582,27 @@ function swipePill(p, s) {
   // for "entry" and "sending" — but a second click would send a second code.
   const busy = AUTH.phase !== "entry";
   const disc = '<span class="tz-disc' + (busy ? " tz-busy" : "") + '" data-commit="' + method + '"' +
-    ' role="button" tabindex="0" aria-label="Continue"' + (busy ? ' aria-disabled="true"' : "") +
+    ' role="button" tabindex="0" aria-label="' + esc(K.txt("desktop.gate.continue", "Continue")) + '"' +
+    (busy ? ' aria-disabled="true"' : "") +
     ' style="width:' + badge + "px;height:" + badge + "px;" +
     (ready
-      ? "right:5px;background:" + esc(tok(p.targetBackground || "#C9862B")) +
+      ? "right:5px;background:" + esc(tok(p.targetBackground || D.target)) +
         ";border-color:transparent;cursor:pointer"
-      : (open ? "right:5px;" : "left:5px;") + "background:" + esc(tok(p.badgeBackground || "rgba(255,255,255,0.10)")) +
-        ";border-color:" + esc(tok(p.badgeBorderColor || "rgba(255,255,255,0.18)"))) + '">' +
+      : (open ? "right:5px;" : "left:5px;") + "background:" + esc(tok(p.badgeBackground || D.badge)) +
+        ";border-color:" + esc(tok(p.badgeBorderColor || D.badgeBorder))) + '">' +
     (ready
       ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' +
-        esc(tok(p.targetIconColor || "#000000")) +
+        esc(tok(p.targetIconColor || D.targetIcon)) +
         '" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">' +
         '<path d="M5 12h13M12 5l7 7-7 7"/></svg>'
       : methodGlyph(method)) + "</span>";
   const dial = method === "phone" && open
     ? '<input class="tz-dial" data-dial="1" value="' + esc(AUTH.dial) + '" maxlength="5"' +
-      ' inputmode="tel" aria-label="Country code">'
+      ' inputmode="tel" aria-label="' + esc(K.txt("desktop.gate.countryCode", "Country code")) + '">'
     : "";
   return '<div class="tz-pill" style="' + s + ";height:" + h + "px;border-radius:" +
-    (Number(p.radius) || h / 2) + "px;background:" + esc(tok(p.background || "rgba(255,255,255,0.06)")) +
-    ";border:1px solid " + esc(tok(p.borderColor || "rgba(255,255,255,0.10)")) + '">' +
+    (Number(p.radius) || h / 2) + "px;background:" + esc(tok(p.background || D.background)) +
+    ";border:1px solid " + esc(tok(p.borderColor || D.border)) + '">' +
     disc + dial +
     '<input class="tz-pillin" data-pill="' + method + '"' +
     // TEXT, not email. Chromium refuses setSelectionRange on an email input,
@@ -1455,8 +1616,8 @@ function swipePill(p, s) {
     ' spellcheck="false" value="' + esc(value) + '"' +
     ' style="padding-left:' + (open ? (method === "phone" ? 96 : 20) : h + 6) + "px" +
     ";padding-right:" + (open ? h + 6 : 18) + "px" +
-    ";font-size:" + (Number(p.fontSize) || 15) + "px" +
-    ";color:" + esc(tok(p.textColor || "rgba(255,255,255,0.96)")) + '"></div>';
+    ";font-size:" + (Number(p.fontSize) || D.fontSize) + "px" +
+    ";color:" + esc(tok(p.textColor || D.text)) + '"></div>';
 }
 
 function methodGlyph(method) {
@@ -1467,36 +1628,39 @@ function methodGlyph(method) {
 
 /** The code step: one pill, the digits spaced out, dots for what is missing. */
 function codeEntry(p, s) {
-  const h = Number(p.height) || 56;
+  const D = pillDefaults();
+  const h = Number(p.height) || D.height;
   const len = AUTH.codeLength;
   const shown = AUTH.code.padEnd(len, "·").split("").join(" ");
   const done = AUTH.code.length === len;
   return '<div class="tz-pill' + (AUTH.codeError ? " tz-shake" : "") + '" data-codebox="1" style="' + s +
     ";height:" + h + "px;border-radius:" + (h / 2) + "px;cursor:text" +
-    ";background:rgba(255,255,255,0.06);border:1px solid " +
-    (AUTH.codeError ? "var(--danger)" : done ? esc(tok("#C9862B")) : "rgba(255,255,255,0.10)") + '">' +
+    ";background:" + esc(D.background) + ";border:1px solid " +
+    (AUTH.codeError ? "var(--danger)" : done ? esc(tok(D.target)) : esc(D.border)) + '">' +
     // A real input, held invisible over the pill: the browser's own autofill
     // for a one-time code only offers itself to a field it can see.
     '<input data-code="1" inputmode="numeric" autocomplete="one-time-code"' +
-    ' maxlength="' + len + '" value="' + esc(AUTH.code) + '" aria-label="Enter the code we sent you"' +
+    ' maxlength="' + len + '" value="' + esc(AUTH.code) + '" aria-label="' +
+    esc(K.txt("desktop.gate.codeLabel", "Enter the code we sent you")) + '"' +
     ' style="position:absolute;inset:0;width:100%;height:100%;opacity:0;border:0;background:none">' +
     '<span style="width:100%;text-align:center;pointer-events:none;font-variant-numeric:tabular-nums' +
-    ";letter-spacing:" + (Number(p.letterSpacing) || 8) + "px" +
-    ";font-size:" + (Number(p.fontSize) || 17) + "px" +
-    ';color:rgba(255,255,255,0.96)">' + esc(shown) + "</span></div>";
+    ";letter-spacing:" + (Number(p.letterSpacing) || D.codeSpacing) + "px" +
+    ";font-size:" + (Number(p.fontSize) || D.codeFontSize) + "px" +
+    ";color:" + esc(D.text) + '">' + esc(shown) + "</span></div>";
 }
 
 /** Apple and Google, as the round icon buttons the phones draw — not the wide
  *  labelled rows this window used to have. */
 function socialButton(provider, p, s) {
-  const size = Number(p.size) || 52;
+  const size = Number(p.size) || K.num("desktop.gate.socialSize", 52);
   const mark = provider === "apple"
     ? '<svg width="' + Math.round(size * 0.42) + '" height="' + Math.round(size * 0.42) +
       '" viewBox="0 0 24 24"><path fill="#fff" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.46 1.58-1.51 3.14-.9 1.36-1.84 2.71-3.32 2.71-1.48 0-1.86-.88-3.56-.88-1.66 0-2.25.91-3.6.91-1.36 0-2.3-1.27-3.22-2.61-1.87-2.61-3.34-7.53-1.42-10.86.95-1.66 2.65-2.7 4.5-2.73 1.4-.03 2.72.95 3.58.95.85 0 2.45-1.18 4.12-1.01.7.03 2.67.28 3.93 2.13-.1.06-2.35 1.37-2.33 4.07.03 3.22 2.83 4.29 2.86 4.31z"/></svg>'
     : '<svg width="' + Math.round(size * 0.40) + '" height="' + Math.round(size * 0.40) +
       '" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
   return '<button class="tz-social tz-press" data-oauth="' + provider + '"' +
-    ' aria-label="Continue with ' + (provider === "apple" ? "Apple" : "Google") + '"' +
+    ' aria-label="' + esc(K.txt("desktop.gate.continueWith", "Continue with {provider}",
+      { provider: provider === "apple" ? "Apple" : "Google" })) + '"' +
     ' style="' + s + ";width:" + size + "px;height:" + size + 'px">' + mark + "</button>";
 }
 
@@ -1507,25 +1671,33 @@ function wordMeter(p) {
   const left = total - used;
   const tick = earned > 0 ? (base / total) * 100 : -1;
   const fill = p.fillColor || "var(--accent)";
+  const big = K.num("desktop.meter.bigSize", 28), small = K.num("desktop.meter.smallSize", 13);
+  const tiny = K.num("desktop.meter.tinySize", 12), bar = K.num("desktop.meter.barHeight", 10);
   return '<div><div style="display:flex;justify-content:space-between;align-items:baseline">' +
-    '<span style="color:var(--text);font-size:28px;font-weight:700;letter-spacing:-.5px">' + left.toLocaleString() + "</span>" +
-    '<span style="color:var(--label);font-size:13px">' + used.toLocaleString() + " of " + total.toLocaleString() + " used</span></div>" +
-    '<div style="color:var(--label);font-size:13px;margin-top:2px">words left</div>' +
-    '<div style="height:10px;border-radius:5px;background:var(--border);margin-top:12px;position:relative;overflow:hidden">' +
+    '<span style="color:var(--text);font-size:' + big + 'px;font-weight:700;letter-spacing:-.5px">' + left.toLocaleString() + "</span>" +
+    '<span style="color:var(--label);font-size:' + small + 'px">' +
+    esc(K.txt("desktop.meter.used", "{used} of {total} used", { used: used.toLocaleString(), total: total.toLocaleString() })) +
+    "</span></div>" +
+    '<div style="color:var(--label);font-size:' + small + 'px;margin-top:2px">' + esc(K.txt("desktop.meter.left", "words left")) + "</div>" +
+    '<div style="height:' + bar + "px;border-radius:" + (bar / 2) +
+    'px;background:var(--border);margin-top:12px;position:relative;overflow:hidden">' +
     '<div style="width:' + (used / total) * 100 + "%;height:100%;background:" + fill + '"></div>' +
     (tick >= 0 ? '<div style="position:absolute;top:0;bottom:0;left:' + tick + '%;width:2px;background:var(--bg)"></div>' : "") +
     '</div><div style="display:flex;gap:14px;margin-top:10px">' +
-    '<span style="color:var(--label);font-size:12px">' + base.toLocaleString() + " free</span>" +
-    (earned > 0 ? '<span style="color:' + (p.earnedColor || "var(--accent)") + ';font-size:12px;font-weight:600">+' +
-      earned.toLocaleString() + " earned</span>" : "") + "</div>" +
-    (p.caption ? '<div style="color:var(--label);font-size:13px;margin-top:12px">' + esc(p.caption) + "</div>" : "") + "</div>";
+    '<span style="color:var(--label);font-size:' + tiny + 'px">' +
+    esc(K.txt("desktop.meter.free", "{n} free", { n: base.toLocaleString() })) + "</span>" +
+    (earned > 0 ? '<span style="color:' + (p.earnedColor || "var(--accent)") + ";font-size:" + tiny + 'px;font-weight:600">' +
+      esc(K.txt("desktop.meter.earned", "+{n} earned", { n: earned.toLocaleString() })) + "</span>" : "") + "</div>" +
+    (p.caption ? '<div style="color:var(--label);font-size:' + small + 'px;margin-top:12px">' + esc(p.caption) + "</div>" : "") + "</div>";
 }
 
 function pie(p) {
   const data = (p.data || []).filter((d) => (+d.value || 0) > 0);
   const total = data.reduce((n, d) => n + (+d.value || 0), 0);
-  const size = p.size || 150, r = size / 2;
-  const inner = p.donut === false ? 0 : r - r * 0.26;
+  const size = p.size || K.num("desktop.pie.size", 150), r = size / 2;
+  const inner = p.donut === false ? 0 : r - r * K.num("desktop.pie.ring", 0.26);
+  const fallback = K.color("desktop.chart.color", "#E8A23C");
+  const legendSize = K.num("desktop.pie.legendSize", 12.5);
   if (!total) return "";
   let a = -Math.PI / 2, paths = "";
   data.forEach((d) => {
@@ -1539,22 +1711,26 @@ function pie(p) {
     // start and end coincide and the path collapses. Draw a ring instead.
     paths += data.length === 1
       ? '<circle cx="' + r + '" cy="' + r + '" r="' + (r + inner) / 2 + '" fill="none" stroke="' +
-        esc(d.color || "#E8A23C") + '" stroke-width="' + (r - inner) + '"/>'
+        esc(d.color || fallback) + '" stroke-width="' + (r - inner) + '"/>'
       : '<path d="M ' + x0 + " " + y0 + " A " + r + " " + r + " 0 " + big + " 1 " + x1 + " " + y1 +
         " L " + ix1 + " " + iy1 + " A " + inner + " " + inner + " 0 " + big + " 0 " + ix0 + " " + iy0 +
-        ' Z" fill="' + esc(d.color || "#E8A23C") + '"/>';
+        ' Z" fill="' + esc(d.color || fallback) + '"/>';
     a = a1;
   });
   const legend = p.legend === false ? "" :
     '<div style="display:flex;flex-direction:column;gap:6px;flex:1;min-width:0">' + data.map((d) =>
       '<div style="display:flex;align-items:center;gap:8px;min-width:0">' +
-      '<span style="width:8px;height:8px;border-radius:50%;flex:none;background:' + esc(d.color || "#E8A23C") + '"></span>' +
-      '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px">' + esc(d.label || "") + "</span>" +
-      '<span style="color:var(--label);font-size:12.5px">' + Math.round(((+d.value) / total) * 100) + "%</span></div>").join("") + "</div>";
+      '<span style="width:8px;height:8px;border-radius:50%;flex:none;background:' + esc(d.color || fallback) + '"></span>' +
+      '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:' + legendSize + 'px">' +
+      esc(d.label || "") + "</span>" +
+      '<span style="color:var(--label);font-size:' + legendSize + 'px">' + Math.round(((+d.value) / total) * 100) +
+      "%</span></div>").join("") + "</div>";
   const centre = p.centerValue != null
     ? '<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">' +
-      '<div style="color:var(--text);font-size:19px;font-weight:700">' + esc(p.centerValue) + "</div>" +
-      '<div style="color:var(--label);font-size:11px">' + esc(p.centerLabel || "") + "</div></div>"
+      '<div style="color:var(--text);font-size:' + K.num("desktop.pie.centerSize", 19) + 'px;font-weight:700">' +
+      esc(p.centerValue) + "</div>" +
+      '<div style="color:var(--label);font-size:' + K.num("desktop.pie.centerLabelSize", 11) + 'px">' +
+      esc(p.centerLabel || "") + "</div></div>"
     : "";
   return '<div style="display:flex;align-items:center;gap:18px"><div style="position:relative;flex:none;width:' +
     size + "px;height:" + size + 'px"><svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + " " + size + '">' +
@@ -1565,9 +1741,12 @@ function bars(p) {
   const vals = (p.series || []).map((x) => (typeof x === "number" ? x : +x.value || 0));
   if (!vals.length) return "";
   const max = Math.max.apply(null, vals.concat([1]));
-  return '<div style="display:flex;align-items:flex-end;gap:4px;height:110px">' + vals.map((v) =>
-    '<div style="flex:1;border-radius:3px;background:' + esc(p.color || "#E8A23C") +
-    ';height:' + Math.max(2, (v / max) * 100) + '%"></div>').join("") + "</div>";
+  const minPct = K.num("desktop.bars.minPct", 2);
+  return '<div style="display:flex;align-items:flex-end;gap:' + K.num("desktop.bars.gap", 4) +
+    "px;height:" + K.num("desktop.bars.height", 110) + 'px">' + vals.map((v) =>
+    '<div style="flex:1;border-radius:' + K.num("desktop.bars.radius", 3) + "px;background:" +
+    esc(p.color || K.color("desktop.chart.color", "#E8A23C")) +
+    ';height:' + Math.max(minPct, (v / max) * 100) + '%"></div>').join("") + "</div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -1579,7 +1758,7 @@ function toast(msg) {
   t.textContent = msg;
   t.classList.add("on");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove("on"), 2600);
+  toast._t = setTimeout(() => t.classList.remove("on"), K.num("desktop.toast.ms", 2600));
 }
 
 /** What the control that fired the current action handed over.
@@ -1682,7 +1861,7 @@ async function run(action, eventValue) {
           await paint(true);
         }
       } catch (err) {
-        if (err && err.quota) { go("paywall"); return; }
+        if (err && err.quota) { go(K.str("quota.screenId", "paywall")); return; }
         await run(action.onError);
       }
       return;
@@ -1723,6 +1902,22 @@ function go(screenId, params) {
   STACK.push({ screenId, params });
   paint();
 }
+
+/**
+ * A screen the MAIN PROCESS asked for — the paywall, when the hotkey was
+ * refused for being out of words. The window may still be booting, so the
+ * request waits for render() to lay the landing tab down and goes on top of
+ * it; and a second request for the screen already showing is not a second
+ * copy of it.
+ */
+let PENDING_SCREEN = null;
+function navigateTo(screenId) {
+  if (typeof screenId !== "string" || !screenId) return;
+  if (!SESSION || !STACK.length) { PENDING_SCREEN = screenId; return; }
+  const top = STACK[STACK.length - 1];
+  if (top && top.screenId === screenId) return;
+  go(screenId);
+}
 function back() {
   if (STACK.length > 1) { STACK.pop(); paint(); }
 }
@@ -1755,14 +1950,15 @@ async function paint(force) {
   const seq = paint._seq = (paint._seq || 0) + 1;
   const fresh = force || !paint._last || paint._last !== cur.screenId;
   let slow = 0;
+  const loading = esc(K.txt("desktop.screen.loading", "Loading…"));
   if (!paint._last) {
-    view.innerHTML = '<div class="pad" style="color:var(--label)">Loading…</div>';
+    view.innerHTML = '<div class="pad" style="color:var(--label)">' + loading + "</div>";
   } else if (fresh) {
     slow = setTimeout(() => {
       if (seq !== paint._seq) return;
       dropField();
-      view.innerHTML = '<div class="pad" style="color:var(--label);background:var(--bg);min-height:100%">Loading…</div>';
-    }, 700);
+      view.innerHTML = '<div class="pad" style="color:var(--label);background:var(--bg);min-height:100%">' + loading + "</div>";
+    }, K.num("desktop.screen.slowMs", 700));
   }
   paint._last = cur.screenId;
   let screen;
@@ -1771,8 +1967,16 @@ async function paint(force) {
   } catch (err) {
     clearTimeout(slow);
     if (seq !== paint._seq) return;
+    // Out of words is not a broken screen: it is the one the server names
+    // for it, in place of the one that was refused.
+    const quotaScreen = K.str("quota.screenId", "paywall");
+    if (err && err.quota && cur.screenId !== quotaScreen) {
+      STACK[STACK.length - 1] = { screenId: quotaScreen };
+      return paint(true);
+    }
     dropField();
-    view.innerHTML = '<div class="pad"><p style="color:var(--danger)">Couldn\'t load this screen.</p>' +
+    view.innerHTML = '<div class="pad"><p style="color:var(--danger)">' +
+      esc(K.txt("desktop.screen.loadFailed", "Couldn't load this screen.")) + "</p>" +
       '<p style="color:var(--label);font-size:13px">' + esc(String(err.message || err)) + "</p></div>";
     return;
   }
@@ -1881,6 +2085,9 @@ function wireChat(view, sc) {
  * `window.tz`. Same message names, same quantising of the level — twenty steps
  * is finer than the eye and turns sixty messages a second into a trickle.
  */
+/** NeuralField props that are sent as messages or as their own parameter,
+ *  never inside the `cfg` the page bakes. */
+const FIELD_LIVE = ["alpha", "growth", "state", "level", "training"];
 let FIELD_BINDS = null;   // { state, level, training } paths the server named
 let FIELD_PROPS = null;
 let FIELD_LAST = "";
@@ -1953,12 +2160,20 @@ function wireField(view) {
   // place. Reloading the iframe for a new alpha was the black frame in the
   // middle of slide-to-begin.
   if (FIELD_EL && FIELD_EL.dataset.q !== q) {
+    const was = new URLSearchParams(FIELD_EL.dataset.q || "");
     FIELD_EL.dataset.q = q;
     const qs = new URLSearchParams(q);
-    const tune = {};
-    if (qs.has("alpha")) tune.alpha = Number(qs.get("alpha"));
-    if (qs.has("growth")) tune.growth = Number(qs.get("growth"));
-    fieldSend(tune);
+    if ((was.get("cfg") || "") !== (qs.get("cfg") || "")) {
+      // Different GEOMETRY is a different drawing, and the page bakes its
+      // geometry once — so this one reloads. It does not happen between the
+      // screens of one catalog, which all send the same field.
+      FIELD_EL.src = "neuralField.html" + q;
+    } else {
+      const tune = {};
+      if (qs.has("alpha")) tune.alpha = Number(qs.get("alpha"));
+      if (qs.has("growth")) tune.growth = Number(qs.get("growth"));
+      fieldSend(tune);
+    }
   }
   const ground = uncoverField(slot, view);
   if (!FIELD_EL) {
@@ -2051,7 +2266,7 @@ function wireMic(view, sc) {
         repaint();
         const eh = n && n.on && n.on.onError;
         const msg = (err && err.name === "NotAllowedError")
-          ? "microphone blocked — allow it in your system settings"
+          ? K.txt("desktop.voice.micBlocked", "microphone blocked — allow it in your system settings")
           : ((err && err.message) ? err.message : String(err));
         if (eh) await run(eh, msg); else toast(msg);
       }
@@ -2144,13 +2359,14 @@ function startFlips() {
     const el = document.getElementById(f.id);
     if (!el || f.words.length < 2) return;
     let i = 0;
+    const fade = K.num("desktop.flip.fadeMs", 250);
     FLIP_TIMERS.push(setInterval(() => {
       el.style.opacity = "0";
       setTimeout(() => {
         i = (i + 1) % f.words.length;
         el.textContent = f.words[i];
         el.style.opacity = "1";
-      }, 250);
+      }, fade);
     }, f.ms));
   });
   FLIPS = [];
@@ -2177,7 +2393,10 @@ function renderTabs() {
  */
 function paintChrome(shell) {
   if (!shell) return;
-  const text = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.textContent = v; };
+  const text = (id, v) => {
+    const el = $(id);
+    if (el && typeof v === "string" && v.trim()) { el.textContent = v; CHROME_PAINTED.add(id); }
+  };
   const hint = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.placeholder = v; };
   // The form itself is the server's auth.screen now — its labels are props on
   // that tree, not ids in this document. What is left here is the copy AROUND
@@ -2194,6 +2413,33 @@ function paintChrome(shell) {
   text("settingsLink", r.settings); text("signOut", r.signOut);
   text("back", r.back);
   applyGateLayout(shell.gateLayout);
+}
+
+/**
+ * THE FIRST PAINT'S WORDS, FROM THE KNOBS.
+ *
+ * app.html carries its own copy of the chrome's words so the very first frame
+ * has something in it. Those are only the fallbacks now: as soon as knobs are
+ * known — the main process's cached bootstrap, before this window has asked
+ * anything — each is replaced by the server's label. An element that
+ * `desktop.shell` has already painted is left alone: that block is the more
+ * specific answer, and it is the one the server has always sent.
+ */
+const CHROME_PAINTED = new Set();
+function paintFirst() {
+  const put = (id, v) => {
+    const el = $(id);
+    if (el && !CHROME_PAINTED.has(id) && typeof v === "string" && v.trim()) el.textContent = v;
+  };
+  document.title = K.txt("desktop.window.title", "Tailzu");
+  put("gateTitle", K.txt("desktop.gate.title", "Tailzu"));
+  put("gateSub", K.txt("desktop.gate.subtitle",
+    "Sign in the same way you do on your phone — your voices, history and words come with you."));
+  put("railBrand", K.txt("desktop.rail.brand", "Tailzu"));
+  put("dictate", K.txt("desktop.rail.dictate", "Dictate now"));
+  put("settingsLink", K.txt("desktop.rail.settings", "Settings"));
+  put("signOut", K.txt("desktop.rail.signOut", "Sign out"));
+  put("back", K.txt("desktop.rail.back", "← Back"));
 }
 
 /**
@@ -2216,14 +2462,14 @@ function applyGateLayout(l) {
   const g = $("gate");
   if (!g || !GATE_LAYOUT) return;
   const L = GATE_LAYOUT;
-  const wide = window.innerWidth >= (Number(L.wideAt) || 860);
+  const wide = window.innerWidth >= (Number(L.wideAt) || K.num("desktop.gate.wideAt", 860));
   const twoCol = wide && (L.align === "right" || L.align === "left");
   g.dataset.cols = twoCol ? "1" : "0";
   if (twoCol) {
-    const col = Math.min(0.95, Math.max(0.05, Number(L.column) || 0.5));
+    const col = Math.min(0.95, Math.max(0.05, Number(L.column) || K.num("desktop.gate.column", 0.5)));
     // Mirrored for "left", so one number describes either side.
     g.style.setProperty("--gate-col", ((L.align === "left" ? 1 - col : col) * 100) + "%");
-    g.style.setProperty("--gate-w", (Number(L.columnWidth) || 300) + "px");
+    g.style.setProperty("--gate-w", (Number(L.columnWidth) || K.num("desktop.gate.columnWidth", 300)) + "px");
   } else {
     g.style.removeProperty("--gate-col");
     g.style.removeProperty("--gate-w");
@@ -2248,15 +2494,6 @@ function applyGateLayout(l) {
 // A window that is resized across `wideAt` changes which layout applies.
 window.addEventListener("resize", () => applyGateLayout());
 
-/** The tray's copy lives in the main process, which never talks to the backend.
- *  The window is the only thing here holding a connection, so it passes the
- *  block along and main caches it for the launches that start offline. */
-function shareChrome(shell) {
-  if (!shell) return;
-  paintChrome(shell);
-  try { window.tailzuApp.shell(shell); } catch { /* tray only */ }
-}
-
 async function render() {
   const signedIn = !!(SESSION && SESSION.access_token);
   $("gate").hidden = signedIn;
@@ -2268,17 +2505,19 @@ async function render() {
     // bigger problem than the heading being one release old.
     // gateBoot() memoises it, and the art and the phone-method switch already
     // read the same answer — so this is the one request, not a second.
+    // (The bootstrap itself already went to the knobs and on to the main
+    // process as it arrived — see received().)
     const anon = await gateBoot();
     if (anon) {
       BOOT = anon;                 // role() resolves typography against it too
       applyTheme(anon.theme);
-      shareChrome(anon.flags && anon.flags["desktop.shell"]);
+      paintChrome(anon.flags && anon.flags["desktop.shell"]);
     }
     return;
   }
   BOOT = await bootstrap();
   applyTheme(BOOT.theme);
-  shareChrome(BOOT.flags && BOOT.flags["desktop.shell"]);
+  paintChrome(BOOT.flags && BOOT.flags["desktop.shell"]);
   TABS = BOOT.navigation && BOOT.navigation.kind === "tabs" ? BOOT.navigation.tabs : [];
   renderTabs();
   // WHERE THE SERVER SAYS, when the server says somewhere this window has.
@@ -2296,6 +2535,10 @@ async function render() {
   const landing = TABS.find((t) => (t.screenId || t.id) === BOOT.initialScreenId) || TABS[0];
   TAB_ID = landing ? landing.id : "";
   STACK = [{ screenId: landing ? (landing.screenId || landing.id) : "home" }];
+  // A screen the main process asked for while this was booting goes on top
+  // of the landing tab, so Back still leads somewhere.
+  if (PENDING_SCREEN && PENDING_SCREEN !== STACK[0].screenId) STACK.push({ screenId: PENDING_SCREEN });
+  PENDING_SCREEN = null;
   await paint();
 }
 
@@ -2488,7 +2731,8 @@ function wireGate() {
       const shown = box.querySelector("span");
       if (shown) shown.textContent = AUTH.code.padEnd(AUTH.codeLength, "\u00b7").split("").join(" ");
       box.classList.remove("tz-shake");
-      box.style.borderColor = AUTH.code.length === AUTH.codeLength ? tok("#C9862B") : "rgba(255,255,255,0.10)";
+      const D = pillDefaults();
+      box.style.borderColor = AUTH.code.length === AUTH.codeLength ? tok(D.target) : D.border;
       $("gateErr").textContent = "";
       codeIn.setSelectionRange(AUTH.code.length, AUTH.code.length);
       // Six digits is the whole answer — there is nothing else to press.
@@ -2498,7 +2742,8 @@ function wireGate() {
       if (e.key === "Enter" && AUTH.code.length === AUTH.codeLength) void submitCode();
     });
     // The caret belongs here the moment the step opens — this IS the step.
-    setTimeout(() => { const c = $("gateForm").querySelector("[data-code]"); if (c) c.focus(); }, 320);
+    setTimeout(() => { const c = $("gateForm").querySelector("[data-code]"); if (c) c.focus(); },
+      K.num("desktop.gate.codeFocusMs", 320));
   }
 
   host.querySelectorAll("[data-oauth]").forEach((el) => {
@@ -2540,10 +2785,12 @@ async function commit(method) {
     let to;
     if (method === "phone") {
       to = (AUTH.dial + AUTH.phone).replace(/[^\d+]/g, "");
-      if (!/^\+\d{7,15}$/.test(to)) throw new Error("Enter a number with its country code, like +1 555 000 1234.");
+      if (!/^\+\d{7,15}$/.test(to)) {
+        throw new Error(K.txt("desktop.gate.badPhone", "Enter a number with its country code, like +1 555 000 1234."));
+      }
     } else {
       to = AUTH.email.trim();
-      if (!/.+@.+\..+/.test(to)) throw new Error("Enter your email address.");
+      if (!/.+@.+\..+/.test(to)) throw new Error(K.txt("desktop.gate.badEmail", "Enter your email address."));
     }
     AUTH.phase = "sending";
     paintGate();
@@ -2595,7 +2842,7 @@ async function oauth(provider) {
     if (!r || !r.ok) {
       // Closing the window is a decision, not a failure worth shouting about.
       if (r && r.error === "cancelled") return;
-      throw new Error((r && r.error) || "Sign-in failed.");
+      throw new Error((r && r.error) || K.txt("desktop.gate.signInFailed", "Sign-in failed."));
     }
     SESSION = r.session;
     location.reload();
@@ -2626,10 +2873,25 @@ function refreshDisc(method) {
 }
 
 (async function start() {
+  // Listen before asking, so nothing sent in between is missed: the main
+  // process pushes new knobs whenever it adopts a bootstrap, and asks for a
+  // screen when it refuses the hotkey for being out of words.
+  try { window.tailzuApp.onKnobs((k) => { K.setKnobs(k); paintFirst(); }); } catch { /* tray only */ }
+  try { window.tailzuApp.onNavigate((id) => navigateTo(id)); } catch { /* tray only */ }
+
   ENV = await window.tailzuApp.env();
   SESSION = ENV.session || null;
+  // The main process's cached bootstrap: the server's words and numbers for
+  // this first paint, before this window has asked the server anything.
+  if (ENV.knobs) K.setKnobs(ENV.knobs);
+  paintFirst();
+  if (ENV.navigate) PENDING_SCREEN = ENV.navigate;
 
-  $("dictate").addEventListener("click", () => { window.tailzuApp.dictate(); toast("Listening — " + (ENV.hotkey || "your hotkey") + " stops"); });
+  $("dictate").addEventListener("click", () => {
+    window.tailzuApp.dictate();
+    toast(K.txt("desktop.toast.listening", "Listening — {key} stops",
+      { key: ENV.hotkey || K.txt("desktop.toast.yourHotkey", "your hotkey") }));
+  });
   $("settingsLink").addEventListener("click", () => go("settings"));
   $("back").addEventListener("click", back);
   $("signOut").addEventListener("click", async () => {
@@ -2655,6 +2917,6 @@ function refreshDisc(method) {
     // A failed bootstrap must not leave a blank window with no way out.
     $("gate").hidden = false;
     $("shell").hidden = true;
-    fail("Couldn't reach the backend: " + ((e && e.message) || e));
+    fail(K.txt("desktop.gate.offline", "Couldn't reach the backend: {error}", { error: String((e && e.message) || e) }));
   }
 })();

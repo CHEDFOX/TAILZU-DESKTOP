@@ -19,8 +19,16 @@
       callbacks here capture their own session id and no-op when a NEWER
       session has started — so a stale watchdog, a late ws close, or a slow
       upload can never tear down or contaminate the session that replaced it.
+
+      KNOBS: every threshold, the microphone constraints and the error copy
+      here are the server's (knobs.js, desktop.recorder.* / desktop.mic.*),
+      handed over with each start-recording as `cfg.knobs`. The literals next
+      to each key are what they were before, and what a launch that never
+      reached the backend still uses.
     -->
+    <script src="knobs.js"></script>
     <script>
+      const K = window.TailzuKnobs;
       let cfg = {};
       let session = 0;      // id of the CURRENT session (from main)
       let stream = null;
@@ -42,6 +50,8 @@
       window.tailzu.onStart((c) => {
         cfg = c;
         session = c.session || 0;
+        // The knobs as of this press, from the main process's bootstrap.
+        if (c.knobs) K.setKnobs(c.knobs);
         // Defensive teardown: if a previous session is somehow still capturing
         // (state desync upstream), kill it completely before starting fresh —
         // never let two captures share the mic or a chunks array.
@@ -64,20 +74,27 @@
       //
       // Pausing therefore costs nothing — nothing ends, nothing is lost — and
       // the text appears as you go rather than all at once at the end.
-      const FLUSH_SILENCE_MS = 1200;   // long enough to be a breath, not a gap
-      const MIN_SEGMENT_MS = 700;      // never flush a cough
-      const IDLE_END_MS = 25000;       // walked away: close the mic ourselves
-      const SPEECH_LEVEL = 0.012;      // RMS floor; room tone sits well under
+      // The thresholds, read when the meter starts (so each session uses the
+      // knobs it was started with):
+      //   flushSilenceMs  long enough to be a breath, not a gap
+      //   minSegmentMs    never flush a cough
+      //   idleEndMs       walked away: close the mic ourselves
+      //   speechLevel     RMS floor; room tone sits well under
+      //   meterPollMs     how often the level is read
 
       let levelCtx = null, levelTimer = null, analyser = null;
       let speaking = false, lastSpeechAt = 0, segmentStartedAt = 0, flushing = false;
 
       function watchLevel(sid) {
+        const FLUSH_SILENCE_MS = K.num("desktop.recorder.flushSilenceMs", 1200);
+        const MIN_SEGMENT_MS = K.num("desktop.recorder.minSegmentMs", 700);
+        const IDLE_END_MS = K.num("desktop.recorder.idleEndMs", 25000);
+        const SPEECH_LEVEL = K.num("desktop.recorder.speechLevel", 0.012);
         try {
           levelCtx = new (window.AudioContext || window.webkitAudioContext)();
           const src = levelCtx.createMediaStreamSource(stream);
           analyser = levelCtx.createAnalyser();
-          analyser.fftSize = 512;
+          analyser.fftSize = K.num("desktop.recorder.fftSize", 512);
           src.connect(analyser);
         } catch { return; }   // no meter is survivable: it just never flushes
         const buf = new Float32Array(analyser.fftSize);
@@ -99,7 +116,7 @@
           } else if (!speaking && quietFor > IDLE_END_MS) {
             window.tailzu.idle({ session: sid });
           }
-        }, 120);
+        }, K.num("desktop.recorder.meterPollMs", 120));
       }
 
       function stopWatchingLevel() {
@@ -124,6 +141,8 @@
       function emitPartial(sid, text) { window.tailzu.partial({ session: sid, text: text }); }
 
       function base() { return (cfg.baseUrl || "").replace(/\/+$/, ""); }
+      /** The account's bearer, and no header at all without one. */
+      function auth() { return cfg.token ? { Authorization: "Bearer " + cfg.token } : {}; }
       function stopTracks() {
         if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
       }
@@ -170,13 +189,13 @@
         for (const k of ["micBlockedMac", "micBlockedWindows", "micMissing", "micBusy"]) {
           if (m === str(k)) return m;
         }
-        return "mic: " + m;
+        return K.txt("desktop.recorder.micError", "mic: {error}", { error: m });
       }
 
       async function getMic() {
         try {
           return await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+            audio: K.obj("desktop.mic.constraints", { echoCancellation: true, noiseSuppression: true, autoGainControl: true }),
           });
         } catch (err) {
           // THERE IS NO PERMISSION SCREEN HERE, AND THERE SHOULD NOT BE.
@@ -207,15 +226,15 @@
       }
 
       // ---- Per-tone refine routing (mirrors the mobile app/src/api.ts) -------
-      const LLM_TONES = ["formal", "casual", "very-casual", "excited"];
       async function refineText(text) {
         const tone = (cfg.tone || "none").toLowerCase();
+        const llmTones = K.list("desktop.recorder.llmTones", ["formal", "casual", "very-casual", "excited"]);
         const p = tone === "none" ? "/v1/refine/none"
-          : LLM_TONES.includes(tone) ? "/v1/refine/" + tone
+          : llmTones.includes(tone) ? "/v1/refine/" + tone
           : "/v1/refine";
         const res = await fetch(base() + p, {
           method: "POST",
-          headers: { Authorization: "Bearer " + cfg.token, "Content-Type": "application/json" },
+          headers: Object.assign({ "Content-Type": "application/json" }, auth()),
           body: JSON.stringify({ text, targetApp: "Desktop", language: cfg.language || "auto" }),
         });
         if (!res.ok) throw new Error("refine HTTP " + res.status);
@@ -225,7 +244,7 @@
 
       // ======================= BATCH =======================
       function pickMime() {
-        const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+        const candidates = K.list("desktop.mic.mimeTypes", ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]);
         for (const m of candidates) {
           if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
         }
@@ -271,7 +290,7 @@
             segmentStartedAt = Date.now();
           } catch (err) {
             stopTracks(); stopWatchingLevel();
-            emitError(sid, "could not continue recording: " + String(err));
+            emitError(sid, K.txt("desktop.recorder.continueFailed", "could not continue recording: {error}", { error: String(err) }));
             return;
           }
           void uploadBatch(sid, segment, type, true);
@@ -290,7 +309,7 @@
             stopTracks();
             // Nothing was ever recording — say so instead of dying silently
             // (this is the state a dropped start-recording IPC used to leave).
-            emitError(sid, "recorder was not running");
+            emitError(sid, K.txt("desktop.recorder.notRunning", "recorder was not running"));
           }
         } catch (err) {
           emitError(sid, String(err));
@@ -303,7 +322,7 @@
             // A flush with nothing in it is ordinary — they paused twice, or
             // the segment was all room tone. Only a FINAL stop with no audio
             // is worth telling anyone about.
-            if (!isSegment) emitError(sid, "no audio captured");
+            if (!isSegment) emitError(sid, K.txt("desktop.mic.noAudio", "no audio captured"));
             return;
           }
           const ext = type.includes("ogg") ? "ogg" : "webm";
@@ -316,12 +335,15 @@
           fd.append("tone", cfg.tone || "none");
           const res = await fetch(base() + "/v1/transcribe-clean", {
             method: "POST",
-            headers: { Authorization: "Bearer " + cfg.token },
+            headers: auth(),
             body: fd,
           });
           if (!res.ok) {
             const body = await res.text().catch(() => "");
-            emitError(sid, "HTTP " + res.status + (body ? " " + body.slice(0, 120) : ""));
+            emitError(sid, K.txt("desktop.recorder.httpError", "HTTP {status}{body}", {
+              status: res.status,
+              body: body ? " " + body.slice(0, K.num("desktop.recorder.errorBodyChars", 120)) : "",
+            }));
             return;
           }
           const json = await res.json();
@@ -348,7 +370,8 @@
           // A failed SEGMENT must not end the session: the mic is still open
           // and they are probably still talking. Tell them, keep going.
           if (isSegment) { window.tailzu.segment({ session: sid, text: "", failed: true }); return; }
-          emitError(sid, "upload: " + (err && err.message ? err.message : String(err)));
+          emitError(sid, K.txt("desktop.recorder.uploadFailed", "upload: {error}",
+            { error: err && err.message ? err.message : String(err) }));
         }
       }
 
@@ -388,7 +411,7 @@
             } else if (m.type === "done") {
               finishLive(sid);
             } else if (m.type === "error") {
-              emitError(sid, m.message || "stream error");
+              emitError(sid, m.message || K.txt("desktop.recorder.streamError", "stream error"));
               teardownLive();
             }
           };
@@ -443,7 +466,8 @@
         try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
         // If "done" never arrives (server hiccup), finish with what we have —
         // but only for THIS session (checked inside finishLive).
-        wsWatchdog = setTimeout(() => { if (sid === session && live) finishLive(sid); }, 4000);
+        wsWatchdog = setTimeout(() => { if (sid === session && live) finishLive(sid); },
+          K.num("desktop.recorder.liveTailMs", 4000));
       }
 
       function teardownLive() {
@@ -465,7 +489,8 @@
         const raw = previewText();
         teardownLive();
         if (!raw) {
-          emitError(sid, "no speech detected — check your microphone");
+          // The same sentence the batch path uses, server-drawn like it.
+          emitError(sid, str("noSpeech"));
           return;
         }
         // Same shape as mobile: stream gives the transcript, refine polishes it
