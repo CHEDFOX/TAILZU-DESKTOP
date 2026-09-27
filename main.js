@@ -1452,7 +1452,43 @@ function startedHidden() {
   try { return app.getLoginItemSettings().wasOpenedAtLogin === true; } catch { return false; }
 }
 
+/**
+ * DRAGGED TO THE TRASH IS UNINSTALLED.
+ *
+ * A Mac has no uninstaller: people drag the app to the Trash. A menu-bar app
+ * with no window keeps running from there, holding the hotkey, and its login
+ * item starts it again at the next login, from the Trash. So it checks that
+ * its own executable is still where it was started, and when it is not (or
+ * it was started from the Trash), it removes its login item and quits.
+ * Windows' uninstaller does the same from build/installer.nsh; the check is
+ * harmless there.
+ *
+ * Not a knob: this has to work on a machine that never reaches the server
+ * again.
+ */
+function watchForUninstall() {
+  if (!app.isPackaged) return;
+  const exe = process.execPath;
+  const gone = () => {
+    try { return exe.includes("/.Trash/") || !fs.existsSync(exe); } catch { return false; }
+  };
+  const check = () => {
+    if (!gone()) return false;
+    try { app.setLoginItemSettings({ openAtLogin: false }); } catch { /* best effort */ }
+    try { globalShortcut.unregisterAll(); } catch { /* quitting anyway */ }
+    app.quit();
+    return true;
+  };
+  if (check()) return true;
+  const timer = setInterval(check, 30000);
+  timer.unref?.();
+  return false;
+}
+
 app.whenReady().then(() => {
+  // Already in the Trash (a login item still pointing there): leave quietly.
+  if (watchForUninstall()) return;
+
   // WHO THE NOTIFICATIONS ARE FROM.
   //
   // Windows titles a notification with the app's user-model id, and an
