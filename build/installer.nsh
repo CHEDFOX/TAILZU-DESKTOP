@@ -6,6 +6,11 @@
 ; outlives the uninstall. Both are cleaned here.
 ;
 ; electron-builder picks this file up from build/ (nsis.include).
+;
+; And the account: package.json sets nsis.deleteAppDataOnUninstall, so an
+; uninstall removes %APPDATA%\Tailzu — session.json with it — and the next
+; install starts signed out. electron-builder skips that on an update (the
+; same isUpdated guard as below), so updating never signs anyone out.
 
 !macro customUnInit
   ; Before the files go: a copy still running would keep the hotkey, and

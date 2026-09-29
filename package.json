@@ -64,7 +64,7 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "deleteAppDataOnUninstall": false,
+      "deleteAppDataOnUninstall": true,
       "artifactName": "Tailzu-Setup.${ext}",
       "uninstallDisplayName": "${productName}",
       "installerIcon": "build/icon.ico",
