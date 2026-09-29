@@ -34,6 +34,7 @@
       "app.html",
       "sdui.js",
       "tapDetector.js",
+      "updater.js",
       "knobs.js",
       "neuralField.html",
       "assets/**"

@@ -68,4 +68,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // Apple / Google. The renderer cannot open a window or hold the PKCE
   // secret, so it asks and gets back a session or an error string.
   oauth: (provider) => ipcRenderer.invoke("app:oauth", provider),
+  // The update card: install this build in place of the running one. The
+  // main process checks the address and the checksum; progress comes back.
+  installUpdate: (u) => ipcRenderer.invoke("app:installUpdate", u),
+  onUpdateProgress: (cb) => ipcRenderer.on("app:updateProgress", (_e, p) => cb(p)),
 });

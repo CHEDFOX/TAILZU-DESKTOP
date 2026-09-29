@@ -70,6 +70,10 @@ const COMPONENTS = [
   // the server keeps the field off the desk's pages for those.
   "DeskField",
 ];
+// Declared only by a copy that can put an update in place of itself (the main
+// process knows: updater.js). The server then sends the one-click update card;
+// a copy that cannot gets the download link.
+const SELF_UPDATE = "DeskSelfUpdate";
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -93,6 +97,8 @@ const ACTIONS = [
   // live on this computer (the pill, the shortcut), a microphone started from
   // a page, and a way out of the account from the settings page itself.
   "copyText", "desktop.config", "dictate", "signOut",
+  // The update card's button: download, check and install the new build here.
+  "installUpdate",
 ];
 
 /**
@@ -260,7 +266,7 @@ function capabilities() {
     // room it has, so the server laid a phone column down the middle of a
     // window. It reads the viewport now.
     platform: "ios",
-    components: COMPONENTS,
+    components: ENV && ENV.selfUpdate ? COMPONENTS.concat(SELF_UPDATE) : COMPONENTS,
     actions: ACTIONS,
     templates: [],
     device: {
@@ -1555,6 +1561,42 @@ function manageAt() {
   };
 }
 
+/**
+ * The update card's button. The main process downloads, checks and installs;
+ * this only keeps the card's line honest while it does — the server sent the
+ * words for each step, and the percentage is filled in here. On success the
+ * app quits and the new build opens, so there is no "done" to show.
+ */
+let updateListening = false, updatePaintAt = 0;
+async function installUpdate(action) {
+  const words = action.words || {};
+  const say = (key, vars) => String(words[key] || "").replace(/\{(\w+)\}/g, (_, k) => (vars && vars[k] != null ? String(vars[k]) : ""));
+  const show = (busy, line) => { setStatePath("upd.busy", busy); setStatePath("upd.line", line || undefined); repaint(); };
+  if (!window.tailzuApp.installUpdate) { window.tailzuApp.openExternal(action.url); return; }
+  if (!updateListening) {
+    updateListening = true;
+    window.tailzuApp.onUpdateProgress((p) => {
+      if (!p) return;
+      const now = Date.now();
+      // Every percent would repaint the page a hundred times; a few a second is enough to read.
+      if (p.phase === "downloading" && now - updatePaintAt < 200 && p.pct < 99) return;
+      updatePaintAt = now;
+      show(true, p.phase === "installing" ? say("installing") : say("downloading", { pct: p.pct || 0 }));
+    });
+  }
+  show(true, say("downloading", { pct: 0 }));
+  let r;
+  try { r = await window.tailzuApp.installUpdate({ url: action.url, version: action.version, sha512: action.sha512 }); }
+  catch { r = { ok: false, reason: "failed" }; }
+  if (r && r.ok) return;
+  if (r && r.reason === "unsupported") {
+    window.tailzuApp.openExternal(action.url);
+    show(false, say("manual"));
+    return;
+  }
+  show(false, say("failed"));
+}
+
 function buyOnWeb() {
   const flags = (BOOT && BOOT.flags) || {};
   // A SECOND SUBSCRIPTION IS THE ONE MISTAKE THIS WINDOW CAN MAKE WITH
@@ -1995,6 +2037,7 @@ async function run(action, eventValue) {
     case "haptic": return;                      // no equivalent, and none faked
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(action.url); return;
+    case "installUpdate": return installUpdate(action);
 
     // ── buying ────────────────────────────────────────────────────────────
     // Every row on the paywall fires one of these, and this window answered

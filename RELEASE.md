@@ -101,11 +101,22 @@ was actually **downloaded** — a build sitting in your own `dist/` folder skips
 the quarantine flag, so it will open on your machine whether or not
 notarization worked.
 
-## What this does not do yet
+## Updates
 
-There is no auto-update. Every release is a fresh download from the page.
-electron-updater plus a published feed is the answer when the installed base is
-large enough to care.
+From 0.2.2 a build installs its own updates (updater.js). Publishing records
+the installer's SHA-512 beside it (receive-download.sh, backend), and the
+window's update card gets an "Update now" button: it downloads the new build
+from tailzu.space, checks it against that checksum, puts it in place of the
+running one and restarts on it, still signed in. Windows runs the installer
+silently over the install; macOS swaps the .app; Linux swaps the AppImage.
+
+A copy that cannot replace itself (a Mac app run from the disk image, an
+Applications folder the user cannot write to, a Linux build that is not an
+AppImage) gets the download link instead. Builds before 0.2.2 have no updater,
+so reaching 0.2.2 is one last manual download.
+
+On a Mac, until the app is signed with a Developer ID, macOS treats each new
+build as a new app: it may ask again for the microphone and Accessibility.
 
 ### 0.2.2 — the network shows
 
@@ -122,6 +133,9 @@ tried once more before the raw words are pasted.
 
 Publishing now sends the version with each installer; every older install
 on that OS sees an update card in its window.
+
+Updates install from the window: "Update now" downloads the new build, checks
+its SHA-512, swaps it in and restarts (see Updates above).
 
 Live dictation writes from the whole recording: the stream only draws the
 captions, and on stop the audio goes through /v1/transcribe-clean like every

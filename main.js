@@ -23,6 +23,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { createTapDetector } = require("./tapDetector.js");
+const updater = require("./updater.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -307,8 +308,10 @@ function scheduleBootRefresh() {
 }
 
 // ---- Updates ---------------------------------------------------------------
-// There is no auto-updater, so the server says which build is current and
-// which is the oldest it still supports, and this says so to the user.
+// The server says which build is current and which is the oldest it still
+// supports, and this says so to the user. A copy that can install its own
+// update (updater.js) sends them to the window's card, where one click does
+// it; one that cannot sends them to the download.
 
 /** Dotted numbers, compared as numbers: 0.1.10 is newer than 0.1.9. A part
  *  that is not a number counts as 0, so "1.2" equals "1.2.0". */
@@ -327,7 +330,8 @@ function checkForUpdate() {
   const current = app.getVersion();
   const latest = String(u.latest || ""), min = String(u.min || "");
   const url = typeof u.url === "string" && /^https?:\/\//i.test(u.url) ? u.url : "";
-  const open = url ? () => { shell.openExternal(url).catch(() => {}); } : null;
+  const inApp = typeof u.sha512 === "string" && /^[a-f0-9]{128}$/i.test(u.sha512) && updater.canSelfUpdate();
+  const open = inApp ? () => openAppWindow() : url ? () => { shell.openExternal(url).catch(() => {}); } : null;
   const vars = { current, latest: latest || min, min, notes: String(u.notes || "") };
   if (min && compareVersions(current, min) < 0) {
     if (requiredAnnounced === min) return;
@@ -341,7 +345,9 @@ function checkForUpdate() {
   if (latest && compareVersions(current, latest) < 0 && localState.updateAnnounced !== latest) {
     localState.updateAnnounced = latest;
     saveLocalState();
-    notify(txt("desktop.notify.updateAvailable", "Tailzu {latest} is available. Click to download it.", vars), open);
+    notify(inApp
+      ? txt("desktop.notify.updateReady", "Tailzu {latest} is ready. Click to update.", vars)
+      : txt("desktop.notify.updateAvailable", "Tailzu {latest} is available. Click to download it.", vars), open);
   }
 }
 
@@ -1270,6 +1276,9 @@ ipcMain.handle("app:env", () => {
     // has launched, counted once per launch here so both surfaces agree.
     appVersion: app.getVersion(),
     launchCount: Number(localState.launchCount) || 1,
+    // Whether this copy can put an update in place of itself. The window
+    // tells the server, which then sends the one-click card.
+    selfUpdate: updater.canSelfUpdate(),
     // The cached knobs, so the first paint is already the server's.
     knobs: knobsPayload(),
     // A screen the main process asked for before the page could hear it.
@@ -1319,6 +1328,18 @@ ipcMain.on("app:openExternal", (_e, url) => {
   if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 ipcMain.on("app:dictate", () => toggleDictation());
+// The update card's button. The window names the build; updater.js checks the
+// address, the version and the checksum itself, downloads, verifies, and puts
+// it in place. Then this quits so the swap can finish and the new build start.
+ipcMain.handle("app:installUpdate", async (e, u) => {
+  if (!appWin || appWin.isDestroyed() || e.sender !== appWin.webContents) return { ok: false, reason: "refused" };
+  const version = String((u && u.version) || "");
+  if (compareVersions(app.getVersion(), version) >= 0) return { ok: false, reason: "current" };
+  const send = (p) => { try { if (!e.sender.isDestroyed()) e.sender.send("app:updateProgress", p); } catch { /* window gone */ } };
+  const r = await updater.update({ url: u && u.url, version, sha512: u && u.sha512 }, send);
+  if (r.ok) setTimeout(() => { quitting = true; app.quit(); }, 300);
+  return r;
+});
 // Apple / Google. The window asks; the main process owns the browser window,
 // the PKCE secret and the code exchange, and hands back only the session.
 ipcMain.handle("app:oauth", async (_e, provider) => {
