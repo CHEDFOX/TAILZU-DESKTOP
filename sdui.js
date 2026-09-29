@@ -882,12 +882,12 @@ function node(n) {
     case "SwipeAction": {
       // THE WAY IN. On a phone it is dragged, because a live microphone
       // deserves a held intention. A mouse has no thumb to rest, so here it is
-      // the same object as a button — same label, same colours, same amber far
+      // the same object as a button — same label, same colours, same pale far
       // end — and a click commits it. The gesture was never the point; the
       // deliberateness was, and a click on a pill this size is deliberate.
       const d = K.obj("desktop.swipeAction", {
         height: 58, radius: 999, background: "#0B0B0D", color: "#fff", fontSize: 12, weight: 700,
-        tracking: 1.8, disc: 46, target: "#C9862B",
+        tracking: 1.8, disc: 46, target: "#F3E2C6",
       });
       const h = Number(p.height) || d.height;
       const disc = Number(p.disc) || d.disc;
@@ -1032,10 +1032,10 @@ function chatDefaults() {
   return K.obj("desktop.chat.style", {
     askBg: "rgba(255,255,255,0.06)", askBorder: "rgba(255,255,255,0.09)",
     askText: "rgba(255,255,255,0.9)", mineBg: "#FFFFFF", mineText: "#000000",
-    noteText: "#E8A23C", noteBg: "rgba(232,162,60,0.1)", noteBorder: "rgba(232,162,60,0.26)",
+    noteText: "#F3E2C6", noteBg: "rgba(243,226,198,0.1)", noteBorder: "rgba(243,226,198,0.26)",
     variantBg: "rgba(255,255,255,0.05)", variantBorder: "rgba(255,255,255,0.1)",
     variantText: "rgba(255,255,255,0.92)", angleText: "rgba(255,255,255,0.4)",
-    pickedBg: "rgba(232,162,60,0.13)", pickedBorder: "#E8A23C",
+    pickedBg: "rgba(243,226,198,0.13)", pickedBorder: "#F3E2C6",
     labelText: "rgba(255,255,255,0.38)", radius: 16, gap: 11,
     tail: 5, fontSize: 14.5, mineLineHeight: 21, askLineHeight: 22, noteSize: 11,
     optionRadius: 14, optionSize: 14, optionLineHeight: 21, labelSize: 10.5,
@@ -1118,8 +1118,9 @@ function voiceButton(n, p, s) {
     esc(on ? K.txt("desktop.voice.stop", "Stop and transcribe") : K.txt("desktop.voice.record", "Record")) + '"' +
     ' style="' + s + ";flex:none;width:" + size + "px;height:" + size + "px;border-radius:50%;cursor:pointer" +
     ";border:0;display:flex;align-items:center;justify-content:center;background:" +
-    esc(tok(on ? K.color("desktop.voice.liveBackground", "#e0556b")
-               : (p.background || K.color("desktop.voice.background", "#E8A23C")))) + '">' +
+    // Amber ONLY while it is recording — the one live thing; pale ink at rest.
+    esc(tok(on ? K.color("desktop.voice.liveBackground", "#E8A23C")
+               : (p.background || K.color("desktop.voice.background", "#F3E2C6")))) + '">' +
     // A filled circle while live, the mic glyph at rest. Drawn rather than
     // loaded: the phones use an uploaded icon, and a window that waited on
     // that upload would show an empty button until somebody made one.
@@ -1329,7 +1330,9 @@ function startSession(n) {
       say("assistant", reply);
       setState_("speaking");
       setLevel(LV.speaking);
-      speak(reply, () => { if (r.alive) void listen(); });
+      // The server names the voice for this reply (speak: "bn-IN") from its
+      // script: someone who switched to Bengali is answered in Bengali.
+      speak(reply, () => { if (r.alive) void listen(); }, res && typeof res.speak === "string" ? res.speak : "");
     } catch (err) {
       fail((err && err.message) ? err.message : K.txt("desktop.voice.replyFailed", "Couldn't reach the conversation."));
     }
@@ -1338,13 +1341,14 @@ function startSession(n) {
   /** Out loud, then back to listening. A browser with no voices installed
    *  resolves immediately rather than hanging the loop on an utterance that
    *  will never fire `onend`. */
-  function speak(text, done) {
+  function speak(text, done, voice) {
     try {
       const synth = window.speechSynthesis;
       if (!synth) { done(); return; }
       synth.cancel();
       const u = new SpeechSynthesisUtterance(text);
-      if (r.language && r.language !== "auto") u.lang = r.language;
+      if (voice) u.lang = voice;
+      else if (r.language && r.language !== "auto") u.lang = r.language;
       u.onend = done;
       u.onerror = done;
       synth.speak(u);
@@ -1649,7 +1653,7 @@ function pillDefaults() {
   return K.obj("desktop.pill", {
     height: 56, fontSize: 15, background: "rgba(255,255,255,0.06)", border: "rgba(255,255,255,0.10)",
     text: "rgba(255,255,255,0.96)", badge: "rgba(255,255,255,0.10)", badgeBorder: "rgba(255,255,255,0.18)",
-    target: "#C9862B", targetIcon: "#000000", codeFontSize: 17, codeSpacing: 8,
+    target: "#F3E2C6", targetIcon: "#000000", codeFontSize: 17, codeSpacing: 8,
   });
 }
 

@@ -1,7 +1,14 @@
-// Generates assets/tray.png — the 32×32 menu-bar / system-tray mark: an amber
-// dot in the Tailzu accent #E8A23C, drawn with pure Node (zlib + a hand-rolled
-// PNG encoder) so a real, valid icon lives in the repo without shipping a
-// binary blob by hand. Run: npm run icon.
+// Generates the 32×32 menu-bar / system-tray marks, drawn with pure Node (zlib
+// + a hand-rolled PNG encoder) so real, valid icons live in the repo without
+// shipping a binary blob by hand. Run: npm run icon.
+//
+//   assets/tray.png       at rest: a neutral grey dot (#8E8E93). Amber is only
+//                         for what is live, and an idle tray is not. Grey reads
+//                         on a light or a dark bar; on macOS main.js also marks
+//                         it a template image, so the menu bar inks it itself.
+//   assets/tray-live.png  while recording: the same dot in the Tailzu accent
+//                         #E8A23C. main.js swaps to it (refreshTray) for as
+//                         long as the microphone is open.
 //
 // It does NOT touch assets/icon.png any more. That used to be generated here
 // too, and it is now the real brand mark — running this script would have
@@ -15,11 +22,9 @@ const zlib = require("zlib");
 const fs = require("fs");
 const path = require("path");
 
-const R = 0xe8, G = 0xa2, B = 0x3c;
-
-// RGBA scanlines for a SIZE×SIZE anti-aliased disc, each row prefixed with a
-// filter byte (0 = none).
-function drawDot(SIZE) {
+// RGBA scanlines for a SIZE×SIZE anti-aliased disc in [R, G, B], each row
+// prefixed with a filter byte (0 = none).
+function drawDot(SIZE, [R, G, B]) {
   const raw = Buffer.alloc((SIZE * 4 + 1) * SIZE);
   let o = 0;
   const c = (SIZE - 1) / 2, rad = SIZE / 2 - 1;
@@ -57,7 +62,7 @@ function chunk(type, data) {
   return Buffer.concat([len, t, data, crc]);
 }
 
-function encodePng(SIZE) {
+function encodePng(SIZE, rgb) {
   const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(SIZE, 0);
@@ -67,7 +72,7 @@ function encodePng(SIZE) {
   return Buffer.concat([
     sig,
     chunk("IHDR", ihdr),
-    chunk("IDAT", zlib.deflateSync(drawDot(SIZE))),
+    chunk("IDAT", zlib.deflateSync(drawDot(SIZE, rgb))),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
@@ -76,8 +81,10 @@ const outDir = path.join(__dirname, "assets");
 fs.mkdirSync(outDir, { recursive: true });
 // icon.png: macOS icns generation REQUIRES ≥512×512 (the mac CI job failed at
 // 256 with "must be at least 512x512"); Windows/Linux accept 512 and downscale.
-for (const [name, size] of [["tray.png", 32]]) {
-  const png = encodePng(size);
+const REST = [0x8e, 0x8e, 0x93];   // neutral grey — the idle tray
+const LIVE = [0xe8, 0xa2, 0x3c];   // the accent — only while recording
+for (const [name, size, rgb] of [["tray.png", 32, REST], ["tray-live.png", 32, LIVE]]) {
+  const png = encodePng(size, rgb);
   fs.writeFileSync(path.join(outDir, name), png);
   console.log(`wrote assets/${name}`, png.length, "bytes");
 }
