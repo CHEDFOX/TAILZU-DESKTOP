@@ -52,6 +52,11 @@
   html,body { height:100%; margin:0; }
   body {
     background:var(--bg); color:var(--body);
+  }
+  /* The desk's ground from the first frame, when this window was a desk last
+     time (sdui.js rememberedLook) — never black, then white. */
+  html[data-look="desk"] body { background:var(--d-sheet); }
+  body {
     font:15px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased; overflow:hidden;
   }

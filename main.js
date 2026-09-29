@@ -16,7 +16,7 @@
 
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
-  ipcMain, clipboard, Notification, nativeImage, session, shell,
+  ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme,
 } = require("electron");
 const { execFile } = require("child_process");
 const path = require("path");
@@ -850,7 +850,15 @@ function openAppWindow(screenId) {
     width: num("desktop.window.width", 1120), height: num("desktop.window.height", 780),
     minWidth: num("desktop.window.minWidth", 380), minHeight: num("desktop.window.minHeight", 520),
     title: txt("desktop.window.title", "Tailzu"),
-    backgroundColor: color("desktop.window.background", "#000000"),
+    // THE FIRST FRAME IS THE DESK'S, NOT A BLACK ONE. The window used to open
+    // at once on black, then paint the old rail while the page asked the
+    // server which look to use — a glimpse of the previous version on every
+    // open. It now opens on the desk's own sheet, light or dark as the system
+    // is, and stays hidden until the page has drawn.
+    backgroundColor: bool("desktop.desk", false)
+      ? (nativeTheme.shouldUseDarkColors ? "#151210" : "#FFFFFF")
+      : color("desktop.window.background", "#000000"),
+    show: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -858,6 +866,7 @@ function openAppWindow(screenId) {
       nodeIntegration: false,
     },
   });
+  appWin.once("ready-to-show", () => { if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); } });
   hardenWindow(appWin);
   // "hide" puts it away and keeps its boot (a tray app's close means that);
   // "close" really closes it, and the tray builds a fresh one next time.

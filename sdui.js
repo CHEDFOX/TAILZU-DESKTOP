@@ -2729,10 +2729,29 @@ function applyGateLayout(l) {
 // A window that is resized across `wideAt` changes which layout applies.
 window.addEventListener("resize", () => applyGateLayout());
 
+/**
+ * THE LOOK THIS WINDOW HAD LAST TIME, before the server has said.
+ *
+ * The shell was revealed the moment a session existed and told which look to
+ * wear only once bootstrap came back — so every open showed the old rail
+ * ("Dictate now", "Sign out") on black for a round trip, then swapped. The
+ * look is remembered, applied to the first frame, and the shell stays hidden
+ * until the server's answer is in.
+ */
+const LOOK_KEY = "tz.look";
+function rememberedLook() {
+  try { return localStorage.getItem(LOOK_KEY) === "desk" ? "desk" : ""; } catch { return ""; }
+}
+if (rememberedLook() === "desk") {
+  document.documentElement.dataset.look = "desk";
+  const sh = document.getElementById("shell");
+  if (sh) sh.dataset.look = "desk";
+}
+
 async function render() {
   const signedIn = !!(SESSION && SESSION.access_token);
   $("gate").hidden = signedIn;
-  $("shell").hidden = !signedIn;
+  $("shell").hidden = true;
   if (!signedIn) {
     // Ask as a stranger, so the gate is drawn by the same server that draws
     // everything behind it. A failure here is not fatal: the markup already
@@ -2755,6 +2774,8 @@ async function render() {
   paintChrome(BOOT.flags && BOOT.flags["desktop.shell"]);
   DESK = !!(BOOT.flags && BOOT.flags["desktop.desk"] === true);
   $("shell").dataset.look = DESK ? "desk" : "rail";
+  document.documentElement.dataset.look = DESK ? "desk" : "";
+  try { localStorage.setItem(LOOK_KEY, DESK ? "desk" : "rail"); } catch { /* next open just waits */ }
   TABS = BOOT.navigation && BOOT.navigation.kind === "tabs" ? BOOT.navigation.tabs : [];
   renderTabs();
   paintMast();
@@ -2777,6 +2798,8 @@ async function render() {
   // of the landing tab, so Back still leads somewhere.
   if (PENDING_SCREEN && PENDING_SCREEN !== STACK[0].screenId) STACK.push({ screenId: PENDING_SCREEN });
   PENDING_SCREEN = null;
+  // Shown now, in the look the server chose, with its first page on the way.
+  $("shell").hidden = false;
   await paint();
 }
 
