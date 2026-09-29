@@ -19,7 +19,7 @@
   @font-face { font-family:"Instrument Sans"; font-weight:400; font-display:swap; src:url(assets/fonts/instrument-sans-latin-400-normal.woff2) format("woff2"); }
   @font-face { font-family:"Instrument Sans"; font-weight:500; font-display:swap; src:url(assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
   @font-face { font-family:"Instrument Sans"; font-weight:600; font-display:swap; src:url(assets/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
-  @font-face { font-family:"Noto Sans Devanagari"; font-weight:400; font-display:swap; src:url(assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
+  @font-face { font-family:"Noto Sans Devanagari"; font-weight:100 900; font-display:swap; src:url(assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
 
   /* THE DESK'S TOKENS. Paper and ink in light, ink and pale in dark, the
      site's own rooms for colour. The server can retune any of these
@@ -133,8 +133,8 @@
   .d-em { font-style:italic; }
   .d-lede { color:var(--d-ink2); font:400 14px/1.55 var(--f-ui); max-width:60ch; }
   .d-count { font:500 11.5px/1.2 var(--f-label); letter-spacing:.14em; text-transform:uppercase; }
-  .d-said { font:600 19px/1.3 var(--f-said); color:var(--d-ink3); }
-  .d-written { font:400 19px/1.45 var(--f-written); color:var(--d-ink); }
+  .d-said { font:600 19px/1.3 var(--f-said); color:var(--d-ink3); white-space:pre-line; font-synthesis:none; }
+  .d-written { font:400 19px/1.45 var(--f-written); color:var(--d-ink); white-space:pre-line; }
   .d-deva { font-family:var(--f-deva); font-size:17px; }
   .d-margin { font:500 11px/1.5 var(--f-label); letter-spacing:.08em; text-transform:uppercase; color:var(--d-ink3); }
   .d-margin-strong { font:500 11px/1.5 var(--f-label); letter-spacing:.08em; color:var(--d-ink2); }
