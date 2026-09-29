@@ -66,6 +66,7 @@
       "perMachine": false,
       "deleteAppDataOnUninstall": false,
       "artifactName": "Tailzu-Setup.${ext}",
+      "uninstallDisplayName": "${productName}",
       "include": "build/installer.nsh"
     },
     "linux": {
