@@ -919,7 +919,8 @@ function sendToRecorder(channel, payload) {
 // words as you speak (live mode). Click-through + non-focusable so it can never
 // steal the paste target.
 function showOverlay() {
-  if (overlayWin && !overlayWin.isDestroyed()) { overlayWin.show(); return; }
+  // Same rule as the pill: over the app they are in, however it got there.
+  if (overlayWin && !overlayWin.isDestroyed()) { overlayWin.showInactive(); raisePill(overlayWin); return; }
   const wa = screen.getPrimaryDisplay().workArea;
   const w = num("desktop.overlay.width", 560), h = num("desktop.overlay.height", 84);
   overlayWin = new BrowserWindow({
@@ -934,6 +935,8 @@ function showOverlay() {
       nodeIntegration: false,
     },
   });
+  try { overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
+  raisePill(overlayWin);
   overlayWin.setIgnoreMouseEvents(true);
   hardenWindow(overlayWin);
   overlayWin.loadFile("overlay.html");
@@ -996,16 +999,42 @@ function createPillWindow() {
       backgroundThrottling: false,
     },
   }));
-  try { pillWin.setAlwaysOnTop(true, str("desktop.pill.level", "floating")); } catch { /* default level */ }
-  try { pillWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* one space */ }
+  // On every space and over full-screen apps FIRST: on macOS this call resets
+  // the window's level, so the level is set after it, not before.
+  try { pillWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
+  raisePill(pillWin);
   pillWin.setIgnoreMouseEvents(true, { forward: true });
   hardenWindow(pillWin);
   pillWin.webContents.on("did-finish-load", () => {
     pillSend(Object.assign({ state: pillState }, pillData, { hint: pillHint(), rest: bool("desktop.pill.rest", true) }));
-    if (pillOn()) pillWin.showInactive();
+    if (pillOn()) { pillWin.showInactive(); raisePill(pillWin); }
   });
   pillWin.loadFile("pill.html");
   return pillWin;
+}
+
+/**
+ * ABOVE WHATEVER THEY ARE WRITING IN, EVERY TIME.
+ *
+ * The pill sat at the "floating" level, set once. A full-screen app, a video
+ * call's always-on-top window, or Windows handing the topmost band to the app
+ * just clicked all covered it, and it stayed covered: someone talking to it
+ * could not see it listen. It now sits at the screen-saver level, the highest
+ * a window can ask for, and claims it again every time it changes state, and
+ * every second or so while a dictation is running.
+ */
+function raisePill(w) {
+  if (!w || w.isDestroyed()) return;
+  try { w.setAlwaysOnTop(true, str("desktop.pill.level", "screen-saver"), 1); } catch { /* default level */ }
+  try { w.moveTop(); } catch { /* not supported here */ }
+}
+let pillGuard = null;
+function guardPill(on) {
+  if (on && !pillGuard) {
+    pillGuard = setInterval(() => {
+      if (pillWin && !pillWin.isDestroyed() && pillWin.isVisible()) raisePill(pillWin);
+    }, num("desktop.pill.raiseEveryMs", 1200));
+  } else if (!on && pillGuard) { clearInterval(pillGuard); pillGuard = null; }
 }
 
 function pillSend(m) {
@@ -1020,6 +1049,9 @@ function pill(state, data) {
   if (state === "listening") { try { w.setBounds(pillBounds()); } catch { /* keep its place */ } }
   pillSend(Object.assign({ state, hint: pillHint() }, data || {}));
   if (!w.isVisible() && !w.webContents.isLoading()) w.showInactive();
+  raisePill(w);
+  // Held on top for as long as it is listening or writing.
+  if (state !== "caption" && state !== "flash") guardPill(state === "listening" || state === "writing");
 }
 
 /** Words, counted the way a reader counts them — Devanagari and Latin alike,

@@ -123,6 +123,12 @@ tried once more before the raw words are pasted.
 Publishing now sends the version with each installer; every older install
 on that OS sees an update card in its window.
 
+Live dictation writes from the whole recording: the stream only draws the
+captions, and on stop the audio goes through /v1/transcribe-clean like every
+other dictation (no doubled sentences, no rough stream text). The pill and the
+caption overlay sit at the screen-saver level and reclaim the top while a
+dictation runs, so no app can cover them.
+
 Opening the window no longer flashes the old rail on black: the window stays
 hidden until its first frame is drawn, on the desk's own sheet, and the page
 keeps the shell hidden until the server has said which look to wear.

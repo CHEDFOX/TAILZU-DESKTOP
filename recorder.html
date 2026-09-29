@@ -48,6 +48,9 @@
       let wsWatchdog = null;
       // The second engine's reading, when the stream's `done` carried one.
       let doneAlternative = "";
+      // THE WHOLE RECORDING, kept beside the stream. See startLive: the text
+      // that is pasted comes from this, and the stream only draws captions.
+      let liveRec = null, liveChunks = [], recordedSession = 0;
       // What this session has already written, pause by pause. Each stretch
       // after the first is sent with it as context, so it is written as the
       // continuation it is rather than as a new message: no capital after a
@@ -223,6 +226,8 @@
         } catch {}
         mediaRecorder = null;
         chunks = [];
+        if (liveRec) { try { liveRec.ondataavailable = liveRec.onstop = null; if (liveRec.state !== "inactive") liveRec.stop(); } catch {} liveRec = null; }
+        liveChunks = [];
         teardownLiveGraph();
         if (ws) {
           ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
@@ -480,6 +485,23 @@
           stream = await getMic();
           if (sid !== session) { stopTracks(); return; } // superseded while awaiting the mic
           startBands(sid, stream);
+          // LIVE IS FOR SEEING, NOT FOR WRITING.
+          //
+          // The pasted text used to be built from the stream's finals — a
+          // quicker, rougher reading than the whole clip gets, which a second
+          // engine could interleave and double — and then refined as bare text.
+          // Words were misheard, sentences came twice, and instructions stayed
+          // in. Now the whole recording is kept beside the stream and, when the
+          // person stops, goes through /v1/transcribe-clean: the same recogniser
+          // fusion, instruction split and writing as every other dictation. The
+          // captions still move as they talk; they just are not what is sent.
+          liveChunks = [];
+          try {
+            const mimeType = pickMime();
+            liveRec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+            liveRec.ondataavailable = (e) => { if (e.data && e.data.size) liveChunks.push(e.data); };
+            liveRec.start();
+          } catch { liveRec = null; }   // no recorder: the stream's text is the fallback
           ws = new WebSocket(wsUrl());
           ws.binaryType = "arraybuffer";
           // Browser WebSocket can't set an Authorization header; the protocol
@@ -503,6 +525,9 @@
               doneAlternative = typeof m.alternative === "string" ? m.alternative.trim() : "";
               finishLive(sid);
             } else if (m.type === "error") {
+              // Captions lost while the recording carries on: nothing to tell
+              // them, the words are still being kept.
+              if (liveRec && liveRec.state === "recording") { dropStream(); return; }
               emitError(sid, m.message || K.txt("desktop.recorder.streamError", "stream error"));
               teardownLive();
             }
@@ -553,6 +578,17 @@
       }
 
       function stopLive(sid) {
+        // The recording first, so its last words are in before the mic closes.
+        if (liveRec && liveRec.state !== "inactive") {
+          const rec = liveRec;
+          rec.onstop = () => {
+            const parts = liveChunks.slice(); liveChunks = [];
+            const type = rec.mimeType || "audio/webm";
+            if (liveRec === rec) liveRec = null;
+            void uploadBatch(sid, parts, type, false);
+          };
+          try { rec.stop(); recordedSession = sid; } catch { liveRec = null; }
+        }
         teardownLiveGraph();
         stopTracks();
         try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
@@ -576,10 +612,26 @@
         }
       }
 
+      /** Close the caption stream alone, leaving the microphone and the
+       *  recording running. */
+      function dropStream() {
+        if (!ws) return;
+        ws.onclose = ws.onmessage = ws.onerror = ws.onopen = null;
+        try { ws.close(); } catch {}
+        ws = null;
+      }
+
       async function finishLive(sid) {
         if (sid !== session || !live) return;
+        // The stream ended before they did: the captions stop, the recording
+        // goes on, and stopping still writes it.
+        if (liveRec && liveRec.state === "recording") { dropStream(); return; }
         const raw = previewText();
+        // The recording is being written (stopLive → uploadBatch): the stream
+        // only had to draw the captions, and it has.
+        const recorded = recordedSession === sid || liveChunks.length > 0;
         teardownLive();
+        if (recorded) return;
         if (!raw) {
           // The same sentence the batch path uses, server-drawn like it.
           emitError(sid, str("noSpeech"));
