@@ -59,7 +59,7 @@
       "target": [
         "nsis"
       ],
-      "icon": "assets/icon.png"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": true,
@@ -67,6 +67,9 @@
       "deleteAppDataOnUninstall": false,
       "artifactName": "Tailzu-Setup.${ext}",
       "uninstallDisplayName": "${productName}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
       "include": "build/installer.nsh"
     },
     "linux": {
