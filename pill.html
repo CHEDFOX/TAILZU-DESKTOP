@@ -1,0 +1,388 @@
+<!doctype html>
+<!--
+  THE PILL. What dictation looks like on a desktop, at the foot of the screen,
+  over whatever you are writing in.
+
+  One idea carries every state: three small squares, the atoms of the mark.
+
+    rest       a slim capsule holding the three squares; hover opens it with
+               the way in ("Tap Ctrl twice to talk"), a click starts talking
+    listening  the squares multiply into bars that move with your voice,
+               amber because the microphone is open (the one amber the brand
+               allows: something live); ✕ discards, ✓ finishes
+    flash      a pause wrote a chunk while you keep talking: a pulse runs out
+               from the middle
+    writing    the bars fall back into squares and roll like a wave
+    done       "✓ 12 words", the check born amber and settling, then rest
+    error      a short sentence, rose, then rest
+
+  Drawn on a canvas so it is exact at any scale. Every size, colour, timing
+  and word is a knob (desktop.pill.*); the literals below are only for the
+  moment before the first bootstrap.
+
+    pill.html                 the window main.js opens (transparent, click-through
+                              until the pointer is over the pill)
+    pill.html?demo            a scripted run over a mock document, for review
+    pill.html?demo&capture    the same on a virtual clock: window.__step(ms)
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tailzu</title>
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; cursor: default; }
+  canvas { position: fixed; left: 0; top: 0; }
+  /* The review page only: a document being written into, so the pill is seen
+     where it lives. */
+  body.demo { background: #DAD6CF; font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  .doc { position: absolute; left: 50%; top: 34px; transform: translateX(-50%); width: 620px; height: 250px; background: #FFFFFF;
+    border-radius: 12px; box-shadow: 0 1px 0 rgba(0,0,0,.05), 0 12px 32px rgba(0,0,0,.12); padding: 26px 34px; box-sizing: border-box; color: #1B1712; }
+  .doc .bar { position: absolute; left: 0; right: 0; top: 0; height: 30px; border-bottom: 1px solid #EEE9E1; border-radius: 12px 12px 0 0; background: #FAF8F4; }
+  .doc .bar i { position: absolute; top: 11px; width: 9px; height: 9px; border-radius: 50%; background: #DDD6CC; }
+  .doc h4 { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: #8A8175; letter-spacing: .06em; text-transform: uppercase; }
+  .doc p { margin: 0 0 8px; }
+  .doc .caret { display: inline-block; width: 2px; height: 18px; background: #1B1712; vertical-align: -3px; margin-left: 1px; animation: b 1s steps(1) infinite; }
+  @keyframes b { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="knobs.js"></script>
+<script>
+(function () {
+"use strict";
+const K = window.TailzuKnobs;
+const q = new URLSearchParams(location.search), DEMO = q.has("demo"), CAPTURE = q.has("capture");
+const bridge = DEMO ? null : window.tailzu;
+
+// ---- time -----------------------------------------------------------------------
+let virtual = 0;
+const clock = () => (CAPTURE ? virtual : performance.now());
+const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
+const ease = (cur, tgt, k, dt) => cur + (tgt - cur) * (1 - Math.exp(-k * dt));
+const outCubic = (t) => 1 - Math.pow(1 - clamp(t), 3);
+
+// ---- colour ----------------------------------------------------------------------
+function rgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+/** A knob colour at an alpha. A knob that is not a hex is used as it is. */
+function rgba(hex, a) { const c = rgb(hex); return c ? `rgba(${c[0]},${c[1]},${c[2]},${clamp(a)})` : hex; }
+function mixHex(a, b, t) {
+  const x = rgb(a), y = rgb(b); if (!x || !y) return t < .5 ? a : b;
+  const c = x.map((v, i) => Math.round(v + (y[i] - v) * clamp(t)));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// ---- knobs, read as they are used, so a change from the server lands on the next frame
+const C = {
+  ink: () => K.color("desktop.pill.ink", "#0F0D0B"),
+  pale: () => K.color("desktop.pill.pale", "#F3E2C6"),
+  amber: () => K.color("desktop.pill.live", "#E8A23C"),
+  rose: () => K.color("desktop.pill.error", "#E4587B"),
+};
+const FONT = () => `${K.num("desktop.pill.fontWeight", 500)} ${K.num("desktop.pill.fontSize", 12)}px ${K.str("desktop.pill.font", '-apple-system, "Segoe UI", system-ui, sans-serif')}`;
+const BARS = () => Math.max(5, Math.min(31, Math.round(K.num("desktop.pill.bars", 15))));
+
+// ---- state ------------------------------------------------------------------------
+let S = { name: "rest", at: 0, data: {} };
+let hint = "";               // the way in, as main words it for the keys it bound
+let caption = "";            // live captions, when that mode is on
+let flashAt = -1e9;          // a chunk written mid-session
+let hovered = false, overCancel = false;
+let restShown = true;
+const bands = new Float32Array(32);
+let bandsAt = -1e9;
+
+function setState(name, data) {
+  S = { name, at: clock(), data: data || {} };
+  if (name !== "listening") caption = "";
+  wake();
+}
+
+// ---- the canvas -------------------------------------------------------------------
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function fit() {
+  DPR = window.devicePixelRatio || 1; W = window.innerWidth; H = window.innerHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); cv.style.width = W + "px"; cv.style.height = H + "px";
+  wake();
+}
+window.addEventListener("resize", fit);
+
+// Animated values. The pill's box, and one "atom" per bar.
+const P = { w: 48, h: 14, solid: 0, buttons: 0, text: 0 };
+const A = []; // { x, h, y, a, hot }
+function atoms(n) { while (A.length < n) A.push({ x: W / 2, h: 3, y: 0, a: 0, hot: 0 }); return A; }
+
+function textW(s) { ctx.save(); ctx.font = FONT(); const w = ctx.measureText(s).width; ctx.restore(); return w; }
+function doneLabel() {
+  const n = S.data.words | 0;
+  return n === 1 ? K.txt("desktop.pill.doneOne", "1 word") : n > 0 ? K.txt("desktop.pill.done", "{n} words", { n }) : K.txt("desktop.pill.doneNone", "Done");
+}
+
+/** Where everything wants to be this frame. */
+function targets(t) {
+  const st = S.name, sq = K.num("desktop.pill.atom", 3);
+  const g = {};
+  if (st === "rest") {
+    const open = hovered && restShown && !!hint;
+    g.w = open ? K.num("desktop.pill.hoverPad", 30) + 3 * sq + 10 + textW(hint) : K.num("desktop.pill.restWidth", 46);
+    g.h = open ? K.num("desktop.pill.hoverHeight", 28) : K.num("desktop.pill.restHeight", 14);
+    g.solid = open ? 1 : 0; g.buttons = 0; g.text = open ? 1 : 0; g.show = restShown ? 1 : 0;
+  } else if (st === "listening") {
+    g.w = K.num("desktop.pill.listenWidth", 188); g.h = K.num("desktop.pill.listenHeight", 38);
+    g.solid = 1; g.buttons = 1; g.text = 0; g.show = 1;
+  } else if (st === "writing") {
+    g.w = K.num("desktop.pill.writeWidth", 124); g.h = K.num("desktop.pill.writeHeight", 30);
+    g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
+  } else {
+    const label = st === "done" ? doneLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"));
+    g.w = textW(label) + (st === "done" ? 46 : 38); g.h = K.num("desktop.pill.labelHeight", 30);
+    g.solid = 1; g.buttons = 0; g.text = 1; g.show = 1;
+  }
+  return g;
+}
+
+let last = 0, running = false;
+function wake() { if (!running && !CAPTURE) { running = true; last = clock(); requestAnimationFrame(loop); } }
+function loop() { const settled = frame(); if (settled && S.name === "rest") { running = false; return; } requestAnimationFrame(loop); }
+
+/** One frame. Returns true when nothing is moving. */
+function frame() {
+  const now = clock(), dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000)); last = now;
+  const t = (now - S.at) / 1000;
+  if (S.name === "done" && t * 1000 > K.num("desktop.pill.doneMs", 1300)) setState("rest");
+  if (S.name === "error" && t * 1000 > K.num("desktop.pill.errorMs", 2400)) setState("rest");
+  // Bands decay once the recorder goes quiet, so a dropped message never
+  // freezes a bar mid-air.
+  if (now - bandsAt > 250) for (let i = 0; i < bands.length; i++) bands[i] *= Math.exp(-dt * 10);
+
+  const g = targets(t), k = K.num("desktop.pill.spring", 16);
+  const before = P.w + P.h + P.solid + P.buttons + P.text;
+  P.w = ease(P.w, g.w, k, dt); P.h = ease(P.h, g.h, k, dt);
+  P.solid = ease(P.solid, g.solid, k * .8, dt); P.buttons = ease(P.buttons, g.buttons, k * .9, dt);
+  P.text = ease(P.text, g.text, k * .9, dt);
+  P.show = ease(P.show ?? 1, g.show, k, dt);
+  let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text - before) > 0.01;
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  if (P.show < 0.01) return !moving;
+  const cx = W / 2, bottom = H - K.num("desktop.pill.bottomPad", 14);
+  const x0 = cx - P.w / 2, y0 = bottom - P.h, cy = bottom - P.h / 2;
+  ctx.globalAlpha = P.show;
+
+  // The capsule. At rest it is a shade over the page; open, it is ink.
+  const err = S.name === "error" ? outCubic(t / 0.2) : 0;
+  const shake = S.name === "error" && t < 0.42 ? Math.sin(t * 60) * 3 * (1 - t / 0.42) : 0;
+  ctx.save();
+  ctx.translate(shake, 0);
+  ctx.shadowColor = `rgba(0,0,0,${0.12 + 0.26 * P.solid})`; ctx.shadowBlur = 8 + 14 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
+  ctx.fillStyle = mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), P.solid);
+  ctx.globalAlpha = P.show * (K.num("desktop.pill.restAlpha", 0.78) + (1 - K.num("desktop.pill.restAlpha", 0.78)) * P.solid);
+  ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, P.h / 2); ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.globalAlpha = P.show;
+  ctx.strokeStyle = err ? rgba(C.rose(), .55 * err) : rgba(C.pale(), 0.12 + 0.06 * P.solid); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(x0 + .5, y0 + .5, P.w - 1, P.h - 1, (P.h - 1) / 2); ctx.stroke();
+
+  // Live captions, above: the tail of what is being said.
+  if (S.name === "listening" && caption) {
+    ctx.save(); ctx.font = FONT();
+    const maxW = Math.min(W - 24, K.num("desktop.pill.captionWidth", 360));
+    let s = caption; while (s.length > 1 && ctx.measureText("…" + s).width > maxW - 28) s = s.slice(1);
+    if (s !== caption) s = "…" + s.trimStart();
+    const cw = ctx.measureText(s).width + 28, ch = 28, ccy = y0 - 10 - ch;
+    ctx.fillStyle = rgba(C.ink(), .94); ctx.beginPath(); ctx.roundRect(cx - cw / 2, ccy, cw, ch, 10); ctx.fill();
+    ctx.fillStyle = C.pale(); ctx.textBaseline = "middle"; ctx.fillText(s, cx - cw / 2 + 14, ccy + ch / 2 + .5);
+    ctx.restore();
+  }
+
+  // The atoms.
+  const n = BARS(), mid = (n - 1) / 2, sq = K.num("desktop.pill.atom", 3), aa = atoms(n);
+  const inner = P.h, bl = x0 + inner + 4, br = x0 + P.w - inner - 4;
+  const maxH = Math.max(sq, P.h - K.num("desktop.pill.barInset", 16));
+  const flashP = (now - flashAt) / 1000;
+  const talking = now - bandsAt < 250;
+  for (let i = 0; i < n; i++) {
+    const a = aa[i], d = Math.abs(i - mid), side = i < mid ? -1 : 1;
+    let tx = cx, th = sq, ty = 0, ta = 0, hot = 0;
+    if (S.name === "rest") {
+      const open = P.text > .5 && hint;
+      const gx = open ? x0 + 15 + sq : cx - 5 - sq / 2;
+      if (d <= 1) { tx = gx + (i - mid + 1) * (sq + 2.6) + (open ? 0 : 5 - sq - 2.6 + sq / 2); ta = open ? .85 : .6; }
+      else { tx = gx + 5; ta = 0; }
+    } else if (S.name === "listening") {
+      tx = n > 1 ? bl + (br - bl) * i / (n - 1) : cx;
+      // Low voice in the middle, the rest mirrored outwards: a voice has one
+      // shape, and a symmetric one reads as a voice rather than a meter.
+      const band = bands[Math.min(bands.length - 1, Math.round(d * 1.35))] * (1 - 0.08 * ((i * 7) % 3));
+      const env = 0.5 + 0.5 * Math.cos(Math.PI * d / (mid + 1.2));
+      const breath = talking ? 0 : 0.5 + 0.5 * Math.sin(t * 3.2 - d * 0.7);
+      const pulse = flashP < 0.6 ? Math.exp(-Math.pow(d - flashP / 0.6 * (mid + 1), 2) / 2) * (1 - flashP / 0.6) : 0;
+      th = sq + (maxH - sq) * clamp(band * env * 1.25 + pulse * .55);
+      ta = talking ? .95 : .45 + .4 * breath;
+      hot = 1;
+    } else if (S.name === "writing") {
+      const gap = K.num("desktop.pill.writeGap", 6);
+      tx = cx + (i - mid) * gap;
+      ty = -Math.sin(t * 9 - i * 0.55) * 3 * clamp(t / 0.3);
+      const sweep = ((t * 1.3) % 1.4) - 0.2, near = Math.exp(-Math.pow(i / (n - 1) - sweep, 2) * 40);
+      ta = (d <= mid ? .5 : 0) + .45 * near; th = sq;
+    } else {
+      tx = x0 + 18; ta = 0; th = sq;
+    }
+    const kk = K.num("desktop.pill.atomSpring", 22);
+    a.x = ease(a.x, tx, kk, dt); a.h = ease(a.h, th, S.name === "listening" ? 30 : kk, dt);
+    a.y = ease(a.y, ty, kk, dt); a.a = ease(a.a, ta, kk, dt); a.hot = ease(a.hot, hot, kk * .6, dt);
+    if (Math.abs(a.x - tx) + Math.abs(a.h - th) + Math.abs(a.a - ta) > 0.05) moving = true;
+    if (a.a < 0.01) continue;
+    ctx.fillStyle = a.hot > .02 ? mixHex(C.pale(), C.amber(), a.hot) : C.pale();
+    ctx.globalAlpha = P.show * a.a;
+    const w = sq;
+    ctx.beginPath(); ctx.roundRect(a.x - w / 2, cy - a.h / 2 + a.y, w, a.h, Math.min(w / 2, 1.2 + a.h / 6)); ctx.fill();
+  }
+  ctx.globalAlpha = P.show;
+
+  // ✕ and ✓, while listening.
+  if (P.buttons > 0.01) {
+    const r = P.h / 2 - 5, lx = x0 + P.h / 2, rx = x0 + P.w - P.h / 2, b = P.buttons;
+    ctx.globalAlpha = P.show * b;
+    ctx.fillStyle = rgba(C.pale(), overCancel ? .24 : .13); ctx.beginPath(); ctx.arc(lx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = rgba(C.pale(), .9); ctx.lineWidth = 1.6; ctx.lineCap = "round";
+    const s = r * .36;
+    ctx.beginPath(); ctx.moveTo(lx - s, cy - s); ctx.lineTo(lx + s, cy + s); ctx.moveTo(lx + s, cy - s); ctx.lineTo(lx - s, cy + s); ctx.stroke();
+    ctx.fillStyle = C.pale(); ctx.beginPath(); ctx.arc(rx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = C.ink(); ctx.lineWidth = 1.8; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(rx - r * .38, cy + r * .02); ctx.lineTo(rx - r * .1, cy + r * .3); ctx.lineTo(rx + r * .4, cy - r * .3); ctx.stroke();
+    ctx.globalAlpha = P.show;
+  }
+
+  // Words: the hint on hover, the count when done, the reason on error.
+  if (P.text > 0.01) {
+    ctx.save(); ctx.font = FONT(); ctx.textBaseline = "middle"; ctx.globalAlpha = P.show * outCubic(P.text);
+    if (S.name === "rest") {
+      ctx.fillStyle = rgba(C.pale(), .88); ctx.fillText(hint, x0 + 15 + 3 * sq + 12, cy + .5);
+    } else if (S.name === "done") {
+      // The check draws itself, born amber, and settles to pale.
+      const p = outCubic(t / 0.35), ix = x0 + 18, s = 5;
+      ctx.strokeStyle = mixHex(C.amber(), C.pale(), clamp((t - .35) / .5)); ctx.lineWidth = 2; ctx.lineCap = "round"; ctx.lineJoin = "round";
+      const pts = [[ix - s, cy], [ix - s * .3, cy + s * .7], [ix + s * 1.1, cy - s * .8]];
+      const L1 = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]), L2 = Math.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1]);
+      const len = (L1 + L2) * p;
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      if (len <= L1) ctx.lineTo(pts[0][0] + (pts[1][0] - pts[0][0]) * len / L1, pts[0][1] + (pts[1][1] - pts[0][1]) * len / L1);
+      else { ctx.lineTo(pts[1][0], pts[1][1]); const u = (len - L1) / L2; ctx.lineTo(pts[1][0] + (pts[2][0] - pts[1][0]) * u, pts[1][1] + (pts[2][1] - pts[1][1]) * u); }
+      ctx.stroke();
+      ctx.fillStyle = C.pale(); ctx.fillText(doneLabel(), x0 + 32, cy + .5);
+    } else if (S.name === "error") {
+      ctx.fillStyle = C.rose(); ctx.beginPath(); ctx.arc(x0 + 17, cy, 3.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = C.pale(); ctx.fillText(S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"), x0 + 27, cy + .5);
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+  if (S.name === "listening" || S.name === "writing" || S.name === "done" || S.name === "error") moving = true;
+  return !moving;
+}
+
+// ---- pointer: the window lets clicks through everywhere but the pill ------------
+function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2, y: bottom - P.h, w: P.w, h: P.h }; }
+function inside(x, y, pad = 4) { const r = pillRect(); return x >= r.x - pad && x <= r.x + r.w + pad && y >= r.y - pad && y <= r.y + r.h + pad; }
+function onCancel(x, y) { const r = pillRect(); return S.name === "listening" && Math.hypot(x - (r.x + r.h / 2), y - (r.y + r.h / 2)) <= r.h / 2; }
+function setHover(v) {
+  if (v === hovered) return;
+  hovered = v;
+  if (bridge && bridge.pillHover) bridge.pillHover(v);
+  wake();
+}
+window.addEventListener("mousemove", (e) => {
+  // Only a visible pill takes the pointer; an invisible rest pill is nothing.
+  const live = S.name !== "rest" || restShown;
+  setHover(live && inside(e.clientX, e.clientY));
+  const oc = onCancel(e.clientX, e.clientY); if (oc !== overCancel) { overCancel = oc; wake(); }
+});
+document.addEventListener("mouseleave", () => { setHover(false); overCancel = false; });
+window.addEventListener("mousedown", (e) => {
+  if (!inside(e.clientX, e.clientY)) return;
+  const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish") : null;
+  if (act && bridge && bridge.pillAction) bridge.pillAction(act);
+});
+
+// ---- the main process -----------------------------------------------------------
+function onPill(m) {
+  if (!m || typeof m !== "object") return;
+  if (typeof m.hint === "string") hint = m.hint;
+  if (typeof m.rest === "boolean") restShown = m.rest;
+  if (m.state === "flash") { flashAt = clock(); wake(); return; }
+  if (m.state === "caption") { caption = String(m.text || ""); wake(); return; }
+  if (m.state) setState(m.state, m);
+  else wake();
+}
+function onLevel(p) {
+  const b = p && p.bands; if (!b || !b.length) return;
+  for (let i = 0; i < bands.length; i++) bands[i] = i < b.length ? clamp(+b[i] || 0) : 0;
+  bandsAt = clock(); wake();
+}
+
+if (bridge) {
+  bridge.onPill && bridge.onPill(onPill);
+  bridge.onLevel && bridge.onLevel(onLevel);
+  bridge.onKnobs && bridge.onKnobs((k) => { K.setKnobs(k); wake(); });
+  bridge.knobs && bridge.knobs().then((k) => { K.setKnobs(k); wake(); }).catch(() => {});
+}
+fit();
+
+// ---- review: a scripted run over a mock document -----------------------------------
+if (DEMO) {
+  const BARE = q.has("bare");   // the pill alone, over whatever the page behind it is
+  if (!BARE) document.body.className = "demo";
+  if (!BARE) document.body.insertAdjacentHTML("afterbegin", `<div class="doc"><div class="bar"><i style="left:14px"></i><i style="left:30px"></i><i style="left:46px"></i></div>
+    <h4>Standup notes</h4><p>Design review moved to Thursday.</p><p id="line"><span id="typed"></span><span class="caret"></span></p></div>`);
+  const SENT = "Can we push the call to four? The deck needs one more pass.";
+  const script = [[0, "rest"], [1.1, "hover"], [2.2, "listening"], [6.9, "writing"], [7.9, "done"], [9.4, "rest"], [10.6, "listening2"], [12.2, "error"]];
+  let step = -1;
+  const speech = (t) => {           // syllables: bursts with gaps, as a voice has
+    const syl = Math.max(0, Math.sin(t * 11.5)) * (0.55 + 0.45 * Math.sin(t * 2.3 + 1)) * (Math.sin(t * 0.9) > -0.6 ? 1 : 0.05);
+    return syl;
+  };
+  window.__demo = (t) => {
+    const s = script.reduce((k, [at], i) => (t >= at ? i : k), 0);
+    if (s !== step) {
+      step = s; const name = script[s][1];
+      const typed = document.getElementById("typed");
+      if (name === "rest") { setHover(false); onPill({ state: "rest", hint: "Tap Ctrl twice to talk", rest: true }); if (typed) typed.textContent = t > 9 ? SENT : ""; }
+      if (name === "hover") { hovered = true; wake(); }
+      if (name === "listening" || name === "listening2") { hovered = false; onPill({ state: "listening" }); }
+      if (name === "writing") onPill({ state: "writing" });
+      if (name === "done") { onPill({ state: "done", words: 12 }); }
+      if (name === "error") onPill({ state: "error", label: "Didn't catch that" });
+    }
+    const name = script[step][1];
+    if (name === "listening") {
+      const lt = t - 2.2, v = lt > 0.4 && lt < 4.4 ? speech(lt) : 0.02;
+      const b = []; for (let i = 0; i < 16; i++) b.push(clamp(v * (1 - i * 0.045) * (0.75 + 0.25 * Math.sin(lt * 17 + i * 1.7))));
+      onLevel({ bands: b });
+      if (Math.abs(lt - 2.6) < 0.02) { flashAt = clock(); }
+    }
+    if (name === "done") {
+      const p = clamp((t - 7.9) / 0.9);
+      const typed = document.getElementById("typed"); if (typed) typed.textContent = SENT.slice(0, Math.round(SENT.length * outCubic(p)));
+    }
+  };
+  if (CAPTURE) {
+    window.__step = (ms) => { virtual += ms; window.__demo(virtual / 1000); frame(); };
+    window.__ready = true;
+    virtual = 0; last = 0; window.__demo(0); frame();
+  } else {
+    const t0 = performance.now();
+    (function tick() { window.__demo(((performance.now() - t0) / 1000) % 13.5); requestAnimationFrame(tick); })();
+  }
+}
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for a notarized, hardened-runtime build.
+
+  Apple requires the hardened runtime for notarization, and the hardened
+  runtime switches off the things Electron and a dictation app need unless
+  each one is asked for here. Getting this wrong does not fail the build — it
+  ships an app that launches and then cannot record, which is the whole
+  product.
+
+    allow-jit / allow-unsigned-executable-memory
+      V8 compiles JavaScript at runtime. Without these the app crashes on
+      launch under the hardened runtime.
+
+    device.audio-input
+      The microphone. NSMicrophoneUsageDescription (in package.json) is the
+      PROMPT; this is the PERMISSION. An app with the prompt and not the
+      entitlement asks politely and then records silence.
+
+    automation.apple-events
+      Pasting into the focused app. Only needed if the paste path uses
+      AppleScript/System Events; harmless if it does not, and its absence is
+      very hard to diagnose from a user report of "nothing appears".
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

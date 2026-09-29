@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+
+# Per-user state written beside this file in a DEV run (the packaged app keeps
+# it in userData instead). None of it belongs in the repo:
+#   config.json   may carry a backend token
+#   session.json  carries the signed-in user's refresh token
+#   shell.json    the cached copy of the server's chrome, rewritten every boot
+config.json
+session.json
+shell.json
