@@ -16,6 +16,17 @@ contextBridge.exposeInMainWorld("tailzu", {
   result: (text) => ipcRenderer.send("dictation-result", text),
   error: (msg) => ipcRenderer.send("dictation-error", msg),
   partial: (text) => ipcRenderer.send("live-partial", text),
+  // How loud the voice is, band by band, while the mic is open — for the pill.
+  level: (p) => ipcRenderer.send("dictation-level", p),
+  // main → recorder: throw this session away, nothing is written.
+  onCancel: (cb) => ipcRenderer.on("cancel-recording", (_e, p) => cb(p)),
+  // main → pill: its state, and the voice's level while it listens.
+  onPill: (cb) => ipcRenderer.on("pill", (_e, m) => cb(m)),
+  onLevel: (cb) => ipcRenderer.on("pill-level", (_e, p) => cb(p)),
+  // pill → main: the pointer is over it (take clicks) or not (let them
+  // through), and what a click on it asks for: start, finish or cancel.
+  pillHover: (on) => ipcRenderer.send("pill:hover", !!on),
+  pillAction: (a) => ipcRenderer.send("pill:action", String(a || "")),
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
   // The server's knobs ({ labels, flags } of the last bootstrap), for a page
@@ -29,6 +40,10 @@ contextBridge.exposeInMainWorld("tailzu", {
 // process validates — the renderer never touches the filesystem or the shell.
 contextBridge.exposeInMainWorld("tailzuApp", {
   env: () => ipcRenderer.invoke("app:env"),
+  // This computer's own settings (the pill, pausing, start at login, the
+  // bound keys), and a request to change one. The main process checks both.
+  config: () => ipcRenderer.invoke("app:config"),
+  setConfig: (key, value) => ipcRenderer.invoke("app:setConfig", key, value),
   setSession: (v) => ipcRenderer.invoke("app:setSession", v),
   openExternal: (url) => ipcRenderer.send("app:openExternal", url),
   dictate: () => ipcRenderer.send("app:dictate"),
