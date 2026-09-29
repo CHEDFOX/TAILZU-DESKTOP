@@ -2535,6 +2535,24 @@ function paintMast() {
     me.title = who;
   }
   applyLook(f["desktop.look"]);
+  applyMast(f["desktop.mast"]);
+}
+
+/**
+ * THE MASTHEAD'S PROPORTIONS, FROM THE SERVER: `desktop.mast` =
+ * { logo: 19, brand: 18, tabs: "center" | "start" } — the mark's width and the
+ * name's size in pixels, and which side the tabs sit on. Absent keys keep
+ * app.html's own values; numbers outside a sane range are ignored.
+ */
+function applyMast(m) {
+  const mast = $("mast");
+  if (!mast || !m || typeof m !== "object") return;
+  const root = document.documentElement.style;
+  const px = (v, lo, hi) => { const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? n + "px" : null; };
+  const logo = px(m.logo, 10, 48), brand = px(m.brand, 10, 36);
+  if (logo) root.setProperty("--m-logo", logo);
+  if (brand) root.setProperty("--m-brand", brand);
+  if (m.tabs === "start" || m.tabs === "center") mast.dataset.tabs = m.tabs;
 }
 
 /**
