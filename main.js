@@ -1562,6 +1562,7 @@ ipcMain.on("dictation-result", (_e, payload) => {
   // user's words and belong at the cursor.
   const t = (text || "").trim();
   if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
+  if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
   if (!t) return;
   clipboard.writeText(t);
   // Small delay so the clipboard write settles before the paste keystroke.
