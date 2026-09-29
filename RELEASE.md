@@ -107,6 +107,14 @@ There is no auto-update. Every release is a fresh download from the page.
 electron-updater plus a published feed is the answer when the installed base is
 large enough to care.
 
+### 0.2.0 — the desk and the pill
+
+The window is Tailzu's own desk: a masthead with Today, Insights, Words,
+Voices and Train, and Settings and Plan behind the gear. The pill sits at the
+foot of the screen while you talk. Both are drawn from the server, so after
+this one install every change to them is a backend deploy. An older install
+keeps the phone screens it had until it updates.
+
 Until then the server tells installed builds about a release. Bump `version` in
 `desktop/package.json` before `npm run dist` (every build reports it as
 `appVersion` in its bootstrap), publish, then set the flag from the control
