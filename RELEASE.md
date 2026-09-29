@@ -114,6 +114,15 @@ training screen was plain black. The page colour now sits under it. Builds
 from this one declare `DeskField`, and the server puts the network on the
 Train page only for them. Error toasts say the error, not `$event`.
 
+Dictation: stretches pasted on a pause are separated by a space, and each
+is written as the continuation of the one before. A breath or a cough is no
+longer uploaded on its own (it came back as "Thank you."). A live dictation
+sends the second engine's reading to the refine step, and a failed refine is
+tried once more before the raw words are pasted.
+
+Publishing now sends the version with each installer; every older install
+on that OS sees an update card in its window.
+
 ### 0.2.0 — the desk and the pill
 
 The window is Tailzu's own desk: a masthead with Today, Insights, Words,
