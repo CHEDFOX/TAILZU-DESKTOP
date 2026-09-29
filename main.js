@@ -282,6 +282,10 @@ function refreshBoot() {
             platform: "web",
             appVersion: app.getVersion(),
             device: { formFactor: "desktop", os: process.platform },
+            // The same answer the window gets (sdui.js declares these too):
+            // this copy's flags are the ones broadcast to every window and
+            // the ones that decide where "out of words" opens.
+            components: ["DeskShell", "Keys"],
           },
           launchCount: Number(localState.launchCount) || 1,
         }),
