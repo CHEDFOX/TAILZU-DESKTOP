@@ -123,6 +123,10 @@ tried once more before the raw words are pasted.
 Publishing now sends the version with each installer; every older install
 on that OS sees an update card in its window.
 
+Opening the window no longer flashes the old rail on black: the window stays
+hidden until its first frame is drawn, on the desk's own sheet, and the page
+keeps the shell hidden until the server has said which look to wear.
+
 ### 0.2.0 — the desk and the pill
 
 The window is Tailzu's own desk: a masthead with Today, Insights, Words,
