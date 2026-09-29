@@ -107,6 +107,13 @@ There is no auto-update. Every release is a fresh download from the page.
 electron-updater plus a published feed is the answer when the installed base is
 large enough to care.
 
+### 0.2.2 — the network shows
+
+The neural network was drawn behind the desk's page colour, so the live
+training screen was plain black. The page colour now sits under it. Builds
+from this one declare `DeskField`, and the server puts the network on the
+Train page only for them. Error toasts say the error, not `$event`.
+
 ### 0.2.0 — the desk and the pill
 
 The window is Tailzu's own desk: a masthead with Today, Insights, Words,

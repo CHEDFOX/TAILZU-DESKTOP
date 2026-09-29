@@ -65,6 +65,10 @@ const COMPONENTS = [
   // those pages only to a build that can draw them; an older installer keeps
   // the rail and the phone screens it has always had.
   "DeskShell", "Keys",
+  // A NeuralField the window can actually show on a page with a ground of its
+  // own (groundView). A build without it drew the field behind the sheet, so
+  // the server keeps the field off the desk's pages for those.
+  "DeskField",
 ];
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
@@ -1237,7 +1241,8 @@ function startSession(n) {
   };
   const fail = (m) => {
     if (!r.alive) return;
-    teardown(r);
+    r.alive = false;
+    closeMic(r);
     setState_("error");
     const eh = n.on && n.on.onError;
     if (eh) void run(eh, m); else toast(m);
@@ -1904,7 +1909,8 @@ async function run(action, eventValue) {
       if (i === -1) list.push(v); else list.splice(i, 1);
       setStatePath(action.path, list); repaint(); return;
     }
-    case "toast": toast(label(action.message) || ""); return;
+    // resolveValue, so "$event" is the error it carries and not the word.
+    case "toast": { const m = resolveValue(action.message); toast(label(m == null ? "" : String(m)) || ""); return; }
     // A note back on the clipboard, as it was written.
     case "copyText": {
       const t = String(resolveValue(action.text) ?? "");
@@ -2231,6 +2237,7 @@ function fieldState() {
  *  rather than keep a canvas alive for a screen nobody is on — and rather than
  *  leave it standing under whatever the view shows next. */
 function dropField() {
+  groundView(null);
   if (FIELD_TRACK) FIELD_TRACK();
   if (FIELD_EL) { try { FIELD_EL.remove(); } catch {} FIELD_EL = null; }
   FIELD_BINDS = FIELD_PROPS = null; FIELD_LAST = "";
@@ -2265,6 +2272,29 @@ function uncoverField(slot, view) {
   return ground;
 }
 
+/**
+ * THE VIEW'S OWN GROUND GOES UNDER THE FIELD, NOT OVER IT.
+ *
+ * The field is a layer beneath #view, so whatever #view paints sits on top of
+ * it. The desk gave #view a ground of its own — the sheet on the desk's pages,
+ * --bg on the phone-shaped ones — and from then on the field ran behind an
+ * opaque sheet on every screen: the live training screen was plain black.
+ *
+ * While a field is up the ground moves one level down, to #main, where it
+ * paints beneath the layer, and the view goes clear. Same colour, right order.
+ * Called with null when the field goes, which hands the ground back.
+ */
+function groundView(view) {
+  const v = view || $("view");
+  if (!v) return;
+  const host = v.parentElement;
+  v.style.background = "";
+  if (host) host.style.backgroundColor = "";
+  if (!view || !host) return;
+  host.style.backgroundColor = getComputedStyle(v).backgroundColor;
+  v.style.background = "transparent";
+}
+
 function wireField(view) {
   const slot = view.querySelector("[data-field]");
   if (!slot) { dropField(); return; }
@@ -2290,6 +2320,7 @@ function wireField(view) {
       fieldSend(tune);
     }
   }
+  groundView(view);
   const ground = uncoverField(slot, view);
   if (!FIELD_EL) {
     // MOUNTED ONCE, OUTSIDE THE VIEW, AND NEVER MOVED.
