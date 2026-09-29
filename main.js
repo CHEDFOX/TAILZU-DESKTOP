@@ -939,6 +939,17 @@ let pillWin = null;
 let pillState = "rest";
 let pillData = {};                 // what came with the state (a count, a reason)
 let pillWords = 0;                 // written in the running session, pauses included
+// Sessions that have already pasted something. A pause-flush pastes each
+// stretch of speech on its own, and pasted bare they ran together:
+// "stuck up?Then", "sometimes.Okay". Every paste after a session's first
+// is separated from the one before it.
+const pastedIn = new Set();
+function spaced(session, t) {
+  const joined = pastedIn.has(session) && !/^[\s.,!?;:)\]}]/.test(t) ? " " + t : t;
+  pastedIn.add(session);
+  if (pastedIn.size > 32) pastedIn.delete(pastedIn.values().next().value);
+  return joined;
+}
 const cancelled = new Set();       // sessions thrown away: nothing from them is pasted
 
 function pillOn() { return cfg.pill !== false && bool("desktop.pill.enabled", true); }
@@ -1567,8 +1578,9 @@ ipcMain.on("dictation-result", (_e, payload) => {
   const t = (text || "").trim();
   if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
   if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
-  if (!t) return;
-  clipboard.writeText(t);
+  if (!t) { pastedIn.delete(session); return; }
+  clipboard.writeText(spaced(session, t));
+  pastedIn.delete(session);
   // Small delay so the clipboard write settles before the paste keystroke.
   setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
 });
@@ -1585,7 +1597,7 @@ ipcMain.on("dictation-segment", (_e, payload) => {
   }
   const t = (text || "").trim();
   if (!t) return;
-  clipboard.writeText(t);
+  clipboard.writeText(spaced(session, t));
   setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
   if (session === activeSession) {
     pillWords += countWords(t);

@@ -46,6 +46,13 @@
       let finals = [];
       let lastPartial = "";
       let wsWatchdog = null;
+      // The second engine's reading, when the stream's `done` carried one.
+      let doneAlternative = "";
+      // What this session has already written, pause by pause. Each stretch
+      // after the first is sent with it as context, so it is written as the
+      // continuation it is rather than as a new message: no capital after a
+      // comma, no repeated greeting.
+      let written = "";
 
       window.tailzu.onStart((c) => {
         cfg = c;
@@ -56,6 +63,7 @@
         // (state desync upstream), kill it completely before starting fresh —
         // never let two captures share the mic or a chunks array.
         forceTeardownAll();
+        written = "";
         cfg.live ? startLive(session) : startBatch(session);
       });
       window.tailzu.onStop((p) => {
@@ -131,12 +139,20 @@
 
       let levelCtx = null, levelTimer = null, analyser = null;
       let speaking = false, lastSpeechAt = 0, segmentStartedAt = 0, flushing = false;
+      // How long this stretch was actually above the room. A cough or a
+      // breath trips `speaking` for a poll or two, and flushed on its own it
+      // came back from the recogniser as "Thank you." or "Okay." and was
+      // pasted. A stretch with less than a word's worth of sound is kept and
+      // joined to what is said next.
+      let speechMs = 0;
 
       function watchLevel(sid) {
         const FLUSH_SILENCE_MS = K.num("desktop.recorder.flushSilenceMs", 1200);
         const MIN_SEGMENT_MS = K.num("desktop.recorder.minSegmentMs", 700);
         const IDLE_END_MS = K.num("desktop.recorder.idleEndMs", 25000);
         const SPEECH_LEVEL = K.num("desktop.recorder.speechLevel", 0.012);
+        const MIN_SPEECH_MS = K.num("desktop.recorder.minSpeechMs", 400);
+        const POLL_MS = K.num("desktop.recorder.meterPollMs", 120);
         try {
           levelCtx = new (window.AudioContext || window.webkitAudioContext)();
           const src = levelCtx.createMediaStreamSource(stream);
@@ -153,12 +169,14 @@
           for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
           const rms = Math.sqrt(sum / buf.length);
           const now = Date.now();
-          if (rms > SPEECH_LEVEL) { speaking = true; lastSpeechAt = now; return; }
+          if (rms > SPEECH_LEVEL) { speaking = true; lastSpeechAt = now; speechMs += POLL_MS; return; }
           const quietFor = now - lastSpeechAt;
           // Flush only if they actually said something since the last one.
           if (speaking && quietFor > FLUSH_SILENCE_MS
               && now - segmentStartedAt > MIN_SEGMENT_MS) {
             speaking = false;
+            if (speechMs < MIN_SPEECH_MS) return;   // a breath: keep it with the next words
+            speechMs = 0;
             flushSegment(sid);
           } else if (!speaking && quietFor > IDLE_END_MS) {
             window.tailzu.idle({ session: sid });
@@ -171,6 +189,7 @@
         if (levelCtx) { try { levelCtx.close(); } catch {} levelCtx = null; }
         analyser = null;
         speaking = false;
+        speechMs = 0;
       }
 
       /** End this segment and start the next one on the SAME microphone. The
@@ -274,20 +293,38 @@
       }
 
       // ---- Per-tone refine routing (mirrors the mobile app/src/api.ts) -------
-      async function refineText(text) {
+      async function refineText(text, alternative) {
         const tone = (cfg.tone || "none").toLowerCase();
         const llmTones = K.list("desktop.recorder.llmTones", ["formal", "casual", "very-casual", "excited"]);
         const p = tone === "none" ? "/v1/refine/none"
           : llmTones.includes(tone) ? "/v1/refine/" + tone
           : "/v1/refine";
-        const res = await fetch(base() + p, {
-          method: "POST",
-          headers: Object.assign({ "Content-Type": "application/json" }, auth()),
-          body: JSON.stringify({ text, targetApp: "Desktop", language: cfg.language || "auto" }),
-        });
-        if (!res.ok) throw new Error("refine HTTP " + res.status);
-        const j = await res.json();
-        return (j.refinedText || "").trim();
+        const body = { text, targetApp: "Desktop", language: cfg.language || "auto" };
+        // The second engine's reading goes with it: the server reconciles the
+        // two and decides which leads. Dropped here, the work was wasted.
+        if (alternative) body.alternative = alternative;
+        // ONE RETRY. A refine that fails pastes the raw transcript, and the
+        // raw transcript still holds everything that was said TO the keyboard
+        // ("…write this in Japanese"). A blip is worth a second try first.
+        let last = null;
+        for (let i = 0; i < 2; i++) {
+          try {
+            const res = await fetch(base() + p, {
+              method: "POST",
+              headers: Object.assign({ "Content-Type": "application/json" }, auth()),
+              body: JSON.stringify(body),
+            });
+            // Refused (no words left, signed out): a retry gets the same answer.
+            if (res.status >= 400 && res.status < 500) throw Object.assign(new Error("refine HTTP " + res.status), { final: true });
+            if (!res.ok) throw new Error("refine HTTP " + res.status);
+            const j = await res.json();
+            return (j.refinedText || "").trim();
+          } catch (err) {
+            last = err;
+            if (err && err.final) break;
+          }
+        }
+        throw last || new Error("refine failed");
       }
 
       // ======================= BATCH =======================
@@ -382,6 +419,8 @@
           fd.append("language", cfg.language || "auto");
           // Explicit tone override — same field the mobile keyboard sends.
           fd.append("tone", cfg.tone || "none");
+          // What this session already wrote, so this stretch continues it.
+          if (written) fd.append("context", written.slice(-K.num("desktop.recorder.contextChars", 600)));
           const res = await fetch(base() + "/v1/transcribe-clean", {
             method: "POST",
             headers: auth(),
@@ -402,6 +441,7 @@
           // pastes and ends it. Same text, different meaning to the main
           // process, and it must not learn the difference by guessing.
           const deliver = isSegment ? emitSegment : emitResult;
+          if (cleaned && sid === session) written = (written + " " + cleaned).trim();
           if (cleaned) {
             deliver(sid, cleaned);
           } else if (transcript) {
@@ -435,6 +475,7 @@
         live = true;
         finals = [];
         lastPartial = "";
+        doneAlternative = "";
         try {
           stream = await getMic();
           if (sid !== session) { stopTracks(); return; } // superseded while awaiting the mic
@@ -459,6 +500,7 @@
               lastPartial = "";
               emitPartial(sid, previewText());
             } else if (m.type === "done") {
+              doneAlternative = typeof m.alternative === "string" ? m.alternative.trim() : "";
               finishLive(sid);
             } else if (m.type === "error") {
               emitError(sid, m.message || K.txt("desktop.recorder.streamError", "stream error"));
@@ -546,9 +588,13 @@
         // Same shape as mobile: stream gives the transcript, refine polishes it
         // with the active tone. If refine hiccups, the raw words still paste.
         try {
-          const refined = await refineText(raw);
-          emitResult(sid, refined || raw);
+          // An empty answer is the server saying there is nothing to write —
+          // noise the recogniser turned into words. Pasting the raw words
+          // instead was how they reached the field.
+          emitResult(sid, await refineText(raw, doneAlternative));
         } catch {
+          // Unreachable twice over: their words are not lost, but they go as
+          // they were heard.
           emitResult(sid, raw);
         }
       }
