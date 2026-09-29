@@ -61,8 +61,55 @@
       window.tailzu.onStop((p) => {
         // Only stop the session main thinks is active; a stale stop is a no-op.
         if (p && p.session && p.session !== session) return;
+        stopBands();
         live ? stopLive(session) : stopBatch(session);
       });
+      // Thrown away from the pill: close the mic and upload nothing. A new
+      // session id means nothing still in flight can report into this one.
+      window.tailzu.onCancel && window.tailzu.onCancel((p) => {
+        if (p && p.session && p.session !== session) return;
+        stopBands();
+        stopWatchingLevel();
+        forceTeardownAll();
+        session = -1;
+      });
+
+      // ---- The voice, band by band, for the pill ------------------------------
+      // Its own analyser on the same stream, separate from the pause meter, so
+      // the bars move whether or not pausing writes. Bands are spaced the way
+      // an ear hears (low voice in the first), each 0..1, sent a few dozen
+      // times a second and only while this session is the live one.
+      let bandCtx = null, bandTimer = null;
+      function startBands(sid, src) {
+        if (!src || !window.tailzu.level) return;
+        try {
+          bandCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const an = bandCtx.createAnalyser();
+          an.fftSize = K.num("desktop.pill.fftSize", 1024);
+          an.smoothingTimeConstant = K.num("desktop.pill.smoothing", 0.55);
+          bandCtx.createMediaStreamSource(src).connect(an);
+          const bins = new Uint8Array(an.frequencyBinCount), hz = bandCtx.sampleRate / an.fftSize;
+          const N = Math.max(4, Math.min(24, K.num("desktop.pill.bands", 12)));
+          const lo = K.num("desktop.pill.lowHz", 90), hi = K.num("desktop.pill.highHz", 4200);
+          const floor = K.num("desktop.pill.floorDb", 30), span = K.num("desktop.pill.spanDb", 150);
+          const edges = Array.from({ length: N + 1 }, (_, i) => Math.round(lo * Math.pow(hi / lo, i / N) / hz));
+          bandTimer = setInterval(() => {
+            if (sid !== session) return;
+            an.getByteFrequencyData(bins);
+            const out = [];
+            for (let b = 0; b < N; b++) {
+              let m = 0; const a = edges[b], z = Math.max(a + 1, edges[b + 1]);
+              for (let i = a; i < z && i < bins.length; i++) m = Math.max(m, bins[i]);
+              out.push(Math.max(0, Math.min(1, (m - floor) / span)));
+            }
+            window.tailzu.level({ session: sid, bands: out });
+          }, K.num("desktop.pill.levelMs", 33));
+        } catch { stopBands(); }
+      }
+      function stopBands() {
+        if (bandTimer) { clearInterval(bandTimer); bandTimer = null; }
+        if (bandCtx) { try { bandCtx.close(); } catch {} bandCtx = null; }
+      }
 
       // ---- Pause-flush -------------------------------------------------------
       // A PAUSE IS NOT AN ENDING, AND TREATING IT AS ONE IS WHY AUTO-STOP FAILS.
@@ -147,6 +194,7 @@
         if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
       }
       function forceTeardownAll() {
+        stopBands();
         try {
           if (mediaRecorder && mediaRecorder.state !== "inactive") {
             mediaRecorder.ondataavailable = null;
@@ -262,6 +310,7 @@
           mediaRecorder.onstop = () => onRecorderStopped(sid, mimeType);
           mediaRecorder.start();
           if (cfg.pauseFlush !== false) watchLevel(sid);
+          startBands(sid, stream);
         } catch (err) {
           stopTracks();
           emitError(sid, micMessage(err));
@@ -389,6 +438,7 @@
         try {
           stream = await getMic();
           if (sid !== session) { stopTracks(); return; } // superseded while awaiting the mic
+          startBands(sid, stream);
           ws = new WebSocket(wsUrl());
           ws.binaryType = "arraybuffer";
           // Browser WebSocket can't set an Authorization header; the protocol

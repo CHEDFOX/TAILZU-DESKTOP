@@ -398,6 +398,9 @@ function loadConfig() {
       : list("desktop.tap.keys", ["Ctrl", "Alt"])).map(String),
     // Launch Tailzu when you log in (applies to the installed app).
     autoStart: flag(file.autoStart, bool("desktop.autoStart.default", false)),
+    // The pill at the foot of the screen: dictation's state, where you are
+    // looking, instead of a tray icon you cannot see.
+    pill: flag(file.pill, bool("desktop.pill.default", true)),
   };
 }
 let cfg = loadConfig();
@@ -790,6 +793,11 @@ function createRecorderWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // A hidden window's timers are slowed to once a second by Chromium. The
+      // meter that flushes on a pause and feeds the pill runs on one, so an
+      // unthrottled recorder is the difference between bars that move with a
+      // voice and bars that twitch.
+      backgroundThrottling: false,
     },
   });
   hardenWindow(recorderWin);
@@ -917,6 +925,136 @@ function showOverlay() {
   overlayWin.loadFile("overlay.html");
 }
 function hideOverlay() { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide(); }
+
+// ---- The pill ----------------------------------------------------------------
+// Dictation's state at the foot of the screen (pill.html): three squares at
+// rest, bars that move with the voice while it listens, a wave while it
+// writes, the word count when it is done. Click-through except where the pill
+// is, and never focusable, so the paste still lands where the cursor was.
+let pillWin = null;
+let pillState = "rest";
+let pillData = {};                 // what came with the state (a count, a reason)
+let pillWords = 0;                 // written in the running session, pauses included
+const cancelled = new Set();       // sessions thrown away: nothing from them is pasted
+
+function pillOn() { return cfg.pill !== false && bool("desktop.pill.enabled", true); }
+
+/** The way in, in words, for the keys this computer actually bound. */
+function pillHint() {
+  if (cfg.tap && tapActive && cfg.tapKeys.length) {
+    return txt("desktop.pill.hintTap", "Tap {key} twice to talk", { key: cfg.tapKeys[0] });
+  }
+  return txt("desktop.pill.hintKey", "Press {key} to talk", { key: prettyKey(cfg.hotkey) });
+}
+
+/** Bottom-centre of the display the pointer is on: where the person is. */
+function pillBounds() {
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const w = num("desktop.pill.windowWidth", 420), h = num("desktop.pill.windowHeight", 132);
+  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
+    y: Math.round(wa.y + wa.height - h - num("desktop.pill.bottomOffset", 4)) };
+}
+
+function createPillWindow() {
+  if (pillWin && !pillWin.isDestroyed()) return pillWin;
+  pillWin = new BrowserWindow(Object.assign(pillBounds(), {
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false,
+    maximizable: false, fullscreenable: false, skipTaskbar: true, focusable: false,
+    hasShadow: false, alwaysOnTop: true, show: false,
+    // A panel on macOS: it floats over full-screen apps and a click on it
+    // does not take focus from the app being written in.
+    ...(process.platform === "darwin" ? { type: "panel" } : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  }));
+  try { pillWin.setAlwaysOnTop(true, str("desktop.pill.level", "floating")); } catch { /* default level */ }
+  try { pillWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* one space */ }
+  pillWin.setIgnoreMouseEvents(true, { forward: true });
+  hardenWindow(pillWin);
+  pillWin.webContents.on("did-finish-load", () => {
+    pillSend(Object.assign({ state: pillState }, pillData, { hint: pillHint(), rest: bool("desktop.pill.rest", true) }));
+    if (pillOn()) pillWin.showInactive();
+  });
+  pillWin.loadFile("pill.html");
+  return pillWin;
+}
+
+function pillSend(m) {
+  if (pillWin && !pillWin.isDestroyed() && !pillWin.webContents.isLoading()) pillWin.webContents.send("pill", m);
+}
+
+/** Move the pill to a state. `caption` and `flash` are moments, not states. */
+function pill(state, data) {
+  if (state !== "caption" && state !== "flash") { pillState = state; pillData = data || {}; }
+  if (!pillOn()) return;
+  const w = createPillWindow();
+  if (state === "listening") { try { w.setBounds(pillBounds()); } catch { /* keep its place */ } }
+  pillSend(Object.assign({ state, hint: pillHint() }, data || {}));
+  if (!w.isVisible() && !w.webContents.isLoading()) w.showInactive();
+}
+
+/** Words, counted the way a reader counts them — Devanagari and Latin alike,
+ *  where splitting on spaces would miscount a script with no spaces. */
+function countWords(t) {
+  try {
+    let n = 0;
+    for (const seg of new Intl.Segmenter(undefined, { granularity: "word" }).segment(String(t))) if (seg.isWordLike) n++;
+    return n;
+  } catch { return String(t).split(/\s+/).filter(Boolean).length; }
+}
+
+/** A failure, said in the few words the pill has room for. The notification
+ *  still carries the whole sentence. */
+function pillError(message) {
+  const m = String(message || ""), n = (SHELL && SHELL.notify) || {};
+  if (m === n.noSpeech || /no audio/i.test(m)) return txt("desktop.pill.err.noSpeech", "Didn't catch that");
+  if (m === n.micBlockedMac || m === n.micBlockedWindows) return txt("desktop.pill.err.micBlocked", "Microphone blocked");
+  if (m === n.micMissing) return txt("desktop.pill.err.micMissing", "No microphone");
+  if (m === n.micBusy) return txt("desktop.pill.err.micBusy", "Microphone in use");
+  if (m.indexOf("quota_exceeded") !== -1) return txt("desktop.pill.err.words", "Out of words this month");
+  return txt("desktop.pill.err.other", "Couldn't write that");
+}
+
+/** Throw the running session away: the recorder drops what it has and
+ *  nothing from it is pasted, however late it arrives. */
+function cancelDictation() {
+  if (!recording) return;
+  const sid = activeSession;
+  cancelled.add(sid);
+  sendToRecorder("cancel-recording", { session: sid });
+  activeSession = 0;
+  recording = false;
+  hideOverlay();
+  refreshTray();
+  pill("rest", { cancelled: true });
+}
+
+// Only the pill's own page may drive these.
+const fromPill = (e) => !!pillWin && !pillWin.isDestroyed() && e.sender === pillWin.webContents;
+ipcMain.on("pill:hover", (e, on) => {
+  if (!fromPill(e)) return;
+  // Over the pill: it takes the click. Anywhere else: the click goes through
+  // to whatever is under it, and the pointer is still reported so the pill
+  // knows when it is over it again.
+  if (on) pillWin.setIgnoreMouseEvents(false);
+  else pillWin.setIgnoreMouseEvents(true, { forward: true });
+});
+ipcMain.on("pill:action", (e, a) => {
+  if (!fromPill(e)) return;
+  if (a === "start" && !recording) toggleDictation();
+  else if (a === "finish" && recording) toggleDictation();
+  else if (a === "cancel" && recording) cancelDictation();
+});
+// The voice's level, band by band, from the recorder to the pill.
+ipcMain.on("dictation-level", (e, p) => {
+  if (!recorderWin || e.sender !== recorderWin.webContents) return;
+  if (!p || p.session !== activeSession || !recording) return;
+  if (pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
+});
 function overlayText(t) {
   if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send("overlay-text", t);
 }
@@ -969,6 +1107,15 @@ function buildMenu() {
       label: t("tray.liveCaptions"),
       type: "checkbox", checked: cfg.live,
       click: (item) => saveConfig({ live: item.checked }),
+    },
+    {
+      label: txt("desktop.tray.showPill", "Show the pill"),
+      type: "checkbox", checked: cfg.pill !== false,
+      click: (item) => {
+        saveConfig({ pill: item.checked });
+        if (item.checked) pill(pillState);
+        else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
+      },
     },
     {
       label: t("tray.startAtLogin"),
@@ -1059,6 +1206,33 @@ ipcMain.handle("app:env", () => {
   };
 });
 ipcMain.handle("app:knobs", () => knobsPayload());
+
+/** This computer's settings, as the window's pages show them. The bound keys
+ *  are the ones actually bound, which is not always what was asked for. */
+function localSettings() {
+  return {
+    pill: cfg.pill !== false, pauseFlush: cfg.pauseFlush !== false, autoStart: !!cfg.autoStart,
+    live: !!cfg.live, tap: !!cfg.tap && tapActive, tapKeys: cfg.tapKeys.slice(),
+    hotkey: prettyKey(cfg.hotkey), hold: !!cfg.hold && holdActive, holdKey: cfg.holdKey,
+  };
+}
+// What the window may change, and of what type. Nothing else is written.
+const SETTABLE = { pill: "boolean", pauseFlush: "boolean", autoStart: "boolean", live: "boolean", tap: "boolean" };
+ipcMain.handle("app:config", () => localSettings());
+ipcMain.handle("app:setConfig", (e, key, value) => {
+  if (!appWin || appWin.isDestroyed() || e.sender !== appWin.webContents) return localSettings();
+  if (!Object.prototype.hasOwnProperty.call(SETTABLE, key) || typeof value !== SETTABLE[key]) return localSettings();
+  saveConfig({ [key]: value });
+  if (key === "autoStart" && app.isPackaged) {
+    try { app.setLoginItemSettings({ openAtLogin: value, args: ["--hidden"] }); } catch { /* locked-down machine */ }
+  }
+  if (key === "pill") {
+    if (value) pill(pillState);
+    else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
+  }
+  if (key === "tap") pillSend({ hint: pillHint() });
+  return localSettings();
+});
 ipcMain.handle("app:setSession", (_e, v) => {
   // The window signed in or out. The tray shares the session, so it adopts it
   // here rather than learning about it on the next token push.
@@ -1142,6 +1316,7 @@ ipcMain.on("app:boot", (_e, v) => {
 let lastSignInNudge = 0;
 function requireAccount() {
   if (signedIn()) return true;
+  pill("error", { label: txt("desktop.pill.signIn", "Sign in to talk") });
   openAppWindow();          // lands on the gate — render() shows it when there is no session
   // ONCE, NOT ONCE PER KEY REPEAT. Hold-to-talk calls this from `keydown`,
   // which auto-repeats for as long as the key is down — so an unthrottled
@@ -1165,6 +1340,7 @@ function requireAccount() {
 let lastQuotaNudge = 0;
 function requireWords() {
   if (!bool("quota.exceeded", false)) return true;
+  pill("error", { label: txt("desktop.pill.err.words", "Out of words this month") });
   const now = Date.now();
   if (now - lastQuotaNudge > num("desktop.notify.nudgeThrottleMs", 5000)) {
     lastQuotaNudge = now;
@@ -1198,6 +1374,7 @@ async function startRecording(sid) {
     recording = false;
     hideOverlay();   // toggleDictation already raised it for a live session
     refreshTray();
+    pill("rest");
     requireAccount();
     return;
   }
@@ -1229,13 +1406,17 @@ function toggleDictation() {
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
+    pillWords = 0;
+    pill("listening");
     // Overlay BEFORE the start call: when the token is fresh startRecording
     // runs to completion synchronously, and a failure inside it hides an
-    // overlay that this line had not raised yet.
-    if (cfg.live) { showOverlay(); overlayText(""); }
+    // overlay that this line had not raised yet. With the pill on, the live
+    // words are its caption instead.
+    if (cfg.live && !pillOn()) { showOverlay(); overlayText(""); }
     void startRecording(activeSession);
   } else {
     sendToRecorder("stop-recording", { session: activeSession });
+    pill("writing");
   }
   refreshTray();
 }
@@ -1373,10 +1554,14 @@ function settleSession(session) {
 
 ipcMain.on("dictation-result", (_e, payload) => {
   const { session, text } = payload || {};
+  // Thrown away with the pill's ✕: late or not, none of it is pasted.
+  if (cancelled.has(session)) { cancelled.delete(session); return; }
+  const current = session === activeSession;
   settleSession(session);
   // Paste regardless of session age — late-arriving words are still the
   // user's words and belong at the cursor.
   const t = (text || "").trim();
+  if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
   if (!t) return;
   clipboard.writeText(t);
   // Small delay so the clipboard write settles before the paste keystroke.
@@ -1388,6 +1573,7 @@ ipcMain.on("dictation-result", (_e, payload) => {
 // between flushing on a pause and stopping on one.
 ipcMain.on("dictation-segment", (_e, payload) => {
   const { session, text, failed } = payload || {};
+  if (cancelled.has(session)) return;
   if (failed) {
     notify(fmt("notify.dictationFailed", { message: txt("desktop.notify.segmentLost", "segment lost — still listening") }));
     return;
@@ -1396,7 +1582,11 @@ ipcMain.on("dictation-segment", (_e, payload) => {
   if (!t) return;
   clipboard.writeText(t);
   setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
-  if (session === activeSession && cfg.live) overlayText("");
+  if (session === activeSession) {
+    pillWords += countWords(t);
+    pill("flash");
+    if (cfg.live) { if (pillOn()) pill("caption", { text: "" }); else overlayText(""); }
+  }
 });
 
 // Nobody said anything for a long time. Close the mic rather than leave it
@@ -1408,6 +1598,8 @@ ipcMain.on("dictation-idle", (_e, payload) => {
 
 ipcMain.on("dictation-error", (_e, payload) => {
   const { session, message } = payload || {};
+  if (cancelled.has(session)) { cancelled.delete(session); return; }
+  if (session === activeSession) pill("error", { label: pillError(message) });
   settleSession(session);
   notify(fmt("notify.dictationFailed", { message }));
   // The server refused for words: the cached `quota.exceeded` was stale, so
@@ -1418,7 +1610,9 @@ ipcMain.on("dictation-error", (_e, payload) => {
 // Live partials from the recorder → overlay captions (current session only).
 ipcMain.on("live-partial", (_e, payload) => {
   const { session, text } = payload || {};
-  if (session === activeSession) overlayText(text);
+  if (session !== activeSession) return;
+  if (pillOn()) pill("caption", { text });
+  else overlayText(text);
 });
 
 // ---- App lifecycle -----------------------------------------------------------
@@ -1537,6 +1731,7 @@ app.whenReady().then(() => {
   }
 
   createRecorderWindow();
+  if (pillOn()) createPillWindow();
 
   tray = new Tray(trayIcon());
   refreshTray();

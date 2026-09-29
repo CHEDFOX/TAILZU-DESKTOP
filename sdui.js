@@ -59,6 +59,12 @@ const COMPONENTS = [
   // categories so the reply leaves the speaker rather than the earpiece; a
   // window has neither, so none of that exists here.
   "VoiceSession",
+  // THE DESK. A window-shaped Tailzu rather than a phone's screens in a
+  // frame: a masthead instead of a rail, pages that run the width of the
+  // window, the said line above the written one. Declared so the server sends
+  // those pages only to a build that can draw them; an older installer keeps
+  // the rail and the phone screens it has always had.
+  "DeskShell", "Keys",
 ];
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
@@ -79,6 +85,10 @@ const ACTIONS = [
   // Declared, because a capability list that omits them is the server being
   // told this window cannot take a payment — and it now can.
   "iap.subscribe", "iap.showPaywall", "iap.restore",
+  // What only a desktop has: a clipboard to put a note back on, settings that
+  // live on this computer (the pill, the shortcut), a microphone started from
+  // a page, and a way out of the account from the settings page itself.
+  "copyText", "desktop.config", "dictate", "signOut",
 ];
 
 /**
@@ -107,6 +117,13 @@ let FLIPS = [];
 let FLIP_TIMERS = [];
 let STATE = {};          // per-screen state, replaced on every navigation
 let TAB_ID = "";
+// The desk: set when the server says this window gets its own pages (the
+// masthead, the width of the window) rather than the phone's.
+let DESK = false;
+// Settings that live on this computer — the pill, pausing, the keys that are
+// bound — read from the main process and put under `state.desktop` on every
+// screen, so a page can show them and a switch can change them.
+let LOCAL = {};
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) =>
@@ -516,12 +533,58 @@ function css(st) {
 // ---------------------------------------------------------------------------
 
 let handlers = [];        // [{ id, action }] — bound after innerHTML lands
+let SUBMITS = [];         // actions an Enter in a desk field runs, by 1-based index
+
+/**
+ * THE KEYS THIS COMPUTER HAS BOUND, drawn as keys.
+ *
+ * Only the main process knows them — the server cannot, and a page that said
+ * "Ctrl twice" to someone who moved it to Alt would be wrong in the one place
+ * it is trying to teach. So the node names which binding to draw and the keys
+ * come from `state.desktop`, as keycaps.
+ */
+function keysNode(p, s) {
+  const d = LOCAL || {};
+  const tap = d.tap !== false && Array.isArray(d.tapKeys) && d.tapKeys.length;
+  const keys = p.source !== "hotkey" && tap ? [d.tapKeys[0], d.tapKeys[0]]
+    : String(d.hotkey || "Ctrl+Shift+Space").split("+").map((k) => k.trim()).filter(Boolean);
+  return '<span class="d-keys" style="' + s + '">' +
+    keys.map((k) => '<span class="d-keycap">' + esc(k) + "</span>").join("") + "</span>";
+}
 
 function bind(action) {
   if (!action) return "";
   const id = "h" + handlers.length;
-  handlers.push({ id, action });
+  handlers.push({ id, action: STATE && STATE.item !== undefined ? withItem(action) : action });
   return ' data-h="' + id + '"';
+}
+
+/**
+ * A ROW'S ACTION REMEMBERS ITS ROW.
+ *
+ * A List draws each item with `state.item` set, and unsets it when the row is
+ * drawn. Clicks come later — so "copy this note" or "delete this word",
+ * written as `$state.item.text`, would read an item that no longer exists and
+ * act on nothing. The references to the item are filled in when the row is
+ * drawn; everything else in the action is left for the click.
+ */
+function withItem(v) {
+  const ITEM = /\$state\.item\.[A-Za-z0-9_.]+/g;
+  if (typeof v === "string") {
+    if (/^\$state\.item\.[A-Za-z0-9_.]+$/.test(v)) return stateAt(v.slice(7));
+    return v.replace(ITEM, (m) => { const x = stateAt(m.slice(7)); return x == null ? "" : String(x); });
+  }
+  if (Array.isArray(v)) return v.map(withItem);
+  if (v && typeof v === "object") { const o = {}; for (const k of Object.keys(v)) o[k] = withItem(v[k]); return o; }
+  return v;
+}
+
+/** The desk's own classes, by name. Only `d-` names get through: a class is a
+ *  stylesheet rule in app.html, and a server that could name any class could
+ *  reach styles this window never meant to hand out. */
+function cls(p) {
+  const list = String((p && p.cls) || "").split(/\s+/).filter((c) => /^d-[a-z0-9-]+$/.test(c));
+  return list.length ? ' class="' + list.join(" ") + '"' : "";
 }
 
 function node(n) {
@@ -534,6 +597,9 @@ function node(n) {
 
   switch (n.type) {
     case "Screen":
+      // A desk page runs the width of the window and brings its own margins;
+      // a phone screen keeps the centred column it was designed for.
+      if (p.layout === "full") return '<div' + cls({ cls: "d-screen " + (p.cls || "") }) + ' style="' + s + '">' + kids + "</div>";
       return '<div class="pad" style="' + s + '">' + kids + "</div>";
 
     case "Row":
@@ -572,7 +638,7 @@ function node(n) {
       // means. It also fixes the containing block: an absolutely-positioned
       // child now measures against its own parent, which is what it does on
       // the phones and not what it was doing here.
-      return '<div' + bind(press) + ' style="' +
+      return '<div' + bind(press) + cls(p) + ' style="' +
         (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
         (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
@@ -614,6 +680,14 @@ function node(n) {
       // links, rendered as "our Terms and" with the spaces eaten and the words
       // jammed together. pre-wrap keeps them and still wraps, which is what
       // the phones do with the same tree.
+      // A desk line takes its face from its class, and its words from state
+      // when it is bound to them — the keys this computer has bound, a note's
+      // two lines — so one template can draw every row of a list.
+      if (p.cls) {
+        const bound = n.bind && n.bind.content ? stateAt(n.bind.content) : undefined;
+        const words = bound != null ? esc(String(bound)) : txt;
+        return '<span' + bind(press) + cls(p) + ' style="' + s + '">' + words + "</span>";
+      }
       return '<span' + bind(press) + ' style="white-space:pre-wrap;' +
         role(p.variant || "body", "color:var(--text)") + ";" +
         (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
@@ -623,6 +697,8 @@ function node(n) {
         'padding:5px 11px;' + role(n.type === "Badge" ? "badge" : "chip", "color:var(--body)") + ";" + (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
 
     case "Button": {
+      // A desk control is a link or an ink button, drawn by its class.
+      if (p.cls) return '<button type="button"' + bind(press) + cls(p) + ' style="' + s + '">' + txt + "</button>";
       const primary = p.variant !== "secondary" && p.variant !== "ghost";
       return '<button' + bind(press) + ' style="display:block;width:100%;border:0;cursor:pointer;' +
         (primary ? "background:var(--accent);color:" + K.color("desktop.button.primaryText", "#000")
@@ -647,6 +723,11 @@ function node(n) {
       const path = (n.bind && n.bind.value) || "";
       const val = path ? (stateAt(path) || "") : "";
       const multi = p.multiline === true;
+      if (p.cls && !multi) {
+        const submit = n.on && n.on.onSubmit ? ' data-s="' + SUBMITS.push(n.on.onSubmit) + '"' : "";
+        return '<input value="' + esc(val) + '" data-bind="' + esc(path) + '"' + submit + cls(p) +
+          ' placeholder="' + esc(label(p.placeholder) || "") + '" aria-label="' + esc(label(p.placeholder) || "") + '" style="' + s + '">';
+      }
       const common = ' data-bind="' + esc(path) + '" placeholder="' + esc(label(p.placeholder) || "") +
         '" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:13px;' +
         "padding:13px 14px;color:var(--text);font:inherit;outline:none;" + s + '"';
@@ -658,6 +739,11 @@ function node(n) {
     case "Switch": {
       const path = (n.bind && n.bind.value) || "";
       const on = truthy(path ? stateAt(path) : p.value);
+      if (p.cls) {
+        return '<button type="button" role="switch" aria-checked="' + on + '"' + cls(p) +
+          (n.on && n.on.onChange ? bind(n.on.onChange) : ' data-toggle="' + esc(path) + '"') +
+          ' aria-label="' + esc(label(p.accessibilityLabel || p.label || "")) + '" style="' + s + '"></button>';
+      }
       const sw = K.obj("desktop.switch", {
         width: 50, height: 30, knob: 24, inset: 3, offBackground: "rgba(255,255,255,.16)", knobColor: "#fff",
       });
@@ -708,6 +794,8 @@ function node(n) {
         ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + box + '"></video>'
         : '<img src="' + esc(src) + '" alt="" style="' + box + '">';
     }
+
+    case "Keys": return keysNode(p, s);
 
     case "WordMeter": return wordMeter(p);
     case "PieChart": case "DonutChart": return pie(p);
@@ -1816,6 +1904,31 @@ async function run(action, eventValue) {
       setStatePath(action.path, list); repaint(); return;
     }
     case "toast": toast(label(action.message) || ""); return;
+    // A note back on the clipboard, as it was written.
+    case "copyText": {
+      const t = String(resolveValue(action.text) ?? "");
+      try { await navigator.clipboard.writeText(t); toast(label(action.message) || K.txt("desktop.toast.copied", "Copied")); }
+      catch { toast(K.txt("desktop.toast.copyFailed", "Couldn't copy that")); }
+      return;
+    }
+    // A setting that lives on this computer. The main process checks the key
+    // and the value, writes its own file, and answers with every setting again.
+    case "desktop.config": {
+      try {
+        const v = action.value === "$toggle" ? !truthy(stateAt("desktop." + action.key)) : resolveValue(action.value);
+        const next = await window.tailzuApp.setConfig(String(action.key || ""), v);
+        if (next && typeof next === "object") LOCAL = next;
+      } catch { toast(K.txt("desktop.toast.settingFailed", "Couldn't change that setting")); }
+      STATE.desktop = Object.assign({}, LOCAL);
+      repaint();
+      return;
+    }
+    case "dictate":
+      try { window.tailzuApp.dictate(); } catch { /* tray only */ }
+      return;
+    case "signOut":
+      await signOutHere();
+      return;
     case "haptic": return;                      // no equivalent, and none faked
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(action.url); return;
@@ -1985,6 +2098,7 @@ async function paint(force) {
   // the one that should land; this one would paint over it a moment later.
   if (seq !== paint._seq) return;
   STATE = Object.assign({}, screen.state || {});
+  STATE.desktop = Object.assign({}, LOCAL);
   // Picks belong to the thread that was on screen. A new screen has none.
   CHAT_PICKED = {};
   CURRENT_ACTIONS = screen.actions || {};
@@ -2287,10 +2401,14 @@ function repaint(screen) {
   const sc = CURRENT_SCREEN;
   if (!sc) return;
   handlers = [];
+  SUBMITS = [];
   // Whatever was turning words over belongs to the DOM about to be replaced.
   stopFlips();
   const html = sc.root ? node(sc.root) : '<div class="pad">' + (sc.blocks || []).map(node).join("") + "</div>";
   const view = $("view");
+  // A desk page sits on the desk's own ground. A phone screen pushed from one
+  // (the paywall, a live training session) keeps its own dark room.
+  view.dataset.look = DESK && sc.look === "desk" ? "desk" : "legacy";
   view.innerHTML = html;
   // A NEW SCREEN ARRIVES, IT DOES NOT SNAP. The first paint of a screen fades
   // its content in over the field, which stays where it was; a repaint of the
@@ -2311,6 +2429,10 @@ function repaint(screen) {
   startFlips();
 
   bindHandlers(view);
+  view.querySelectorAll("[data-s]").forEach((el) => {
+    const act = SUBMITS[Number(el.getAttribute("data-s")) - 1];
+    if (act) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setStatePath(el.getAttribute("data-bind"), el.value); void run(act); } });
+  });
   view.querySelectorAll("[data-bind]").forEach((el) => {
     const path = el.getAttribute("data-bind");
     if (!path) return;
@@ -2330,8 +2452,8 @@ function repaint(screen) {
   wireChat(view, sc);
   wireMic(view, sc);
   wireField(view);
-  document.querySelectorAll("#tabs .tab").forEach((b) => {
-    b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID));
+  document.querySelectorAll("#tabs .tab, #mtabs .mtab").forEach((b) => {
+    b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID && STACK.length <= 1));
   });
 }
 
@@ -2373,11 +2495,74 @@ function startFlips() {
 }
 
 function renderTabs() {
-  $("tabs").innerHTML = TABS.map((t) =>
-    '<button class="tab" data-tab="' + esc(t.id) + '">' + esc(t.title) + "</button>").join("");
-  document.querySelectorAll("#tabs .tab").forEach((b) => {
+  const host = DESK ? $("mtabs") : $("tabs");
+  const cl = DESK ? "mtab" : "tab";
+  host.innerHTML = TABS.map((t) =>
+    '<button class="' + cl + '" data-tab="' + esc(t.id) + '">' + esc(t.title) + "</button>").join("");
+  host.querySelectorAll("." + cl).forEach((b) => {
     b.addEventListener("click", () => switchTab(b.dataset.tab));
   });
+}
+
+/**
+ * THE MASTHEAD'S RIGHT-HAND SIDE: how many words are left, the way into
+ * settings, and whose account this is. All three from what the window already
+ * has — the boot's quota flags and the signed-in token — so nothing here is a
+ * request of its own.
+ */
+function paintMast() {
+  if (!DESK) return;
+  const f = (BOOT && BOOT.flags) || {};
+  const q = $("quota");
+  if (q) {
+    const paid = f["quota.entitled"] === true;
+    const used = Number(f["quota.wordsUsed"]) || 0, of = Number(f["quota.wordsFree"]) || 0;
+    q.querySelector("span").textContent = paid
+      ? K.txt("desktop.mast.unlimited", "Unlimited")
+      : K.txt("desktop.mast.words", "{used} / {of} words", { used: used.toLocaleString(), of: of.toLocaleString() });
+    q.style.setProperty("--fill", paid ? "100%" : Math.min(100, of ? (used / of) * 100 : 0) + "%");
+    q.setAttribute("aria-label", q.querySelector("span").textContent);
+  }
+  const me = $("me");
+  if (me) {
+    let who = "";
+    try {
+      const claims = JSON.parse(atob(String(SESSION.access_token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      who = (claims.user_metadata && (claims.user_metadata.full_name || claims.user_metadata.name)) || claims.email || claims.phone || "";
+    } catch { /* no name to show */ }
+    me.textContent = (String(who).trim()[0] || "·").toUpperCase();
+    me.title = who;
+  }
+  applyLook(f["desktop.look"]);
+}
+
+/**
+ * THE DESK'S COLOURS, FROM THE SERVER. app.html paints the first frame with
+ * its own tokens; a `desktop.look` block ({ light: {...}, dark: {...} }, each a
+ * map of token name to colour) retunes them without an installer. Only
+ * `--d-` tokens, and only values that look like colours.
+ */
+let LOOK = null;
+function applyLook(look) {
+  if (look && typeof look === "object") LOOK = look;
+  if (!LOOK) return;
+  const dark = prefers("(prefers-color-scheme: dark)");
+  const set = LOOK[dark ? "dark" : "light"] || {};
+  const root = document.documentElement.style;
+  Object.keys(set).forEach((k) => {
+    const v = String(set[k]);
+    if (/^d-[a-z0-9-]+$/.test(k) && /^(#[0-9a-f]{3,8}|rgba?\([0-9., ]+\))$/i.test(v)) root.setProperty("--" + k, v);
+  });
+}
+try { window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyLook()); } catch { /* old engine */ }
+
+/** Signing out, from the rail's link or the desk's settings page. */
+async function signOutHere() {
+  await setSession(null);
+  // Drop the tray's token too, or it keeps reading the account of someone
+  // who just signed out of it.
+  try { window.tailzuApp.token(null); } catch { /* tray only */ }
+  location.reload();
 }
 
 /**
@@ -2409,7 +2594,7 @@ function paintChrome(shell) {
   text("gateNote", g.note);
   $("gateNote").hidden = !$("gateNote").textContent.trim();
   const r = shell.rail || {};
-  text("railBrand", r.brand);       text("dictate", r.dictate);
+  text("railBrand", r.brand);       text("mastBrand", r.brand);       text("dictate", r.dictate);
   text("settingsLink", r.settings); text("signOut", r.signOut);
   text("back", r.back);
   applyGateLayout(shell.gateLayout);
@@ -2518,8 +2703,11 @@ async function render() {
   BOOT = await bootstrap();
   applyTheme(BOOT.theme);
   paintChrome(BOOT.flags && BOOT.flags["desktop.shell"]);
+  DESK = !!(BOOT.flags && BOOT.flags["desktop.desk"] === true);
+  $("shell").dataset.look = DESK ? "desk" : "rail";
   TABS = BOOT.navigation && BOOT.navigation.kind === "tabs" ? BOOT.navigation.tabs : [];
   renderTabs();
+  paintMast();
   // WHERE THE SERVER SAYS, when the server says somewhere this window has.
   //
   // We report `formFactor: "desktop"` now, so the intro and the two setup
@@ -2894,13 +3082,15 @@ function refreshDisc(method) {
   });
   $("settingsLink").addEventListener("click", () => go("settings"));
   $("back").addEventListener("click", back);
-  $("signOut").addEventListener("click", async () => {
-    await setSession(null);
-    // Drop the tray's token too, or it keeps reading the account of someone
-    // who just signed out of it.
-    try { window.tailzuApp.token(null); } catch { /* tray only */ }
-    location.reload();
-  });
+  $("signOut").addEventListener("click", () => { void signOutHere(); });
+  // The masthead's settings and word count both open the settings page the
+  // server names for the desk.
+  const openSettings = () => go(K.str("desktop.desk.settingsScreenId", "desk_settings"));
+  $("gear").addEventListener("click", openSettings);
+  $("quota").addEventListener("click", openSettings);
+  // This computer's own settings. An older main process has no such call;
+  // the pages then show the defaults the server wrote next to each switch.
+  try { LOCAL = (await window.tailzuApp.config()) || {}; } catch { LOCAL = {}; }
 
   if (!SESSION) {
     const b = await gateBoot();
