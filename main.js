@@ -1066,13 +1066,13 @@ function countWords(t) {
 
 /** A failure, said in the few words the pill has room for. The notification
  *  still carries the whole sentence. */
-function pillError(message) {
+function pillError(message, quota) {
   const m = String(message || ""), n = (SHELL && SHELL.notify) || {};
   if (m === n.noSpeech || /no audio/i.test(m)) return txt("desktop.pill.err.noSpeech", "Didn't catch that");
   if (m === n.micBlockedMac || m === n.micBlockedWindows) return txt("desktop.pill.err.micBlocked", "Microphone blocked");
   if (m === n.micMissing) return txt("desktop.pill.err.micMissing", "No microphone");
   if (m === n.micBusy) return txt("desktop.pill.err.micBusy", "Microphone in use");
-  if (m.indexOf("quota_exceeded") !== -1) return txt("desktop.pill.err.words", "Out of words this month");
+  if (quota) return txt("desktop.pill.err.words", "Out of words this month");
   return txt("desktop.pill.err.other", "Couldn't write that");
 }
 
@@ -1670,14 +1670,21 @@ ipcMain.on("dictation-idle", (_e, payload) => {
 });
 
 ipcMain.on("dictation-error", (_e, payload) => {
-  const { session, message } = payload || {};
+  const { session, message, code, detail } = payload || {};
   if (cancelled.has(session)) { cancelled.delete(session); return; }
-  if (session === activeSession) pill("error", { label: pillError(message) });
+  // `message` is words for the person, and it is all the notification says.
+  // What actually went wrong ("NotReadableError: …", "HTTP 500 …") used to be
+  // pasted into it; it is logged here instead.
+  if (detail) console.warn("[dictation] " + (code ? code + ": " : "") + detail);
+  // Known by its code now that the message is a sentence: the stream's own,
+  // or the one the recorder reads out of a refused upload.
+  const quota = code === "quota_exceeded";
+  if (session === activeSession) pill("error", { label: pillError(message, quota) });
   settleSession(session);
   notify(fmt("notify.dictationFailed", { message }));
   // The server refused for words: the cached `quota.exceeded` was stale, so
   // ask again, and the next press is answered before the mic opens.
-  if (String(message || "").indexOf("quota_exceeded") !== -1) void refreshBoot();
+  if (quota) void refreshBoot();
 });
 
 // Live partials from the recorder → overlay captions (current session only).

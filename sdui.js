@@ -137,6 +137,44 @@ const esc = (s) =>
 // Auth
 // ---------------------------------------------------------------------------
 
+/**
+ * A FAILURE, WORDED FOR THE PERSON AT THE WINDOW.
+ *
+ * Errors here used to carry "/v1/app/bootstrap → 500", the browser's own
+ * "Failed to fetch" or Supabase's "invalid_grant", and the gate and the voice
+ * screens showed a thrown message as it stood. Now a failure this file words
+ * on purpose is marked `worded` (with the raw detail beside it for the log),
+ * and anything else is logged and replaced by the caller's sentence. The
+ * words for a refused request are the phones' (labels error.*), so one edit
+ * on the server changes both.
+ */
+function worded(message, detail) {
+  const e = new Error(message);
+  e.worded = true;
+  if (detail) e.detail = detail;
+  return e;
+}
+
+function statusText(status) {
+  if (status === 401 || status === 403) return K.txt("error.unauthorized", "Your session has expired. Sign in again to continue.");
+  if (status === 404) return K.txt("error.notFound", "That isn't available right now.");
+  if (status === 429) return K.txt("error.rateLimited", "Too many requests. Wait a moment, then try again.");
+  if (status >= 500) return K.txt("error.server", "Something went wrong on our side. Try again in a moment.");
+  return K.txt("error.generic", "Something went wrong. Try again.");
+}
+
+/** What to show for a caught failure; the raw detail goes to the console. */
+function userText(err, fallback) {
+  if (err && err.worded) {
+    if (err.detail) console.warn("[tailzu]", err.detail);
+    return err.message;
+  }
+  console.warn("[tailzu]", err);
+  // fetch rejects with a TypeError when the network is not there at all.
+  if (err instanceof TypeError) return K.txt("error.network", "Couldn't reach Tailzu. Check your connection and try again.");
+  return fallback;
+}
+
 async function sbFetch(path, body) {
   const res = await fetch(SUPABASE_URL + path, {
     method: "POST",
@@ -145,8 +183,14 @@ async function sbFetch(path, body) {
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(json.error_description || json.msg || json.error ||
-      K.txt("desktop.gate.authFailed", "Auth failed ({status})", { status: res.status }));
+    // Supabase's own words ("Token has expired or is invalid", "invalid_grant")
+    // are for the log. A refused code is the one case with its own sentence.
+    const detail = path + " → " + res.status + " " + (json.error_description || json.msg || json.error || "");
+    if (res.status === 429 || res.status >= 500) throw worded(statusText(res.status), detail);
+    if (path.indexOf("/verify") !== -1) {
+      throw worded(K.txt("desktop.gate.codeWrong", "That code didn't work. Check it and try again."), detail);
+    }
+    throw worded(K.txt("desktop.gate.authFailed", "Couldn't sign you in. Try again."), detail);
   }
   return json;
 }
@@ -255,9 +299,9 @@ async function api(path, body, method) {
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     if (res.status === 429 && text.indexOf("quota_exceeded") !== -1) {
-      const e = new Error("quota_exceeded"); e.quota = true; throw e;
+      const e = worded(K.txt("error.quota", "You've used this month's free words."), text); e.quota = true; throw e;
     }
-    throw new Error(path + " → " + res.status);
+    throw worded(statusText(res.status), path + " → " + res.status);
   }
   const ct = res.headers.get("content-type") || "";
   return ct.indexOf("application/json") !== -1 ? res.json() : res.text();
@@ -1149,7 +1193,7 @@ async function micStart(path, n) {
     stream.getTracks().forEach((t) => t.stop());
     MIC = null;
     try {
-      if (!chunks.length) throw new Error(K.txt("desktop.mic.noAudio", "no audio captured"));
+      if (!chunks.length) throw worded(K.txt("desktop.mic.noAudio", "no audio captured"));
       const type = rec.mimeType || "audio/webm";
       const fd = new FormData();
       fd.append("audio", new Blob(chunks, { type }), "audio." + (type.indexOf("ogg") !== -1 ? "ogg" : "webm"));
@@ -1161,10 +1205,10 @@ async function micStart(path, n) {
         headers: tok ? { Authorization: "Bearer " + tok } : {},
         body: fd,
       });
-      if (!res.ok) throw new Error("transcribe → " + res.status);
+      if (!res.ok) throw worded(statusText(res.status), "transcribe → " + res.status);
       const j = await res.json();
       const text = String(j.cleanedText || j.transcript || j.text || "").trim();
-      if (!text) throw new Error(K.txt("desktop.mic.noSpeech", "no speech detected"));
+      if (!text) throw worded(K.txt("desktop.mic.noSpeech", "no speech detected"));
       if (path) setStatePath(path, text);
       repaint();
       const ch = n.on && n.on.onChange;
@@ -1172,7 +1216,7 @@ async function micStart(path, n) {
     } catch (err) {
       repaint();
       const eh = n.on && n.on.onError;
-      const msg = (err && err.message) ? err.message : String(err);
+      const msg = userText(err, K.txt("desktop.mic.transcribeFailed", "Couldn't turn that into text. Try again."));
       if (eh) await run(eh, msg); else toast(msg);
     }
   };
@@ -1297,7 +1341,15 @@ function startSession(n) {
         else if (m.type === "final") {
           if (m.text && m.text.trim()) r.committed = (r.committed + " " + m.text.trim()).trim();
           r.partial = ""; heard();
-        } else if (m.type === "error") fail(m.message || K.txt("desktop.voice.micStopped", "The microphone stopped."));
+        } else if (m.type === "error") {
+          // The server's sentence, except its sign-in refusal: that keeps
+          // the keyboards' old wording ("invalid or missing token") because
+          // they match on it, so it is said here.
+          if (m.message) console.warn("[voice] stream error " + (m.code || "") + ": " + m.message);
+          fail(m.code === "unauthorized"
+            ? K.txt("error.unauthorized", "Your session has expired. Sign in again to continue.")
+            : (m.message || K.txt("desktop.voice.micStopped", "The microphone stopped.")));
+        }
       };
       r.ws.onerror = () => { /* onclose follows */ };
       r.ctx = new AudioContext();
@@ -1314,7 +1366,7 @@ function startSession(n) {
     } catch (err) {
       fail(err && err.name === "NotAllowedError"
         ? K.txt("desktop.voice.micBlocked", "microphone blocked — allow it in your system settings")
-        : ((err && err.message) ? err.message : K.txt("desktop.voice.startFailed", "Couldn't start listening.")));
+        : userText(err, K.txt("desktop.voice.startFailed", "Couldn't start listening.")));
     }
   }
 
@@ -1334,7 +1386,7 @@ function startSession(n) {
       // script: someone who switched to Bengali is answered in Bengali.
       speak(reply, () => { if (r.alive) void listen(); }, res && typeof res.speak === "string" ? res.speak : "");
     } catch (err) {
-      fail((err && err.message) ? err.message : K.txt("desktop.voice.replyFailed", "Couldn't reach the conversation."));
+      fail(userText(err, K.txt("desktop.voice.replyFailed", "Couldn't reach the conversation.")));
     }
   }
 
@@ -2099,9 +2151,12 @@ async function paint(force) {
       return paint(true);
     }
     dropField();
+    // The second line says what to do when there is something to say (a
+    // refused request, no network); the error itself goes to the console.
+    const why = userText(err, "");
     view.innerHTML = '<div class="pad"><p style="color:var(--danger)">' +
       esc(K.txt("desktop.screen.loadFailed", "Couldn't load this screen.")) + "</p>" +
-      '<p style="color:var(--label);font-size:13px">' + esc(String(err.message || err)) + "</p></div>";
+      (why ? '<p style="color:var(--label);font-size:13px">' + esc(why) + "</p>" : "") + "</div>";
     return;
   }
   clearTimeout(slow);
@@ -2417,7 +2472,7 @@ function wireMic(view, sc) {
         const eh = n && n.on && n.on.onError;
         const msg = (err && err.name === "NotAllowedError")
           ? K.txt("desktop.voice.micBlocked", "microphone blocked — allow it in your system settings")
-          : ((err && err.message) ? err.message : String(err));
+          : userText(err, K.txt("desktop.recorder.micError", "Couldn't start the microphone. Try again."));
         if (eh) await run(eh, msg); else toast(msg);
       }
     });
@@ -3051,11 +3106,11 @@ async function commit(method) {
     if (method === "phone") {
       to = (AUTH.dial + AUTH.phone).replace(/[^\d+]/g, "");
       if (!/^\+\d{7,15}$/.test(to)) {
-        throw new Error(K.txt("desktop.gate.badPhone", "Enter a number with its country code, like +1 555 000 1234."));
+        throw worded(K.txt("desktop.gate.badPhone", "Enter a number with its country code, like +1 555 000 1234."));
       }
     } else {
       to = AUTH.email.trim();
-      if (!/.+@.+\..+/.test(to)) throw new Error(K.txt("desktop.gate.badEmail", "Enter your email address."));
+      if (!/.+@.+\..+/.test(to)) throw worded(K.txt("desktop.gate.badEmail", "Enter your email address."));
     }
     AUTH.phase = "sending";
     paintGate();
@@ -3069,7 +3124,7 @@ async function commit(method) {
     void dressGate("code");
   } catch (e) {
     AUTH.phase = "entry";
-    AUTH.error = String((e && e.message) || e || "");
+    AUTH.error = userText(e, K.txt("desktop.gate.authFailed", "Couldn't sign you in. Try again."));
     paintGate();
   }
 }
@@ -3091,7 +3146,7 @@ async function submitCode() {
     AUTH.phase = "verify";
     AUTH.codeError = true;
     AUTH.code = "";
-    AUTH.error = String((e && e.message) || e || "");
+    AUTH.error = userText(e, K.txt("desktop.gate.codeWrong", "That code didn't work. Check it and try again."));
     paintGate();
   }
 }
@@ -3107,12 +3162,17 @@ async function oauth(provider) {
     if (!r || !r.ok) {
       // Closing the window is a decision, not a failure worth shouting about.
       if (r && r.error === "cancelled") return;
-      throw new Error((r && r.error) || K.txt("desktop.gate.signInFailed", "Sign-in failed."));
+      // The main process's reason ("no authorization code", Supabase's
+      // own) is for the log; the person gets the phones' sentence.
+      throw worded(provider === "apple"
+        ? K.txt("auth.apple.errorBody", "Apple sign-in didn't go through. Try again, or use your email.")
+        : K.txt("auth.google.errorBody", "Google sign-in didn't go through. Try again, or use your email."),
+      (r && r.error) || "no session");
     }
     SESSION = r.session;
     location.reload();
   } catch (e) {
-    AUTH.error = String((e && e.message) || e || "");
+    AUTH.error = userText(e, K.txt("desktop.gate.signInFailed", "Sign-in failed."));
     paintGate();
   } finally {
     const again = $("gateForm");
@@ -3192,6 +3252,6 @@ function refreshDisc(method) {
     // A failed bootstrap must not leave a blank window with no way out.
     $("gate").hidden = false;
     $("shell").hidden = true;
-    fail(K.txt("desktop.gate.offline", "Couldn't reach the backend: {error}", { error: String((e && e.message) || e) }));
+    fail(userText(e, K.txt("desktop.gate.offline", "Couldn't reach Tailzu. Check your connection and try again.")));
   }
 })();

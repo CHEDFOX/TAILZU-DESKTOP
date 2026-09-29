@@ -206,7 +206,17 @@
 
       function emitSegment(sid, text) { window.tailzu.segment({ session: sid, text: text }); }
       function emitResult(sid, text) { window.tailzu.result({ session: sid, text: text }); }
-      function emitError(sid, message) { window.tailzu.error({ session: sid, message: message }); }
+      /** A failure. `message` is the sentence the notification shows, and
+       *  only ever words for a person; what actually went wrong travels in
+       *  `extra.detail` to the main process's log, with the server's `code`
+       *  when there was one. */
+      function emitError(sid, message, extra) {
+        window.tailzu.error(Object.assign({ session: sid, message: message }, extra || {}));
+      }
+      /** An error as a developer reads it — for the log, never the screen. */
+      function errText(err) {
+        return (err && err.message) ? (err.name ? err.name + ": " : "") + err.message : String(err);
+      }
       function emitPartial(sid, text) { window.tailzu.partial({ session: sid, text: text }); }
 
       function base() { return (cfg.baseUrl || "").replace(/\/+$/, ""); }
@@ -254,14 +264,38 @@
 
       function micMessage(err) {
         const m = (err && err.message) ? err.message : String(err);
-        // A sentence getMic already wrote is passed through as it is; anything
-        // else keeps the "mic:" label, which is the honest thing to say about a
-        // failure we cannot name. Compared against the resolved strings rather
-        // than a prefix, so server-drawn copy in any wording still matches.
+        // A sentence getMic already wrote is passed through as it is.
+        // Compared against the resolved strings rather than a prefix, so
+        // server-drawn copy in any wording still matches.
         for (const k of ["micBlockedMac", "micBlockedWindows", "micMissing", "micBusy"]) {
           if (m === str(k)) return m;
         }
-        return K.txt("desktop.recorder.micError", "mic: {error}", { error: m });
+        // Anything else is a failure we cannot name, and the browser's words
+        // for it ("AbortError: Could not start audio source") are not for
+        // people. The notification says the mic did not start; the caller
+        // sends the error itself to the log.
+        return K.txt("desktop.recorder.micError", "Couldn't start the microphone. Try again.");
+      }
+
+      /**
+       * A refused upload, worded by what the server said. It used to be the
+       * status and the raw body ("HTTP 429 {code: quota_exceeded, …}") in the
+       * notification. The words are the phones' (labels error.*), so one edit
+       * on the server changes every surface; the word cap's own sentence is
+       * already written for people (the number, the reset date, the way out)
+       * and is shown.
+       */
+      function httpMessage(status, body) {
+        let j = null;
+        try { j = JSON.parse(body); } catch { j = null; }
+        if (j && j.code === "quota_exceeded") {
+          return (typeof j.message === "string" && j.message.trim())
+            ? j.message.trim() : K.txt("error.quota", "You've used this month's free words.");
+        }
+        if (status === 401 || status === 403) return K.txt("error.unauthorized", "Your session has expired. Sign in again to continue.");
+        if (status === 429) return K.txt("error.rateLimited", "Too many requests. Wait a moment, then try again.");
+        if (status >= 500) return K.txt("error.server", "Something went wrong on our side. Try again in a moment.");
+        return K.txt("error.generic", "Something went wrong. Try again.");
       }
 
       async function getMic() {
@@ -355,7 +389,7 @@
           startBands(sid, stream);
         } catch (err) {
           stopTracks();
-          emitError(sid, micMessage(err));
+          emitError(sid, micMessage(err), { detail: errText(err) });
         }
       }
 
@@ -381,7 +415,8 @@
             segmentStartedAt = Date.now();
           } catch (err) {
             stopTracks(); stopWatchingLevel();
-            emitError(sid, K.txt("desktop.recorder.continueFailed", "could not continue recording: {error}", { error: String(err) }));
+            emitError(sid, K.txt("desktop.recorder.continueFailed", "Recording stopped unexpectedly. Try again."),
+              { detail: errText(err) });
             return;
           }
           void uploadBatch(sid, segment, type, true);
@@ -400,10 +435,12 @@
             stopTracks();
             // Nothing was ever recording — say so instead of dying silently
             // (this is the state a dropped start-recording IPC used to leave).
-            emitError(sid, K.txt("desktop.recorder.notRunning", "recorder was not running"));
+            emitError(sid, K.txt("desktop.recorder.notRunning", "Recording didn't start. Try again."),
+              { detail: "recorder was not running" });
           }
         } catch (err) {
-          emitError(sid, String(err));
+          emitError(sid, K.txt("desktop.recorder.stopFailed", "Recording didn't finish. Try again."),
+            { detail: errText(err) });
         }
       }
 
@@ -433,10 +470,12 @@
           });
           if (!res.ok) {
             const body = await res.text().catch(() => "");
-            emitError(sid, K.txt("desktop.recorder.httpError", "HTTP {status}{body}", {
-              status: res.status,
-              body: body ? " " + body.slice(0, K.num("desktop.recorder.errorBodyChars", 120)) : "",
-            }));
+            emitError(sid, httpMessage(res.status, body), {
+              // The main process asks for a fresh bootstrap on this, so the
+              // next press is refused before the mic opens.
+              code: body.indexOf("quota_exceeded") !== -1 ? "quota_exceeded" : undefined,
+              detail: "HTTP " + res.status + (body ? " " + body.slice(0, K.num("desktop.recorder.errorBodyChars", 120)) : ""),
+            });
             return;
           }
           const json = await res.json();
@@ -464,8 +503,8 @@
           // A failed SEGMENT must not end the session: the mic is still open
           // and they are probably still talking. Tell them, keep going.
           if (isSegment) { window.tailzu.segment({ session: sid, text: "", failed: true }); return; }
-          emitError(sid, K.txt("desktop.recorder.uploadFailed", "upload: {error}",
-            { error: err && err.message ? err.message : String(err) }));
+          emitError(sid, K.txt("desktop.recorder.uploadFailed", "Couldn't send your recording. Check your connection and try again."),
+            { detail: errText(err) });
         }
       }
 
@@ -528,7 +567,13 @@
               // Captions lost while the recording carries on: nothing to tell
               // them, the words are still being kept.
               if (liveRec && liveRec.state === "recording") { dropStream(); return; }
-              emitError(sid, m.message || K.txt("desktop.recorder.streamError", "stream error"));
+              // The server's sentence — except the sign-in refusal, which it
+              // keeps in the keyboards' old wording ("invalid or missing
+              // token") because they match on it. That one is said here.
+              emitError(sid, m.code === "unauthorized"
+                ? K.txt("error.unauthorized", "Your session has expired. Sign in again to continue.")
+                : (m.message || K.txt("desktop.recorder.streamError", "Voice stopped working. Try again.")),
+              { code: m.code, detail: m.message });
               teardownLive();
             }
           };
@@ -549,7 +594,7 @@
             ws.send(downsampleTo16k(e.inputBuffer.getChannelData(0), inRate));
           };
         } catch (err) {
-          emitError(sid, micMessage(err));
+          emitError(sid, micMessage(err), { detail: errText(err) });
           teardownLive();
         }
       }
