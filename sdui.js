@@ -548,7 +548,8 @@ function keysNode(p, s) {
   const tap = d.tap !== false && Array.isArray(d.tapKeys) && d.tapKeys.length;
   const keys = p.source !== "hotkey" && tap ? [d.tapKeys[0], d.tapKeys[0]]
     : String(d.hotkey || "Ctrl+Shift+Space").split("+").map((k) => k.trim()).filter(Boolean);
-  return '<span class="d-keys" style="' + s + '">' +
+  const small = /(^|\s)d-keys-small(\s|$)/.test(String(p.cls || "")) ? " d-keys-small" : "";
+  return '<span class="d-keys' + small + '" style="' + s + '">' +
     keys.map((k) => '<span class="d-keycap">' + esc(k) + "</span>").join("") + "</span>";
 }
 
@@ -3066,6 +3067,14 @@ function refreshDisc(method) {
   // screen when it refuses the hotkey for being out of words.
   try { window.tailzuApp.onKnobs((k) => { K.setKnobs(k); paintFirst(); }); } catch { /* tray only */ }
   try { window.tailzuApp.onNavigate((id) => navigateTo(id)); } catch { /* tray only */ }
+  // A dictation just landed. Today is a list of them, so it redraws — after a
+  // moment, so the note is in history before the page asks for it.
+  try {
+    window.tailzuApp.onDictated(() => {
+      const top = STACK[STACK.length - 1];
+      if (DESK && top && top.screenId === "desk_today") setTimeout(() => { void paint(true); }, K.num("desktop.desk.refreshMs", 1500));
+    });
+  } catch { /* an older main process */ }
 
   ENV = await window.tailzuApp.env();
   SESSION = ENV.session || null;

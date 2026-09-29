@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // The main process asking the window to show a screen — the paywall, when
   // dictation is refused for being out of words.
   onNavigate: (cb) => ipcRenderer.on("app:navigate", (_e, screenId) => cb(screenId)),
+  // A dictation was written (and pasted where the cursor was).
+  onDictated: (cb) => ipcRenderer.on("app:dictated", () => cb()),
   // Apple / Google. The renderer cannot open a window or hold the PKCE
   // secret, so it asks and gets back a session or an error string.
   oauth: (provider) => ipcRenderer.invoke("app:oauth", provider),
