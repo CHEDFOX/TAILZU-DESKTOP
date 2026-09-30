@@ -128,11 +128,25 @@ training screen was plain black. The page colour now sits under it. Builds
 from this one declare `DeskField`, and the server puts the network on the
 Train page only for them. Error toasts say the error, not `$event`.
 
-Dictation: stretches pasted on a pause are separated by a space, and each
-is written as the continuation of the one before. A breath or a cough is no
-longer uploaded on its own (it came back as "Thank you."). A live dictation
-sends the second engine's reading to the refine step, and a failed refine is
-tried once more before the raw words are pasted.
+Dictation: only the written text is ever pasted, never the raw transcript,
+and in the account's own voice (no tone is sent; the server uses the
+account's, as it does for the phone). A pause writes a paragraph, not a
+phrase: short dictations are written whole when they stop. Nothing without
+a voice in it is uploaded — the meter reads every sample and tells a voice
+from a breath, a keyboard, a fan or a hum (speechMeter.js) — so silence no
+longer comes back as "Thank you.". Stretches go one after another, each with
+exactly what was written before it, and join with one space or none as the
+script and punctuation want (the server's `joinWithSpace`, or pasteJoin.js).
+Each request gets a fresh token, and a refused one is renewed and resent. A
+live dictation sends the second engine's reading to the refine step; a
+failed refine is said as a failure, not pasted raw.
+
+The pill: its hint shows on hover from the first launch (it was dropped
+while the page loaded), it follows the screens when a monitor, the scaling
+or the taskbar changes and after sleep, it comes back from a crashed page,
+and no state can leave it stuck on "writing" (a stop always settles). The
+paste helper on Windows opens no console window that could take the
+keyboard, and the caption overlay no longer activates the app on macOS.
 
 Publishing now sends the version with each installer; every older install
 on that OS sees an update card in its window.
