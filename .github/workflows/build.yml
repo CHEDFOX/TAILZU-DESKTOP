@@ -45,10 +45,12 @@ jobs:
         run: |
           npm ci
           npm run icon
+          # --publish never: at a repo root on CI, electron-builder infers a
+          # GitHub release and demands GH_TOKEN. Publishing is the step below.
           # --universal: macos-latest runners are arm64; a plain build would ship
           # an arm64-only dmg that Intel Macs can't open. Universal lipo-merges
           # both arches (per-arch .node prebuilds allowed via mac.x64ArchFiles).
-          npx electron-builder --mac --universal
+          npx electron-builder --mac --universal --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: Tailzu-mac
@@ -88,7 +90,7 @@ jobs:
         run: |
           npm ci
           npm run icon
-          npx electron-builder --win
+          npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: Tailzu-win
@@ -128,7 +130,7 @@ jobs:
         run: |
           npm ci
           npm run icon
-          npx electron-builder --linux
+          npx electron-builder --linux --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: Tailzu-linux
