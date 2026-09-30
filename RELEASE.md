@@ -106,7 +106,8 @@ notarization worked.
 From 0.2.2 a build installs its own updates (updater.js). Publishing records
 the installer's SHA-512 beside it (receive-download.sh, backend), and the
 window's update card gets an "Update now" button: it downloads the new build
-from tailzu.space, checks it against that checksum, puts it in place of the
+from tailzu.space (over https, and a redirect anywhere else is refused) into a
+fresh private temp folder, checks it against that checksum, puts it in place of the
 running one and restarts on it, still signed in. Windows runs the installer
 silently over the install; macOS swaps the .app; Linux swaps the AppImage.
 

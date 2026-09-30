@@ -60,6 +60,9 @@ function saveSession(v) {
     if (v) {
       fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
       fs.writeFileSync(sessionPath, JSON.stringify(v, null, 2), { mode: 0o600 });
+      // `mode` only applies to a file being created; one an older build wrote
+      // keeps whatever it had, so it is narrowed every time.
+      fs.chmodSync(sessionPath, 0o600);
     } else if (fs.existsSync(sessionPath)) {
       fs.unlinkSync(sessionPath);
     }
@@ -142,7 +145,6 @@ const SHELL_DEFAULTS = {
     holdUnavailable: "unavailable",
     holdOff: "Hold-to-talk: off (set \"hold\": true in config)",
     tapToTalk: "Double-tap {key} to dictate",
-    tapOff: "Double-tap: off (set \"tap\": true in config)",
     backend: "Backend",
     signedIn: "Signed in — dictation lands on your account",
     editConfig: "Edit config…",
@@ -367,8 +369,23 @@ function loadConfig() {
   // A key the user wrote in config.json wins; a key they did not is the
   // server's default (a knob), which is the old literal until it says otherwise.
   const flag = (v, key) => (typeof v === "boolean" ? v : key);
+  // THE ACCOUNT'S TOKEN RIDES ON EVERY REQUEST TO THIS ADDRESS, so it is https
+  // — or plain http to this machine, for a backend run locally. Anything else
+  // would send the token in clear; it is refused and said so, like broken JSON.
+  const wanted = String(process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space").trim();
+  let baseUrl = null;
+  try {
+    const u = new URL(wanted);
+    if (u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1"))) {
+      baseUrl = u.href.replace(/\/+$/, "");
+    }
+  } catch { /* not a URL at all */ }
+  if (!baseUrl) {
+    configError = txt("desktop.notify.baseUrlRefused",
+      "baseUrl must be https (or http to localhost): {url} was ignored.", { url: wanted });
+  }
   return {
-    baseUrl: (process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space").trim(),
+    baseUrl: baseUrl || "https://api.tailzu.space",
     language: process.env.TAILZU_LANGUAGE || file.language || str("desktop.language.default", "auto"),
     // Electron accelerator string. CommandOrControl = ⌘ on macOS, Ctrl on Win/Linux.
     hotkey: process.env.TAILZU_HOTKEY || file.hotkey || str("desktop.hotkey.default", "CommandOrControl+Shift+Space"),
@@ -502,21 +519,39 @@ function tokenNow() {
   return (authSession && authSession.access_token) || null;
 }
 
-/** Swap in a new session (from a refresh, or from the window signing in). */
+/** Swap in a new session (from a refresh, or from the window signing in).
+ *  Only strings are taken: whatever lands here is sent as a header. */
 function adoptSession(raw) {
-  authSession = raw && raw.access_token
+  const s = (v) => (typeof v === "string" && v ? v : null);
+  authSession = raw && s(raw.access_token)
     ? {
         access_token: raw.access_token,
-        refresh_token: raw.refresh_token || (authSession && authSession.refresh_token) || null,
-        expires_at: raw.expires_at ||
-          Math.floor(Date.now() / 1000) + (raw.expires_in || num("desktop.auth.tokenLifetimeSec", 3600)),
+        refresh_token: s(raw.refresh_token) || (authSession && authSession.refresh_token) || null,
+        expires_at: Number(raw.expires_at) ||
+          Math.floor(Date.now() / 1000) + (Number(raw.expires_in) || num("desktop.auth.tokenLifetimeSec", 3600)),
       }
     : null;
   saveSession(authSession);
 }
 
-/** Renew the access token against Supabase when it has gone stale. One POST,
- *  no SDK. A refresh that fails means the session is gone, not merely old. */
+/** The session as the window holds it. The refresh token stays in this
+ *  process: the window never renews anything itself (see app:session). */
+const forWindow = (s) => (s ? { access_token: s.access_token, expires_at: s.expires_at } : null);
+
+/**
+ * Renew the access token against Supabase when it has gone stale. One POST,
+ * no SDK.
+ *
+ * THIS PROCESS IS THE ONLY ONE THAT RENEWS. Supabase rotates the refresh token
+ * on every use and refuses a spent one, and the window used to renew with its
+ * own copy — so whichever of the two went second (usually the window, after
+ * this timer had already renewed) presented a spent token and signed the
+ * account out everywhere. The window asks here instead (app:session).
+ *
+ * Only a refusal signs out. A refresh that could not be sent — offline, a
+ * laptop waking before its Wi-Fi, a 5xx — leaves the session as it was, to be
+ * tried again; it used to sign the account out as well.
+ */
 async function refreshSession() {
   if (!tokenStale() || !authSession.refresh_token) return;
   if (refreshing) return refreshing;
@@ -527,15 +562,16 @@ async function refreshSession() {
         headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
         body: JSON.stringify({ refresh_token: authSession.refresh_token }),
       });
-      if (!res.ok) throw new Error("refresh " + res.status);
-      adoptSession(await res.json());
-    } catch {
-      // Signed out for real: fall back to the device tone rather than keep
-      // showing an account this process can no longer reach.
-      adoptSession(null);
-      accountTone = null;
-      refreshTray();
-    } finally { refreshing = null; }
+      if (res.ok) adoptSession(await res.json());
+      else if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        // Signed out for real: fall back to the device tone rather than keep
+        // showing an account this process can no longer reach.
+        adoptSession(null);
+        accountTone = null;
+        refreshTray();
+      }
+    } catch { /* unreachable, not refused: keep the session and try again */ }
+    finally { refreshing = null; }
   })();
   return refreshing;
 }
@@ -647,14 +683,16 @@ function closePage() {
 function awaitLoopbackCode(openUrl) {
   const http = require("http");
   const port = loopbackPort();
-  const base = "http://127.0.0.1:" + port + "/cb";
+  const base = loopbackUrl();
   return new Promise((resolve, reject) => {
     let settled = false;
     const server = http.createServer((req, res) => {
       let u;
       try { u = new URL(req.url, base); } catch { u = null; }
       if (!u || u.pathname !== "/cb") { res.writeHead(404).end(); return; }
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      // Connection: close, or the browser's keep-alive socket holds the
+      // server open after close() for as long as the browser likes.
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
       res.end(closePage());
       const err = u.searchParams.get("error_description") || u.searchParams.get("error");
       const code = u.searchParams.get("code");
@@ -721,13 +759,16 @@ function oauthEmbedded(provider, verifier, challenge) {
     // way to pick a different account.
     const part = "oauth-" + Date.now();
     const ses = session.fromPartition(part, { cache: false });
+    // A provider's page is the web: it gets no permission this app could
+    // grant (Electron grants every one to a session with no handler).
+    ses.setPermissionRequestHandler((_wc, _p, cb) => cb(false));
     const win = new BrowserWindow({
       width: num("desktop.oauth.width", 480), height: num("desktop.oauth.height", 680),
       title: txt("desktop.oauth.title", "Sign in"),
       backgroundColor: color("desktop.window.background", "#000000"),
       autoHideMenuBar: true, parent: appWin && !appWin.isDestroyed() ? appWin : undefined,
       modal: false,
-      webPreferences: { partition: part, contextIsolation: true, nodeIntegration: false },
+      webPreferences: { partition: part, contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
 
@@ -791,6 +832,13 @@ let uiohookRef = null;
 let sessionSeq = 0;
 let activeSession = 0;
 
+/** What every window of ours runs with: the bridge in preload.js and nothing
+ *  else — no Node, an isolated world, Chromium's sandbox. */
+const webPrefs = (extra) => Object.assign({
+  preload: path.join(__dirname, "preload.js"),
+  contextIsolation: true, nodeIntegration: false, sandbox: true,
+}, extra);
+
 // ---- Hidden recorder window --------------------------------------------------
 // getUserMedia + MediaRecorder/WebAudio live in a renderer (Chromium), so we
 // host them in an invisible window. It never takes focus, so the paste still
@@ -800,18 +848,23 @@ function createRecorderWindow() {
     show: false,
     focusable: false,
     skipTaskbar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      // A hidden window's timers are slowed to once a second by Chromium. The
-      // meter that flushes on a pause and feeds the pill runs on one, so an
-      // unthrottled recorder is the difference between bars that move with a
-      // voice and bars that twitch.
-      backgroundThrottling: false,
-    },
+    // A hidden window's timers are slowed to once a second by Chromium. The
+    // meter that flushes on a pause and feeds the pill runs on one, so an
+    // unthrottled recorder is the difference between bars that move with a
+    // voice and bars that twitch.
+    webPreferences: webPrefs({ backgroundThrottling: false }),
   });
   hardenWindow(recorderWin);
+  // A recorder whose page crashed is still a window, so every later press
+  // went to it and nothing recorded again until a restart. It is thrown away
+  // instead, and the next press builds a new one.
+  const win = recorderWin;
+  win.webContents.on("render-process-gone", () => {
+    if (recorderWin !== win) return;
+    recorderWin = null;
+    try { win.destroy(); } catch { /* already gone */ }
+    if (recording) { settleSession(activeSession); pill("error", { label: pillError("") }); }
+  });
   recorderWin.loadFile("recorder.html");
 }
 
@@ -867,11 +920,7 @@ function openAppWindow(screenId) {
       : color("desktop.window.background", "#000000"),
     show: false,
     autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: webPrefs(),
   });
   appWin.once("ready-to-show", () => { if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); } });
   hardenWindow(appWin);
@@ -935,11 +984,7 @@ function showOverlay() {
     y: wa.y + wa.height - num("desktop.overlay.bottomOffset", 120),
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, focusable: false, resizable: false, hasShadow: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    webPreferences: webPrefs(),
   });
   try { overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
   raisePill(overlayWin);
@@ -963,13 +1008,19 @@ let pillWords = 0;                 // written in the running session, pauses inc
 // "stuck up?Then", "sometimes.Okay". Every paste after a session's first
 // is separated from the one before it.
 const pastedIn = new Set();
+/** Remember a session id in one of these sets, keeping only the latest few. */
+function remember(set, session) {
+  set.add(session);
+  if (set.size > 32) set.delete(set.values().next().value);
+}
 function spaced(session, t) {
   const joined = pastedIn.has(session) && !/^[\s.,!?;:)\]}]/.test(t) ? " " + t : t;
-  pastedIn.add(session);
-  if (pastedIn.size > 32) pastedIn.delete(pastedIn.values().next().value);
+  remember(pastedIn, session);
   return joined;
 }
-const cancelled = new Set();       // sessions thrown away: nothing from them is pasted
+// Sessions thrown away: nothing from them is pasted. A cancelled recorder
+// often reports nothing at all, so nothing else would ever clear its id.
+const cancelled = new Set();
 
 function pillOn() { return cfg.pill !== false && bool("desktop.pill.enabled", true); }
 
@@ -998,12 +1049,7 @@ function createPillWindow() {
     // A panel on macOS: it floats over full-screen apps and a click on it
     // does not take focus from the app being written in.
     ...(process.platform === "darwin" ? { type: "panel" } : {}),
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
+    webPreferences: webPrefs({ backgroundThrottling: false }),
   }));
   // On every space and over full-screen apps FIRST: on macOS this call resets
   // the window's level, so the level is set after it, not before.
@@ -1087,7 +1133,7 @@ function pillError(message, quota) {
 function cancelDictation() {
   if (!recording) return;
   const sid = activeSession;
-  cancelled.add(sid);
+  remember(cancelled, sid);
   sendToRecorder("cancel-recording", { session: sid });
   activeSession = 0;
   recording = false;
@@ -1096,8 +1142,12 @@ function cancelDictation() {
   pill("rest", { cancelled: true });
 }
 
-// Only the pill's own page may drive these.
-const fromPill = (e) => !!pillWin && !pillWin.isDestroyed() && e.sender === pillWin.webContents;
+// EVERY MESSAGE IS CHECKED FOR WHICH OF OUR WINDOWS SENT IT. All four load the
+// same preload, so any of them can send anything; only the pill may drive
+// the pill, only the recorder may report a dictation, and only the app window
+// may touch the session, the settings, the browser or the updater.
+const isFrom = (e, w) => !!w && !w.isDestroyed() && e.sender === w.webContents;
+const fromPill = (e) => isFrom(e, pillWin);
 ipcMain.on("pill:hover", (e, on) => {
   if (!fromPill(e)) return;
   // Over the pill: it takes the click. Anywhere else: the click goes through
@@ -1114,8 +1164,7 @@ ipcMain.on("pill:action", (e, a) => {
 });
 // The voice's level, band by band, from the recorder to the pill.
 ipcMain.on("dictation-level", (e, p) => {
-  if (!recorderWin || e.sender !== recorderWin.webContents) return;
-  if (!p || p.session !== activeSession || !recording) return;
+  if (!isFrom(e, recorderWin) || !p || p.session !== activeSession || !recording) return;
   if (pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
 });
 function overlayText(t) {
@@ -1183,28 +1232,17 @@ function buildMenu() {
     {
       label: t("tray.liveCaptions"),
       type: "checkbox", checked: cfg.live,
-      click: (item) => saveConfig({ live: item.checked }),
+      click: (item) => setLocal("live", item.checked),
     },
     {
       label: txt("desktop.tray.showPill", "Show the pill"),
       type: "checkbox", checked: cfg.pill !== false,
-      click: (item) => {
-        saveConfig({ pill: item.checked });
-        if (item.checked) pill(pillState);
-        else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
-      },
+      click: (item) => setLocal("pill", item.checked),
     },
     {
       label: t("tray.startAtLogin"),
       type: "checkbox", checked: cfg.autoStart,
-      click: (item) => {
-        saveConfig({ autoStart: item.checked });
-        // Registering the dev electron binary as a login item is useless noise;
-        // only meaningful for the installed app.
-        if (app.isPackaged) {
-          app.setLoginItemSettings({ openAtLogin: item.checked, args: ["--hidden"] });
-        }
-      },
+      click: (item) => setLocal("autoStart", item.checked),
     },
     { type: "separator" },
     // The double-tap first, because it is the way in now and the chord is the
@@ -1216,7 +1254,7 @@ function buildMenu() {
     {
       label: `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(txt("desktop.tray.keyJoiner", " or ")) })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
       type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
-      click: (item) => saveConfig({ tap: item.checked }),
+      click: (item) => setLocal("tap", item.checked),
     },
     { label: `${t("tray.hotkey")}: ${prettyKey(cfg.hotkey)}`, enabled: false },
     {
@@ -1241,28 +1279,45 @@ function buildMenu() {
 
 function openConfig() {
   if (!fs.existsSync(configPath)) {
-    // seed from the example so first-time users have something to edit
+    // Seeded with what is in use, so first-time users have something to edit.
+    // (config.example.json is not in the packaged app, so it cannot be copied.)
     try {
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      fs.copyFileSync(path.join(__dirname, "config.example.json"), configPath);
-    } catch {
       fs.writeFileSync(configPath, JSON.stringify({ baseUrl: cfg.baseUrl, hotkey: cfg.hotkey }, null, 2));
-    }
+    } catch { /* read-only disk: openPath below says so itself */ }
   }
-  shell.openPath(configPath);
+  void shell.openPath(configPath);
+}
+
+/** Change one of this computer's settings, from the tray or the window. */
+function setLocal(key, value) {
+  saveConfig({ [key]: value });
+  // Registering the dev electron binary as a login item is useless noise;
+  // only meaningful for the installed app. Registry writes fail on
+  // locked-down machines, which is a setting not taking, not a crash.
+  if (key === "autoStart" && app.isPackaged) {
+    try { app.setLoginItemSettings({ openAtLogin: value, args: ["--hidden"] }); } catch { /* locked-down machine */ }
+  }
+  if (key === "pill") {
+    if (value) pill(pillState);
+    else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
+  }
+  if (key === "tap") pillSend({ hint: pillHint() });
 }
 
 // ---- What the app window is allowed to ask for -------------------------------
 // Narrow on purpose: the renderer gets the backend URL, the session, and the
 // ability to store one. It never gets fs, and it never gets the config file
 // path — a renderer that can write arbitrary paths is a renderer that can be
-// talked into writing arbitrary paths.
-ipcMain.handle("app:env", () => {
+// talked into writing arbitrary paths. And only the app window gets any of it.
+const fromApp = (e) => isFrom(e, appWin);
+ipcMain.handle("app:env", (e) => {
+  if (!fromApp(e)) return null;
   const navigate = pendingScreen;
   pendingScreen = null;
   return {
     baseUrl: cfg.baseUrl,
-    session: authSession,
+    session: forWindow(authSession),
     tone: cfg.tone,
     language: cfg.language,
     // The key that is actually bound, so the window can name it rather than
@@ -1298,41 +1353,41 @@ function localSettings() {
 }
 // What the window may change, and of what type. Nothing else is written.
 const SETTABLE = { pill: "boolean", pauseFlush: "boolean", autoStart: "boolean", live: "boolean", tap: "boolean" };
-ipcMain.handle("app:config", () => localSettings());
+ipcMain.handle("app:config", (e) => (fromApp(e) ? localSettings() : null));
 ipcMain.handle("app:setConfig", (e, key, value) => {
-  if (!appWin || appWin.isDestroyed() || e.sender !== appWin.webContents) return localSettings();
-  if (!Object.prototype.hasOwnProperty.call(SETTABLE, key) || typeof value !== SETTABLE[key]) return localSettings();
-  saveConfig({ [key]: value });
-  if (key === "autoStart" && app.isPackaged) {
-    try { app.setLoginItemSettings({ openAtLogin: value, args: ["--hidden"] }); } catch { /* locked-down machine */ }
-  }
-  if (key === "pill") {
-    if (value) pill(pillState);
-    else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
-  }
-  if (key === "tap") pillSend({ hint: pillHint() });
+  if (!fromApp(e)) return null;
+  if (Object.prototype.hasOwnProperty.call(SETTABLE, key) && typeof value === SETTABLE[key]) setLocal(key, value);
   return localSettings();
 });
-ipcMain.handle("app:setSession", (_e, v) => {
+ipcMain.handle("app:setSession", (e, v) => {
+  if (!fromApp(e)) return null;
   // The window signed in or out. The tray shares the session, so it adopts it
-  // here rather than learning about it on the next token push.
-  adoptSession(v || null);
+  // here — and signing out drops the tone too, or the tray would go on
+  // showing (and dictating with) the tone of an account nobody is in.
+  adoptSession(v && typeof v === "object" ? v : null);
   if (!signedIn()) accountTone = null;
   refreshTray();
   void refreshAccountTone();
-  return true;
+  return forWindow(authSession);
 });
-ipcMain.on("app:openExternal", (_e, url) => {
+// The window's token, renewed here when it is spent (see refreshSession: one
+// holder of the refresh token, not two). Null once the account is gone.
+ipcMain.handle("app:session", async (e) => {
+  if (!fromApp(e)) return null;
+  await refreshSession();
+  return forWindow(authSession);
+});
+ipcMain.on("app:openExternal", (e, url) => {
   // Only ever http(s). A renderer handing this a file:// or a shell scheme is
   // the whole reason this check exists.
-  if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
+  if (fromApp(e) && typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
 });
-ipcMain.on("app:dictate", () => toggleDictation());
+ipcMain.on("app:dictate", (e) => { if (fromApp(e)) toggleDictation(); });
 // The update card's button. The window names the build; updater.js checks the
 // address, the version and the checksum itself, downloads, verifies, and puts
 // it in place. Then this quits so the swap can finish and the new build start.
 ipcMain.handle("app:installUpdate", async (e, u) => {
-  if (!appWin || appWin.isDestroyed() || e.sender !== appWin.webContents) return { ok: false, reason: "refused" };
+  if (!fromApp(e)) return { ok: false, reason: "refused" };
   const version = String((u && u.version) || "");
   if (compareVersions(app.getVersion(), version) >= 0) return { ok: false, reason: "current" };
   const send = (p) => { try { if (!e.sender.isDestroyed()) e.sender.send("app:updateProgress", p); } catch { /* window gone */ } };
@@ -1342,45 +1397,25 @@ ipcMain.handle("app:installUpdate", async (e, u) => {
 });
 // Apple / Google. The window asks; the main process owns the browser window,
 // the PKCE secret and the code exchange, and hands back only the session.
-ipcMain.handle("app:oauth", async (_e, provider) => {
+ipcMain.handle("app:oauth", async (e, provider) => {
+  if (!fromApp(e)) return { ok: false, error: "refused" };
   try {
     const raw = await oauthSignIn(String(provider || ""));
     adoptSession(raw);
     refreshTray();
     void refreshAccountTone();
-    return { ok: true, session: authSession };
+    return { ok: true, session: forWindow(authSession) };
   } catch (err) {
     return { ok: false, error: String((err && err.message) || err) };
   }
 });
-// The window owns the session and its refresh, so it hands the main process a
-// live token rather than the main process parsing and refreshing one too.
-ipcMain.on("app:token", (_e, t) => {
-  const next = typeof t === "string" && t ? t : null;
-  // Signing out has to drop the tone too. Keeping it would leave the tray
-  // showing — and dictating with — the tone of an account nobody is signed
-  // into any more, which is exactly the split this whole section removes.
-  if (!next) {
-    if (!signedIn() && !accountTone) return;
-    adoptSession(null); accountTone = null; refreshTray();
-    return;
-  }
-  // The window pushes on every request it makes, so most of these are the
-  // same token again. Only a change is worth a read.
-  if (authSession && authSession.access_token === next) return;
-  // A token we did not have means the window refreshed. It carries no expiry
-  // here, and the old one would mark this brand-new token as spent — assume a
-  // full hour; the window's setSession lands the real expiry moments later.
-  adoptSession({ access_token: next });
-  void refreshAccountTone();
-});
 // Anything the window wrote could have been the tone. Cheaper to re-read than
 // to have the window guess which of its writes mattered.
-ipcMain.on("app:changed", () => { void refreshAccountTone(); });
+ipcMain.on("app:changed", (e) => { if (fromApp(e)) void refreshAccountTone(); });
 // Every bootstrap the window receives — labels and flags, `desktop.shell`
 // among them. Newer than this process's own fetch more often than not.
-ipcMain.on("app:boot", (_e, v) => {
-  if (!v || typeof v !== "object") return;
+ipcMain.on("app:boot", (e, v) => {
+  if (!fromApp(e) || !v || typeof v !== "object") return;
   const labels = v.labels && typeof v.labels === "object" ? v.labels : {};
   const flags = v.flags && typeof v.flags === "object" ? v.flags : {};
   // Over the cached response, so what only this process's fetch carries
@@ -1606,18 +1641,38 @@ function setupKeyHook() {
 }
 
 // ---- Paste into the focused app (OS-native, no native module) ----------------
-// Text is already on the clipboard; we synthesize the paste shortcut for the
+// The text goes on the clipboard; we synthesize the paste shortcut for the
 // frontmost app. macOS needs Accessibility permission granted once.
-function pasteIntoFocusedApp() {
+//
+// ONE PASTE AT A TIME. A pause-flush pastes each stretch as it lands, and two
+// can land together (the last stretch and the final one). Each used to write
+// the clipboard and fire its keystroke a moment later — and PowerShell takes
+// half a second to start — so the second write replaced the first before its
+// keystroke: the second text pasted twice and the first not at all. Each
+// paste now waits for the keystroke before it, and a little after it for the
+// target app to read the clipboard.
+let pasting = Promise.resolve();
+function paste(text) {
+  const delay = num("desktop.paste.delayMs", 120);
+  pasting = pasting.then(() => new Promise((done) => {
+    clipboard.writeText(text);
+    // Small delay so the clipboard write settles before the paste keystroke.
+    setTimeout(() => pasteIntoFocusedApp(() => setTimeout(done, delay)), delay);
+  })).catch(() => { /* one failed paste must not stop the ones after it */ });
+}
+
+function pasteIntoFocusedApp(done) {
+  // A hung helper must not hold every later paste behind it.
+  const opts = { timeout: 10000 };
   if (process.platform === "darwin") {
-    execFile("osascript", ["-e", 'tell application "System Events" to keystroke "v" using command down'],
-      (err) => { if (err) notifyAccessibility(); });
+    execFile("osascript", ["-e", 'tell application "System Events" to keystroke "v" using command down'], opts,
+      (err) => { if (err) notifyAccessibility(); done(); });
   } else if (process.platform === "win32") {
     const ps = "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')";
-    execFile("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], () => {});
+    execFile("powershell", ["-NoProfile", "-WindowStyle", "Hidden", "-Command", ps], opts, () => done());
   } else {
     // Linux (X11): xdotool. Wayland users may need wtype instead.
-    execFile("xdotool", ["key", "--clearmodifiers", "ctrl+v"], () => {});
+    execFile("xdotool", ["key", "--clearmodifiers", "ctrl+v"], opts, () => done());
   }
 }
 
@@ -1644,38 +1699,42 @@ function settleSession(session) {
   refreshTray();
 }
 
-ipcMain.on("dictation-result", (_e, payload) => {
-  const { session, text } = payload || {};
+/** A message from the recorder, and only from the recorder, with its text as
+ *  a trimmed string whatever was sent; null for anything else. */
+function fromRecorder(e, payload) {
+  if (!isFrom(e, recorderWin) || !payload || typeof payload !== "object") return null;
+  return Object.assign({}, payload, { text: typeof payload.text === "string" ? payload.text.trim() : "" });
+}
+
+ipcMain.on("dictation-result", (e, payload) => {
+  const p = fromRecorder(e, payload);
+  if (!p) return;
+  const { session, text: t } = p;
   // Thrown away with the pill's ✕: late or not, none of it is pasted.
   if (cancelled.has(session)) { cancelled.delete(session); return; }
   const current = session === activeSession;
   settleSession(session);
   // Paste regardless of session age — late-arriving words are still the
   // user's words and belong at the cursor.
-  const t = (text || "").trim();
   if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
   if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
-  if (!t) { pastedIn.delete(session); return; }
-  clipboard.writeText(spaced(session, t));
+  if (t) paste(spaced(session, t));
   pastedIn.delete(session);
-  // Small delay so the clipboard write settles before the paste keystroke.
-  setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
 });
 
 // A chunk of a session that is still running: paste it and leave the mic open.
 // settleSession is deliberately NOT called — that is the entire difference
 // between flushing on a pause and stopping on one.
-ipcMain.on("dictation-segment", (_e, payload) => {
-  const { session, text, failed } = payload || {};
-  if (cancelled.has(session)) return;
-  if (failed) {
+ipcMain.on("dictation-segment", (e, payload) => {
+  const p = fromRecorder(e, payload);
+  if (!p || cancelled.has(p.session)) return;
+  const { session, text: t } = p;
+  if (p.failed) {
     notify(fmt("notify.dictationFailed", { message: txt("desktop.notify.segmentLost", "segment lost — still listening") }));
     return;
   }
-  const t = (text || "").trim();
   if (!t) return;
-  clipboard.writeText(spaced(session, t));
-  setTimeout(pasteIntoFocusedApp, num("desktop.paste.delayMs", 120));
+  paste(spaced(session, t));
   if (session === activeSession) {
     pillWords += countWords(t);
     pill("flash");
@@ -1685,13 +1744,15 @@ ipcMain.on("dictation-segment", (_e, payload) => {
 
 // Nobody said anything for a long time. Close the mic rather than leave it
 // open on a desk somebody walked away from.
-ipcMain.on("dictation-idle", (_e, payload) => {
-  const { session } = payload || {};
-  if (session === activeSession && recording) toggleDictation();
+ipcMain.on("dictation-idle", (e, payload) => {
+  const p = fromRecorder(e, payload);
+  if (p && p.session === activeSession && recording) toggleDictation();
 });
 
-ipcMain.on("dictation-error", (_e, payload) => {
-  const { session, message, code, detail } = payload || {};
+ipcMain.on("dictation-error", (e, payload) => {
+  const p = fromRecorder(e, payload);
+  if (!p) return;
+  const { session, code } = p, message = String(p.message || ""), detail = String(p.detail || "");
   if (cancelled.has(session)) { cancelled.delete(session); return; }
   // `message` is words for the person, and it is all the notification says.
   // What actually went wrong ("NotReadableError: …", "HTTP 500 …") used to be
@@ -1709,11 +1770,11 @@ ipcMain.on("dictation-error", (_e, payload) => {
 });
 
 // Live partials from the recorder → overlay captions (current session only).
-ipcMain.on("live-partial", (_e, payload) => {
-  const { session, text } = payload || {};
-  if (session !== activeSession) return;
-  if (pillOn()) pill("caption", { text });
-  else overlayText(text);
+ipcMain.on("live-partial", (e, payload) => {
+  const p = fromRecorder(e, payload);
+  if (!p || p.session !== activeSession) return;
+  if (pillOn()) pill("caption", { text: p.text });
+  else overlayText(p.text);
 });
 
 // ---- App lifecycle -----------------------------------------------------------
@@ -1781,6 +1842,10 @@ function watchForUninstall() {
 }
 
 app.whenReady().then(() => {
+  // The second copy is on its way out (app.quit above), but `ready` can still
+  // fire for it — and past this line it would build a tray, find its own
+  // hotkey "taken by another app", and write a fallback into config.json.
+  if (!primaryInstance) return;
   // Already in the Trash (a login item still pointing there): leave quietly.
   if (watchForUninstall()) return;
 
@@ -1817,19 +1882,20 @@ app.whenReady().then(() => {
       : null);
   }
 
-  // Auto-grant mic to our own local pages ONLY. Scoping to file:// means any
-  // future remote content loaded by mistake can never inherit silent mic access.
-  session.defaultSession.setPermissionRequestHandler((wc, permission, done) => {
-    const local = (wc?.getURL() || "").startsWith("file://");
-    done(local && (permission === "media" || permission === "audioCapture"));
+  // The microphone, auto-granted, to the two pages that record — the hidden
+  // recorder and the app window (its Train tab has a mic of its own) — and
+  // nothing else to anyone: not the camera, not to the pill or the captions,
+  // and never to remote content loaded by mistake.
+  session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {
+    const types = (details && details.mediaTypes) || [];
+    done(permission === "media" && types.length > 0 && types.every((m) => m === "audio") &&
+      [recorderWin, appWin].some((w) => !!w && !w.isDestroyed() && w.webContents === wc));
   });
 
   // One launch, counted once — here, where only the copy that holds the lock
   // gets to, and before anything reports it.
-  if (primaryInstance) {
-    localState.launchCount = (Number(localState.launchCount) || 0) + 1;
-    saveLocalState();
-  }
+  localState.launchCount = (Number(localState.launchCount) || 0) + 1;
+  saveLocalState();
 
   createRecorderWindow();
   if (pillOn()) createPillWindow();

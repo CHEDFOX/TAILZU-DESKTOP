@@ -1,5 +1,7 @@
-// Bridge between the hidden recorder / overlay windows and the main process.
-// contextIsolation is on, so renderers only see this tiny, explicit API.
+// Bridge between our windows (the hidden recorder, the pill, the captions, the
+// app window) and the main process. contextIsolation is on, so renderers only
+// see this tiny, explicit API — and the main process checks which window sent
+// each message, so a call exposed here to all four is answered for one.
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("tailzu", {
@@ -44,21 +46,21 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // bound keys), and a request to change one. The main process checks both.
   config: () => ipcRenderer.invoke("app:config"),
   setConfig: (key, value) => ipcRenderer.invoke("app:setConfig", key, value),
+  // Signed in or out: the main process keeps the session and answers with
+  // the part the window holds (the access token and its expiry).
   setSession: (v) => ipcRenderer.invoke("app:setSession", v),
+  // The token again, renewed by the main process when it is spent. It alone
+  // holds the refresh token: two holders of one rotating token sign out.
+  session: () => ipcRenderer.invoke("app:session"),
   openExternal: (url) => ipcRenderer.send("app:openExternal", url),
   dictate: () => ipcRenderer.send("app:dictate"),
-  // The window owns auth; the tray needs a live token to read the account's
-  // tone, so the window hands one over rather than the main process learning
-  // to refresh sessions as well.
-  token: (t) => ipcRenderer.send("app:token", t),
   changed: () => ipcRenderer.send("app:changed"),
   // Every bootstrap the window receives — its labels and flags, which carry
   // `desktop.shell` (the tray's and the notifications' copy) and every knob.
   // The main process fetches its own too; this only ever makes it fresher.
   boot: (v) => ipcRenderer.send("app:boot", v),
-  // The knobs the main process holds (its cached bootstrap), so the window's
-  // first paint uses the server's words even before its own bootstrap lands.
-  knobs: () => ipcRenderer.invoke("app:knobs"),
+  // The knobs the main process holds (its cached bootstrap) come with env();
+  // every newer set is pushed here.
   onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
   // The main process asking the window to show a screen — the paywall, when
   // dictation is refused for being out of words.

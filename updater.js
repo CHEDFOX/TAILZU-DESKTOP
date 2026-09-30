@@ -37,6 +37,8 @@ const MIN_BYTES = 5_000_000;
 const STALL_MS = 45_000;
 
 const writable = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
+/** Our own server, over https: the only place a build is taken from. */
+const trusted = (u) => u.protocol === "https:" && HOSTS.has(u.hostname);
 
 /** Where this build lives and how it is replaced, or null when it cannot be. */
 function target() {
@@ -81,7 +83,16 @@ function download(url, file, onProgress) {
       reject(err);
     };
     const alive = () => { clearTimeout(stall); stall = setTimeout(() => fail(new Error("download stalled")), STALL_MS); };
-    const req = net.request({ url, redirect: "follow", cache: "no-cache" });
+    // A redirect is followed only to our own server. The address was checked
+    // before asking, and "follow" would have taken the file from wherever the
+    // answer pointed — the checksum is then the only thing between this and
+    // running someone else's build.
+    const req = net.request({ url, redirect: "manual", cache: "no-cache" });
+    req.on("redirect", (_status, _method, to) => {
+      let ok = false;
+      try { ok = trusted(new URL(to)); } catch { /* not an address */ }
+      if (ok) req.followRedirect(); else fail(new Error("redirected off tailzu.space"));
+    });
     req.on("response", (res) => {
       if (res.statusCode !== 200) return fail(new Error("download status " + res.statusCode));
       const len = res.headers["content-length"];
@@ -170,7 +181,10 @@ async function install(t, file, dir) {
     // Beside the old file, so the rename is on one filesystem and atomic. The
     // running build keeps its own copy open; it is only the name that moves.
     const staged = path.join(path.dirname(t.file), "." + path.basename(t.file) + ".update");
-    fs.copyFileSync(file, staged);
+    // Written fresh, never through something already at that name (a link
+    // left there would carry the verified build somewhere else).
+    fs.rmSync(staged, { force: true });
+    fs.copyFileSync(file, staged, fs.constants.COPYFILE_EXCL);
     fs.chmodSync(staged, 0o755);
     fs.renameSync(staged, t.file);
     const script = path.join(dir, "relaunch.sh");
@@ -200,15 +214,17 @@ async function update(u, send) {
   const version = String((u && u.version) || "");
   let url;
   try { url = new URL(String((u && u.url) || "")); } catch { return { ok: false, reason: "invalid" }; }
-  if (url.protocol !== "https:" || !HOSTS.has(url.hostname) || path.posix.basename(url.pathname) !== name ||
+  if (!trusted(url) || path.posix.basename(url.pathname) !== name ||
       !/^[a-f0-9]{128}$/.test(sha512) || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(version)) {
     return { ok: false, reason: "invalid" };
   }
   busy = true;
-  const dir = path.join(app.getPath("temp"), "tailzu-update-" + version);
+  // A NEW DIRECTORY, ONLY OURS. A fixed name in a shared /tmp could be made
+  // first by another user, who could then swap the file between the checksum
+  // and the install. mkdtemp makes it fresh and private (0700).
+  let dir = null;
   try {
-    fs.rmSync(dir, { recursive: true, force: true });
-    fs.mkdirSync(dir, { recursive: true });
+    dir = fs.mkdtempSync(path.join(app.getPath("temp"), "tailzu-update-"));
     const file = path.join(dir, name);
     send({ phase: "downloading", pct: 0 });
     const got = await download(url.toString(), file, (pct) => send({ phase: "downloading", pct }));
@@ -219,6 +235,8 @@ async function update(u, send) {
     return { ok: true };
   } catch (err) {
     console.warn("[update] " + ((err && err.message) || err));
+    // A failed attempt leaves nothing behind; the next one starts clean.
+    if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* in use */ }
     busy = false;
     return { ok: false, reason: "failed" };
   }
