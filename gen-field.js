@@ -9,8 +9,8 @@
  * It was written to disk ONCE, by hand, which is a copy: the two drift the
  * moment anybody touches the phone's version, and nothing anywhere says they
  * have. This makes the copy reproducible instead. `npm run field` after a
- * change to app/src/sdui/neuralFieldPage.ts, and the window gets the same
- * drawing the phones do.
+ * change to TAILZU-FRONTEND's app/src/sdui/neuralFieldPage.ts (FRONTEND_DIR
+ * names that checkout), and the window gets the same drawing the phones do.
  *
  * The cfg baked in here is only the GEOMETRY — regions, colours, bloom, focal
  * length — and it is only the FALLBACK: the window passes whatever the node's
@@ -21,7 +21,14 @@
 const fs = require("fs");
 const path = require("path");
 
-const SRC = path.join(__dirname, "..", "app", "src", "sdui", "neuralFieldPage.ts");
+// The phone's page lives in TAILZU-FRONTEND. Point FRONTEND_DIR at a checkout
+// of it; by default it is expected beside this repo.
+const FRONTEND = process.env.FRONTEND_DIR || path.join(__dirname, "..", "TAILZU-FRONTEND");
+const SRC = path.join(FRONTEND, "app", "src", "sdui", "neuralFieldPage.ts");
+if (!fs.existsSync(SRC)) {
+  console.error(`No ${SRC}. Set FRONTEND_DIR to a TAILZU-FRONTEND checkout.`);
+  process.exit(1);
+}
 const OUT = path.join(__dirname, "neuralField.html");
 
 // Geometry only. Kept in step with NEURAL_FIELD in the backend's catalog, which

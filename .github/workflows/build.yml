@@ -1,0 +1,157 @@
+name: build
+
+# Builds the desktop installers on GitHub's runners — including the macOS .dmg,
+# which can ONLY be built on a Mac (electron-builder can't cross-build it).
+#
+# AND PUBLISHES THEM, but only when asked. With the DOWNLOADS_SSH_KEY secret
+# set, a manual run ("Run workflow" on the Actions tab) sends each installer
+# straight to ~/tulmi/downloads on the server, where /download serves it
+# (stable filenames, no link changes) and every older install is offered the
+# update in its window. The key is pinned on the server to
+# deploy/receive-download.sh (TAILZU-BACKEND), so all it can do is drop one of
+# the three installer files.
+#
+# A push only builds and keeps the installers as artifacts on the run page.
+# Publishing reaches every user, so it is never a side effect of a push — in
+# this repo main is where the code lives, and a push there is not a release.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Build and publish one platform, or all"
+        type: choice
+        options: [all, mac, win, linux]
+        default: all
+
+jobs:
+  mac:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'mac' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build .dmg
+        env:
+          # No signing cert in CI — skip electron-builder's identity discovery
+          # so the build produces an UNSIGNED dmg instead of failing. Users
+          # open it via right-click → Open (Gatekeeper). Wire a Developer ID
+          # cert + notarization here later for frictionless installs.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm ci
+          npm run icon
+          # --universal: macos-latest runners are arm64; a plain build would ship
+          # an arm64-only dmg that Intel Macs can't open. Universal lipo-merges
+          # both arches (per-arch .node prebuilds allowed via mac.x64ArchFiles).
+          npx electron-builder --mac --universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tailzu-mac
+          path: dist/Tailzu.dmg
+          if-no-files-found: error
+      - name: Publish to tailzu.space
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          HOST: ${{ vars.DOWNLOADS_HOST || '91.108.104.168' }}
+        run: |
+          if [ -z "$KEY" ]; then echo "No DOWNLOADS_SSH_KEY secret: kept as an artifact only."; exit 0; fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/tailzu_ci
+          chmod 600 ~/.ssh/tailzu_ci
+          # Best effort: Git Bash's ssh-keyscan on the Windows runner can fail
+          # where ssh itself works, and a failed scan must not stop the upload.
+          ssh-keyscan -T 20 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || echo "keyscan failed; ssh accepts the key on first use"
+          # The version rides with the name; the server writes it beside the
+          # installer and tells every older install, in its window. A receiver
+          # from before versions refuses the pair (exit 2): send the name alone.
+          V=$(node -p "require('./package.json').version")
+          up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu.dmg; }
+          up "Tailzu.dmg $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu.dmg"; else exit "$rc"; fi; }
+          rm -f ~/.ssh/tailzu_ci
+
+  win:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'win' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build installer
+        run: |
+          npm ci
+          npm run icon
+          npx electron-builder --win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tailzu-win
+          path: dist/Tailzu-Setup.exe
+          if-no-files-found: error
+      - name: Publish to tailzu.space
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          HOST: ${{ vars.DOWNLOADS_HOST || '91.108.104.168' }}
+        run: |
+          if [ -z "$KEY" ]; then echo "No DOWNLOADS_SSH_KEY secret: kept as an artifact only."; exit 0; fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/tailzu_ci
+          chmod 600 ~/.ssh/tailzu_ci
+          # Best effort: Git Bash's ssh-keyscan on the Windows runner can fail
+          # where ssh itself works, and a failed scan must not stop the upload.
+          ssh-keyscan -T 20 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || echo "keyscan failed; ssh accepts the key on first use"
+          # The version rides with the name; the server writes it beside the
+          # installer and tells every older install, in its window. A receiver
+          # from before versions refuses the pair (exit 2): send the name alone.
+          V=$(node -p "require('./package.json').version")
+          up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu-Setup.exe; }
+          up "Tailzu-Setup.exe $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu-Setup.exe"; else exit "$rc"; fi; }
+          rm -f ~/.ssh/tailzu_ci
+
+  linux:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.only == 'all' || inputs.only == 'linux' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build AppImage
+        run: |
+          npm ci
+          npm run icon
+          npx electron-builder --linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tailzu-linux
+          path: dist/Tailzu.AppImage
+          if-no-files-found: error
+      - name: Publish to tailzu.space
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          HOST: ${{ vars.DOWNLOADS_HOST || '91.108.104.168' }}
+        run: |
+          if [ -z "$KEY" ]; then echo "No DOWNLOADS_SSH_KEY secret: kept as an artifact only."; exit 0; fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/tailzu_ci
+          chmod 600 ~/.ssh/tailzu_ci
+          # Best effort: Git Bash's ssh-keyscan on the Windows runner can fail
+          # where ssh itself works, and a failed scan must not stop the upload.
+          ssh-keyscan -T 20 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || echo "keyscan failed; ssh accepts the key on first use"
+          # The version rides with the name; the server writes it beside the
+          # installer and tells every older install, in its window. A receiver
+          # from before versions refuses the pair (exit 2): send the name alone.
+          V=$(node -p "require('./package.json').version")
+          up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu.AppImage; }
+          up "Tailzu.AppImage $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu.AppImage"; else exit "$rc"; fi; }
+          rm -f ~/.ssh/tailzu_ci
