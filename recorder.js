@@ -34,8 +34,7 @@ let stopped = 0;
 let stream = null;
 
 // ---- batch state ----
-let mediaRecorder = null;
-let chunks = [];
+let mediaRecorder = null;   // the one recording now (each keeps its own audio: record())
 
 // ---- live state ----
 let ws = null;
@@ -50,12 +49,16 @@ let wsWatchdog = null;
 let doneAlternative = "";
 // THE WHOLE RECORDING, kept beside the stream. See startLive: the text
 // that is pasted comes from this, and the stream only draws captions.
-let liveRec = null, liveChunks = [], recordedSession = 0;
-// What this session has already written, pause by pause. Each stretch
+let liveRec = null, liveChunks = [], recordedSession = 0, liveAt = 0;
+// What each session has already written, pause by pause. Each stretch
 // after the first is sent with it as context, so it is written as the
 // continuation it is rather than as a new message: no capital after a
-// comma, no repeated greeting.
-let written = "";
+// comma, no repeated greeting, and the server can say whether it joins
+// with a space. Per session, because a stop's last stretch can still be
+// on its way when the next session starts.
+const wrote = new Map();   // session → text
+// Stretches this session has sent on a pause.
+let sentStretches = 0;
 
 window.tailzu.onStart((c) => {
   cfg = c;
@@ -66,7 +69,10 @@ window.tailzu.onStart((c) => {
   // (state desync upstream), kill it completely before starting fresh —
   // never let two captures share the mic or a chunks array.
   forceTeardownAll();
-  written = "";
+  // Sessions with nothing left to send are done with.
+  for (const k of wrote.keys()) if (!queues.has(k)) wrote.delete(k);
+  sentStretches = 0;
+  metered = false;
   cfg.live ? startLive(session) : startBatch(session);
 });
 window.tailzu.onStop((p) => {
@@ -74,6 +80,8 @@ window.tailzu.onStop((p) => {
   if (p && p.session && p.session !== session) return;
   stopped = session;
   stopBands();
+  // The last words since the meter's previous read, before anything stops.
+  if (pollLevel) pollLevel();
   live ? stopLive(session) : stopBatch(session);
 });
 // Thrown away from the pill: close the mic and upload nothing. A new
@@ -105,6 +113,9 @@ function startBands(sid, src) {
     const lo = K.num("desktop.pill.lowHz", 90), hi = K.num("desktop.pill.highHz", 4200);
     const floor = K.num("desktop.pill.floorDb", 30), span = K.num("desktop.pill.spanDb", 150);
     const edges = Array.from({ length: N + 1 }, (_, i) => Math.round(lo * Math.pow(hi / lo, i / N) / hz));
+    // Silence is sent once, not thirty times a second through two
+    // processes: the pill lets bars fall by itself when the voice stops.
+    let quiet = false;
     bandTimer = setInterval(() => {
       if (sid !== session) return;
       an.getByteFrequencyData(bins);
@@ -114,6 +125,9 @@ function startBands(sid, src) {
         for (let i = a; i < z && i < bins.length; i++) m = Math.max(m, bins[i]);
         out.push(Math.max(0, Math.min(1, (m - floor) / span)));
       }
+      const silent = out.every((v) => v === 0);
+      if (silent && quiet) return;
+      quiet = silent;
       window.tailzu.level({ session: sid, bands: out });
     }, K.num("desktop.pill.levelMs", 33));
   } catch { stopBands(); }
@@ -135,65 +149,151 @@ function stopBands() {
 // the text appears as you go rather than all at once at the end.
 // The thresholds, read when the meter starts (so each session uses the
 // knobs it was started with):
-//   flushSilenceMs  long enough to be a breath, not a gap
+//   flushPauseMs    a pause this long is the end of a thought, not a breath
+//   flushSpeechMs   voice a stretch needs before a pause writes it alone
 //   minSegmentMs    never flush a cough
 //   idleEndMs       walked away: close the mic ourselves
 //   speechLevel     RMS floor; room tone sits well under
+//   voicing         how periodic a loud frame must be to be a voice
 //   meterPollMs     how often the level is read
+//
+// A PAUSE WRITES A PARAGRAPH, NOT A PHRASE. It used to write after 1.2 s of
+// quiet and 0.4 s of sound: stretches of a few words, each written in
+// isolation, where the writer had no sentence to punctuate and no way to
+// fix a false start that ran across the pause — so it came back close to
+// the raw transcript, and every stretch was one more upload that silence
+// could turn into words. Now a pause writes only after several sentences'
+// worth of voice and a pause long enough to end a thought. A short
+// dictation is written once, whole, when it stops; a long one still
+// appears paragraph by paragraph as it goes. (New keys: the old ones,
+// flushSilenceMs and minSpeechMs, carry the server's old values.)
+//
+// NOTHING THAT IS NOT A VOICE IS SENT. The meter (speechMeter.js) reads
+// every sample and counts only voice: a breath, a keyboard, a fan or a
+// hum is loud but not voice. A stretch is written on a pause only once it
+// holds `flushSpeechMs` of voice; less, and it stays with the next words
+// rather than going alone to a recogniser that answers breath with
+// "Thank you.". And the stretch a stop ends is sent only if it holds any
+// voice at all (see lastStretchHeard).
+//
+// The meter runs in every mode, so that last decision can be made in
+// every mode; it flushes and idles only where pausing writes (batch).
 
-let levelCtx = null, levelTimer = null, analyser = null;
-let speaking = false, lastSpeechAt = 0, segmentStartedAt = 0, flushing = false;
-// How long this stretch was actually above the room. A cough or a
-// breath trips `speaking` for a poll or two, and flushed on its own it
-// came back from the recogniser as "Thank you." or "Okay." and was
-// pasted. A stretch with less than a word's worth of sound is kept and
-// joined to what is said next.
-let speechMs = 0;
+let levelCtx = null, levelTimer = null, analyser = null, pollLevel = null;
+let speaking = false, lastSpeechAt = 0, lastSoundAt = 0, segmentStartedAt = 0, flushing = false;
+// Voice in the stretch not yet written, in ms (speechMeter.js): at the
+// level a pause writes at, and at the far lower level the stop's decision
+// uses (a quiet voice is still a voice; only a stretch without one is
+// withheld).
+let speechMs = 0, softSpeechMs = 0;
+// The meter has read real audio this session, so its silence is real.
+// Unset (it could not start), the server is asked instead of trusted.
+let metered = false;
 
-function watchLevel(sid) {
-  const FLUSH_SILENCE_MS = K.num("desktop.recorder.flushSilenceMs", 1200);
+function watchLevel(sid, pausing) {
+  const FLUSH_SILENCE_MS = K.num("desktop.recorder.flushPauseMs", 2000);
   const MIN_SEGMENT_MS = K.num("desktop.recorder.minSegmentMs", 700);
   const IDLE_END_MS = K.num("desktop.recorder.idleEndMs", 25000);
   const SPEECH_LEVEL = K.num("desktop.recorder.speechLevel", 0.012);
-  const MIN_SPEECH_MS = K.num("desktop.recorder.minSpeechMs", 400);
+  const MIN_SPEECH_MS = K.num("desktop.recorder.flushSpeechMs", 4000);
   const POLL_MS = K.num("desktop.recorder.meterPollMs", 120);
+  let meter, soft, buf, readTo;
   try {
     levelCtx = new (window.AudioContext || window.webkitAudioContext)();
     const src = levelCtx.createMediaStreamSource(stream);
     analyser = levelCtx.createAnalyser();
-    analyser.fftSize = K.num("desktop.recorder.fftSize", 512);
+    // Longer than the time between two reads, so every sample is read once
+    // (it used to be a 10 ms snapshot of every 120).
+    analyser.fftSize = Math.min(32768, Math.pow(2, Math.ceil(Math.log2(levelCtx.sampleRate * POLL_MS / 1000 * 1.5))));
     src.connect(analyser);
-  } catch { return; }   // no meter is survivable: it just never flushes
-  const buf = new Float32Array(analyser.fftSize);
-  segmentStartedAt = lastSpeechAt = Date.now();
-  levelTimer = setInterval(() => {
-    if (sid !== session || !analyser) return;
+    const voicing = K.num("desktop.recorder.voicing", 0.5);
+    meter = window.TailzuSpeech.createSpeechMeter({ sampleRate: levelCtx.sampleRate, level: SPEECH_LEVEL, voicing });
+    // The server now measures the voice in every clip itself, so this one
+    // only has to catch a stretch with none in it at all: its floor is far
+    // under the pause's, about -50 dBFS, and a soft-spoken sentence clears it.
+    soft = window.TailzuSpeech.createSpeechMeter({
+      sampleRate: levelCtx.sampleRate, level: K.num("desktop.recorder.finalSpeechLevel", 0.003), voicing,
+    });
+    buf = new Float32Array(analyser.fftSize);
+    readTo = levelCtx.currentTime;
+  } catch { stopWatchingLevel(); return; }   // no meter is survivable: it just never flushes
+  segmentStartedAt = lastSpeechAt = lastSoundAt = Date.now();
+  pollLevel = () => {
+    if (sid !== session || !analyser || !levelCtx) return;
+    // Only what arrived since the last read, by the audio clock.
+    const at = levelCtx.currentTime, fresh = Math.min(buf.length, Math.round((at - readTo) * levelCtx.sampleRate));
+    readTo = at;
+    if (fresh <= 0) return;
     analyser.getFloatTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-    const rms = Math.sqrt(sum / buf.length);
+    const read = buf.subarray(buf.length - fresh), r = meter.feed(read);
+    softSpeechMs = Math.max(0, softSpeechMs + soft.feed(read).voicedMs);
+    metered = true;
     const now = Date.now();
-    if (rms > SPEECH_LEVEL) { speaking = true; lastSpeechAt = now; speechMs += POLL_MS; return; }
-    const quietFor = now - lastSpeechAt;
+    speechMs = Math.max(0, speechMs + r.voicedMs);
+    if (r.loudMs > 0) lastSoundAt = now;
+    if (r.voicedMs > 0) { speaking = true; lastSpeechAt = now; return; }
+    if (!pausing) return;
     // Flush only if they actually said something since the last one.
-    if (speaking && quietFor > FLUSH_SILENCE_MS
+    if (speaking && now - lastSpeechAt > FLUSH_SILENCE_MS
         && now - segmentStartedAt > MIN_SEGMENT_MS) {
       speaking = false;
-      if (speechMs < MIN_SPEECH_MS) return;   // a breath: keep it with the next words
-      speechMs = 0;
+      if (speechMs < MIN_SPEECH_MS) return;   // a few words, or a cough: kept with the next ones
+      speechMs = softSpeechMs = 0;
       flushSegment(sid);
-    } else if (!speaking && quietFor > IDLE_END_MS) {
+    } else if (!speaking && now - lastSoundAt > IDLE_END_MS) {
       window.tailzu.idle({ session: sid });
     }
-  }, POLL_MS);
+  };
+  levelTimer = setInterval(pollLevel, POLL_MS);
 }
 
 function stopWatchingLevel() {
   if (levelTimer) { clearInterval(levelTimer); levelTimer = null; }
   if (levelCtx) { try { levelCtx.close(); } catch {} levelCtx = null; }
   analyser = null;
+  pollLevel = null;
   speaking = false;
-  speechMs = 0;
+  speechMs = softSpeechMs = 0;
+}
+
+/**
+ * Whether the stretch a stop just ended holds a voice, asked before the
+ * meter is cleared. It is usually the silence after the last pause, and
+ * sent on its own that silence came back as words nobody said. Gentle on
+ * purpose (a second line of defence behind the server's own measure): any
+ * voice at all, however quiet, and it is sent. A meter that read nothing,
+ * or belongs to a newer session, knows nothing: then the server decides.
+ */
+function lastStretchHeard(sid) {
+  if (sid !== session || !metered) return true;
+  return softSpeechMs >= K.num("desktop.recorder.minFinalSpeechMs", 120);
+}
+
+/** A stop whose stretch held no voice: nothing is sent, so nothing can be
+ *  invented from it. The session still ends, after the stretches it did
+ *  send. If it sent none, it heard nothing at all, and says so the way the
+ *  server's empty answer would have. */
+async function nothingToSend(sid, sentAny) {
+  const t = turn(sid);
+  await t.wait;
+  try { if (sentAny) emitResult(sid, ""); else emitError(sid, str("noSpeech")); } finally { t.done(); }
+}
+
+// ---- One stretch after another -------------------------------------------
+// A session's stretches are sent one after another, each once the one
+// before it has been answered. Sent together, the short last one came back
+// first and was pasted before the words it follows; and each went with the
+// context of what had been written when it LEFT, which missed the stretch
+// still in flight — so the server shaped it as a new sentence and said no
+// space was needed after nothing. In turn, each carries exactly what was
+// written before it. Per session: a newer one never waits on an older one.
+const queues = new Map();   // session → the previous stretch's turn
+function turn(sid) {
+  const wait = queues.get(sid) || Promise.resolve();
+  let release;
+  const mine = new Promise((r) => { release = r; });
+  queues.set(sid, mine);
+  return { wait, done: () => { release(); if (queues.get(sid) === mine) queues.delete(sid); } };
 }
 
 /** End this segment and start the next one on the SAME microphone. The
@@ -205,8 +305,9 @@ function flushSegment(sid) {
   try { mediaRecorder.stop(); } catch { flushing = false; }
 }
 
-function emitSegment(sid, text) { window.tailzu.segment({ session: sid, text: text }); }
-function emitResult(sid, text) { window.tailzu.result({ session: sid, text: text }); }
+// `join`: the server's word on a space before `text` (see transcribe).
+function emitSegment(sid, text, join) { window.tailzu.segment({ session: sid, text: text, join: join }); }
+function emitResult(sid, text, join) { window.tailzu.result({ session: sid, text: text, join: join }); }
 /** A failure. `message` is the sentence the notification shows, and
  *  only ever words for a person; what actually went wrong travels in
  *  `extra.detail` to the main process's log, with the server's `code`
@@ -222,12 +323,39 @@ function emitPartial(sid, text) { window.tailzu.partial({ session: sid, text: te
 
 function base() { return (cfg.baseUrl || "").replace(/\/+$/, ""); }
 /** The account's bearer, and no header at all without one. */
-function auth() { return cfg.token ? { Authorization: "Bearer " + cfg.token } : {}; }
+function auth(token) { return token ? { Authorization: "Bearer " + token } : {}; }
+
+/**
+ * The token for one request, from the main process, which alone renews it.
+ * The one handed over at the start used to serve every stretch, and a
+ * dictation that outlived it was refused halfway. `renew`: the server has
+ * just refused the one sent, so it is renewed now rather than at its stated
+ * expiry.
+ */
+async function freshToken(renew) {
+  try {
+    const t = window.tailzu.token ? await window.tailzu.token(!!renew) : null;
+    if (typeof t === "string" && t) cfg.token = t;
+  } catch { /* the main process did not answer: the one in hand is tried */ }
+  return cfg.token;
+}
+
+/** A request with the account's token; refused as unauthorised, sent once
+ *  more with a renewed one before anything else is concluded. */
+async function authorized(send) {
+  const res = await send(auth(await freshToken(false)));
+  if (res.status !== 401 && res.status !== 403) return res;
+  return send(auth(await freshToken(true)));
+}
 function stopTracks() {
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
 }
 function forceTeardownAll() {
   stopBands();
+  // The meter too: left running, the old one's timer and audio context
+  // outlived its session, and its stop could close the new one's.
+  stopWatchingLevel();
+  flushing = false;
   try {
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
       mediaRecorder.ondataavailable = null;
@@ -236,7 +364,6 @@ function forceTeardownAll() {
     }
   } catch {}
   mediaRecorder = null;
-  chunks = [];
   if (liveRec) { try { liveRec.ondataavailable = liveRec.onstop = null; if (liveRec.state !== "inactive") liveRec.stop(); } catch {} liveRec = null; }
   liveChunks = [];
   teardownLiveGraph();
@@ -332,36 +459,41 @@ async function getMic() {
   }
 }
 
-// ---- Per-tone refine routing (mirrors the mobile app/src/api.ts) -------
-async function refineText(text, alternative) {
-  const tone = (cfg.tone || "none").toLowerCase();
-  const llmTones = K.list("desktop.recorder.llmTones", ["formal", "casual", "very-casual", "excited"]);
-  const p = tone === "none" ? "/v1/refine/none"
-    : llmTones.includes(tone) ? "/v1/refine/" + tone
-    : "/v1/refine";
+// ---- Refine (the live path's fallback, when there is no recording) ------
+// /v1/refine with no tone, as the phone's keyboard sends it: the server
+// writes in the account's own voice, its tone and its preset. It used to
+// pick /v1/refine/<tone> from the tone this window was handed, and that was
+// "none" (repair only, restyle nothing) whenever the main process had not
+// read the account, which made live dictation read like its transcript.
+async function refineText(text, alternative, context) {
   const body = { text, targetApp: "Desktop", language: cfg.language || "auto" };
+  // What the session already wrote, as on /v1/transcribe-clean.
+  if (context) body.context = context.slice(-K.num("desktop.recorder.contextChars", 600));
   // The second engine's reading goes with it: the server reconciles the
   // two and decides which leads. Dropped here, the work was wasted.
   if (alternative) body.alternative = alternative;
-  // ONE RETRY. A refine that fails pastes the raw transcript, and the
-  // raw transcript still holds everything that was said TO the keyboard
-  // ("…write this in Japanese"). A blip is worth a second try first.
+  // ONE RETRY for a blip. A refusal is not retried (no words left: the
+  // same answer again), except a spent token, which authorized() renews
+  // and resends first.
   let last = null;
   for (let i = 0; i < 2; i++) {
     try {
-      const res = await fetch(base() + p, {
+      const res = await authorized((h) => fetch(base() + "/v1/refine", {
         method: "POST",
-        headers: Object.assign({ "Content-Type": "application/json" }, auth()),
+        headers: Object.assign({ "Content-Type": "application/json" }, h),
         body: JSON.stringify(body),
-      });
-      // Refused (no words left, signed out): a retry gets the same answer.
-      if (res.status >= 400 && res.status < 500) throw Object.assign(new Error("refine HTTP " + res.status), { final: true });
-      if (!res.ok) throw new Error("refine HTTP " + res.status);
+      }));
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        const err = Object.assign(new Error("refine HTTP " + res.status + (text ? " " + text.slice(0, K.num("desktop.recorder.errorBodyChars", 120)) : "")),
+          { words: httpMessage(res.status, text), code: text.indexOf("quota_exceeded") !== -1 ? "quota_exceeded" : undefined });
+        if (res.status < 500) { last = err; break; }
+        throw err;
+      }
       const j = await res.json();
       return (j.refinedText || "").trim();
     } catch (err) {
       last = err;
-      if (err && err.final) break;
     }
   }
   throw last || new Error("refine failed");
@@ -376,22 +508,34 @@ function pickMime() {
   return ""; // let the browser choose
 }
 
+/** A recorder on the open microphone that keeps its own audio: a stop
+ *  still finishing never shares an array with the recorder after it. */
+function record(sid, mimeType) {
+  const parts = [], startedAt = Date.now();
+  const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) parts.push(e.data); };
+  rec.onstop = () => onRecorderStopped(sid, mimeType, rec, parts, startedAt);
+  rec.start();
+  return rec;
+}
+
 async function startBatch(sid) {
   try {
-    stream = await getMic();
+    const mic = await getMic();
     // Superseded, or already stopped, while awaiting the mic — which on
-    // a first run waits on the OS asking the person for permission.
-    if (sid !== session || sid === stopped) { stopTracks(); return; }
-    chunks = [];
+    // a first run waits on the OS asking the person for permission. Its
+    // own tracks are closed, never the global stream, which by now may be
+    // a newer session's.
+    if (sid !== session || sid === stopped) { mic.getTracks().forEach((t) => t.stop()); return; }
+    stream = mic;
     const mimeType = pickMime();
-    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-    mediaRecorder.onstop = () => onRecorderStopped(sid, mimeType);
-    mediaRecorder.start();
-    if (cfg.pauseFlush !== false) watchLevel(sid);
+    mediaRecorder = record(sid, mimeType);
+    // Measured in every mode, so a stop can tell whether its last stretch
+    // held a voice; it writes on a pause only when pausing is on.
+    watchLevel(sid, cfg.pauseFlush !== false);
     startBands(sid, stream);
   } catch (err) {
-    stopTracks();
+    if (sid === session) stopTracks();
     emitError(sid, micMessage(err), { detail: errText(err) });
   }
 }
@@ -400,21 +544,17 @@ async function startBatch(sid) {
  *  a flush hands off to a fresh recorder on the same mic, a real stop
  *  closes the microphone. Confusing the two either leaves the mic hot
  *  forever or ends the session on the first pause. */
-function onRecorderStopped(sid, mimeType) {
+function onRecorderStopped(sid, mimeType, rec, parts, startedAt) {
   const wasFlush = flushing;
   flushing = false;
-  const type = (mediaRecorder && mediaRecorder.mimeType) || "audio/webm";
-  const segment = chunks.slice();
-  chunks = [];
+  const type = rec.mimeType || "audio/webm";
+  const took = Date.now() - startedAt;
 
   if (wasFlush && sid === session && stream) {
     // Next segment first, so the microphone is live again before the
     // upload starts. Anything said during the round trip is captured.
     try {
-      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      mediaRecorder.onstop = () => onRecorderStopped(sid, mimeType);
-      mediaRecorder.start();
+      mediaRecorder = record(sid, mimeType);
       segmentStartedAt = Date.now();
     } catch (err) {
       stopTracks(); stopWatchingLevel();
@@ -422,18 +562,27 @@ function onRecorderStopped(sid, mimeType) {
         { detail: errText(err) });
       return;
     }
-    void uploadBatch(sid, segment, type, true);
+    sentStretches++;
+    void uploadBatch(sid, parts, type, true, took, true);
     return;
   }
 
-  stopWatchingLevel();
-  stopTracks();
-  void uploadBatch(sid, segment, type, false);
+  // The real stop. Whether its stretch held a voice is asked before the
+  // meter is cleared; and only this session's microphone and meter are
+  // closed, since a newer session may already hold them.
+  const heard = lastStretchHeard(sid), sentAny = sentStretches > 0;
+  if (sid === session) { stopWatchingLevel(); stopTracks(); }
+  if (!heard) { void nothingToSend(sid, sentAny); return; }
+  void uploadBatch(sid, parts, type, false, took, sentAny);
 }
 
 function stopBatch(sid) {
   try {
     if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    // A pause's stop is still finishing: it becomes the last one. Taken
+    // for "nothing was recording", it said "Recording didn't start" and
+    // closed the mic under the pause's own recorder.
+    else if (flushing) flushing = false;
     else {
       stopTracks();
       // Nothing was ever recording — say so instead of dying silently
@@ -447,67 +596,121 @@ function stopBatch(sid) {
   }
 }
 
-async function uploadBatch(sid, parts, type, isSegment) {
+/** Close this session's capture without sending anything: the server has
+ *  refused it outright (no words left, signed out), so nothing more it
+ *  records can be written. */
+function endCapture(sid) {
+  if (sid !== session) return;
+  if (mediaRecorder) { mediaRecorder.ondataavailable = mediaRecorder.onstop = null; try { if (mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch {} mediaRecorder = null; }
+  flushing = false;
+  stopBands();
+  stopWatchingLevel();
+  stopTracks();
+}
+
+/** Send a stretch once the one before it has been answered and reported
+ *  (see turn). `sentAny`: this session already sent a stretch, so an empty
+ *  answer to the last one ends it quietly rather than as "no speech". */
+async function uploadBatch(sid, parts, type, isSegment, durationMs, sentAny) {
+  const t = turn(sid);
+  await t.wait;
+  let report = null;
+  try { report = await transcribe(sid, parts, type, isSegment, durationMs, sentAny); }
+  finally {
+    try { if (report) report(); } finally { t.done(); }
+  }
+}
+
+/** The upload itself. Answers with what to tell the main process, or null. */
+async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
+  if (!parts || !parts.length) {
+    // A flush with nothing in it is ordinary — they paused twice, or
+    // the segment was all room tone. Only a FINAL stop with no audio
+    // is worth telling anyone about.
+    return isSegment ? null : () => emitError(sid, K.txt("desktop.mic.noAudio", "no audio captured"));
+  }
+  // A request that never answers held the pill on "writing" until the next
+  // press. It gets what a stretch of its length could need, then it fails.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), K.num("desktop.recorder.uploadTimeoutMs", 60000) + 2 * (durationMs || 0));
   try {
-    if (!parts || !parts.length) {
-      // A flush with nothing in it is ordinary — they paused twice, or
-      // the segment was all room tone. Only a FINAL stop with no audio
-      // is worth telling anyone about.
-      if (!isSegment) emitError(sid, K.txt("desktop.mic.noAudio", "no audio captured"));
-      return;
-    }
     const ext = type.includes("ogg") ? "ogg" : "webm";
     const blob = new Blob(parts, { type });
     const fd = new FormData();
     fd.append("audio", blob, "audio." + ext);
     fd.append("targetApp", "Desktop");
     fd.append("language", cfg.language || "auto");
-    // Explicit tone override — same field the mobile keyboard sends.
-    fd.append("tone", cfg.tone || "none");
+    // No tone field, as the phone app sends none: the server writes in the
+    // account's voice (tone and preset). It used to be sent from this
+    // window's copy, which said "none" (repair only) whenever the main
+    // process had not read the account, and overrode it.
     // What this session already wrote, so this stretch continues it.
-    if (written) fd.append("context", written.slice(-K.num("desktop.recorder.contextChars", 600)));
-    const res = await fetch(base() + "/v1/transcribe-clean", {
+    const before = wrote.get(sid) || "";
+    if (before) fd.append("context", before.slice(-K.num("desktop.recorder.contextChars", 600)));
+    const res = await authorized((h) => fetch(base() + "/v1/transcribe-clean", {
       method: "POST",
-      headers: auth(),
+      headers: h,
       body: fd,
-    });
+      signal: ctl.signal,
+    }));
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      emitError(sid, httpMessage(res.status, body), {
+      const quota = body.indexOf("quota_exceeded") !== -1;
+      // A pause's stretch refused for a passing reason (the server busy, a
+      // burst of requests) is lost like a dropped one, and the session goes
+      // on. It used to end the session in the main process while this
+      // window kept the microphone open, recording into nowhere.
+      if (isSegment && !quota && res.status !== 401 && res.status !== 403) {
+        return () => window.tailzu.segment({ session: sid, text: "", failed: true });
+      }
+      if (isSegment) endCapture(sid);
+      return () => emitError(sid, httpMessage(res.status, body), {
         // The main process asks for a fresh bootstrap on this, so the
         // next press is refused before the mic opens.
-        code: body.indexOf("quota_exceeded") !== -1 ? "quota_exceeded" : undefined,
+        code: quota ? "quota_exceeded" : undefined,
         detail: "HTTP " + res.status + (body ? " " + body.slice(0, K.num("desktop.recorder.errorBodyChars", 120)) : ""),
       });
-      return;
     }
     const json = await res.json();
     const cleaned = (json.cleanedText || "").trim();
-    const transcript = (json.transcript || json.text || "").trim();
+    const heardWords = !json.noSpeech && !!(json.transcript || json.text || "").trim();
+    // Whether it joins what came before with a space, as the server read it
+    // against the context sent — which, sent in turn, is exactly what was
+    // written before it. An older server says nothing, and the main process
+    // decides (pasteJoin.js).
+    const join = typeof json.joinWithSpace === "boolean" ? json.joinWithSpace : undefined;
     // A segment pastes and leaves the session running; a final result
     // pastes and ends it. Same text, different meaning to the main
     // process, and it must not learn the difference by guessing.
     const deliver = isSegment ? emitSegment : emitResult;
-    if (cleaned && sid === session) written = (written + " " + cleaned).trim();
-    if (cleaned) {
-      deliver(sid, cleaned);
-    } else if (transcript) {
-      // Cleanup returned nothing but STT heard real words — paste the raw
-      // transcript rather than silently pasting nothing.
-      deliver(sid, transcript);
-    } else if (!isSegment) {
-      // Both empty: the mic captured silence (wrong input device, muted
-      // mic, or OS permission). Say so instead of a no-op — but only for
-      // a real stop. A silent segment is just a pause, and a toast for
-      // every pause would be unusable.
-      emitError(sid, str("noSpeech"));
-    }
+    return () => {
+      // Added in the order spoken, so the context reads as it was said.
+      if (cleaned) wrote.set(sid, before ? before + (join === false ? "" : " ") + cleaned : cleaned);
+      // ONLY THE WRITTEN TEXT IS EVER PASTED. An empty `cleanedText` is the
+      // server deciding there is nothing to write: silence, noise the
+      // recogniser turned into words, a stretch that was only an
+      // instruction. The raw transcript used to be pasted in its place,
+      // which put exactly those invented or unwritten words at the cursor.
+      if (cleaned) deliver(sid, cleaned, join);
+      else if (!isSegment) {
+        // Nothing to write at the end. After stretches that were written,
+        // or when words were heard and the writer chose to write none,
+        // that is just the end. Otherwise nothing was heard at all (wrong
+        // input device, muted mic, or OS permission): say so — but only
+        // for a real stop. A silent segment is just a pause, and a toast
+        // for every pause would be unusable.
+        if (sentAny || heardWords) emitResult(sid, "");
+        else emitError(sid, str("noSpeech"));
+      }
+    };
   } catch (err) {
     // A failed SEGMENT must not end the session: the mic is still open
     // and they are probably still talking. Tell them, keep going.
-    if (isSegment) { window.tailzu.segment({ session: sid, text: "", failed: true }); return; }
-    emitError(sid, K.txt("desktop.recorder.uploadFailed", "Couldn't send your recording. Check your connection and try again."),
+    if (isSegment) return () => window.tailzu.segment({ session: sid, text: "", failed: true });
+    return () => emitError(sid, K.txt("desktop.recorder.uploadFailed", "Couldn't send your recording. Check your connection and try again."),
       { detail: errText(err) });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -524,9 +727,12 @@ async function startLive(sid) {
   lastPartial = "";
   doneAlternative = "";
   try {
-    stream = await getMic();
-    if (sid !== session || sid === stopped) { stopTracks(); return; } // as in startBatch
+    const mic = await getMic();
+    if (sid !== session || sid === stopped) { mic.getTracks().forEach((t) => t.stop()); return; } // as in startBatch
+    stream = mic;
     startBands(sid, stream);
+    // Measured only (no pause-writing here), for the stop's decision.
+    watchLevel(sid, false);
     // LIVE IS FOR SEEING, NOT FOR WRITING.
     //
     // The pasted text used to be built from the stream's finals — a
@@ -537,11 +743,14 @@ async function startLive(sid) {
     // person stops, goes through /v1/transcribe-clean: the same recogniser
     // fusion, instruction split and writing as every other dictation. The
     // captions still move as they talk; they just are not what is sent.
-    liveChunks = [];
+    // Its own array, so a quick next press cannot empty it under a stop.
+    const mine = [];
+    liveChunks = mine;
+    liveAt = Date.now();
     try {
       const mimeType = pickMime();
       liveRec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      liveRec.ondataavailable = (e) => { if (e.data && e.data.size) liveChunks.push(e.data); };
+      liveRec.ondataavailable = (e) => { if (e.data && e.data.size) mine.push(e.data); };
       liveRec.start();
     } catch { liveRec = null; }   // no recorder: the stream's text is the fallback
     ws = new WebSocket(wsUrl());
@@ -626,16 +835,21 @@ function teardownLiveGraph() {
 }
 
 function stopLive(sid) {
+  // Whether the recording holds a voice at all, before the meter closes.
+  const heard = lastStretchHeard(sid);
+  stopWatchingLevel();
   // The recording first, so its last words are in before the mic closes.
   if (liveRec && liveRec.state !== "inactive") {
-    const rec = liveRec;
+    const rec = liveRec, parts = liveChunks, took = Date.now() - liveAt;
+    // Let go of it now: a next press arriving before it has finished
+    // stopping used to tear it down with the rest, and its words were lost.
+    liveRec = null;
     rec.onstop = () => {
-      const parts = liveChunks.slice(); liveChunks = [];
       const type = rec.mimeType || "audio/webm";
-      if (liveRec === rec) liveRec = null;
-      void uploadBatch(sid, parts, type, false);
+      if (heard) void uploadBatch(sid, parts.slice(), type, false, took, false);
+      else void nothingToSend(sid, false);
     };
-    try { rec.stop(); recordedSession = sid; } catch { liveRec = null; }
+    try { rec.stop(); recordedSession = sid; } catch { /* nothing recorded: the stream's text is the fallback */ }
   }
   teardownLiveGraph();
   stopTracks();
@@ -649,6 +863,8 @@ function stopLive(sid) {
 function teardownLive() {
   live = false;
   clearTimeout(wsWatchdog);
+  stopBands();
+  stopWatchingLevel();
   teardownLiveGraph();
   stopTracks();
   if (ws) {
@@ -685,16 +901,20 @@ async function finishLive(sid) {
     emitError(sid, str("noSpeech"));
     return;
   }
-  // Same shape as mobile: stream gives the transcript, refine polishes it
-  // with the active tone. If refine hiccups, the raw words still paste.
+  // Same shape as mobile: stream gives the transcript, refine writes it in
+  // the account's voice.
   try {
     // An empty answer is the server saying there is nothing to write —
     // noise the recogniser turned into words. Pasting the raw words
     // instead was how they reached the field.
-    emitResult(sid, await refineText(raw, doneAlternative));
-  } catch {
-    // Unreachable twice over: their words are not lost, but they go as
-    // they were heard.
-    emitResult(sid, raw);
+    emitResult(sid, await refineText(raw, doneAlternative, wrote.get(sid)));
+  } catch (err) {
+    // NOT THE RAW WORDS. A refine that failed (twice for a blip; a spent
+    // token is renewed and resent first) used to paste the stream's own
+    // reading, and in 0.2.1 a token that expired after an hour made every
+    // refine fail, so live dictation pasted raw transcripts. A failure is
+    // said as one, in the server's words when it refused.
+    emitError(sid, (err && err.words) || K.txt("desktop.recorder.uploadFailed", "Couldn't send your recording. Check your connection and try again."),
+      { code: err && err.code, detail: errText(err) });
   }
 }

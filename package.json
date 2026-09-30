@@ -37,6 +37,8 @@
       "app.html",
       "sdui.js",
       "tapDetector.js",
+      "pasteJoin.js",
+      "speechMeter.js",
       "updater.js",
       "knobs.js",
       "neuralField.html",

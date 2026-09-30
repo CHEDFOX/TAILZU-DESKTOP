@@ -7,7 +7,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("tailzu", {
   // main → recorder
   onStart: (cb) => ipcRenderer.on("start-recording", (_e, cfg) => cb(cfg)),
-  onStop: (cb) => ipcRenderer.on("stop-recording", () => cb()),
+  // With the session it is for: the recorder ignores a stop meant for one it
+  // has already left (it used to be dropped here, so that check never ran).
+  onStop: (cb) => ipcRenderer.on("stop-recording", (_e, p) => cb(p)),
   // recorder → main
   // A finished chunk of a session that is STILL RUNNING. Separate from
   // `result` because the main process must paste it without ending the
@@ -22,6 +24,10 @@ contextBridge.exposeInMainWorld("tailzu", {
   level: (p) => ipcRenderer.send("dictation-level", p),
   // main → recorder: throw this session away, nothing is written.
   onCancel: (cb) => ipcRenderer.on("cancel-recording", (_e, p) => cb(p)),
+  // recorder → main: the account's access token as of now, renewed by the
+  // main process (the one holder of the refresh token) when it is spent, or
+  // at once with `renew` after the server refused the one sent.
+  token: (renew) => ipcRenderer.invoke("recorder:token", !!renew),
   // main → pill: its state, and the voice's level while it listens.
   onPill: (cb) => ipcRenderer.on("pill", (_e, m) => cb(m)),
   onLevel: (cb) => ipcRenderer.on("pill-level", (_e, p) => cb(p)),

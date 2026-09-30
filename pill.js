@@ -60,8 +60,19 @@ function fit() {
   DPR = window.devicePixelRatio || 1; W = window.innerWidth; H = window.innerHeight;
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); cv.style.width = W + "px"; cv.style.height = H + "px";
   wake();
+  watchScale();
 }
 window.addEventListener("resize", fit);
+// Moved to a monitor at another scale (100% beside 150%), the window keeps
+// its size in points, so no resize fires, and the canvas stayed at the old
+// monitor's pixel density: blurred, or drawn at the wrong size. A change of
+// scale is its own event.
+let scaleQuery = null;
+function watchScale() {
+  if (scaleQuery) scaleQuery.removeEventListener("change", fit);
+  scaleQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  scaleQuery.addEventListener("change", fit);
+}
 
 // Animated values. The pill's box, and one "atom" per bar.
 const P = { w: 48, h: 14, solid: 0, buttons: 0, text: 0 };
@@ -236,6 +247,10 @@ function frame() {
   }
   ctx.restore();
   if (S.name === "listening" || S.name === "writing" || S.name === "done" || S.name === "error") moving = true;
+  // The pill changes size under a pointer that is not moving (listening
+  // shrinks to writing, done to rest), and no mousemove says so: the window
+  // went on taking clicks where the pill had been. Asked again as it moves.
+  if (pointer) hoverAt(pointer.x, pointer.y);
   return !moving;
 }
 
@@ -249,13 +264,15 @@ function setHover(v) {
   if (bridge && bridge.pillHover) bridge.pillHover(v);
   wake();
 }
-window.addEventListener("mousemove", (e) => {
+let pointer = null;   // where the pointer was last seen over this window
+function hoverAt(x, y) {
   // Only a visible pill takes the pointer; an invisible rest pill is nothing.
   const live = S.name !== "rest" || restShown;
-  setHover(live && inside(e.clientX, e.clientY));
-  const oc = onCancel(e.clientX, e.clientY); if (oc !== overCancel) { overCancel = oc; wake(); }
-});
-document.addEventListener("mouseleave", () => { setHover(false); overCancel = false; });
+  setHover(live && inside(x, y));
+  const oc = onCancel(x, y); if (oc !== overCancel) { overCancel = oc; wake(); }
+}
+window.addEventListener("mousemove", (e) => { pointer = { x: e.clientX, y: e.clientY }; hoverAt(pointer.x, pointer.y); });
+document.addEventListener("mouseleave", () => { pointer = null; setHover(false); overCancel = false; });
 window.addEventListener("mousedown", (e) => {
   if (!inside(e.clientX, e.clientY)) return;
   const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish") : null;
@@ -265,6 +282,9 @@ window.addEventListener("mousedown", (e) => {
 // ---- the main process -----------------------------------------------------------
 function onPill(m) {
   if (!m || typeof m !== "object") return;
+  // Shown again: the main process has made it click-through, and the
+  // pointer it last saw is from before it was hidden.
+  if (m.unhover) { pointer = null; hovered = false; overCancel = false; wake(); }
   if (typeof m.hint === "string") hint = m.hint;
   if (typeof m.rest === "boolean") restShown = m.rest;
   if (m.state === "flash") { flashAt = clock(); wake(); return; }

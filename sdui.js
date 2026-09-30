@@ -1206,7 +1206,10 @@ async function micStart(path, n) {
       });
       if (!res.ok) throw worded(statusText(res.status), "transcribe → " + res.status);
       const j = await res.json();
-      const text = String(j.cleanedText || j.transcript || j.text || "").trim();
+      // The written text only: an empty cleanedText is the server deciding
+      // there was nothing to write, and the raw transcript in its place was
+      // the invented or unwritten words it had just withheld.
+      const text = String(j.cleanedText || "").trim();
       if (!text) throw worded(K.txt("desktop.mic.noSpeech", "no speech detected"));
       if (path) setStatePath(path, text);
       repaint();

@@ -24,6 +24,9 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
   and live (WebAudio→16 kHz PCM→WebSocket) capture paths.
 - **overlay.html** + **overlay.js** — the floating live-caption strip.
 - **pill.html** + **pill.js** — the dictation pill at the foot of the screen.
+- **speechMeter.js** — tells a voice from a breath, a keyboard or a hum, so a
+  pause writes only speech and silence is never uploaded (node --test).
+- **pasteJoin.js** — the space (or none) between two pasted stretches.
 - **app.html** + **sdui.js** — the app window, drawn from the server's screens.
 
 Every page carries a Content-Security-Policy that runs only this folder's own
@@ -53,7 +56,7 @@ it would pin those values against anything the server later changes.
 | `baseUrl` | your backend, e.g. `https://api.tailzu.space` — https, or http to `localhost` only: the account's token rides on every request |
 | `language` | `auto` or a code like `en` / `hi` / `es` (`desktop.language.default`) |
 | `hotkey` | toggle accelerator (`desktop.hotkey.default`, `CommandOrControl+Shift+Space`); if it is taken, `desktop.hotkey.fallbacks` are tried in order |
-| `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (`desktop.tone.default`; also in the tray menu) |
+| `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (`desktop.tone.default`): only what the tray shows signed out. Dictation writes in the account's voice; the tray's Tone menu changes the account's tone |
 | `live` | `true` → live captions while dictating (`desktop.live.default`) |
 | `pauseFlush` | `false` → a pause no longer writes out what was said so far (`desktop.pauseFlush.default`) |
 | `hold` | `true` → hold-to-talk on `holdKey` (`desktop.hold.default`; needs uiohook-napi) |

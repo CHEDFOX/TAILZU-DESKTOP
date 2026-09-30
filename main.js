@@ -16,13 +16,14 @@
 
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
-  ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme,
+  ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
 } = require("electron");
 const { execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { createTapDetector } = require("./tapDetector.js");
+const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
@@ -266,7 +267,9 @@ function adoptBoot(boot) {
  *  for them itself once it has (app:knobs), so none is skipped for long. */
 function broadcastKnobs() {
   const k = knobsPayload();
-  for (const w of [appWin, recorderWin, overlayWin]) {
+  // The pill too: it was left out, so its sizes and colours from the server
+  // held only from the next launch.
+  for (const w of [appWin, recorderWin, overlayWin, pillWin]) {
     if (w && !w.isDestroyed() && !w.webContents.isLoading()) w.webContents.send("knobs", k);
   }
 }
@@ -389,7 +392,8 @@ function loadConfig() {
     language: process.env.TAILZU_LANGUAGE || file.language || str("desktop.language.default", "auto"),
     // Electron accelerator string. CommandOrControl = ⌘ on macOS, Ctrl on Win/Linux.
     hotkey: process.env.TAILZU_HOTKEY || file.hotkey || str("desktop.hotkey.default", "CommandOrControl+Shift+Space"),
-    // Refine tone sent with every dictation. Same ids the mobile app uses.
+    // The tone the tray shows while signed out. Dictation is not sent a tone:
+    // it writes in the account's (see startRecording). Same ids as the app.
     tone: (file.tone || str("desktop.tone.default", "none")).toLowerCase(),
     // Live captions: stream audio and show partials in an overlay while talking.
     live: flag(file.live, bool("desktop.live.default", false)),
@@ -863,7 +867,10 @@ function createRecorderWindow() {
     if (recorderWin !== win) return;
     recorderWin = null;
     try { win.destroy(); } catch { /* already gone */ }
-    if (recording) { settleSession(activeSession); pill("error", { label: pillError("") }); }
+    // Listening or already writing: either way nothing will answer for the
+    // session now. (Only a listening one was settled, so a crash during
+    // the upload left the pill on "writing" until the next press.)
+    if (activeSession) { settleSession(activeSession); pill("error", { label: pillError("") }); }
   });
   recorderWin.loadFile("recorder.html");
 }
@@ -973,24 +980,37 @@ function sendToRecorder(channel, payload) {
 // A small always-on-top strip near the bottom of the screen that shows the
 // words as you speak (live mode). Click-through + non-focusable so it can never
 // steal the paste target.
-function showOverlay() {
-  // Same rule as the pill: over the app they are in, however it got there.
-  if (overlayWin && !overlayWin.isDestroyed()) { overlayWin.showInactive(); raisePill(overlayWin); return; }
-  const wa = screen.getPrimaryDisplay().workArea;
+/** Near the foot of the display the pointer is on, like the pill. It was
+ *  always the primary display, wherever the person was writing. */
+function overlayBounds() {
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const w = num("desktop.overlay.width", 560), h = num("desktop.overlay.height", 84);
-  overlayWin = new BrowserWindow({
-    width: w, height: h,
-    x: Math.round(wa.x + (wa.width - w) / 2),
-    y: wa.y + wa.height - num("desktop.overlay.bottomOffset", 120),
-    frame: false, transparent: true, alwaysOnTop: true,
-    skipTaskbar: true, focusable: false, resizable: false, hasShadow: false,
-    webPreferences: webPrefs(),
-  });
-  try { overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
+  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
+    y: wa.y + wa.height - num("desktop.overlay.bottomOffset", 120) };
+}
+function showOverlay() {
+  if (!overlayWin || overlayWin.isDestroyed()) {
+    overlayWin = new BrowserWindow(Object.assign(overlayBounds(), {
+      frame: false, transparent: true, alwaysOnTop: true,
+      skipTaskbar: true, focusable: false, resizable: false, hasShadow: false,
+      // NEVER SHOWN BY THE CONSTRUCTOR. A window shown that way is shown
+      // with show(), which on macOS activates the app first — the app they
+      // were writing in lost the keyboard, and the paste went to Tailzu.
+      // showInactive below, and a panel on macOS, as the pill is.
+      show: false,
+      ...(process.platform === "darwin" ? { type: "panel" } : {}),
+      webPreferences: webPrefs(),
+    }));
+    try { overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
+    overlayWin.setIgnoreMouseEvents(true);
+    hardenWindow(overlayWin);
+    overlayWin.loadFile("overlay.html");
+  } else {
+    setBoundsExactly(overlayWin, overlayBounds());
+  }
+  // Same rule as the pill: over the app they are in, however it got there.
+  overlayWin.showInactive();
   raisePill(overlayWin);
-  overlayWin.setIgnoreMouseEvents(true);
-  hardenWindow(overlayWin);
-  overlayWin.loadFile("overlay.html");
 }
 function hideOverlay() { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide(); }
 
@@ -1003,19 +1023,25 @@ let pillWin = null;
 let pillState = "rest";
 let pillData = {};                 // what came with the state (a count, a reason)
 let pillWords = 0;                 // written in the running session, pauses included
-// Sessions that have already pasted something. A pause-flush pastes each
-// stretch of speech on its own, and pasted bare they ran together:
-// "stuck up?Then", "sometimes.Okay". Every paste after a session's first
-// is separated from the one before it.
-const pastedIn = new Set();
-/** Remember a session id in one of these sets, keeping only the latest few. */
+let listeningSince = 0;             // when the running session opened the mic
+// What each session pasted last. A pause-flush pastes each stretch of
+// speech on its own, and pasted bare they ran together: "stuck up?Then",
+// "andजिंदगी में.I'm". Every paste after a session's first is joined to the
+// one before it: as the server says (`joinWithSpace`, read against the
+// context the recorder sent, which is exactly what was pasted before), or
+// by the same rule here (pasteJoin.js) when an older server says nothing —
+// one space, or none where the script or the punctuation wants none.
+const pastedIn = new Map();
+/** Remember a session id in a set, keeping only the latest few. */
 function remember(set, session) {
   set.add(session);
   if (set.size > 32) set.delete(set.values().next().value);
 }
-function spaced(session, t) {
-  const joined = pastedIn.has(session) && !/^[\s.,!?;:)\]}]/.test(t) ? " " + t : t;
-  remember(pastedIn, session);
+function spaced(session, t, join) {
+  const prev = pastedIn.get(session) || "";
+  const joined = prev && typeof join === "boolean" ? (join ? " " : "") + t : joinStretch(prev, t);
+  pastedIn.set(session, t);
+  if (pastedIn.size > 32) pastedIn.delete(pastedIn.keys().next().value);
   return joined;
 }
 // Sessions thrown away: nothing from them is pasted. A cancelled recorder
@@ -1032,17 +1058,32 @@ function pillHint() {
   return txt("desktop.pill.hintKey", "Press {key} to talk", { key: prettyKey(cfg.hotkey) });
 }
 
-/** Bottom-centre of the display the pointer is on: where the person is. */
-function pillBounds() {
-  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+/** Bottom-centre of a display's work area, so above the taskbar or the Dock
+ *  wherever they sit: by default the display the pointer is on, where the
+ *  person is. */
+function pillBounds(display) {
+  const wa = (display || screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea;
   const w = num("desktop.pill.windowWidth", 420), h = num("desktop.pill.windowHeight", 132);
   return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
     y: Math.round(wa.y + wa.height - h - num("desktop.pill.bottomOffset", 4)) };
 }
 
+/** setBounds, checked. On Windows a move between two monitors at different
+ *  scaling (a laptop at 150% beside a monitor at 100%) can land the window
+ *  at the size it had in the old monitor's pixels; asked again from the new
+ *  monitor, it lands right. */
+function setBoundsExactly(w, b) {
+  try {
+    w.setBounds(b);
+    const got = w.getBounds();
+    if (got.x !== b.x || got.y !== b.y || got.width !== b.width || got.height !== b.height) w.setBounds(b);
+  } catch { /* keep its place */ }
+}
+
+let pillRebuiltAt = 0;
 function createPillWindow() {
   if (pillWin && !pillWin.isDestroyed()) return pillWin;
-  pillWin = new BrowserWindow(Object.assign(pillBounds(), {
+  const win = pillWin = new BrowserWindow(Object.assign(pillBounds(), {
     frame: false, transparent: true, resizable: false, movable: false, minimizable: false,
     maximizable: false, fullscreenable: false, skipTaskbar: true, focusable: false,
     hasShadow: false, alwaysOnTop: true, show: false,
@@ -1053,16 +1094,30 @@ function createPillWindow() {
   }));
   // On every space and over full-screen apps FIRST: on macOS this call resets
   // the window's level, so the level is set after it, not before.
-  try { pillWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
-  raisePill(pillWin);
-  pillWin.setIgnoreMouseEvents(true, { forward: true });
-  hardenWindow(pillWin);
-  pillWin.webContents.on("did-finish-load", () => {
-    pillSend(Object.assign({ state: pillState }, pillData, { hint: pillHint(), rest: bool("desktop.pill.rest", true) }));
-    if (pillOn()) { pillWin.showInactive(); raisePill(pillWin); }
+  try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch { /* one space */ }
+  raisePill(win);
+  win.setIgnoreMouseEvents(true, { forward: true });
+  hardenWindow(win);
+  win.webContents.on("did-finish-load", () => {
+    // Straight to the page, not through pillSend: isLoading() is still true
+    // while this event runs, and its check dropped the message. The pill
+    // started with no hint (hovering it opened nothing until a first
+    // dictation), and one rebuilt mid-dictation came back looking idle.
+    win.webContents.send("pill", Object.assign({ state: pillState }, pillData, { hint: pillHint(), rest: bool("desktop.pill.rest", true) }));
+    if (pillOn()) showPill(win);
   });
-  pillWin.loadFile("pill.html");
-  return pillWin;
+  // A pill whose page crashed stayed on screen as an empty window, drawing
+  // nothing for the rest of the run. It is rebuilt, in the state dictation
+  // is in; a page that keeps crashing is rebuilt at the next state instead
+  // of in a loop.
+  win.webContents.on("render-process-gone", () => {
+    if (pillWin !== win) return;
+    pillWin = null;
+    try { win.destroy(); } catch { /* already gone */ }
+    if (pillOn() && Date.now() - pillRebuiltAt > 5000) { pillRebuiltAt = Date.now(); createPillWindow(); }
+  });
+  win.loadFile("pill.html");
+  return win;
 }
 
 /**
@@ -1074,11 +1129,15 @@ function createPillWindow() {
  * could not see it listen. It now sits at the screen-saver level, the highest
  * a window can ask for, and claims it again every time it changes state, and
  * every second or so while a dictation is running.
+ *
+ * moveTop only for a window already showing: on Windows it is SetWindowPos
+ * with SWP_SHOWWINDOW and on macOS an order-front, so it SHOWS a hidden one
+ * (the pill the tray switched off, a pill still loading).
  */
 function raisePill(w) {
   if (!w || w.isDestroyed()) return;
   try { w.setAlwaysOnTop(true, str("desktop.pill.level", "screen-saver"), 1); } catch { /* default level */ }
-  try { w.moveTop(); } catch { /* not supported here */ }
+  if (w.isVisible()) { try { w.moveTop(); } catch { /* not supported here */ } }
 }
 let pillGuard = null;
 function guardPill(on) {
@@ -1093,17 +1152,62 @@ function pillSend(m) {
   if (pillWin && !pillWin.isDestroyed() && !pillWin.webContents.isLoading()) pillWin.webContents.send("pill", m);
 }
 
+/** Show without taking the keyboard, on top. It may have been hidden under
+ *  the pointer, which it would still believe is over it, taking clicks
+ *  meant for the app below: it starts un-hovered. */
+function showPill(w) {
+  w.setIgnoreMouseEvents(true, { forward: true });
+  w.webContents.send("pill", { unhover: true });
+  w.showInactive();
+  raisePill(w);
+}
+function hidePill() {
+  guardPill(false);
+  if (pillWin && !pillWin.isDestroyed() && pillWin.isVisible()) pillWin.hide();
+}
+
 /** Move the pill to a state. `caption` and `flash` are moments, not states. */
 function pill(state, data) {
-  if (state !== "caption" && state !== "flash") { pillState = state; pillData = data || {}; }
-  if (!pillOn()) return;
+  const moment = state === "caption" || state === "flash";
+  if (!moment) {
+    pillState = state; pillData = data || {};
+    // Held on top for as long as it is listening or writing, and never
+    // past it: every other state ends the guard, a switched-off pill too
+    // (its interval used to run on for the rest of the launch).
+    guardPill(pillOn() && (state === "listening" || state === "writing"));
+  }
+  // Switched off, by the tray or by the server: hidden, not left on screen
+  // showing whatever it showed last.
+  if (!pillOn()) { hidePill(); return; }
   const w = createPillWindow();
-  if (state === "listening") { try { w.setBounds(pillBounds()); } catch { /* keep its place */ } }
-  pillSend(Object.assign({ state, hint: pillHint() }, data || {}));
-  if (!w.isVisible() && !w.webContents.isLoading()) w.showInactive();
-  raisePill(w);
-  // Held on top for as long as it is listening or writing.
-  if (state !== "caption" && state !== "flash") guardPill(state === "listening" || state === "writing");
+  if (state === "listening") setBoundsExactly(w, pillBounds());
+  pillSend(Object.assign({ state, hint: pillHint(), rest: bool("desktop.pill.rest", true) }, data || {}));
+  if (!w.isVisible()) { if (!w.webContents.isLoading()) showPill(w); }
+  // A change of state reclaims the top. Captions and flashes (several a
+  // second while live captions run) leave that to the guard.
+  else if (!moment) raisePill(w);
+}
+
+/** The pill where the screens now are, and on top. A monitor unplugged, a
+ *  resolution or a scale changed, the taskbar moved or set to hide: its
+ *  place was worked out once, and it stayed where the old screen had been,
+ *  off the edge or in the middle of the new one. And a machine waking from
+ *  sleep can have dropped it from the topmost band. It stays on the display
+ *  it was on, or the nearest one if that one is gone. */
+let replaceTimer = null;
+function replaceFloating() {
+  clearTimeout(replaceTimer);
+  // The events come in bursts (a dock unplugged is several): once, after.
+  replaceTimer = setTimeout(() => {
+    if (pillWin && !pillWin.isDestroyed()) {
+      setBoundsExactly(pillWin, pillBounds(screen.getDisplayMatching(pillWin.getBounds())));
+      raisePill(pillWin);
+    }
+    if (overlayWin && !overlayWin.isDestroyed() && overlayWin.isVisible()) {
+      setBoundsExactly(overlayWin, overlayBounds());
+      raisePill(overlayWin);
+    }
+  }, num("desktop.pill.replaceMs", 300));
 }
 
 /** Words, counted the way a reader counts them — Devanagari and Latin alike,
@@ -1161,6 +1265,18 @@ ipcMain.on("pill:action", (e, a) => {
   if (a === "start" && !recording) toggleDictation();
   else if (a === "finish" && recording) toggleDictation();
   else if (a === "cancel" && recording) cancelDictation();
+});
+// The token for one request from the recorder. It was handed one token at
+// the start of a dictation and used it for every stretch, so a dictation
+// that outlived it (an hour's token, a press in its last minutes) was
+// refused halfway: the stretches after that were lost, and in live mode the
+// refused refine pasted the raw words. Renewed here, by the one holder of the
+// refresh token, when it is spent, and at once when the server refused it.
+ipcMain.handle("recorder:token", async (e, renew) => {
+  if (!isFrom(e, recorderWin)) return null;
+  if (renew && authSession && authSession.refresh_token) authSession.expires_at = 0;
+  await refreshSession();
+  return tokenNow();
 });
 // The voice's level, band by band, from the recorder to the pill.
 ipcMain.on("dictation-level", (e, p) => {
@@ -1299,8 +1415,10 @@ function setLocal(key, value) {
     try { app.setLoginItemSettings({ openAtLogin: value, args: ["--hidden"] }); } catch { /* locked-down machine */ }
   }
   if (key === "pill") {
-    if (value) pill(pillState);
-    else if (pillWin && !pillWin.isDestroyed()) pillWin.hide();
+    // Back in the state dictation is in. A "done" or an error from before it
+    // was hidden is over; shown again, it read as news.
+    if (value) pill(pillState === "listening" || pillState === "writing" ? pillState : "rest");
+    else hidePill();
   }
   if (key === "tap") pillSend({ hint: pillHint() });
 }
@@ -1494,7 +1612,13 @@ function requireWords() {
 async function startRecording(sid) {
   if (tokenStale()) await refreshSession();
   // Superseded while we waited — either stopped, or replaced by a newer press.
-  if (!recording || sid !== activeSession) return;
+  if (!recording || sid !== activeSession) {
+    // Stopped before the recorder was ever told to start: nothing recorded,
+    // and nothing will answer for it, so it is settled here. It used to sit
+    // on "writing", waiting for an answer that could not come.
+    if (sid === activeSession) { settleSession(sid); pill("rest"); }
+    return;
+  }
   // The refresh may have failed, which means the session is gone rather than
   // merely old. Stop instead of recording into a void.
   if (!signedIn()) {
@@ -1508,8 +1632,15 @@ async function startRecording(sid) {
   sendToRecorder("start-recording", {
     // The account's token, always: dictation requires one, so there is no
     // longer a fallback path that writes to a user nobody can read.
+    //
+    // NO TONE. It used to send this process's idea of the tone, which was
+    // "none" whenever it had not (yet) read the account — offline at login,
+    // a failed read — and a stale one after the voice was changed on the
+    // phone; the server took it over the account's own. The server writes
+    // in the account's voice (its tone and its preset) when none is sent,
+    // exactly as it does for the phone.
     baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language,
-    tone: currentTone(), live: cfg.live, session: sid,
+    live: cfg.live, session: sid,
     // Was never forwarded, so the recorder read it as absent — and absent
     // means on. Turning it off in config.json did nothing.
     pauseFlush: cfg.pauseFlush,
@@ -1534,6 +1665,8 @@ function toggleDictation() {
   if (recording) {
     activeSession = ++sessionSeq;
     pillWords = 0;
+    listeningSince = Date.now();
+    clearTimeout(writingTimer);
     pill("listening");
     // Overlay BEFORE the start call: when the token is fresh startRecording
     // runs to completion synchronously, and a failure inside it hides an
@@ -1544,8 +1677,30 @@ function toggleDictation() {
   } else {
     sendToRecorder("stop-recording", { session: activeSession });
     pill("writing");
+    awaitWriting(activeSession, Date.now() - listeningSince);
   }
   refreshTray();
+}
+
+/**
+ * A STOP IS ALWAYS ANSWERED, OR IT IS SETTLED ANYWAY.
+ *
+ * The recorder answers every stop with a result or an error, and its upload
+ * gives up after a time of its own. But a recorder that hangs, or an answer
+ * lost between the two processes, left the pill on "writing" (and its guard
+ * raising it every second) until the next press. So a stop has a deadline,
+ * later than the recorder's own and longer for a longer recording; past it
+ * the session is settled as a failure. A late answer is still pasted: only
+ * the state moves on.
+ */
+let writingTimer = null;
+function awaitWriting(sid, listenedMs) {
+  clearTimeout(writingTimer);
+  writingTimer = setTimeout(() => {
+    if (sid !== activeSession || recording) return;
+    settleSession(sid);
+    pill("error", { label: pillError("") });
+  }, num("desktop.pill.writingMaxMs", 120000) + 2 * listenedMs);
 }
 
 // ---- Hold-to-talk (low-level key hook) ---------------------------------------
@@ -1662,8 +1817,12 @@ function paste(text) {
 }
 
 function pasteIntoFocusedApp(done) {
-  // A hung helper must not hold every later paste behind it.
-  const opts = { timeout: 10000 };
+  // A hung helper must not hold every later paste behind it. And no console
+  // window: PowerShell is a console program, and started without this it
+  // opened one (for the moment before -WindowStyle Hidden takes hold) that
+  // could take the foreground, so Ctrl+V went to it or to whatever Windows
+  // brought forward after it, not to the app being written in.
+  const opts = { timeout: 10000, windowsHide: true };
   if (process.platform === "darwin") {
     execFile("osascript", ["-e", 'tell application "System Events" to keystroke "v" using command down'], opts,
       (err) => { if (err) notifyAccessibility(); done(); });
@@ -1695,6 +1854,7 @@ function settleSession(session) {
   if (session !== activeSession) return;
   activeSession = 0;
   recording = false;
+  clearTimeout(writingTimer);
   hideOverlay();
   refreshTray();
 }
@@ -1718,7 +1878,7 @@ ipcMain.on("dictation-result", (e, payload) => {
   // user's words and belong at the cursor.
   if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
   if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
-  if (t) paste(spaced(session, t));
+  if (t) paste(spaced(session, t, p.join));
   pastedIn.delete(session);
 });
 
@@ -1734,7 +1894,7 @@ ipcMain.on("dictation-segment", (e, payload) => {
     return;
   }
   if (!t) return;
-  paste(spaced(session, t));
+  paste(spaced(session, t, p.join));
   if (session === activeSession) {
     pillWords += countWords(t);
     pill("flash");
@@ -1761,7 +1921,14 @@ ipcMain.on("dictation-error", (e, payload) => {
   // Known by its code now that the message is a sentence: the stream's own,
   // or the one the recorder reads out of a refused upload.
   const quota = code === "quota_exceeded";
-  if (session === activeSession) pill("error", { label: pillError(message, quota) });
+  if (session === activeSession) {
+    // An error that ends a session still listening closes the microphone
+    // too. The recorder does so itself for every error it knows ends one;
+    // this is for any it does not, so the mic is never left open on a
+    // session nothing will write.
+    if (recording) sendToRecorder("cancel-recording", { session });
+    pill("error", { label: pillError(message, quota) });
+  }
   settleSession(session);
   notify(fmt("notify.dictationFailed", { message }));
   // The server refused for words: the cached `quota.exceeded` was stale, so
@@ -1899,6 +2066,13 @@ app.whenReady().then(() => {
 
   createRecorderWindow();
   if (pillOn()) createPillWindow();
+  // The pill follows the screens, and is raised again after sleep and on
+  // unlock (see replaceFloating).
+  screen.on("display-added", replaceFloating);
+  screen.on("display-removed", replaceFloating);
+  screen.on("display-metrics-changed", replaceFloating);
+  powerMonitor.on("resume", replaceFloating);
+  powerMonitor.on("unlock-screen", replaceFloating);
 
   tray = new Tray(trayIcon());
   refreshTray();
