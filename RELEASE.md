@@ -1,6 +1,8 @@
 # Publishing the desktop app
 
-The delivery side is already built. `tailzu.space/download` detects the
+This repo's `build` workflow builds all three installers on every push and
+publishes them only on a manual run (Actions → build → Run workflow), with
+the `DOWNLOADS_SSH_KEY` secret set. The delivery side is already built. `tailzu.space/download` detects the
 visitor's OS and links to `/downloads/Tailzu-Setup.exe`, `/downloads/Tailzu.dmg`
 or `/downloads/Tailzu.AppImage`, HEAD-checks each one, and shows "coming soon"
 for whatever is not published yet. The server serves that directory from a host
@@ -19,7 +21,7 @@ stranger can install this.**
 ## Windows
 
 ```
-npm --prefix desktop run dist:win      # on Windows
+npm run dist:win      # on Windows
 ```
 
 Produces `dist/Tailzu-Setup.exe`. It installs and runs.
@@ -66,7 +68,7 @@ certificate from the same account:
 export APPLE_ID="you@example.com"
 export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
 export APPLE_TEAM_ID="A1B2C3D4E5"
-npm --prefix desktop run dist:mac:signed
+npm run dist:mac:signed
 ```
 
 Notarization uploads the app to Apple and waits for a verdict — usually a few
@@ -157,7 +159,7 @@ this one install every change to them is a backend deploy. An older install
 keeps the phone screens it had until it updates.
 
 Until then the server tells installed builds about a release. Bump `version` in
-`desktop/package.json` before `npm run dist` (every build reports it as
+`package.json` before `npm run dist` (every build reports it as
 `appVersion` in its bootstrap), publish, then set the flag from the control
 console:
 

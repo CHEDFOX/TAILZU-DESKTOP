@@ -35,7 +35,6 @@ one is allowed by hash, written by gen-field.js).
 ## Run it (dev)
 
 ```
-cd desktop
 npm install
 npm run icon          # generate tray + app icons (one-time)
 cp config.example.json config.json   # optional — only baseUrl is needed
@@ -67,7 +66,7 @@ Authorization header; dictation needs a signed-in account.
 
 For the **installed** app, config lives in the per-user data dir (Windows:
 `%APPDATA%\tailzu-desktop\config.json`) — use the tray's "Edit config…" to open
-it. The dev `desktop/config.json` is git-ignored and never packaged.
+it. The dev `config.json` (in this repo's root) is git-ignored and never packaged.
 
 ## Use it
 
@@ -95,8 +94,8 @@ client that reports `device.formFactor: "desktop"`.
 `txt(key, fallback)` reads `bootstrap.labels`, and `num` / `bool` / `str` /
 `color` / `list` / `obj` read `bootstrap.flags`. The literal next to each key is
 the value that used to be hardcoded, kept only for a launch that has never
-reached the server. `tools/knobs/extract.mjs` scans `desktop/*.js` and
-`*.html` for those calls, and the backend sends every key it finds, so each is
+reached the server. `tools/knobs/extract.mjs` (in TAILZU-FRONTEND) scans this repo's `*.js`
+and `*.html` for those calls, and the backend sends every key it finds, so each is
 visible and changeable from the control console. Keys are named
 `desktop.<area>.<name>` — hotkey fallbacks, tap timings, recorder thresholds,
 window sizes, notification copy, the overlay's look, the window's toasts.
@@ -147,7 +146,6 @@ SmartScreen, and run.
 ## Build installers (PC build)
 
 ```
-cd desktop
 npm install
 npm run icon
 npm run dist:win      # Windows: dist/Tailzu Setup 0.1.0.exe (NSIS, one-click)
@@ -155,7 +153,7 @@ npm run dist:mac      # macOS:  dist/Tailzu-0.1.0.dmg (needs a Mac)
 npm run dist          # current OS
 ```
 
-Output lands in `desktop/dist/`. Windows builds are local + free — no cloud
+Output lands in `dist/`. Windows builds are local + free — no cloud
 service, no store review. Notes:
 
 - The installer is **unsigned**, so Windows SmartScreen shows "Windows protected
