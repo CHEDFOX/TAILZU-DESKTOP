@@ -202,43 +202,33 @@ async function sbFetch(path, body) {
 }
 
 /**
- * A valid access token, refreshing when the stored one has expired.
+ * A valid access token, renewed when the stored one has expired.
  *
  * Null when nobody is signed in, and the request then goes out with no
  * Authorization header at all. There used to be a static fallback token here,
  * which the backend resolves to a synthetic user — so a signed-out window
  * asked for things as somebody nobody is.
+ *
+ * THE MAIN PROCESS RENEWS IT, not this window. Supabase rotates the refresh
+ * token on every use, and this window used to renew with its own copy after
+ * the tray's timer had already spent it — which signed the account out
+ * everywhere. The main process holds the only refresh token and answers with
+ * a live access token (or none, once the account is really gone).
  */
 async function bearer() {
   if (!SESSION) return null;
   const now = Math.floor(Date.now() / 1000);
-  if (SESSION.expires_at && SESSION.expires_at - K.num("desktop.auth.refreshSkewSec", 60) <= now && SESSION.refresh_token) {
-    try {
-      const r = await sbFetch("/auth/v1/token?grant_type=refresh_token", { refresh_token: SESSION.refresh_token });
-      await setSession(r);
-    } catch {
-      // Refresh failed — the session is gone, not merely stale.
-      await setSession(null);
-      render();
-      return null;
-    }
+  if (SESSION.expires_at && SESSION.expires_at - K.num("desktop.auth.refreshSkewSec", 60) <= now) {
+    SESSION = (await window.tailzuApp.session()) || null;
+    if (!SESSION) { render(); return null; }
   }
-  // The tray reads the account's tone with this, so it always has the current
-  // one rather than a copy that goes stale the moment the token rotates.
-  try { window.tailzuApp.token(SESSION.access_token); } catch { /* tray only */ }
   return SESSION.access_token;
 }
 
+/** Signed in (a Supabase session) or out (null). The main process keeps it
+ *  and hands back the part this window holds. */
 async function setSession(raw) {
-  SESSION = raw
-    ? {
-        access_token: raw.access_token,
-        refresh_token: raw.refresh_token,
-        expires_at: raw.expires_at ||
-          Math.floor(Date.now() / 1000) + (raw.expires_in || K.num("desktop.auth.tokenLifetimeSec", 3600)),
-      }
-    : null;
-  await window.tailzuApp.setSession(SESSION);
+  SESSION = (await window.tailzuApp.setSession(raw || null)) || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +284,9 @@ function capabilities() {
 }
 
 async function api(path, body, method) {
+  // A path, never an address: "…tailzu.space" + ".evil.com/x" is another host,
+  // and the account's token would go with it.
+  if (typeof path !== "string" || path[0] !== "/") throw new Error("not an API path: " + path);
   const tok = await bearer();
   const headers = { "Content-Type": "application/json" };
   if (tok) headers.Authorization = "Bearer " + tok;
@@ -402,12 +395,10 @@ function applyTheme(theme) {
 // The scale and the two stacks are knobs; read per call so a new bootstrap
 // retunes the next paint.
 //
-// Single quotes inside the stacks, because these land in double-quoted style
-// attributes: a "Segoe UI" in there closed the attribute early and cut off
-// everything role() wrote after it — including the node's own style, so
-// every Text lost its margins and colours from the tree ("0words"). A stack
-// from the server gets the same treatment, for the same reason.
-const fontStack = (v) => String(v).replace(/"/g, "'");
+// Escaped, because this lands in a double-quoted style attribute: a
+// "Segoe UI" in there closed the attribute early and cut off everything
+// role() wrote after it — including the node's own style, so every Text lost
+// its margins and colours from the tree ("0words"). css() does the same.
 
 function role(name, extra) {
   const theme = (BOOT && BOOT.theme) || {};
@@ -426,7 +417,7 @@ function role(name, extra) {
   if (r.transform) out.push("text-transform:" + r.transform);
   if (r.align) out.push("text-align:" + r.align);
   if (r.color) out.push("color:" + (c[r.color] || r.color));
-  out.push("font-family:" + fontStack(r.family === "display"
+  out.push("font-family:" + (r.family === "display"
     ? K.str("desktop.font.serif", "Georgia,'Times New Roman',serif")
     : K.str("desktop.font.sans", "-apple-system,'Segoe UI',system-ui,sans-serif")));
   if (r.marginTop != null) out.push("margin-top:" + r.marginTop + "px");
@@ -434,7 +425,7 @@ function role(name, extra) {
   if (r.marginVertical != null) {
     out.push("margin-top:" + r.marginVertical + "px", "margin-bottom:" + r.marginVertical + "px");
   }
-  return out.join(";") + (extra ? ";" + extra : "");
+  return esc(out.join(";") + (extra ? ";" + extra : ""));
 }
 
 function label(v) {
@@ -579,7 +570,9 @@ function css(st) {
     if (typeof v === "number" && !NUMERIC_OK.test(prop)) v = v + "px";
     out.push(prop + ":" + v);
   }
-  return out.join(";");
+  // Every caller puts this in a double-quoted style attribute, where a quote
+  // in a value (a font name, a url) would end the attribute.
+  return esc(out.join(";"));
 }
 
 // ---------------------------------------------------------------------------
@@ -705,7 +698,7 @@ function node(n) {
         kids + (txt ? "<div>" + txt + "</div>" : "") + "</div>";
 
     case "Spacer":
-      return '<div style="height:' + (st.height || K.num("desktop.spacer.height", 8)) + "px;flex:" + (st.flex || 0) + '"></div>';
+      return '<div style="height:' + esc(st.height || K.num("desktop.spacer.height", 8)) + "px;flex:" + esc(st.flex || 0) + '"></div>';
 
     case "Divider":
       return '<div style="height:1px;background:var(--border);margin:' + K.num("desktop.divider.margin", 12) + 'px 0"></div>';
@@ -846,8 +839,8 @@ function node(n) {
         "object-fit:" + (p.contentFit === "contain" ? "contain" : "cover") + ";" +
         "display:block;" + (fills ? "margin:0;" : "margin:0 auto " + K.num("desktop.image.marginBottom", 14) + "px;");
       return n.type === "Video"
-        ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + box + '"></video>'
-        : '<img src="' + esc(src) + '" alt="" style="' + box + '">';
+        ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + esc(box) + '"></video>'
+        : '<img src="' + esc(src) + '" alt="" style="' + esc(box) + '">';
     }
 
     case "Keys": return keysNode(p, s);
@@ -1330,8 +1323,10 @@ function startSession(n) {
       // still reported by the same path rather than silently.
       r.stream = (warmed ? await warmed : null) ||
         await navigator.mediaDevices.getUserMedia({ audio: micConstraints() });
-      if (!r.alive) { closeMic(r); return; }
       const token = await bearer();
+      // Either wait can outlast the screen; a socket opened after that is one
+      // nothing will ever close.
+      if (!r.alive) { closeMic(r); return; }
       r.ws = new WebSocket(ENV.baseUrl.replace(/^http/, "ws") + "/v1/transcribe-stream");
       r.ws.binaryType = "arraybuffer";
       // A browser socket cannot set an Authorization header; the protocol
@@ -1358,6 +1353,11 @@ function startSession(n) {
         }
       };
       r.ws.onerror = () => { /* onclose follows */ };
+      // The socket went away under a live microphone (the server closed it, the
+      // network dropped). Nothing else would ever notice: the silence timer
+      // keeps re-arming on nothing said, and the mic stays open. Our own
+      // closes detach this first (closeMic).
+      r.ws.onclose = () => fail(K.txt("desktop.voice.micStopped", "The microphone stopped."));
       r.ctx = new AudioContext();
       r.src = r.ctx.createMediaStreamSource(r.stream);
       r.proc = r.ctx.createScriptProcessor(4096, 1, 1);
@@ -1399,7 +1399,13 @@ function startSession(n) {
   /** Out loud, then back to listening. A browser with no voices installed
    *  resolves immediately rather than hanging the loop on an utterance that
    *  will never fire `onend`. */
-  function speak(text, done, voice) {
+  function speak(text, then, voice) {
+    // Once, whichever of the end, an error or the ceiling comes first. The
+    // ceiling used to fire on its own schedule too: a long first reply's
+    // timer ended the NEXT reply mid-sentence and opened a second microphone
+    // over the first.
+    let timer = null, over = false;
+    const done = () => { if (over) return; over = true; clearTimeout(timer); then(); };
     try {
       const synth = window.speechSynthesis;
       if (!synth) { done(); return; }
@@ -1412,7 +1418,7 @@ function startSession(n) {
       synth.speak(u);
       // Some engines drop an utterance silently. A ceiling proportional to the
       // reply keeps a dead synthesiser from ending the conversation.
-      setTimeout(() => { if (r.alive && stateAt(r.statePath) === "speaking") done(); },
+      timer = setTimeout(done,
         Math.min(K.num("desktop.voice.ttsMaxMs", 30000),
           K.num("desktop.voice.ttsBaseMs", 2000) + text.length * K.num("desktop.voice.ttsPerCharMs", 90)));
     } catch { done(); }
@@ -1572,7 +1578,6 @@ async function installUpdate(action) {
   const words = action.words || {};
   const say = (key, vars) => String(words[key] || "").replace(/\{(\w+)\}/g, (_, k) => (vars && vars[k] != null ? String(vars[k]) : ""));
   const show = (busy, line) => { setStatePath("upd.busy", busy); setStatePath("upd.line", line || undefined); repaint(); };
-  if (!window.tailzuApp.installUpdate) { window.tailzuApp.openExternal(action.url); return; }
   if (!updateListening) {
     updateListening = true;
     window.tailzuApp.onUpdateProgress((p) => {
@@ -1862,7 +1867,7 @@ function wordMeter(p) {
   const used = Math.max(0, Math.min(total, +p.used || 0));
   const left = total - used;
   const tick = earned > 0 ? (base / total) * 100 : -1;
-  const fill = p.fillColor || "var(--accent)";
+  const fill = esc(p.fillColor || "var(--accent)");
   const big = K.num("desktop.meter.bigSize", 28), small = K.num("desktop.meter.smallSize", 13);
   const tiny = K.num("desktop.meter.tinySize", 12), bar = K.num("desktop.meter.barHeight", 10);
   return '<div><div style="display:flex;justify-content:space-between;align-items:baseline">' +
@@ -1878,7 +1883,7 @@ function wordMeter(p) {
     '</div><div style="display:flex;gap:14px;margin-top:10px">' +
     '<span style="color:var(--label);font-size:' + tiny + 'px">' +
     esc(K.txt("desktop.meter.free", "{n} free", { n: base.toLocaleString() })) + "</span>" +
-    (earned > 0 ? '<span style="color:' + (p.earnedColor || "var(--accent)") + ";font-size:" + tiny + 'px;font-weight:600">' +
+    (earned > 0 ? '<span style="color:' + esc(p.earnedColor || "var(--accent)") + ";font-size:" + tiny + 'px;font-weight:600">' +
       esc(K.txt("desktop.meter.earned", "+{n} earned", { n: earned.toLocaleString() })) + "</span>" : "") + "</div>" +
     (p.caption ? '<div style="color:var(--label);font-size:' + small + 'px;margin-top:12px">' + esc(p.caption) + "</div>" : "") + "</div>";
 }
@@ -2102,6 +2107,9 @@ function deepResolve(v) {
 
 function setStatePath(path, value) {
   const parts = String(path).replace(/^state\./, "").split(".");
+  // A path is data from the tree; one that walks into a prototype would
+  // write into every object in this window.
+  if (parts.some((k) => k === "__proto__" || k === "constructor" || k === "prototype")) return;
   let o = STATE;
   for (let i = 0; i < parts.length - 1; i++) {
     if (typeof o[parts[i]] !== "object" || o[parts[i]] === null) o[parts[i]] = {};
@@ -2241,7 +2249,6 @@ function applyChrome(screen) {
   view.dataset.full = bare ? "1" : "0";
 }
 
-/** First node in the tree carrying this event, and the action it names. */
 /** Find a node by type anywhere in a tree. The chat and the mic need their own
  *  node back — for the paths the server named on it, and for its handlers —
  *  and the renderer returns strings, so there is nothing to close over. */
@@ -2522,6 +2529,7 @@ function wireMic(view, sc) {
   });
 }
 
+/** First node in the tree carrying this event, and the action it names. */
 function findEvent(n, name) {
   if (!n || typeof n !== "object") return null;
   if (n.on && n.on[name]) return n.on[name];
@@ -2710,10 +2718,8 @@ try { window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change
 
 /** Signing out, from the rail's link or the desk's settings page. */
 async function signOutHere() {
+  // The tray's session too: it is the same one, held by the main process.
   await setSession(null);
-  // Drop the tray's token too, or it keeps reading the account of someone
-  // who just signed out of it.
-  try { window.tailzuApp.token(null); } catch { /* tray only */ }
   location.reload();
 }
 
@@ -2734,7 +2740,6 @@ function paintChrome(shell) {
     const el = $(id);
     if (el && typeof v === "string" && v.trim()) { el.textContent = v; CHROME_PAINTED.add(id); }
   };
-  const hint = (id, v) => { const el = $(id); if (el && typeof v === "string" && v.trim()) el.placeholder = v; };
   // The form itself is the server's auth.screen now — its labels are props on
   // that tree, not ids in this document. What is left here is the copy AROUND
   // it: the heading, and the line under everything.
@@ -2944,12 +2949,6 @@ function gateBoot() {
   // somebody. Auth is optional on the route, so it simply asks without one.
   if (!preBoot) preBoot = bootstrapAnon().catch(() => null);
   return preBoot;
-}
-
-async function phoneEnabled() {
-  const b = await gateBoot();
-  const v = b && (b.flags || {})["auth.enablePhone"];
-  return v === true || v === "true";
 }
 
 /**

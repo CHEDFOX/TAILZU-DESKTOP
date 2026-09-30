@@ -2,8 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- connect-src names wss: as well: "https:" alone refused the Train tab's
+     voice socket. localhost is for a dev backend (main.js refuses any other
+     plain-http address). base-uri and form-action: markup that got into a
+     page could otherwise re-point every relative URL, or post a form away. -->
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:; connect-src https:; font-src 'self'; frame-src 'self'">
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:; connect-src https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; font-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'">
 <title>Tailzu</title>
 <style>
   /* THE DESK'S FACES, shipped with the app: this window's policy lets it load
@@ -285,41 +289,8 @@
   }
   .gatebox h1 { font-size:34px; font-weight:700; color:var(--text); margin:0 0 6px; letter-spacing:-.6px; }
   .gatebox p.sub { margin:0 0 26px; color:var(--muted); }
-  .field {
-    width:100%; background:var(--input); border:1px solid var(--border); border-radius:13px;
-    padding:14px 15px; color:var(--text); font-size:16px; outline:none;
-  }
-  .field:focus { border-color:var(--accent); }
-  .cta {
-    width:100%; margin-top:10px; background:var(--accent); color:#000; border:0;
-    border-radius:13px; padding:14px; font-size:16px; font-weight:700; cursor:pointer;
-  }
-  .cta[disabled] { opacity:.42; cursor:default; }
   .note { color:var(--label); font-size:13px; margin-top:14px; }
   .err { color:var(--danger); font-size:13.5px; margin-top:12px; min-height:19px; }
-
-  /* method switch — only rendered when the backend has phone sign-in on */
-  .methods { display:flex; gap:2px; background:var(--input); border:1px solid var(--border);
-             border-radius:11px; padding:3px; margin-bottom:12px; }
-  .methods button { flex:1; background:none; border:0; border-radius:8px; padding:9px;
-                    color:var(--muted); font-size:14px; font-weight:500; cursor:pointer; }
-  .methods button[aria-pressed="true"] { background:var(--card); color:var(--text); }
-  .phonerow { display:flex; gap:8px; }
-  .phonerow .dial { width:92px; flex:none; text-align:center; }
-
-  /* Apple / Google */
-  .or { display:flex; align-items:center; gap:12px; margin:22px 0 14px;
-        color:var(--label); font-size:12px; }
-  .or::before, .or::after { content:""; flex:1; height:1px; background:var(--border); }
-  .oauth { display:flex; flex-direction:column; gap:9px; }
-  .oauth button {
-    display:flex; align-items:center; justify-content:center; gap:10px;
-    width:100%; border-radius:13px; padding:13px; font-size:15px; font-weight:600;
-    cursor:pointer; border:1px solid var(--border); background:var(--card); color:var(--text);
-  }
-  .oauth button:hover { border-color:var(--muted); }
-  .oauth button[disabled] { opacity:.45; cursor:default; }
-  .oauth svg { display:block; flex:none; }
 
   /* ── toast ─────────────────────────────────────────────────────────────── */
   #toast {

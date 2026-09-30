@@ -100,5 +100,17 @@ if (!cfgLine.test(html)) {
 }
 html = html.replace(cfgLine, (line) => line + RUNTIME_CFG);
 
+// A POLICY THAT RUNS THIS SCRIPT AND NO OTHER. The page's one script is
+// inline, so the policy names it by hash — computed here, from the script as
+// written, so a regenerated page carries the right one. Nothing is fetched.
+const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+if (scripts.length !== 1 || !html.includes('<meta charset="utf-8">')) {
+  console.error("gen-field: expected one inline <script> and a <meta charset=\"utf-8\"> to put the policy after.");
+  process.exit(1);
+}
+const hash = require("crypto").createHash("sha256").update(scripts[0][1], "utf8").digest("base64");
+html = html.replace('<meta charset="utf-8">', (m) => m +
+  `\n<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${hash}'; style-src 'unsafe-inline'">`);
+
 fs.writeFileSync(OUT, html);
 console.log("gen-field: wrote " + path.relative(process.cwd(), OUT) + " (" + html.length + " bytes)");

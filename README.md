@@ -20,9 +20,15 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
 
 - **main.js** — tray app, global hotkey, hold-to-talk hook, tone menu,
   caption overlay, clipboard + paste, config.
-- **recorder.html** — hidden window: batch (MediaRecorder→webm) and live
-  (WebAudio→16 kHz PCM→WebSocket) capture paths.
-- **overlay.html** — the floating live-caption strip.
+- **recorder.html** + **recorder.js** — hidden window: batch (MediaRecorder→webm)
+  and live (WebAudio→16 kHz PCM→WebSocket) capture paths.
+- **overlay.html** + **overlay.js** — the floating live-caption strip.
+- **pill.html** + **pill.js** — the dictation pill at the foot of the screen.
+- **app.html** + **sdui.js** — the app window, drawn from the server's screens.
+
+Every page carries a Content-Security-Policy that runs only this folder's own
+script files, which is why no page has an inline script (neuralField.html's
+one is allowed by hash, written by gen-field.js).
 - **preload.js** — the tiny IPC bridge.
 - **knobs.js** — the server's values for everything above (see below).
 
@@ -45,7 +51,7 @@ it would pin those values against anything the server later changes.
 
 | key | meaning |
 | --- | --- |
-| `baseUrl` | your backend, e.g. `https://api.tailzu.space` |
+| `baseUrl` | your backend, e.g. `https://api.tailzu.space` — https, or http to `localhost` only: the account's token rides on every request |
 | `language` | `auto` or a code like `en` / `hi` / `es` (`desktop.language.default`) |
 | `hotkey` | toggle accelerator (`desktop.hotkey.default`, `CommandOrControl+Shift+Space`); if it is taken, `desktop.hotkey.fallbacks` are tried in order |
 | `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (`desktop.tone.default`; also in the tray menu) |
