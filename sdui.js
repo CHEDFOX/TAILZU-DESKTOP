@@ -76,6 +76,8 @@ const COMPONENTS = [
 const SELF_UPDATE = "DeskSelfUpdate";
 /** The note-taker is here: the server sends the Notes tab and its pages. */
 const NOTES = "DeskNotes";
+/** A Mac that can open the computer's-sound permission from a note. */
+const SYSTEM_AUDIO = "DeskSystemAudio";
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -101,6 +103,8 @@ const ACTIONS = [
   "copyText", "desktop.config", "dictate", "signOut",
   // Start or stop the note-taker from the Notes page.
   "notes.toggle",
+  // A note's Allow button (macOS): the computer's-sound permission.
+  "notes.allowSystemAudio",
   // The update card's button: download, check and install the new build here.
   "installUpdate",
 ];
@@ -260,7 +264,8 @@ function capabilities() {
     // room it has, so the server laid a phone column down the middle of a
     // window. It reads the viewport now.
     platform: "ios",
-    components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : []),
+    components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
+      ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : []),
     actions: ACTIONS,
     templates: [],
     device: {
@@ -2051,6 +2056,7 @@ async function run(action, eventValue) {
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(action.url); return;
     case "notes.toggle": try { window.tailzuApp.toggleNotes(); } catch { /* an older main process */ } return;
+    case "notes.allowSystemAudio": try { window.tailzuApp.allowSystemAudio(); } catch { /* an older main process */ } return;
     case "installUpdate": return installUpdate(action);
 
     // ── buying ────────────────────────────────────────────────────────────

@@ -1314,6 +1314,9 @@ let notesWin = null;
 let notes = null;          // { id, state: "starting" | "recording" | "saving", startedAt, system }
 let notesClock = null;
 let audiotap = null;
+// The helper for this note was refused by macOS (exit 3). Kept apart from
+// `notes`, which is replaced while a note starts and could lose it.
+let tapRefused = false;
 
 function createNotesWindow() {
   notesWin = new BrowserWindow({
@@ -1349,6 +1352,7 @@ function audiotapPath() {
 function startAudiotap() {
   const bin = audiotapPath();
   if (!fs.existsSync(bin)) return false;
+  tapRefused = false;
   let child;
   try { child = spawn(bin, [], { stdio: ["pipe", "pipe", "ignore"] }); } catch { return false; }
   audiotap = child;
@@ -1363,12 +1367,11 @@ function startAudiotap() {
   child.on("error", () => { if (audiotap === child) audiotap = null; });
   child.on("exit", (code) => {
     if (audiotap === child) audiotap = null;
-    // 3: macOS said no. The microphone goes on; the person is told how to
-    // let the computer's sound in next time.
-    if (code === 3 && notes && notes.state === "recording") {
-      notify(txt("desktop.notes.macPermission",
-        "To include the computer's sound, allow Tailzu under System Settings → Privacy & Security → Screen & System Audio Recording. Your microphone is still being noted."),
-        () => { void shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"); });
+    // 3: macOS said no. The note goes on from the microphone, quietly; the
+    // note itself says so afterwards, with a button to allow it.
+    if (code === 3) {
+      tapRefused = true;
+      if (notes && notes.id && notes.state === "recording") sendToNotes("notes:system", { systemAudio: "denied" });
     }
   });
   return true;
@@ -1444,8 +1447,9 @@ async function startNotes() {
     return;
   }
   const src = await systemSource().catch(() => ({ system: "none" }));
+  const systemAudio = src.system === "none" ? "unavailable" : tapRefused ? "denied" : "ok";
   notes = { id, state: "recording", startedAt: Date.now(), system: src.system };
-  sendToNotes("notes:start", Object.assign({ id, baseUrl: cfg.baseUrl, language: cfg.language, knobs: knobsPayload() }, src));
+  sendToNotes("notes:start", Object.assign({ id, baseUrl: cfg.baseUrl, language: cfg.language, knobs: knobsPayload(), systemAudio }, src));
   startNotesClock();
   refreshTray();
   notify(fmt("notify.notesStarted", { key: prettyKey(cfg.notesHotkey) }));
@@ -1521,6 +1525,12 @@ ipcMain.on("notes:status", (e, p) => {
 });
 ipcMain.on("notes:done", (e, p) => { if (fromNotes(e)) notesEnded(p); });
 ipcMain.on("app:notes", (e) => { if (fromApp(e)) toggleNotes(); });
+// The note's Allow button: the Mac's own page for the permission, and nothing
+// else. A fixed address, so the window cannot open anything with it.
+const SYSTEM_AUDIO_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+ipcMain.on("app:allowSystemAudio", (e) => {
+  if (fromApp(e) && process.platform === "darwin") shell.openExternal(SYSTEM_AUDIO_SETTINGS).catch(() => {});
+});
 
 // Quitting mid-note: the stretches already sent are kept, and organised.
 app.on("before-quit", () => {
@@ -1697,6 +1707,8 @@ ipcMain.handle("app:env", (e) => {
     hotkey: prettyKey(cfg.hotkey),
     // The note-taker is here (the window declares DeskNotes) and its key.
     notes: true,
+    // A Mac can open the permission for the computer's sound from a note.
+    systemAudioSettings: process.platform === "darwin",
     notesHotkey: prettyKey(cfg.notesHotkey),
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
