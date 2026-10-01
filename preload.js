@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   dictate: () => ipcRenderer.send("app:dictate"),
   // Start or stop taking notes, as the notes hotkey does.
   toggleNotes: () => ipcRenderer.send("app:notes"),
+  // macOS: open the permission that lets notes hear the computer's sound.
+  allowSystemAudio: () => ipcRenderer.send("app:allowSystemAudio"),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
   changed: () => ipcRenderer.send("app:changed"),
@@ -93,6 +95,8 @@ contextBridge.exposeInMainWorld("tailzuNotes", {
   onStop: (cb) => ipcRenderer.on("notes:stop", () => cb()),
   // macOS: the computer's sound, as 16 kHz 16-bit PCM from the helper.
   onPcm: (cb) => ipcRenderer.on("notes:pcm", (_e, bytes) => cb(bytes)),
+  // macOS refused the computer's sound mid-note ({ systemAudio: "denied" }).
+  onSystem: (cb) => ipcRenderer.on("notes:system", (_e, p) => cb(p)),
   token: (renew) => ipcRenderer.invoke("notes:token", !!renew),
   status: (p) => ipcRenderer.send("notes:status", p),
   done: (p) => ipcRenderer.send("notes:done", p),

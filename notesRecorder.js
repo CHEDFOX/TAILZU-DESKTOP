@@ -34,6 +34,9 @@
   let pcm = null;           // macOS: { ctx, dest, playAt }
   let tick = null, poll = null;
   let stopping = false;
+  // Whether the computer's sound was heard: "ok", "unavailable" (this
+  // computer gave none), or "denied" (macOS refused; the main process says).
+  let systemAudio = "ok";
 
   const base = () => (note && note.base ? note.base.replace(/\/+$/, "") : "");
 
@@ -203,6 +206,7 @@
   async function start(cfg) {
     if (note) return;
     if (cfg.knobs) K.setKnobs(cfg.knobs);
+    systemAudio = cfg.systemAudio === "denied" ? "denied" : "ok";
     stopping = false;
     note = { id: cfg.id, base: cfg.baseUrl, language: cfg.language && cfg.language !== "auto" ? cfg.language : "", t0: performance.now() };
     queue = N.createQueue({
@@ -232,6 +236,8 @@
     }
     let sys = null;
     try { sys = await systemStream(cfg); } catch (e) { sys = null; }
+    // A refusal that came in meanwhile stands.
+    if (systemAudio !== "denied") systemAudio = sys ? "ok" : "unavailable";
     if (sys) startTrack("system", sys, opts);
     bridge.status({ state: "recording", system: !!sys });
 
@@ -273,7 +279,7 @@
       const res = await authed((h) => fetch(base() + "/v1/notes/" + encodeURIComponent(id) + "/finish", {
         method: "POST",
         headers: Object.assign({ "Content-Type": "application/json" }, h),
-        body: JSON.stringify({ durationSeconds: Math.round(duration) }),
+        body: JSON.stringify({ durationSeconds: Math.round(duration), systemAudio }),
       }));
       finished = res.ok;
     } catch { finished = false; }
@@ -287,4 +293,5 @@
   bridge.onStart((cfg) => { void start(cfg); });
   bridge.onStop(() => { void stop(); });
   bridge.onPcm((bytes) => feedPcm(bytes));
+  bridge.onSystem((p) => { if (note && p && p.systemAudio === "denied") systemAudio = "denied"; });
 })();
