@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   session: () => ipcRenderer.invoke("app:session"),
   openExternal: (url) => ipcRenderer.send("app:openExternal", url),
   dictate: () => ipcRenderer.send("app:dictate"),
+  // Start or stop taking notes, as the notes hotkey does.
+  toggleNotes: () => ipcRenderer.send("app:notes"),
+  // A note was organised (its id): the Notes pages can redraw.
+  onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
   changed: () => ipcRenderer.send("app:changed"),
   // Every bootstrap the window receives — its labels and flags, which carry
   // `desktop.shell` (the tray's and the notifications' copy) and every knob.
@@ -80,4 +84,16 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // main process checks the address and the checksum; progress comes back.
   installUpdate: (u) => ipcRenderer.invoke("app:installUpdate", u),
   onUpdateProgress: (cb) => ipcRenderer.on("app:updateProgress", (_e, p) => cb(p)),
+});
+
+// The note-taker's hidden window (notes.html). The main process answers these
+// for that window only.
+contextBridge.exposeInMainWorld("tailzuNotes", {
+  onStart: (cb) => ipcRenderer.on("notes:start", (_e, cfg) => cb(cfg)),
+  onStop: (cb) => ipcRenderer.on("notes:stop", () => cb()),
+  // macOS: the computer's sound, as 16 kHz 16-bit PCM from the helper.
+  onPcm: (cb) => ipcRenderer.on("notes:pcm", (_e, bytes) => cb(bytes)),
+  token: (renew) => ipcRenderer.invoke("notes:token", !!renew),
+  status: (p) => ipcRenderer.send("notes:status", p),
+  done: (p) => ipcRenderer.send("notes:done", p),
 });
