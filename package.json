@@ -1,6 +1,6 @@
 {
   "name": "tailzu-desktop",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Tailzu desktop voice dictation — hotkey → record → clean → paste. Reuses the Tailzu backend.",
   "author": "Tailzu <hello@tailzu.space>",
   "main": "main.js",
@@ -13,7 +13,8 @@
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:mac:signed": "electron-builder --mac --publish never -c.mac.notarize.teamId=$APPLE_TEAM_ID",
-    "test": "node --test"
+    "test": "node --test",
+    "audiotap": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/audiotap-arm64 audiotap/main.swift && swiftc -O -target x86_64-apple-macos13 -o build/audiotap-x64 audiotap/main.swift && lipo -create -output build/audiotap build/audiotap-arm64 build/audiotap-x64 && rm build/audiotap-arm64 build/audiotap-x64"
   },
   "optionalDependencies": {
     "uiohook-napi": "^1.5.4"
@@ -30,6 +31,9 @@
       "preload.js",
       "recorder.html",
       "recorder.js",
+      "notes.html",
+      "notesRecorder.js",
+      "notesCore.js",
       "overlay.html",
       "overlay.js",
       "pill.html",
@@ -51,13 +55,20 @@
       ],
       "icon": "assets/icon-mac.png",
       "artifactName": "Tailzu.${ext}",
-      "x64ArchFiles": "**/*.node",
+      "x64ArchFiles": "{**/*.node,**/audiotap}",
+      "extraResources": [
+        {
+          "from": "build/audiotap",
+          "to": "audiotap"
+        }
+      ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
+        "NSAudioCaptureUsageDescription": "Tailzu hears your computer's sound while you take notes, so a call's other voices are in the notes.",
         "LSUIElement": true
       }
     },

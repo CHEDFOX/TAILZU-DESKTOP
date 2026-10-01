@@ -45,6 +45,9 @@ jobs:
         run: |
           npm ci
           npm run icon
+          # The note-taker's helper that hears the computer's sound
+          # (audiotap/main.swift), built for both Mac architectures.
+          npm run audiotap
           # --publish never: at a repo root on CI, electron-builder infers a
           # GitHub release and demands GH_TOKEN. Publishing is the step below.
           # --universal: macos-latest runners are arm64; a plain build would ship

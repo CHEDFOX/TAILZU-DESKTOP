@@ -74,6 +74,8 @@ const COMPONENTS = [
 // process knows: updater.js). The server then sends the one-click update card;
 // a copy that cannot gets the download link.
 const SELF_UPDATE = "DeskSelfUpdate";
+/** The note-taker is here: the server sends the Notes tab and its pages. */
+const NOTES = "DeskNotes";
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -97,6 +99,8 @@ const ACTIONS = [
   // live on this computer (the pill, the shortcut), a microphone started from
   // a page, and a way out of the account from the settings page itself.
   "copyText", "desktop.config", "dictate", "signOut",
+  // Start or stop the note-taker from the Notes page.
+  "notes.toggle",
   // The update card's button: download, check and install the new build here.
   "installUpdate",
 ];
@@ -256,7 +260,7 @@ function capabilities() {
     // room it has, so the server laid a phone column down the middle of a
     // window. It reads the viewport now.
     platform: "ios",
-    components: ENV && ENV.selfUpdate ? COMPONENTS.concat(SELF_UPDATE) : COMPONENTS,
+    components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : []),
     actions: ACTIONS,
     templates: [],
     device: {
@@ -593,7 +597,8 @@ let SUBMITS = [];         // actions an Enter in a desk field runs, by 1-based i
 function keysNode(p, s) {
   const d = LOCAL || {};
   const tap = d.tap !== false && Array.isArray(d.tapKeys) && d.tapKeys.length;
-  const keys = p.source !== "hotkey" && tap ? [d.tapKeys[0], d.tapKeys[0]]
+  const keys = p.source === "notes" ? String(d.notesHotkey || "Ctrl+Alt+N").split("+").map((k) => k.trim()).filter(Boolean)
+    : p.source !== "hotkey" && tap ? [d.tapKeys[0], d.tapKeys[0]]
     : String(d.hotkey || "Ctrl+Shift+Space").split("+").map((k) => k.trim()).filter(Boolean);
   const small = /(^|\s)d-keys-small(\s|$)/.test(String(p.cls || "")) ? " d-keys-small" : "";
   return '<span class="d-keys' + small + '" style="' + s + '">' +
@@ -2045,6 +2050,7 @@ async function run(action, eventValue) {
     case "haptic": return;                      // no equivalent, and none faked
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(action.url); return;
+    case "notes.toggle": try { window.tailzuApp.toggleNotes(); } catch { /* an older main process */ } return;
     case "installUpdate": return installUpdate(action);
 
     // ── buying ────────────────────────────────────────────────────────────
@@ -3254,6 +3260,13 @@ function refreshDisc(method) {
     window.tailzuApp.onDictated(() => {
       const top = STACK[STACK.length - 1];
       if (DESK && top && top.screenId === "desk_today") setTimeout(() => { void paint(true); }, K.num("desktop.desk.refreshMs", 1500));
+    });
+  } catch { /* an older main process */ }
+  // A note was organised: the Notes pages redraw to show it.
+  try {
+    window.tailzuApp.onNotes(() => {
+      const top = STACK[STACK.length - 1];
+      if (DESK && top && (top.screenId === "desk_notes" || top.screenId === "desk_note")) void paint(true);
     });
   } catch { /* an older main process */ }
 

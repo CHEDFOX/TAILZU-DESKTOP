@@ -10,3 +10,7 @@ dist/
 config.json
 session.json
 shell.json
+
+# The note-taker's Mac helper, built by `npm run audiotap` (CI builds it).
+build/audiotap
+build/audiotap-*
