@@ -12,7 +12,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "dist:mac:signed": "electron-builder --mac --publish never -c.mac.notarize.teamId=$APPLE_TEAM_ID",
+    "dist:mac:signed": "electron-builder --mac --universal --publish never",
     "test": "node --test",
     "audiotap": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/audiotap-arm64 audiotap/main.swift && swiftc -O -target x86_64-apple-macos13 -o build/audiotap-x64 audiotap/main.swift && lipo -create -output build/audiotap build/audiotap-arm64 build/audiotap-x64 && rm build/audiotap-arm64 build/audiotap-x64"
   },
@@ -63,12 +63,14 @@
         }
       ],
       "hardenedRuntime": true,
+      "notarize": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
         "NSAudioCaptureUsageDescription": "Tailzu hears your computer's sound while you take notes, so a call's other voices are in the notes.",
+        "NSAppleEventsUsageDescription": "Tailzu pastes what you said into the app you are typing in.",
         "LSUIElement": true
       }
     },
