@@ -132,6 +132,33 @@ jobs:
           name: Tailzu-win
           path: dist/Tailzu-Setup.exe
           if-no-files-found: error
+      # THE FREE WAY PAST SMARTSCREEN: the Microsoft Store. A Store package is
+      # signed by Microsoft, so it installs with no "Windows protected your
+      # PC" and needs no certificate of ours. Built only once the app is
+      # reserved in Partner Center and its identity is saved as repository
+      # VARIABLES (Settings > Secrets and variables > Actions > Variables),
+      # copied from Partner Center > the app > Product identity:
+      #   MSSTORE_IDENTITY_NAME   Package/Identity/Name
+      #   MSSTORE_PUBLISHER       Package/Identity/Publisher (CN=…)
+      #   MSSTORE_PUBLISHER_NAME  Package/Properties/PublisherDisplayName
+      # The .appx is kept on the run page, to upload in Partner Center.
+      - name: Build Microsoft Store package
+        if: ${{ vars.MSSTORE_IDENTITY_NAME != '' && vars.MSSTORE_PUBLISHER != '' }}
+        shell: bash
+        env:
+          ID: ${{ vars.MSSTORE_IDENTITY_NAME }}
+          PUB: ${{ vars.MSSTORE_PUBLISHER }}
+          PUBNAME: ${{ vars.MSSTORE_PUBLISHER_NAME }}
+        run: |
+          npx electron-builder --win appx --publish never \
+            -c.appx.identityName="$ID" -c.appx.publisher="$PUB" \
+            -c.appx.publisherDisplayName="${PUBNAME:-Tailzu}"
+      - uses: actions/upload-artifact@v4
+        if: ${{ vars.MSSTORE_IDENTITY_NAME != '' && vars.MSSTORE_PUBLISHER != '' }}
+        with:
+          name: Tailzu-store
+          path: dist/Tailzu.appx
+          if-no-files-found: error
       - name: Publish to tailzu.space
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash

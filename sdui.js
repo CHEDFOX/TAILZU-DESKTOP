@@ -265,7 +265,7 @@ function capabilities() {
     // window. It reads the viewport now.
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
-      ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : []),
+      ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : []),
     actions: ACTIONS,
     templates: [],
     device: {
