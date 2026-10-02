@@ -43,6 +43,10 @@ const trusted = (u) => u.protocol === "https:" && HOSTS.has(u.hostname);
 /** Where this build lives and how it is replaced, or null when it cannot be. */
 function target() {
   if (!app.isPackaged) return null;
+  // A Microsoft Store install is updated by the Store, and its folder cannot
+  // be written to. Replacing it with the website's installer would leave two
+  // copies of Tailzu on the machine.
+  if (process.windowsStore) return null;
   if (process.platform === "win32") return { kind: "nsis" };
   if (process.platform === "darwin") {
     // …/Tailzu.app/Contents/MacOS/Tailzu → …/Tailzu.app

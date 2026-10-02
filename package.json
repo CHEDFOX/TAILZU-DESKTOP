@@ -80,6 +80,14 @@
       ],
       "icon": "build/icon.ico"
     },
+    "appx": {
+      "applicationId": "Tailzu",
+      "displayName": "Tailzu",
+      "backgroundColor": "#0F0D0B",
+      "languages": ["en-US"],
+      "addAutoLaunchExtension": false,
+      "artifactName": "Tailzu.${ext}"
+    },
     "nsis": {
       "oneClick": true,
       "perMachine": false,

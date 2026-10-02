@@ -1721,6 +1721,8 @@ ipcMain.handle("app:env", (e) => {
     // Whether this copy can put an update in place of itself. The window
     // tells the server, which then sends the one-click card.
     selfUpdate: updater.canSelfUpdate(),
+    // Installed from the Microsoft Store, which keeps it up to date itself.
+    store: !!process.windowsStore,
     // The cached knobs, so the first paint is already the server's.
     knobs: knobsPayload(),
     // A screen the main process asked for before the page could hear it.
