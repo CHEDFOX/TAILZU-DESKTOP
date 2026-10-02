@@ -37,12 +37,35 @@ jobs:
           node-version: 20
       - name: Build .dmg
         env:
-          # No signing cert in CI — skip electron-builder's identity discovery
-          # so the build produces an UNSIGNED dmg instead of failing. Users
-          # open it via right-click → Open (Gatekeeper). Wire a Developer ID
-          # cert + notarization here later for frictionless installs.
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # SIGNED AND NOTARIZED when the Apple secrets are set, so macOS opens
+          # it without "cannot be verified". Unsigned (as before) when they are
+          # not, so a fork or a missing secret still builds.
+          #   MAC_CERT_P12_BASE64  the Developer ID Application certificate,
+          #                        exported from Keychain as .p12, base64'd
+          #   MAC_CERT_PASSWORD    the password set on that export
+          #   APPLE_API_KEY_P8     an App Store Connect API key (.p8 contents)
+          #   APPLE_API_KEY_ID     its Key ID
+          #   APPLE_API_ISSUER     the Issuer ID on the same page
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "::warning::No MAC_CERT_P12_BASE64 secret: building an UNSIGNED dmg (macOS will say it cannot be verified)."
+            unset CSC_LINK CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+            export APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8"
+          else
+            # Signing without notarizing still trips Gatekeeper; say so.
+            [ -n "$CSC_LINK" ] && echo "::warning::Signed but NOT notarized: add APPLE_API_KEY_P8, APPLE_API_KEY_ID and APPLE_API_ISSUER."
+            unset APPLE_API_KEY_ID APPLE_API_ISSUER
+          fi
+          unset APPLE_API_KEY_P8
           npm ci
           npm run icon
           # The note-taker's helper that hears the computer's sound
@@ -54,6 +77,16 @@ jobs:
           # an arm64-only dmg that Intel Macs can't open. Universal lipo-merges
           # both arches (per-arch .node prebuilds allowed via mac.x64ArchFiles).
           npx electron-builder --mac --universal --publish never
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+      - name: Check what macOS will think of it
+        run: |
+          APP=$(find dist -maxdepth 3 -name "Tailzu.app" -type d | head -1)
+          if codesign --verify --deep --strict "$APP" 2>/dev/null; then
+            codesign -dv "$APP" 2>&1 | grep -E "Authority=Developer ID|TeamIdentifier" || true
+            spctl -a -vvv -t exec "$APP" 2>&1 || echo "::warning::Gatekeeper does not accept it yet (not notarized?)"
+          else
+            echo "::warning::Tailzu.app is not signed."
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: Tailzu-mac
