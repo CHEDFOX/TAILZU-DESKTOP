@@ -67,8 +67,8 @@ stumble.
 Speak the language in your head. English, Hindi, Hinglish, all 22 Indian
 languages and more than 20 others. Switch mid-sentence; Tailzu follows.
 
-Same thought, any voice. Pick how you want to sound, from casual to
-professional, and every message wears it.
+Same thought, any voice. Pick how you want to sound, from Professional to
+Playful, Concise to Poetic, and every message wears it.
 
 Meeting notes, without taking notes. Press Ctrl+Alt+N and Tailzu listens to
 you and the call. When you stop, you get the meeting, a short summary and
@@ -91,7 +91,7 @@ First release on the Microsoft Store.
 - Clean text: filler gone, punctuation in, names and numbers kept
 - English, Hindi, Hinglish, all 22 Indian languages and 20+ more
 - Switch languages mid-sentence
-- Choose a voice: casual, professional, friendly and more
+- 16 voices: Professional, Friendly, Concise, Executive, Playful and more
 - Meeting notes with Ctrl+Alt+N: summary, what mattered, who said what
 - Audio is deleted once it is written
 - One account on your phone and your computer
