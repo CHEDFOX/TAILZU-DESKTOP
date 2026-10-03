@@ -26,6 +26,7 @@ const crypto = require("crypto");
 const { createTapDetector } = require("./tapDetector.js");
 const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
+const frontApp = require("./frontApp.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -1936,6 +1937,14 @@ function toggleDictation() {
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
+    // WHICH APP THIS IS GOING INTO, asked now, while it is still the one in
+    // front (frontApp.js). The recorder starts without waiting for it; the
+    // name follows, and is in place well before anything is written.
+    const sid = activeSession;
+    const focused = BrowserWindow.getFocusedWindow();
+    (focused && focused === appWin ? Promise.resolve("Tailzu") : frontApp.frontApp())
+      .then((name) => { if (name && sid === activeSession) sendToRecorder("recording-target", { session: sid, targetApp: name }); })
+      .catch(() => {});
     pillWords = 0;
     listeningSince = Date.now();
     clearTimeout(writingTimer);
@@ -2342,6 +2351,9 @@ app.whenReady().then(() => {
   saveLocalState();
 
   createRecorderWindow();
+  // The Windows helper that names the app in front starts now, so the first
+  // press does not wait for PowerShell to load.
+  frontApp.warmUp();
   if (pillOn()) createPillWindow();
   // The pill follows the screens, and is raised again after sleep and on
   // unlock (see replaceFloating).
@@ -2447,7 +2459,7 @@ app.whenReady().then(() => {
   // tokenNow() is valid when a key is pressed; renewing on demand would spend
   // a network round-trip out of the start of someone's sentence.
   const keepFresh = setInterval(() => { void refreshSession(); }, num("desktop.auth.keepFreshMs", 600000));
-  app.on("will-quit", () => { clearInterval(keepFresh); clearTimeout(bootTimer); });
+  app.on("will-quit", () => { clearInterval(keepFresh); clearTimeout(bootTimer); frontApp.shutDown(); });
 
   if (app.isPackaged && cfg.autoStart) {
     // Registry writes fail on locked-down machines. That is a setting not

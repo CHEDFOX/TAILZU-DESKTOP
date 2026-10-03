@@ -75,6 +75,16 @@ window.tailzu.onStart((c) => {
   metered = false;
   cfg.live ? startLive(session) : startBatch(session);
 });
+// The app each session is going into, named by the main process a moment after
+// the press (frontApp.js). "Desktop" until it arrives, or where it cannot be
+// known.
+const targets = new Map();
+const targetFor = (sid) => targets.get(sid) || "Desktop";
+window.tailzu.onTarget && window.tailzu.onTarget((p) => {
+  if (p && typeof p.targetApp === "string" && p.targetApp) targets.set(p.session, p.targetApp.slice(0, 40));
+  // Only the recent ones are worth keeping.
+  for (const k of targets.keys()) if (k < (p && p.session || 0) - 20) targets.delete(k);
+});
 window.tailzu.onStop((p) => {
   // Only stop the session main thinks is active; a stale stop is a no-op.
   if (p && p.session && p.session !== session) return;
@@ -465,8 +475,8 @@ async function getMic() {
 // pick /v1/refine/<tone> from the tone this window was handed, and that was
 // "none" (repair only, restyle nothing) whenever the main process had not
 // read the account, which made live dictation read like its transcript.
-async function refineText(text, alternative, context) {
-  const body = { text, targetApp: "Desktop", language: cfg.language || "auto" };
+async function refineText(text, alternative, context, sid) {
+  const body = { text, targetApp: targetFor(sid === undefined ? session : sid), language: cfg.language || "auto" };
   // What the session already wrote, as on /v1/transcribe-clean.
   if (context) body.context = context.slice(-K.num("desktop.recorder.contextChars", 600));
   // The second engine's reading goes with it: the server reconciles the
@@ -638,7 +648,7 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     const blob = new Blob(parts, { type });
     const fd = new FormData();
     fd.append("audio", blob, "audio." + ext);
-    fd.append("targetApp", "Desktop");
+    fd.append("targetApp", targetFor(sid));
     fd.append("language", cfg.language || "auto");
     // No tone field, as the phone app sends none: the server writes in the
     // account's voice (tone and preset). It used to be sent from this
@@ -758,7 +768,7 @@ async function startLive(sid) {
     // Browser WebSocket can't set an Authorization header; the protocol
     // carries the token in the start message (the server accepts both).
     ws.onopen = () => { if (sid === session && ws) ws.send(JSON.stringify({
-      type: "start", token: cfg.token, targetApp: "Desktop",
+      type: "start", token: cfg.token, targetApp: targetFor(sid),
       language: cfg.language || "auto",
       sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
     })); };
@@ -907,7 +917,7 @@ async function finishLive(sid) {
     // An empty answer is the server saying there is nothing to write —
     // noise the recogniser turned into words. Pasting the raw words
     // instead was how they reached the field.
-    emitResult(sid, await refineText(raw, doneAlternative, wrote.get(sid)));
+    emitResult(sid, await refineText(raw, doneAlternative, wrote.get(sid), sid));
   } catch (err) {
     // NOT THE RAW WORDS. A refine that failed (twice for a blip; a spent
     // token is renewed and resent first) used to paste the stream's own

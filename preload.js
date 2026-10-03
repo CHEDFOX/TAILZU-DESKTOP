@@ -7,6 +7,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("tailzu", {
   // main → recorder
   onStart: (cb) => ipcRenderer.on("start-recording", (_e, cfg) => cb(cfg)),
+  // main → recorder: the app this session is going into, once it is known.
+  onTarget: (cb) => ipcRenderer.on("recording-target", (_e, p) => cb(p)),
   // With the session it is for: the recorder ignores a stop meant for one it
   // has already left (it used to be dropped here, so that check never ran).
   onStop: (cb) => ipcRenderer.on("stop-recording", (_e, p) => cb(p)),
