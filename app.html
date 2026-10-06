@@ -243,7 +243,11 @@
      outranks it — which is why this is an attribute and not a property. */
   #shell[data-chrome="0"] #rail { display:none; }
   #crumb[hidden] { display:none; }
-  #view[data-full="1"] { overflow:hidden; display:flex; flex-direction:column; }
+  #view[data-full="1"] { overflow:hidden auto; display:flex; flex-direction:column; }
+  /* …and still scrolls when the window is shorter than the screen: at 150%
+     scaling a 1080p laptop gives a window 672 points, and a screen that owned
+     the window clipped whatever did not fit, with no way to reach it. */
+  #view[data-full="1"] > :first-child { flex:none; min-height:100%; }
   /* A root that asks for flex:1 gets a column to grow in, and grows past the
      window when its content does — the view still scrolls. */
   #view[data-flex="1"] { display:flex; flex-direction:column; }
