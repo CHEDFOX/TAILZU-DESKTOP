@@ -777,7 +777,7 @@ function oauthEmbedded(provider, verifier, challenge) {
     // grant (Electron grants every one to a session with no handler).
     ses.setPermissionRequestHandler((_wc, _p, cb) => cb(false));
     const win = new BrowserWindow({
-      width: num("desktop.oauth.width", 480), height: num("desktop.oauth.height", 680),
+      ...fitToDisplay(num("desktop.oauth.width", 480), num("desktop.oauth.height", 680)),
       title: txt("desktop.oauth.title", "Sign in"),
       backgroundColor: color("desktop.window.background", "#000000"),
       autoHideMenuBar: true, parent: appWin && !appWin.isDestroyed() ? appWin : undefined,
@@ -919,13 +919,16 @@ function openAppWindow(screenId) {
     return;
   }
   if (target) pendingScreen = target;
+  // Wide enough for the sign-in art and the form to stand side by side. At
+  // 980 the art's own rule and a 300px form were fighting over the same
+  // eighty pixels; the layout still re-centres below `wideAt` for anyone who
+  // drags it narrower. And never taller than the screen it opens on: see
+  // fitToDisplay.
+  const size = fitToDisplay(num("desktop.window.width", 1120), num("desktop.window.height", 780));
   appWin = new BrowserWindow({
-    // Wide enough for the sign-in art and the form to stand side by side. At
-    // 980 the art's own rule and a 300px form were fighting over the same
-    // eighty pixels; the layout still re-centres below `wideAt` for anyone who
-    // drags it narrower.
-    width: num("desktop.window.width", 1120), height: num("desktop.window.height", 780),
-    minWidth: num("desktop.window.minWidth", 380), minHeight: num("desktop.window.minHeight", 520),
+    ...size,
+    minWidth: Math.min(num("desktop.window.minWidth", 380), size.width),
+    minHeight: Math.min(num("desktop.window.minHeight", 520), size.height),
     title: txt("desktop.window.title", "Tailzu"),
     // THE FIRST FRAME IS THE DESK'S, NOT A BLACK ONE. The window used to open
     // at once on black, then paint the old rail while the page asked the
@@ -957,6 +960,22 @@ function openAppWindow(screenId) {
     appWin.webContents.send("app:navigate", id);
   });
   appWin.loadFile("app.html");
+}
+
+/** A window no bigger than the display it opens on, and placed inside it.
+ *  Sizes are in points, and a 1080p laptop at Windows' recommended 150% has
+ *  1280×720 of them, 672 above the taskbar — so the 1120×780 window opened
+ *  with its foot below the screen's edge, and whatever sat there could not be
+ *  reached. (Microsoft Store certification, policy 10.1.2.10, at 150%.) The
+ *  display is the one the pointer is on, like the pill's. */
+function fitToDisplay(width, height) {
+  const margin = num("desktop.window.screenMargin", 24);
+  let wa;
+  try { wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea; } catch { wa = null; }
+  if (!wa || !(wa.width > 0) || !(wa.height > 0)) return { width, height };
+  const w = Math.max(320, Math.min(width, wa.width - margin));
+  const h = Math.max(400, Math.min(height, wa.height - margin));
+  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - h) / 2) };
 }
 
 /** Deny navigation + popups on our local windows — they only ever load our own
