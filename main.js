@@ -40,8 +40,25 @@ const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js"
 // install it, or install it again, and it was already signed in to whoever
 // used this PC before. A name only the Store copy uses is always new, so its
 // data is its own and goes with it. Set before anything below reads the path.
+//
+// AN UPDATE NEVER SIGNS ANYONE OUT, this one included. The first launch in the
+// new folder brings over what this app kept in the old one — the sign-in, the
+// settings, the launch count — so a Store copy updating from 0.3.4 opens as it
+// was. Once: after that the folder exists, and nothing is copied again. (A
+// reinstall finds the old folder only where the site's version still keeps
+// it, signed in on this same PC.)
 if (process.windowsStore) {
-  try { app.setPath("userData", path.join(app.getPath("appData"), "Tailzu Store")); } catch { /* the default still works */ }
+  const shared = app.getPath("userData");
+  const own = path.join(app.getPath("appData"), "Tailzu Store");
+  try {
+    if (!fs.existsSync(own)) {
+      fs.mkdirSync(own, { recursive: true });
+      for (const f of ["session.json", "config.json", "desktop-state.json", "bootstrap.json", "shell.json"]) {
+        try { fs.copyFileSync(path.join(shared, f), path.join(own, f)); } catch { /* not there: nothing to bring */ }
+      }
+    }
+    app.setPath("userData", own);
+  } catch { /* the default still works */ }
 }
 
 // ---- Config -----------------------------------------------------------------

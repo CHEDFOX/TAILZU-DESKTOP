@@ -12,25 +12,38 @@
 ; install starts signed out. electron-builder skips that on an update (the
 ; same isUpdated guard as below), so updating never signs anyone out.
 
-; A DOWNLOAD RUN BY HAND STARTS SIGNED OUT; AN UPDATE NEVER DOES.
+; A FRESH INSTALL STARTS SIGNED OUT; AN UPDATE NEVER SIGNS ANYONE OUT.
 ;
 ; Running the site's installer where Tailzu is already installed is not an
 ; uninstall: electron-builder removes the old copy with --updated, which keeps
-; app data, so the new install opened already signed in to whoever used this
-; PC last. The app's own updater (updater.js) runs this installer with
-; --updated; a download someone runs by hand does not. So only the hand-run
-; one forgets the account: session.json, in every folder name the uninstaller
-; itself clears. Settings stay.
+; app data, so downloading the same version again opened signed in to whoever
+; used this PC last. But a NEWER version downloaded and run over an older one
+; is an update, and must keep the account, exactly as "Update now" does.
+;
+; So the version decides. customInit runs before the old copy is removed and
+; reads which version is installed. The account (session.json, in every
+; folder name the uninstaller itself clears) is forgotten only when nothing
+; was installed, or this same version was: a fresh install, or the same
+; download run again. Any other version is an update and keeps it, and the
+; app's own updater (--updated) always does. Settings stay either way.
+
+!macro customInit
+  Var /GLOBAL tailzuInstalledVersion
+  ReadRegStr $tailzuInstalledVersion HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
+!macroend
 
 !macro customInstall
   ${ifNot} ${isUpdated}
-    Delete "$APPDATA\${APP_FILENAME}\session.json"
-    !ifdef APP_PRODUCT_FILENAME
-      Delete "$APPDATA\${APP_PRODUCT_FILENAME}\session.json"
-    !endif
-    !ifdef APP_PACKAGE_NAME
-      Delete "$APPDATA\${APP_PACKAGE_NAME}\session.json"
-    !endif
+    ${if} $tailzuInstalledVersion == ""
+    ${orIf} $tailzuInstalledVersion == "${VERSION}"
+      Delete "$APPDATA\${APP_FILENAME}\session.json"
+      !ifdef APP_PRODUCT_FILENAME
+        Delete "$APPDATA\${APP_PRODUCT_FILENAME}\session.json"
+      !endif
+      !ifdef APP_PACKAGE_NAME
+        Delete "$APPDATA\${APP_PACKAGE_NAME}\session.json"
+      !endif
+    ${endIf}
   ${endIf}
 !macroend
 
