@@ -121,6 +121,20 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.5 — a fresh install starts signed out
+
+Running the site's installer where Tailzu was already installed opened it
+signed in to whoever used the PC last: electron-builder removes the old copy
+as an update, which keeps app data. The installer now forgets the account
+(session.json) when it is run by hand; the app's own updater runs it with
+`--updated`, so updating still keeps you signed in, and settings stay either
+way.
+
+The Microsoft Store copy keeps its data in its own folder (`Tailzu Store`).
+It used the site build's folder name, and Windows lets a Store app write a
+folder that already exists in place, so it read the site build's sign-in and
+left its own behind on uninstall. Store users sign in once after this update.
+
 ### 0.2.2 — the network shows
 
 The neural network was drawn behind the desk's page colour, so the live
