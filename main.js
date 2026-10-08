@@ -31,6 +31,19 @@ const frontApp = require("./frontApp.js");
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
 
+// ---- The Microsoft Store copy keeps its own folder ----------------------------
+// A Store (MSIX) app's NEW files under %APPDATA% go to a private per-app place
+// that Windows deletes on uninstall — but a folder that already exists is
+// written in place, shared and kept. The site's installer made
+// %APPDATA%\tailzu-desktop, so the Store copy, which used the same name, read
+// that sign-in on its first launch and left its own behind on uninstall:
+// install it, or install it again, and it was already signed in to whoever
+// used this PC before. A name only the Store copy uses is always new, so its
+// data is its own and goes with it. Set before anything below reads the path.
+if (process.windowsStore) {
+  try { app.setPath("userData", path.join(app.getPath("appData"), "Tailzu Store")); } catch { /* the default still works */ }
+}
+
 // ---- Config -----------------------------------------------------------------
 // Dev: desktop/config.json (next to this file). Packaged: the asar is read-only,
 // so config lives in the per-user data dir (%APPDATA%/tailzu-desktop on Windows,

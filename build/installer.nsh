@@ -12,6 +12,28 @@
 ; install starts signed out. electron-builder skips that on an update (the
 ; same isUpdated guard as below), so updating never signs anyone out.
 
+; A DOWNLOAD RUN BY HAND STARTS SIGNED OUT; AN UPDATE NEVER DOES.
+;
+; Running the site's installer where Tailzu is already installed is not an
+; uninstall: electron-builder removes the old copy with --updated, which keeps
+; app data, so the new install opened already signed in to whoever used this
+; PC last. The app's own updater (updater.js) runs this installer with
+; --updated; a download someone runs by hand does not. So only the hand-run
+; one forgets the account: session.json, in every folder name the uninstaller
+; itself clears. Settings stay.
+
+!macro customInstall
+  ${ifNot} ${isUpdated}
+    Delete "$APPDATA\${APP_FILENAME}\session.json"
+    !ifdef APP_PRODUCT_FILENAME
+      Delete "$APPDATA\${APP_PRODUCT_FILENAME}\session.json"
+    !endif
+    !ifdef APP_PACKAGE_NAME
+      Delete "$APPDATA\${APP_PACKAGE_NAME}\session.json"
+    !endif
+  ${endIf}
+!macroend
+
 !macro customUnInit
   ; Before the files go: a copy still running would keep the hotkey, and
   ; its exe could not be deleted.
