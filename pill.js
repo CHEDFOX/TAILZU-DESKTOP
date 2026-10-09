@@ -37,6 +37,23 @@ const C = {
 const FONT = () => `${K.num("desktop.pill.fontWeight", 500)} ${K.num("desktop.pill.fontSize", 12)}px ${K.str("desktop.pill.font", '-apple-system, "Segoe UI", system-ui, sans-serif')}`;
 const BARS = () => Math.max(5, Math.min(31, Math.round(K.num("desktop.pill.bars", 15))));
 
+// ---- the split (pillSplit.js) -------------------------------------------------------
+// Listening, the pill comes apart: ✕ to the left edge of the screen, ✓ to the
+// right, a thread between them that the voice plucks. Stopped, the halves
+// glide back and it is whole again where it started. The window spans the
+// screen for it (main.js, desktop.pill.split).
+const SP = window.TailzuPillSplit;
+const SPLIT = () => K.bool("desktop.pill.split", true);
+const INSET = () => K.num("desktop.pill.splitInset", 22);
+const threadOpts = () => ({
+  amp: K.num("desktop.pill.threadAmp", 16),
+  hz: K.num("desktop.pill.threadHz", 5.5),
+  sag: K.num("desktop.pill.threadSag", 3),
+});
+let splitT = 0;                 // 0 joined … 1 apart, at a constant pace, eased where drawn
+const thread = SP.createThread();
+let pluckedAt = -1e9;
+
 // ---- state ------------------------------------------------------------------------
 let S = { name: "rest", at: 0, data: {} };
 let hint = "";               // the way in, as main words it for the keys it bound
@@ -89,6 +106,14 @@ function doneLabel() {
 function targets(t) {
   const st = S.name, sq = K.num("desktop.pill.atom", 3);
   const g = {};
+  // Apart, or still coming back together: the listening pill's shape, ✕ and
+  // ✓ showing, until the two halves meet again. Only then does it become
+  // what the new state is (writing, done, rest).
+  if (st !== "listening" && splitT > 0.001) {
+    g.w = K.num("desktop.pill.listenWidth", 188); g.h = K.num("desktop.pill.listenHeight", 38);
+    g.solid = 1; g.buttons = 1; g.text = 0; g.show = 1;
+    return g;
+  }
   if (st === "rest") {
     const open = hovered && restShown && !!hint;
     g.w = open ? K.num("desktop.pill.hoverPad", 30) + 3 * sq + 10 + textW(hint) : K.num("desktop.pill.restWidth", 46);
@@ -122,6 +147,19 @@ function frame() {
   // freezes a bar mid-air.
   if (now - bandsAt > 250) for (let i = 0; i < bands.length; i++) bands[i] *= Math.exp(-dt * 10);
 
+  // The halves: apart while it listens (a beat after it opens, so the pill
+  // has grown first), together otherwise, at one pace both ways, so a stop
+  // in the middle of coming apart simply turns them round.
+  const wantSplit = SPLIT() && S.name === "listening" && t * 1000 >= K.num("desktop.pill.splitDelayMs", 140);
+  const splitWas = splitT;
+  splitT = clamp(splitT + (wantSplit ? dt : -dt) / Math.max(0.08, K.num("desktop.pill.splitMs", 700) / 1000));
+  const se = SP.easeInOut(splitT), fade = SP.fades(se);
+  if (splitT > 0 || thread.energy() > 0.05) {
+    thread.step(dt, bands, S.name === "listening" && now - bandsAt < 250, threadOpts());
+    // A pause wrote a chunk: the thread is plucked.
+    if (flashAt > pluckedAt) { pluckedAt = flashAt; if (S.name === "listening") thread.pluck(0.7, threadOpts()); }
+  }
+
   const g = targets(t), k = K.num("desktop.pill.spring", 16);
   const before = P.w + P.h + P.solid + P.buttons + P.text;
   P.w = ease(P.w, g.w, k, dt); P.h = ease(P.h, g.h, k, dt);
@@ -129,6 +167,7 @@ function frame() {
   P.text = ease(P.text, g.text, k * .9, dt);
   P.show = ease(P.show ?? 1, g.show, k, dt);
   let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text - before) > 0.01;
+  if (splitT !== splitWas || thread.energy() > 0.05) moving = true;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
@@ -142,13 +181,42 @@ function frame() {
   const shake = S.name === "error" && t < 0.42 ? Math.sin(t * 60) * 3 * (1 - t / 0.42) : 0;
   ctx.save();
   ctx.translate(shake, 0);
-  ctx.shadowColor = `rgba(0,0,0,${0.12 + 0.26 * P.solid})`; ctx.shadowBlur = 8 + 14 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
-  ctx.fillStyle = mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), P.solid);
-  ctx.globalAlpha = P.show * (K.num("desktop.pill.restAlpha", 0.78) + (1 - K.num("desktop.pill.restAlpha", 0.78)) * P.solid);
-  ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, P.h / 2); ctx.fill();
-  ctx.shadowColor = "transparent"; ctx.globalAlpha = P.show;
-  ctx.strokeStyle = err ? rgba(C.rose(), .55 * err) : rgba(C.pale(), 0.12 + 0.06 * P.solid); ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.roundRect(x0 + .5, y0 + .5, P.w - 1, P.h - 1, (P.h - 1) / 2); ctx.stroke();
+  // The body fades as the halves leave it, and is back before they meet.
+  const bodyA = fade.body;
+  if (bodyA > 0.01) {
+    ctx.shadowColor = `rgba(0,0,0,${(0.12 + 0.26 * P.solid) * bodyA})`; ctx.shadowBlur = 8 + 14 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
+    ctx.fillStyle = mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), P.solid);
+    ctx.globalAlpha = P.show * bodyA * (K.num("desktop.pill.restAlpha", 0.78) + (1 - K.num("desktop.pill.restAlpha", 0.78)) * P.solid);
+    ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, P.h / 2); ctx.fill();
+    ctx.shadowColor = "transparent"; ctx.globalAlpha = P.show * bodyA;
+    ctx.strokeStyle = err ? rgba(C.rose(), .55 * err) : rgba(C.pale(), 0.12 + 0.06 * P.solid); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(x0 + .5, y0 + .5, P.w - 1, P.h - 1, (P.h - 1) / 2); ctx.stroke();
+    ctx.globalAlpha = P.show;
+  }
+
+  // The thread, between the two halves: amber, because the microphone is
+  // open, over a dark hair so it reads on a white page and a dark one alike.
+  if (fade.thread > 0.01) {
+    const pd = SP.pods({ x: x0, y: y0, w: P.w, h: P.h }, W, se, INSET());
+    const x1 = pd.lx + pd.r * 0.9, x2 = pd.rx - pd.r * 0.9;
+    const n = Math.max(16, Math.min(240, Math.round((x2 - x1) / Math.max(4, K.num("desktop.pill.threadStep", 12)))));
+    const boil = Math.floor(now / (1000 / Math.max(1, K.num("desktop.pill.handFps", 12))));
+    const pts = thread.points(x1, x2, cy, now / 1000, n, SP.tremor(boil, K.num("desktop.pill.hand", 0.8)), threadOpts());
+    // A pluck on a loud syllable can swing past the window's strip: kept in it.
+    for (const pt of pts) pt[1] = clamp(pt[1], 3, H - 3);
+    const tw = K.num("desktop.pill.threadWidth", 1.6);
+    const trace = () => {
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length - 1; i++) {
+        ctx.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
+      }
+      const l = pts[pts.length - 1]; ctx.lineTo(l[0], l[1]);
+    };
+    ctx.save(); ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.globalAlpha = P.show * fade.thread;
+    trace(); ctx.strokeStyle = rgba(C.ink(), K.num("desktop.pill.threadShadow", 0.1)); ctx.lineWidth = tw + 1.4; ctx.stroke();
+    trace(); ctx.strokeStyle = C.amber(); ctx.lineWidth = tw; ctx.stroke();
+    ctx.restore();
+  }
 
   // Live captions, above: the tail of what is being said.
   if (S.name === "listening" && caption) {
@@ -196,6 +264,8 @@ function frame() {
     } else {
       tx = x0 + 18; ta = 0; th = sq;
     }
+    // Apart, the bars give way to the thread.
+    ta *= 1 - SP.smooth(0, 0.3, se);
     const kk = K.num("desktop.pill.atomSpring", 22);
     a.x = ease(a.x, tx, kk, dt); a.h = ease(a.h, th, S.name === "listening" ? 30 : kk, dt);
     a.y = ease(a.y, ty, kk, dt); a.a = ease(a.a, ta, kk, dt); a.hot = ease(a.hot, hot, kk * .6, dt);
@@ -210,7 +280,20 @@ function frame() {
 
   // ✕ and ✓, while listening.
   if (P.buttons > 0.01) {
-    const r = P.h / 2 - 5, lx = x0 + P.h / 2, rx = x0 + P.w - P.h / 2, b = P.buttons;
+    const pd = SP.pods({ x: x0, y: y0, w: P.w, h: P.h }, W, se, INSET());
+    const r = P.h / 2 - 5, lx = pd.lx, rx = pd.rx, b = P.buttons;
+    // Apart, each half is a disc of its own: the pill's ink, its edge, its shadow.
+    if (fade.disc > 0.01) {
+      ctx.save();
+      for (const px of [lx, rx]) {
+        ctx.globalAlpha = P.show * b * fade.disc;
+        ctx.shadowColor = "rgba(0,0,0,.34)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 5;
+        ctx.fillStyle = C.ink(); ctx.beginPath(); ctx.arc(px, cy, P.h / 2, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowColor = "transparent";
+        ctx.strokeStyle = rgba(C.pale(), 0.18); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px, cy, P.h / 2 - .5, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.restore();
+    }
     ctx.globalAlpha = P.show * b;
     ctx.fillStyle = rgba(C.pale(), overCancel ? .24 : .13); ctx.beginPath(); ctx.arc(lx, cy, r, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = rgba(C.pale(), .9); ctx.lineWidth = 1.6; ctx.lineCap = "round";
@@ -256,8 +339,19 @@ function frame() {
 
 // ---- pointer: the window lets clicks through everywhere but the pill ------------
 function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2, y: bottom - P.h, w: P.w, h: P.h }; }
-function inside(x, y, pad = 4) { const r = pillRect(); return x >= r.x - pad && x <= r.x + r.w + pad && y >= r.y - pad && y <= r.y + r.h + pad; }
-function onCancel(x, y) { const r = pillRect(); return S.name === "listening" && Math.hypot(x - (r.x + r.h / 2), y - (r.y + r.h / 2)) <= r.h / 2; }
+function podsNow() { return SP.pods(pillRect(), W, SP.easeInOut(splitT), INSET()); }
+const apart = () => splitT > 0.02;
+function inside(x, y, pad = 4) {
+  // Apart, only the two halves take the pointer: the thread and the screen
+  // between them stay the app's, clicks and all.
+  if (apart()) return !!SP.podAt(podsNow(), x, y, pad);
+  const r = pillRect(); return x >= r.x - pad && x <= r.x + r.w + pad && y >= r.y - pad && y <= r.y + r.h + pad;
+}
+function onCancel(x, y) {
+  if (S.name !== "listening") return false;
+  if (apart()) return SP.podAt(podsNow(), x, y, 0) === "cancel";
+  const r = pillRect(); return Math.hypot(x - (r.x + r.h / 2), y - (r.y + r.h / 2)) <= r.h / 2;
+}
 function setHover(v) {
   if (v === hovered) return;
   hovered = v;
@@ -275,6 +369,8 @@ window.addEventListener("mousemove", (e) => { pointer = { x: e.clientX, y: e.cli
 document.addEventListener("mouseleave", () => { pointer = null; setHover(false); overCancel = false; });
 window.addEventListener("mousedown", (e) => {
   if (!inside(e.clientX, e.clientY)) return;
+  // Halves on their way home after a stop are not buttons any more.
+  if (apart() && S.name !== "listening") return;
   const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish") : null;
   if (act && bridge && bridge.pillAction) bridge.pillAction(act);
 });

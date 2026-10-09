@@ -121,6 +121,22 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.6 — the pill comes apart while it listens
+
+Listening, the pill splits: ✕ glides to the left edge of the screen, ✓ to the
+right, and the body between them stretches into a thread the voice plucks
+(slack and barely moving when you are quiet, ringing when you talk, plucked
+when a pause writes a chunk). Stopped, the halves glide home and the pill is
+whole again where it started, then shows what it wrote. The thread replaces
+the bars, which the owner asked to rethink. Only the two halves take clicks;
+the thread and the screen between them stay the app's.
+
+For it the pill's window now spans the screen's work area, still
+transparent and click-through. `desktop.pill.split` (server) turns it off and
+brings back the joined pill with its bars; `desktop.pill.splitMaxWidth` caps
+the reach on an ultrawide. The thread's look and feel are knobs too
+(`desktop.pill.thread*`, `desktop.pill.hand*`, `desktop.pill.splitMs`).
+
 ### 0.3.5 — a fresh install starts signed out, an update never signs out
 
 Downloading the same version from the site and running it over the

@@ -7,9 +7,14 @@
 
     rest       a slim capsule holding the three squares; hover opens it with
                the way in ("Tap Ctrl twice to talk"), a click starts talking
-    listening  the squares multiply into bars that move with your voice,
-               amber because the microphone is open (the one amber the brand
-               allows: something live); ✕ discards, ✓ finishes
+    listening  the pill comes apart: ✕ glides to the left edge of the
+               screen, ✓ to the right, and the body between them stretches
+               into a thread your voice plucks, amber because the microphone
+               is open (the one amber the brand allows: something live).
+               ✕ discards, ✓ finishes. Stopped, the halves glide home and the
+               pill is whole again where it started (pillSplit.js). With
+               desktop.pill.split off: the squares multiply into bars that
+               move with your voice, inside the pill.
     flash      a pause wrote a chunk while you keep talking: a pulse runs out
                from the middle
     writing    the bars fall back into squares and roll like a wave
@@ -21,7 +26,8 @@
   moment before the first bootstrap.
 
     pill.html                 the window main.js opens (transparent, click-through
-                              until the pointer is over the pill)
+                              until the pointer is over the pill, as wide as the
+                              screen so the pill can come apart across it)
     pill.html?demo            a scripted run over a mock document, for review
     pill.html?demo&capture    the same on a virtual clock: window.__step(ms)
 -->
@@ -51,6 +57,7 @@
 <body>
 <canvas id="c"></canvas>
 <script src="knobs.js"></script>
+<script src="pillSplit.js"></script>
 <script src="pill.js"></script>
 </body>
 </html>
