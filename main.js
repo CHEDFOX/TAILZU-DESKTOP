@@ -1091,13 +1091,18 @@ let listeningSince = 0;             // when the running session opened the mic
 // by the same rule here (pasteJoin.js) when an older server says nothing —
 // one space, or none where the script or the punctuation wants none.
 const pastedIn = new Map();
+// What was already in the field before the cursor when a session began
+// (frontApp.focusedField). Its first paste joins THAT, as every later one
+// joins the paste before it: "Hello" and "how are you" is one line with a
+// space, not "Hellohow are you".
+const fieldText = new Map();
 /** Remember a session id in a set, keeping only the latest few. */
 function remember(set, session) {
   set.add(session);
   if (set.size > 32) set.delete(set.values().next().value);
 }
 function spaced(session, t, join) {
-  const prev = pastedIn.get(session) || "";
+  const prev = pastedIn.get(session) || fieldText.get(session) || "";
   const joined = prev && typeof join === "boolean" ? (join ? " " : "") + t : joinStretch(prev, t);
   pastedIn.set(session, t);
   if (pastedIn.size > 32) pastedIn.delete(pastedIn.keys().next().value);
@@ -1999,9 +2004,25 @@ function toggleDictation() {
     // name follows, and is in place well before anything is written.
     const sid = activeSession;
     const focused = BrowserWindow.getFocusedWindow();
-    (focused && focused === appWin ? Promise.resolve("Tailzu") : frontApp.frontApp())
+    const ours = !!focused && focused === appWin;
+    (ours ? Promise.resolve("Tailzu") : frontApp.frontApp())
       .then((name) => { if (name && sid === activeSession) sendToRecorder("recording-target", { session: sid, targetApp: name }); })
       .catch(() => {});
+    // AND THE FIELD ITSELF, asked at the same moment (frontApp.focusedField):
+    // its kind and label, and what is already written before the cursor,
+    // which becomes the session's context and what its first paste joins.
+    if (!ours && bool("desktop.field.read", true)) {
+      frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
+        .then((field) => {
+          if (!field || sid !== activeSession) return;
+          if (typeof field.before === "string") {
+            fieldText.set(sid, field.before);
+            if (fieldText.size > 32) fieldText.delete(fieldText.keys().next().value);
+          }
+          sendToRecorder("recording-field", { session: sid, field });
+        })
+        .catch(() => {});
+    }
     pillWords = 0;
     listeningSince = Date.now();
     clearTimeout(writingTimer);

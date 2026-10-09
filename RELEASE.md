@@ -121,6 +121,33 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.7 — it knows the field it is writing into
+
+The owner: "first the screen and app awareness". The app was known
+("Chrome: Gmail"); the field never was, so the search box, the To line,
+the subject and the message were all just Gmail. When dictation starts,
+the field with the keyboard's focus is now read through the system's
+accessibility layer (macOS Accessibility, the permission the paste already
+needs; Windows UI Automation, through the PowerShell already kept open for
+the app's name):
+
+- its kind: a search box, an address bar, an email address field, a text
+  field, a message box or a text area;
+- its label or placeholder: "Search mail", "Subject", "Message #design";
+- what is already written before the cursor, as the phone keyboards send
+  it, and only when the cursor itself was read.
+
+All three go with the dictation (`fieldKind`, `fieldLabel`, `context`), so
+the server writes a search as words and a subject as a subject, and the
+first stretch continues what is there. The first paste now joins that
+text the way later pastes join each other: "Hello" and "how are you" is
+"Hello how are you", not "Hellohow are you". A password field is never
+read or described. On a Mac, Electron and Chromium apps are asked to build
+their accessibility tree (AXManualAccessibility), which changes nothing
+else about them. Linux reads no field yet. `desktop.field.read` turns it
+off; `desktop.field.chars` and `desktop.field.timeoutMs` bound it. CI now
+runs the Windows reader for real and compiles the Mac one (nativeCheck.js).
+
 ### 0.3.6 — the pill comes apart while it listens
 
 At rest the pill is a capsule: two halves, ink and cream, and they are the

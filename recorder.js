@@ -85,6 +85,26 @@ window.tailzu.onTarget && window.tailzu.onTarget((p) => {
   // Only the recent ones are worth keeping.
   for (const k of targets.keys()) if (k < (p && p.session || 0) - 20) targets.delete(k);
 });
+// The field each session is going into (frontApp.focusedField, by way of the
+// main process): its kind and label ride with every request, and what was
+// already written before the cursor is where the session's context starts,
+// so the first stretch is written as the continuation of what is there.
+// Only when nothing has been written yet: a read that lands late must not
+// rewrite a context the session has already sent.
+const fields = new Map();
+window.tailzu.onField && window.tailzu.onField((p) => {
+  if (!p || !p.field || typeof p.field.kind !== "string") return;
+  fields.set(p.session, { kind: p.field.kind, label: typeof p.field.label === "string" ? p.field.label : "" });
+  if (typeof p.field.before === "string" && p.field.before && !wrote.has(p.session)) wrote.set(p.session, p.field.before);
+  for (const k of fields.keys()) if (k < (p.session || 0) - 20) fields.delete(k);
+});
+/** The field's kind and label, put on a request the way `put` adds fields. */
+function withField(sid, put) {
+  const f = fields.get(sid);
+  if (!f) return;
+  put("fieldKind", f.kind);
+  if (f.label) put("fieldLabel", f.label.slice(0, 60));
+}
 window.tailzu.onStop((p) => {
   // Only stop the session main thinks is active; a stale stop is a no-op.
   if (p && p.session && p.session !== session) return;
@@ -477,6 +497,7 @@ async function getMic() {
 // read the account, which made live dictation read like its transcript.
 async function refineText(text, alternative, context, sid) {
   const body = { text, targetApp: targetFor(sid === undefined ? session : sid), language: cfg.language || "auto" };
+  withField(sid === undefined ? session : sid, (k, v) => { body[k] = v; });
   // What the session already wrote, as on /v1/transcribe-clean.
   if (context) body.context = context.slice(-K.num("desktop.recorder.contextChars", 600));
   // The second engine's reading goes with it: the server reconciles the
@@ -649,6 +670,7 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     const fd = new FormData();
     fd.append("audio", blob, "audio." + ext);
     fd.append("targetApp", targetFor(sid));
+    withField(sid, (k, v) => fd.append(k, v));
     fd.append("language", cfg.language || "auto");
     // No tone field, as the phone app sends none: the server writes in the
     // account's voice (tone and preset). It used to be sent from this

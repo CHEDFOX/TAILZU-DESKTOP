@@ -35,6 +35,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # The focused-field reader's AppleScript, which no Linux machine can
+      # check: it must at least compile against System Events.
+      - name: Check the field reader
+        run: node nativeCheck.js mac
       - name: Build .dmg
         env:
           # SIGNED AND NOTARIZED when the Apple secrets are set, so macOS opens
@@ -143,6 +147,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      # The PowerShell that names the app and reads the focused field (UI
+      # Automation), run for real: one answer to each question, in order.
+      - name: Check the field reader
+        run: node nativeCheck.js win
       - name: Build installer
         run: |
           npm ci
