@@ -1122,7 +1122,15 @@ function pillHint() {
  *  person is. */
 function pillBounds(display) {
   const wa = (display || screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea;
-  const w = num("desktop.pill.windowWidth", 420), h = num("desktop.pill.windowHeight", 132);
+  // AS WIDE AS THE SCREEN when the pill comes apart while it listens: ✕ to
+  // one edge, ✓ to the other, the thread between (pill.js, pillSplit.js).
+  // Transparent and click-through everywhere but the pill or its two halves,
+  // so the strip it spans stays the app's below it. A cap keeps it from
+  // reaching across an ultrawide; 0 is the whole work area.
+  const cap = num("desktop.pill.splitMaxWidth", 0);
+  const w = bool("desktop.pill.split", true) ? Math.round(cap > 0 ? Math.min(wa.width, cap) : wa.width)
+    : num("desktop.pill.windowWidth", 420);
+  const h = num("desktop.pill.windowHeight", 132);
   return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
     y: Math.round(wa.y + wa.height - h - num("desktop.pill.bottomOffset", 4)) };
 }
