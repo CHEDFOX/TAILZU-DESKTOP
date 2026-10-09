@@ -429,7 +429,10 @@ if (DEMO) {
     }
     const name = script[step][1];
     if (name === "listening") {
-      const lt = t - 2.2, v = lt > 0.4 && lt < 4.4 ? speech(lt) : 0.02;
+      // At the levels the recorder sends for a real voice (the loud bands sit
+      // near 1 while someone talks), not a whisper: a review that showed the
+      // thread barely moving was showing a voice nobody has.
+      const lt = t - 2.2, v = lt > 0.4 && lt < 4.4 ? Math.min(1, 0.3 + 0.9 * speech(lt)) : 0.02;
       const b = []; for (let i = 0; i < 16; i++) b.push(clamp(v * (1 - i * 0.045) * (0.75 + 0.25 * Math.sin(lt * 17 + i * 1.7))));
       onLevel({ bands: b });
       if (Math.abs(lt - 2.6) < 0.02) { flashAt = clock(); }
