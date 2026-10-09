@@ -15,9 +15,11 @@ if (which === "mac") {
   execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-field.scpt"), "-e", fa.macFieldScript(1000)], { stdio: "inherit" });
   execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-around.scpt"), "-e", fa.macSurroundingsScript()], { stdio: "inherit" });
   console.log("the field and surroundings AppleScript both compile");
-  // Build the Vision OCR helper and read a known image with it.
-  const bin = path.join(os.tmpdir(), "tzocr");
-  execFileSync("swiftc", ["-O", "-o", bin, path.join(__dirname, "native", "tzocr.swift")], { stdio: "inherit" });
+  // Build the Vision OCR helper exactly as the app ships it (universal,
+  // both arches, lipo'd) so a cross-compile problem surfaces here, cheaply,
+  // not inside the dmg build; then read a known image with it.
+  execFileSync("npm", ["run", "tzocr"], { stdio: "inherit", cwd: __dirname });
+  const bin = path.join(__dirname, "build", "tzocr");
   const text = execFileSync(bin, [path.join(__dirname, "native", "ocr-test.png")], { encoding: "utf8" });
   console.log("tzocr read:", JSON.stringify(text.replace(/\n/g, " | ")));
   if (!/TZOCR/.test(text) || !/Friday/.test(text)) { console.error("Vision OCR did not read the test image"); process.exit(1); }
