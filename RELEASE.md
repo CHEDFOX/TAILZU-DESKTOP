@@ -121,6 +121,32 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.9 — it can read the screen even when the app hides its text
+
+0.3.8 read the window through the accessibility layer, which most apps
+answer. Some — Google Docs, a PDF, Figma — draw their text as pixels and
+answer nothing. 0.3.9 fills that gap: when the accessibility read comes
+back empty or thin, the focused window is captured and read with on-device
+OCR (macOS Vision, via the bundled tzocr helper; Windows via
+Windows.Media.Ocr on the shared PowerShell). The accessibility text still
+leads where it exists — it is exact; OCR only adds the lines it did not
+have, and never repeats one.
+
+The image never leaves the machine: it is read into text on the device,
+and only the text joins the rest as `surroundings`, under the same
+reference-only, screen-off-limits rules (no private windows, no money or
+health apps, no password fields). It runs only as a fallback, is bounded
+(the window at ≤1600px), time-boxed (a slow capture or OCR yields nothing
+and the mic carries on), and cached per window so dictating twice into the
+same window reads the picture once.
+
+On macOS the first capture shows the system's Screen Recording prompt
+once; Windows shows none. Knobs: `desktop.ocr.read` (on),
+`desktop.ocr.minChars` (the thin threshold, 80), `desktop.ocr.maxSide`,
+`desktop.ocr.timeoutMs`, `desktop.ocr.cacheMs`. CI builds the Vision helper
+and runs both OCR engines against a known test image (nativeCheck.js). Not
+yet tried in real apps on a real machine; `desktop.ocr.read` turns it off.
+
 ### 0.3.8 — it reads the screen around the field
 
 0.3.7 knew the field; this reads what is around it. When dictation starts,

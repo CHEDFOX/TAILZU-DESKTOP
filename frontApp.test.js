@@ -121,3 +121,30 @@ test("Windows: the UI Automation window walk, read into a blob", () => {
   assert.strictEqual(windowsSurroundings({ ok: false }, 2000), "");
   assert.strictEqual(windowsSurroundings(null, 2000), "");
 });
+
+// OCR fills what the accessibility tree did not have, and never repeats it.
+const { mergeScreen } = require("./frontApp.js");
+
+test("the tree leads; OCR only adds lines it did not already have", () => {
+  // Tree has the conversation; OCR repeats some lines exactly and adds new ones.
+  const ax = "Aarav: move the sync to Friday?\nReply";
+  const ocr = "reply\nAarav: Move the sync to Friday?\nQ3 Plan.docx\nSend";
+  const out = mergeScreen(ax, ocr, 2000);
+  // Dedup is case-insensitive and whole-line: "reply" and the Friday line
+  // (same letters, different case) drop; only the genuinely new lines add.
+  assert.strictEqual(out, "Aarav: move the sync to Friday?\nReply\nQ3 Plan.docx\nSend");
+});
+
+test("tree empty: OCR is the whole of it; both empty: nothing", () => {
+  assert.strictEqual(mergeScreen("", "Doc title\nParagraph one", 2000), "Doc title\nParagraph one");
+  assert.strictEqual(mergeScreen("Just the tree", "", 2000), "Just the tree");
+  assert.strictEqual(mergeScreen("", "", 2000), "");
+  assert.strictEqual(mergeScreen(null, null), "");
+});
+
+test("the merged screen is cut from the end, keeping whole lines", () => {
+  const out = mergeScreen("AAAA".repeat(20), "line two\nthe newest line", 30);
+  assert.ok(out.length <= 30);
+  assert.ok(out.endsWith("the newest line"));
+  assert.ok(!out.includes("AAAA"));
+});

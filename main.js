@@ -27,6 +27,7 @@ const { createTapDetector } = require("./tapDetector.js");
 const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
 const frontApp = require("./frontApp.js");
+const screenRead = require("./screenRead.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -2030,10 +2031,20 @@ function toggleDictation() {
             .catch(() => {});
         }
         // THE SCREEN AROUND THE FIELD: the conversation, the recipient, the
-        // subject (frontApp.surroundings). Other people's words — the server
-        // reads it only to understand this message, never writes it.
+        // subject (screenRead.readScreen) — the accessibility tree first, and
+        // on-device OCR of the window only where the tree is empty or thin
+        // (Google Docs, a PDF, Figma). Other people's words: the server reads
+        // it only to understand this message, never writes it.
         if (bool("desktop.surroundings.read", true)) {
-          frontApp.surroundings({ chars: num("desktop.surroundings.chars", 2000), timeoutMs: num("desktop.surroundings.timeoutMs", 1400) })
+          screenRead.readScreen(info, {
+            axChars: num("desktop.surroundings.chars", 2000),
+            axTimeoutMs: num("desktop.surroundings.timeoutMs", 1400),
+            ocr: bool("desktop.ocr.read", true),
+            minChars: num("desktop.ocr.minChars", 80),
+            maxSide: num("desktop.ocr.maxSide", 1600),
+            ocrTimeoutMs: num("desktop.ocr.timeoutMs", 3000),
+            cacheMs: num("desktop.ocr.cacheMs", 15000),
+          })
             .then((text) => {
               if (text && sid === activeSession) sendToRecorder("recording-around", { session: sid, surroundings: text });
             })

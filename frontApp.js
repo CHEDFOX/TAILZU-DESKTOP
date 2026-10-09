@@ -81,6 +81,26 @@ function joinSurroundings(parts, chars = 2000) {
   return out;
 }
 
+/**
+ * Two readings of the screen into one: the accessibility tree is exact, so
+ * it leads; OCR (the picture, read on the device) only adds lines the tree
+ * did not already have. A line the tree gave is never repeated from the
+ * image, so an app that exposes half its text does not get it twice.
+ */
+function mergeScreen(axText, ocrText, chars = 2000) {
+  const ax = String(axText || "").trim();
+  const have = new Set(ax.split("\n").map((l) => l.trim().toLowerCase()).filter(Boolean));
+  const extra = [];
+  for (const raw of String(ocrText || "").split("\n")) {
+    const t = raw.replace(/\s+/g, " ").trim();
+    if (t.length < 3 || !/[\p{L}\p{N}]/u.test(t) || have.has(t.toLowerCase())) continue;
+    have.add(t.toLowerCase()); extra.push(t);
+  }
+  let out = (ax ? ax + (extra.length ? "\n" + extra.join("\n") : "") : extra.join("\n")).trim();
+  if (out.length > chars) out = out.slice(-chars).replace(/^[^\n]*\n/, "");
+  return out;
+}
+
 /** "Chrome: Gmail", "Slack", "WhatsApp". At most 40 characters, one line. */
 function label(app, title) {
   const raw = String(app || "").replace(/\.exe$/i, "").replace(/[\r\n<>]+/g, " ").trim();
@@ -172,6 +192,46 @@ public static class TzFg {
 '@
 $uia = $false
 try { Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes; $uia = $true } catch {}
+# On-device OCR (Windows.Media.Ocr, built into Windows 10+). The image is
+# read into text HERE; only the text leaves. IAsyncOperation is awaited with
+# the standard WindowsRuntimeSystemExtensions.AsTask bridge.
+$ocrReady = $false
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+  [void][Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+  [void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+  [void][Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+  [void][Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+  $ocrReady = $true
+} catch {}
+function TzAwait($op, $t) {
+  $m = $asTask.MakeGenericMethod($t)
+  $task = $m.Invoke($null, @($op))
+  [void]$task.Wait(8000)
+  return $task.Result
+}
+function TzOcr([string]$path) {
+  $o = @{ ok = $false; text = '' }
+  if (-not $ocrReady) { return $o }
+  try {
+    $file = TzAwait ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+    $stream = TzAwait ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = TzAwait ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bitmap = TzAwait ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+    if ($engine -ne $null) {
+      $res = TzAwait ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+      # One line per OCR line, top to bottom, so the merge reads in order.
+      $lines = foreach ($ln in $res.Lines) { $ln.Text }
+      $o.text = ($lines -join "\`n")
+      $o.ok = $true
+    }
+    $stream.Dispose()
+  } catch {}
+  return $o
+}
 function TzText($el) {
   $s = 
   try { $s = $el.Current.Name } catch {}
@@ -268,6 +328,11 @@ while ($true) {
     [Console]::Out.Flush()
     continue
   }
+  if ($q.StartsWith('o')) {
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress (TzOcr $q.Substring(1))))
+    [Console]::Out.Flush()
+    continue
+  }
   $h = [TzFg]::GetForegroundWindow()
   [uint32]$procId = 0
   [void][TzFg]::GetWindowThreadProcessId($h, [ref]$procId)
@@ -316,6 +381,11 @@ function psAsk(q) {
   });
 }
 function windowsApp() { return psAsk("q").then((o) => infoFrom(o && o.app, o && o.title)); }
+/** Windows OCR of a PNG at `path`, through the shared PowerShell ("o<path>",
+ *  Windows.Media.Ocr). Returns the recognized text, or "". */
+function psOcr(filePath) {
+  return psAsk("o" + String(filePath)).then((o) => (o && o.ok && typeof o.text === "string" ? o.text : "")).catch(() => "");
+}
 
 // ---- Mac ------------------------------------------------------------------------
 function macApp() {
@@ -475,7 +545,9 @@ function linuxApp() {
 function infoFrom(app, title) {
   const name = label(app, title);
   if (!name) return null;
-  return { label: name, private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title) };
+  // The raw window title rides back only to MATCH the window for a screen
+  // capture (screenRead.js); it is used in the main process and never sent.
+  return { label: name, title: String(title || "").slice(0, 200), private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title) };
 }
 
 /** The front window: { label, private, sensitive }, or null. ≤1.5 s. */
@@ -518,7 +590,7 @@ function warmUp() { if (process.platform === "win32") { try { psProcess(); } cat
 function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* gone */ } ps = null; } }
 
 module.exports = {
-  frontApp, frontInfo, focusedField, surroundings, warmUp, shutDown,
+  frontApp, frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
   label, siteOf, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
-  isPrivate, looksSensitive, joinSurroundings, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
+  isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
 };

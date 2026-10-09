@@ -15,6 +15,13 @@ if (which === "mac") {
   execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-field.scpt"), "-e", fa.macFieldScript(1000)], { stdio: "inherit" });
   execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-around.scpt"), "-e", fa.macSurroundingsScript()], { stdio: "inherit" });
   console.log("the field and surroundings AppleScript both compile");
+  // Build the Vision OCR helper and read a known image with it.
+  const bin = path.join(os.tmpdir(), "tzocr");
+  execFileSync("swiftc", ["-O", "-o", bin, path.join(__dirname, "native", "tzocr.swift")], { stdio: "inherit" });
+  const text = execFileSync(bin, [path.join(__dirname, "native", "ocr-test.png")], { encoding: "utf8" });
+  console.log("tzocr read:", JSON.stringify(text.replace(/\n/g, " | ")));
+  if (!/TZOCR/.test(text) || !/Friday/.test(text)) { console.error("Vision OCR did not read the test image"); process.exit(1); }
+  console.log("the Vision OCR helper reads the test image");
 } else if (which === "win") {
   const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-EncodedCommand", Buffer.from(fa.PS, "utf16le").toString("base64")], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
@@ -25,14 +32,18 @@ if (which === "mac") {
   ps.on("exit", () => {
     clearTimeout(timer);
     const lines = out.trim().split(/\r?\n/).filter(Boolean);
-    if (lines.length !== 3) { console.error("expected three answers, got:", JSON.stringify(out)); process.exit(1); }
-    const [app, field, around] = lines.map((l) => JSON.parse(l));
+    if (lines.length !== 4) { console.error("expected four answers, got:", JSON.stringify(out)); process.exit(1); }
+    const [app, field, around, ocr] = lines.map((l) => JSON.parse(l));
     console.log("app:", JSON.stringify(app));
     console.log("field:", JSON.stringify(field), "→", JSON.stringify(fa.windowsField(field, 500)));
     console.log("around:", (around.parts || []).length, "parts →", JSON.stringify(fa.windowsSurroundings(around, 300)).slice(0, 200));
-    if (!("app" in app) || !("ok" in field) || !("ok" in around)) { console.error("answers are not the shapes frontApp.js reads"); process.exit(1); }
+    console.log("ocr:", JSON.stringify((ocr.text || "").replace(/\r?\n/g, " | ")));
+    if (!("app" in app) || !("ok" in field) || !("ok" in around) || !("ok" in ocr)) { console.error("answers are not the shapes frontApp.js reads"); process.exit(1); }
+    if (!ocr.ok || !/TZOCR/.test(ocr.text || "") || !/Friday/.test(ocr.text || "")) { console.error("Windows OCR did not read the test image"); process.exit(1); }
+    console.log("Windows.Media.Ocr reads the test image");
   });
-  ps.stdin.write("q\nf500\ns1000\n");
+  const img = path.join(__dirname, "native", "ocr-test.png");
+  ps.stdin.write("q\nf500\ns1000\no" + img + "\n");
   ps.stdin.end();
 } else {
   console.error("usage: node nativeCheck.js win|mac");

@@ -14,3 +14,6 @@ shell.json
 # The note-taker's Mac helper, built by `npm run audiotap` (CI builds it).
 build/audiotap
 build/audiotap-*
+# The on-device OCR helper, built by `npm run tzocr` (CI builds it).
+build/tzocr
+build/tzocr-*
