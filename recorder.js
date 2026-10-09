@@ -517,7 +517,7 @@ async function getMic() {
 // read the account, which made live dictation read like its transcript.
 async function refineText(text, alternative, context, sid) {
   const rid = sid === undefined ? session : sid;
-  const body = { text, targetApp: targetFor(rid), language: cfg.language || "auto" };
+  const body = { text, targetApp: targetFor(rid), language: cfg.language || "auto", tzOffsetMinutes: -new Date().getTimezoneOffset() };
   withField(rid, (k, v) => { body[k] = v; });
   withScreen(rid, (k, v) => { body[k] = v === "true" ? true : v; });
   // What the session already wrote, as on /v1/transcribe-clean.
@@ -694,6 +694,8 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     fd.append("targetApp", targetFor(sid));
     withField(sid, (k, v) => fd.append(k, v));
     withScreen(sid, (k, v) => fd.append(k, v));
+    // The device's UTC offset now, so recent-dictation timing reads right.
+    fd.append("tzOffsetMinutes", String(-new Date().getTimezoneOffset()));
     fd.append("language", cfg.language || "auto");
     // No tone field, as the phone app sends none: the server writes in the
     // account's voice (tone and preset). It used to be sent from this
