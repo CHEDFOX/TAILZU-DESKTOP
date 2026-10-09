@@ -59,7 +59,7 @@
       ],
       "icon": "assets/icon-mac.png",
       "artifactName": "Tailzu.${ext}",
-      "x64ArchFiles": "{**/*.node,**/audiotap}",
+      "x64ArchFiles": "{**/*.node,**/audiotap,**/tzocr}",
       "extraResources": [
         {
           "from": "build/audiotap",
