@@ -65,9 +65,22 @@ const bands = new Float32Array(32);
 let bandsAt = -1e9;
 
 function setState(name, data) {
+  // NO "✓ 12 words". The owner, of the done label and the joined listening
+  // pill: "these both we don't need". Written, the pill goes straight back
+  // to rest; the words are in the field to be seen.
+  if (name === "done" && !K.bool("desktop.pill.showDone", false)) name = "rest";
   S = { name, at: clock(), data: data || {} };
   if (name !== "listening") caption = "";
   wake();
+}
+
+/** Where the halves start from and go back to: the pill's own place, each
+ *  half a whole disc the joined pill's height whatever size the pill is now,
+ *  so they come out of the small pill and go back into it. */
+function podSeed() {
+  const R = K.num("desktop.pill.listenHeight", 38) / 2;
+  const cy = H - K.num("desktop.pill.bottomPad", 14) - P.h / 2, w = Math.max(P.w, 2 * R);
+  return { x: W / 2 - w / 2, y: cy - R, w, h: 2 * R };
 }
 
 // ---- the canvas -------------------------------------------------------------------
@@ -106,12 +119,14 @@ function doneLabel() {
 function targets(t) {
   const st = S.name, sq = K.num("desktop.pill.atom", 3);
   const g = {};
-  // Apart, or still coming back together: the listening pill's shape, ✕ and
-  // ✓ showing, until the two halves meet again. Only then does it become
-  // what the new state is (writing, done, rest).
-  if (st !== "listening" && splitT > 0.001) {
-    g.w = K.num("desktop.pill.listenWidth", 188); g.h = K.num("desktop.pill.listenHeight", 38);
-    g.solid = 1; g.buttons = 1; g.text = 0; g.show = 1;
+  // SPLIT, THE PILL NEVER GROWS INTO THE JOINED LISTENING SHAPE. The small
+  // pill comes apart where it is: the two halves leave it and it fades, and
+  // on stop they come back into it, at rest or writing, in its own place.
+  // The joined pill with its dots, on the way out and on the way back, was
+  // the one frame the owner did not want.
+  if (st === "listening" && SPLIT()) {
+    g.w = K.num("desktop.pill.restWidth", 46); g.h = K.num("desktop.pill.restHeight", 14);
+    g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
     return g;
   }
   if (st === "rest") {
@@ -147,10 +162,10 @@ function frame() {
   // freezes a bar mid-air.
   if (now - bandsAt > 250) for (let i = 0; i < bands.length; i++) bands[i] *= Math.exp(-dt * 10);
 
-  // The halves: apart while it listens (a beat after it opens, so the pill
-  // has grown first), together otherwise, at one pace both ways, so a stop
-  // in the middle of coming apart simply turns them round.
-  const wantSplit = SPLIT() && S.name === "listening" && t * 1000 >= K.num("desktop.pill.splitDelayMs", 140);
+  // The halves: apart while it listens, straight out of the small pill,
+  // together otherwise, at one pace both ways, so a stop in the middle of
+  // coming apart simply turns them round.
+  const wantSplit = SPLIT() && S.name === "listening" && t * 1000 >= K.num("desktop.pill.splitDelayMs", 0);
   const splitWas = splitT;
   splitT = clamp(splitT + (wantSplit ? dt : -dt) / Math.max(0.08, K.num("desktop.pill.splitMs", 700) / 1000));
   const se = SP.easeInOut(splitT), fade = SP.fades(se);
@@ -197,7 +212,7 @@ function frame() {
   // The thread, between the two halves: amber, because the microphone is
   // open, over a dark hair so it reads on a white page and a dark one alike.
   if (fade.thread > 0.01) {
-    const pd = SP.pods({ x: x0, y: y0, w: P.w, h: P.h }, W, se, INSET());
+    const pd = SP.pods(podSeed(), W, se, INSET());
     const x1 = pd.lx + pd.r * 0.9, x2 = pd.rx - pd.r * 0.9;
     const n = Math.max(16, Math.min(240, Math.round((x2 - x1) / Math.max(4, K.num("desktop.pill.threadStep", 12)))));
     const boil = Math.floor(now / (1000 / Math.max(1, K.num("desktop.pill.handFps", 12))));
@@ -239,7 +254,7 @@ function frame() {
   for (let i = 0; i < n; i++) {
     const a = aa[i], d = Math.abs(i - mid), side = i < mid ? -1 : 1;
     let tx = cx, th = sq, ty = 0, ta = 0, hot = 0;
-    if (S.name === "rest") {
+    if (S.name === "rest" || (S.name === "listening" && SPLIT())) {
       const open = P.text > .5 && hint;
       const gx = open ? x0 + 15 + sq : cx - 5 - sq / 2;
       if (d <= 1) { tx = gx + (i - mid + 1) * (sq + 2.6) + (open ? 0 : 5 - sq - 2.6 + sq / 2); ta = open ? .85 : .6; }
@@ -264,7 +279,7 @@ function frame() {
     } else {
       tx = x0 + 18; ta = 0; th = sq;
     }
-    // Apart, the bars give way to the thread.
+    // Apart, the bars (or the small pill's squares) give way to the thread.
     ta *= 1 - SP.smooth(0, 0.3, se);
     const kk = K.num("desktop.pill.atomSpring", 22);
     a.x = ease(a.x, tx, kk, dt); a.h = ease(a.h, th, S.name === "listening" ? 30 : kk, dt);
@@ -278,21 +293,27 @@ function frame() {
   }
   ctx.globalAlpha = P.show;
 
-  // ✕ and ✓, while listening.
-  if (P.buttons > 0.01) {
-    const pd = SP.pods({ x: x0, y: y0, w: P.w, h: P.h }, W, se, INSET());
-    const r = P.h / 2 - 5, lx = pd.lx, rx = pd.rx, b = P.buttons;
-    // Apart, each half is a disc of its own: the pill's ink, its edge, its shadow.
-    if (fade.disc > 0.01) {
+  // ✕ and ✓, while listening. The two halves, while they are out of the pill (leaving it, apart, or on
+  // their way home); with the split off, the joined pill's ✕ and ✓.
+  const halves = se > 0.001;
+  if (halves || P.buttons > 0.01) {
+    let lx, rx, r, b;
+    if (halves) {
+      const pd = SP.pods(podSeed(), W, se, INSET());
+      // Out of the small pill they grow to their size; home, they shrink back into it.
+      const grow = 0.3 + 0.7 * SP.smooth(0, 0.35, se);
+      lx = pd.lx; rx = pd.rx; b = fade.disc; r = Math.max(2, (pd.r - 5) * grow);
       ctx.save();
       for (const px of [lx, rx]) {
-        ctx.globalAlpha = P.show * b * fade.disc;
+        ctx.globalAlpha = P.show * b;
         ctx.shadowColor = "rgba(0,0,0,.34)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 5;
-        ctx.fillStyle = C.ink(); ctx.beginPath(); ctx.arc(px, cy, P.h / 2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = C.ink(); ctx.beginPath(); ctx.arc(px, cy, pd.r * grow, 0, Math.PI * 2); ctx.fill();
         ctx.shadowColor = "transparent";
-        ctx.strokeStyle = rgba(C.pale(), 0.18); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px, cy, P.h / 2 - .5, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = rgba(C.pale(), 0.18); ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(px, cy, pd.r * grow - .5, 0, Math.PI * 2); ctx.stroke();
       }
       ctx.restore();
+    } else {
+      lx = x0 + P.h / 2; rx = x0 + P.w - P.h / 2; r = P.h / 2 - 5; b = P.buttons;
     }
     ctx.globalAlpha = P.show * b;
     ctx.fillStyle = rgba(C.pale(), overCancel ? .24 : .13); ctx.beginPath(); ctx.arc(lx, cy, r, 0, Math.PI * 2); ctx.fill();
@@ -307,7 +328,8 @@ function frame() {
 
   // Words: the hint on hover, the count when done, the reason on error.
   if (P.text > 0.01) {
-    ctx.save(); ctx.font = FONT(); ctx.textBaseline = "middle"; ctx.globalAlpha = P.show * outCubic(P.text);
+    // With the body: a reason does not float over the thread before the halves are home.
+    ctx.save(); ctx.font = FONT(); ctx.textBaseline = "middle"; ctx.globalAlpha = P.show * outCubic(P.text) * bodyA;
     if (S.name === "rest") {
       ctx.fillStyle = rgba(C.pale(), .88); ctx.fillText(hint, x0 + 15 + 3 * sq + 12, cy + .5);
     } else if (S.name === "done") {
@@ -339,7 +361,7 @@ function frame() {
 
 // ---- pointer: the window lets clicks through everywhere but the pill ------------
 function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2, y: bottom - P.h, w: P.w, h: P.h }; }
-function podsNow() { return SP.pods(pillRect(), W, SP.easeInOut(splitT), INSET()); }
+function podsNow() { return SP.pods(podSeed(), W, SP.easeInOut(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
   // Apart, only the two halves take the pointer: the thread and the screen
