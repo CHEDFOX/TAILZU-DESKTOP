@@ -119,12 +119,13 @@ function doneLabel() {
 function targets(t) {
   const st = S.name, sq = K.num("desktop.pill.atom", 3);
   const g = {};
-  // SPLIT, THE PILL NEVER GROWS INTO THE JOINED LISTENING SHAPE. The small
-  // pill comes apart where it is: the two halves leave it and it fades, and
-  // on stop they come back into it, at rest or writing, in its own place.
-  // The joined pill with its dots, on the way out and on the way back, was
-  // the one frame the owner did not want.
-  if (st === "listening" && SPLIT()) {
+  // SPLIT, THE PILL NEVER GROWS INTO A WIDE PILL OF DOTS. The small pill
+  // comes apart where it is: the two halves leave it and it fades, and on
+  // stop they come back into it, in its own place, and it writes there,
+  // its three squares lighting in turn. The wide pill with its dots (joined
+  // listening, and the rolling wave while writing) was what the owner did
+  // not want: "the wave is still there".
+  if ((st === "listening" || st === "writing") && SPLIT()) {
     g.w = K.num("desktop.pill.restWidth", 46); g.h = K.num("desktop.pill.restHeight", 14);
     g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
     return g;
@@ -254,11 +255,17 @@ function frame() {
   for (let i = 0; i < n; i++) {
     const a = aa[i], d = Math.abs(i - mid), side = i < mid ? -1 : 1;
     let tx = cx, th = sq, ty = 0, ta = 0, hot = 0;
-    if (S.name === "rest" || (S.name === "listening" && SPLIT())) {
+    if (S.name === "rest" || (SPLIT() && (S.name === "listening" || S.name === "writing"))) {
       const open = P.text > .5 && hint;
       const gx = open ? x0 + 15 + sq : cx - 5 - sq / 2;
       if (d <= 1) { tx = gx + (i - mid + 1) * (sq + 2.6) + (open ? 0 : 5 - sq - 2.6 + sq / 2); ta = open ? .85 : .6; }
       else { tx = gx + 5; ta = 0; }
+      // Writing, in the small pill: a light passes over its three squares,
+      // left to right, again and again. Nothing moves, nothing grows.
+      if (S.name === "writing" && d <= 1) {
+        const pos = ((t * 1.5) % 1.5) * 3 - 0.75;
+        ta = .3 + .65 * Math.exp(-Math.pow(i - mid + 1 - pos, 2) * 1.6);
+      }
     } else if (S.name === "listening") {
       tx = n > 1 ? bl + (br - bl) * i / (n - 1) : cx;
       // Low voice in the middle, the rest mirrored outwards: a voice has one
