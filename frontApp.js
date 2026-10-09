@@ -50,6 +50,37 @@ function siteOf(title, app) {
   return "";
 }
 
+// A private window names itself in its title; its screen is not read.
+const PRIVATE = /\b(?:incognito|inprivate|private browsing|private window|guest (?:mode|window))\b/i;
+/** True when the front window is a private/incognito one (from its title). */
+function isPrivate(title) { return PRIVATE.test(String(title || "")); }
+
+// A money/health/secrets app, named loosely, mirroring the server's gate
+// (sensitive.ts): its screen is not read at all, here at the source.
+const SENSITIVE = /\b(?:bank|banking|netbanking|chase|wells\s*fargo|citi(?:bank)?|barclays|hsbc|lloyds|santander|hdfc|icici|axis|kotak|sbi|paytm|phonepe|gpay|google\s*pay|venmo|zelle|cash\s*app|revolut|monzo|wise|coinbase|binance|metamask|robinhood|fidelity|schwab|paypal|credit\s*card|debit\s*card|1password|bitwarden|lastpass|dashlane|keeper|authenticator|wallet|irs|hmrc|health|patient|medical|clinic|hospital|insur\w*)\b/i;
+/** True when this app/site should not have its screen read (money, health). */
+function looksSensitive(label) { return SENSITIVE.test(String(label || "")); }
+
+/**
+ * The screen around the field, from the pieces of text a window gives up:
+ * trimmed, the UI's one- and two-character scraps and pure punctuation
+ * dropped, a run of the same line collapsed, joined top to bottom and cut to
+ * `chars` from the END — in a chat the newest lines, nearest the field, are
+ * what a reply answers. "" when nothing is left.
+ */
+function joinSurroundings(parts, chars = 2000) {
+  const lines = [];
+  let last = "";
+  for (const raw of Array.isArray(parts) ? parts : []) {
+    const t = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+    if (t.length < 3 || !/[\p{L}\p{N}]/u.test(t) || t === last) continue;
+    lines.push(t); last = t;
+  }
+  let out = lines.join("\n").trim();
+  if (out.length > chars) out = out.slice(-chars).replace(/^[^\n]*\n/, "");
+  return out;
+}
+
 /** "Chrome: Gmail", "Slack", "WhatsApp". At most 40 characters, one line. */
 function label(app, title) {
   const raw = String(app || "").replace(/\.exe$/i, "").replace(/[\r\n<>]+/g, " ").trim();
@@ -96,6 +127,12 @@ function fieldOf({ role, subrole, label: lbl, caret, before }, chars = 1000) {
 }
 
 const WIN_ROLES = { "ControlType.Edit": "field", "ControlType.Document": "area", "ControlType.ComboBox": "combo" };
+/** UI Automation's window walk (see PS, "s"), read into a bounded blob. */
+function windowsSurroundings(o, chars) {
+  if (!o || !o.ok || !Array.isArray(o.parts)) return "";
+  return joinSurroundings(o.parts, chars);
+}
+
 /** UI Automation's answer (see PS, "f"), read. */
 function windowsField(o, chars) {
   if (!o || !o.ok) return null;
@@ -135,6 +172,56 @@ public static class TzFg {
 '@
 $uia = $false
 try { Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes; $uia = $true } catch {}
+function TzText($el) {
+  $s = 
+  try { $s = $el.Current.Name } catch {}
+  if ([string]::IsNullOrWhiteSpace($s)) {
+    $vp = $null
+    try { if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $s = $vp.Current.Value } } catch {}
+  }
+  return $s
+}
+# The text around the focused field: a bounded walk of its top-level window,
+# the text of the Text, Edit, Document and header controls under it, in order,
+# newest nearest the field. Capped hard in nodes and time so the one shared
+# PowerShell is never held: a big window yields a little, never a stall.
+function TzAround([int]$chars) {
+  $o = @{ ok = $false; parts = @() }
+  if (-not $uia) { return $o }
+  try {
+    $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($el -eq $null) { return $o }
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $win = $el
+    for ($i = 0; $i -lt 12; $i++) {
+      $p = $walker.GetParent($win); if ($p -eq $null) { break }
+      $win = $p
+      if ($win.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window) { break }
+    }
+    $o.ok = $true
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $parts = New-Object System.Collections.Generic.List[string]
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    $queue.Enqueue($win)
+    $seen = 0
+    $wanted = @([System.Windows.Automation.ControlType]::Text, [System.Windows.Automation.ControlType]::Edit,
+                [System.Windows.Automation.ControlType]::Document, [System.Windows.Automation.ControlType]::Header,
+                [System.Windows.Automation.ControlType]::HeaderItem)
+    while ($queue.Count -gt 0 -and $seen -lt 500 -and $sw.ElapsedMilliseconds -lt 700 -and $parts.Count -lt 120) {
+      $n = $queue.Dequeue(); $seen++
+      try {
+        if ($wanted -contains $n.Current.ControlType -and -not $n.Current.IsPassword) {
+          $t = TzText $n
+          if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$parts.Add($t) }
+        }
+        $child = $walker.GetFirstChild($n)
+        while ($child -ne $null -and $queue.Count -lt 600) { $queue.Enqueue($child); $child = $walker.GetNextSibling($child) }
+      } catch {}
+    }
+    $o.parts = $parts.ToArray()
+  } catch {}
+  return $o
+}
 function TzField([int]$chars) {
   $o = @{ ok = $false }
   if (-not $uia) { return $o }
@@ -171,6 +258,13 @@ while ($true) {
     [int]$n = 1000
     [void][int]::TryParse($q.Substring(1), [ref]$n)
     [Console]::Out.WriteLine((ConvertTo-Json -Compress (TzField $n)))
+    [Console]::Out.Flush()
+    continue
+  }
+  if ($q.StartsWith('s')) {
+    [int]$n = 2000
+    [void][int]::TryParse($q.Substring(1), [ref]$n)
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 (TzAround $n)))
     [Console]::Out.Flush()
     continue
   }
@@ -221,7 +315,7 @@ function psAsk(q) {
     try { const p = psProcess(); psWaiting.push(resolve); p.stdin.write(q + "\n"); } catch { resolve(null); }
   });
 }
-function windowsApp() { return psAsk("q").then((o) => (o ? label(o.app, o.title) : null)); }
+function windowsApp() { return psAsk("q").then((o) => infoFrom(o && o.app, o && o.title)); }
 
 // ---- Mac ------------------------------------------------------------------------
 function macApp() {
@@ -240,7 +334,7 @@ function macApp() {
     execFile("osascript", script.flatMap((l) => ["-e", l]), { timeout: 1500 }, (err, out) => {
       if (err) return resolve(null);
       const [app, ...rest] = String(out).split("\n");
-      resolve(label(app, rest.join(" ")));
+      resolve(infoFrom(app, rest.join(" ")));
     });
   });
 }
@@ -308,21 +402,89 @@ function macField(chars) {
   });
 }
 
+/**
+ * The text around the field, from the focused window's static text and text
+ * areas. Best effort: a window's whole contents can be slow to read over the
+ * accessibility bridge, so it is bounded and the osascript timeout caps it —
+ * a slow read returns nothing rather than holding the mic. Each piece is one
+ * line, separated by RS, for joinSurroundings to clean and bound.
+ */
+function macSurroundingsScript() {
+  const RS = "\u001e";
+  return `
+set RS to character id 30
+set out to ""
+set k to 0
+tell application "System Events"
+  set p to first application process whose frontmost is true
+  try
+    set value of attribute "AXManualAccessibility" of p to true
+  end try
+  try
+    set w to value of attribute "AXFocusedWindow" of p
+  on error
+    return ""
+  end try
+  try
+    set els to entire contents of w
+  on error
+    return ""
+  end try
+  repeat with e in els
+    if k ≥ 400 then exit repeat
+    set k to k + 1
+    try
+      set r to role of e
+      if r is "AXStaticText" or r is "AXTextArea" then
+        set v to value of e
+        if v is not missing value then
+          set v to v as text
+          if (count of v) > 2 then set out to out & v & RS
+        end if
+      end if
+    end try
+  end repeat
+end tell
+return out
+`;
+}
+function macSurroundings(out, chars) {
+  const RS = "\u001e";
+  return joinSurroundings(String(out || "").split(RS), chars);
+}
+function macAround(chars) {
+  return new Promise((resolve) => {
+    execFile("osascript", ["-e", macSurroundingsScript()], { timeout: 1400, maxBuffer: 1 << 20 }, (err, out) => resolve(err ? "" : macSurroundings(out, chars)));
+  });
+}
+
 // ---- Linux ----------------------------------------------------------------------
 function linuxApp() {
   return new Promise((resolve) => {
     execFile("xdotool", ["getactivewindow", "getwindowclassname"], { timeout: 800 }, (err, cls) => {
       if (err) return resolve(null);
-      execFile("xdotool", ["getactivewindow", "getwindowname"], { timeout: 800 }, (e2, title) => resolve(label(String(cls).trim(), e2 ? "" : title)));
+      execFile("xdotool", ["getactivewindow", "getwindowname"], { timeout: 800 }, (e2, title) =>
+        resolve(infoFrom(String(cls).trim(), e2 ? "" : String(title))));
     });
   });
 }
 
-/** The app in front, as a short name, or null. Never waits more than 1.5 s. */
-function frontApp() {
+/** The front window, as the app's name plus what the screen around it may be:
+ *  its label, and whether it is private (incognito) or sensitive (money,
+ *  health) — in both of which the screen is not read. null when unknown. */
+function infoFrom(app, title) {
+  const name = label(app, title);
+  if (!name) return null;
+  return { label: name, private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title) };
+}
+
+/** The front window: { label, private, sensitive }, or null. ≤1.5 s. */
+function frontInfo() {
   const ask = process.platform === "win32" ? windowsApp() : process.platform === "darwin" ? macApp() : linuxApp();
   return Promise.race([ask, new Promise((r) => setTimeout(() => r(null), 1500))]).catch(() => null);
 }
+/** The app in front, as a short name, or null. Never waits more than 1.5 s. */
+function frontApp() { return frontInfo().then((i) => (i ? i.label : null)); }
 
 /**
  * The field with the keyboard's focus: { kind, label?, before? }, or null
@@ -337,8 +499,26 @@ function focusedField({ chars = 1000, timeoutMs = 1200 } = {}) {
   return Promise.race([ask, new Promise((r) => setTimeout(() => r(null), timeoutMs))]).catch(() => null);
 }
 
+/**
+ * The text on the screen around the field, as one bounded blob, or "" (no
+ * window text, no permission, Linux, or too slow). Other people's words, so
+ * the server reads it only to understand the message. Never waits more than
+ * `timeoutMs`; a slow read costs nothing but the help.
+ */
+function surroundings({ chars = 2000, timeoutMs = 1400 } = {}) {
+  const n = Math.max(0, Math.min(8000, chars | 0));
+  const ask = process.platform === "win32" ? psAsk("s" + n).then((o) => windowsSurroundings(o, n))
+    : process.platform === "darwin" ? macAround(n)
+    : Promise.resolve("");
+  return Promise.race([ask, new Promise((r) => setTimeout(() => r(""), timeoutMs))]).then((v) => v || "").catch(() => "");
+}
+
 /** Started early, so the first press is not the one that waits for PowerShell. */
 function warmUp() { if (process.platform === "win32") { try { psProcess(); } catch { /* asked again on the first press */ } } }
 function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* gone */ } ps = null; } }
 
-module.exports = { frontApp, focusedField, warmUp, shutDown, label, siteOf, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript, PS };
+module.exports = {
+  frontApp, frontInfo, focusedField, surroundings, warmUp, shutDown,
+  label, siteOf, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
+  isPrivate, looksSensitive, joinSurroundings, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
+};

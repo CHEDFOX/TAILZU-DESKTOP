@@ -2005,24 +2005,42 @@ function toggleDictation() {
     const sid = activeSession;
     const focused = BrowserWindow.getFocusedWindow();
     const ours = !!focused && focused === appWin;
-    (ours ? Promise.resolve("Tailzu") : frontApp.frontApp())
-      .then((name) => { if (name && sid === activeSession) sendToRecorder("recording-target", { session: sid, targetApp: name }); })
+    (ours ? Promise.resolve({ label: "Tailzu" }) : frontApp.frontInfo())
+      .then((info) => {
+        if (!info || sid !== activeSession) return;
+        // A private window (incognito) or a money/health app: the screen is
+        // not read — not its text around the field, not the field's own text.
+        // The request is marked private so the server keeps nothing either.
+        const off = !!info.private || !!info.sensitive;
+        sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off });
+        if (ours || off) return;
+        // THE FIELD: its kind and label, and what is written before the
+        // cursor, which becomes the session's context and what its first
+        // paste joins (frontApp.focusedField).
+        if (bool("desktop.field.read", true)) {
+          frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
+            .then((field) => {
+              if (!field || sid !== activeSession) return;
+              if (typeof field.before === "string") {
+                fieldText.set(sid, field.before);
+                if (fieldText.size > 32) fieldText.delete(fieldText.keys().next().value);
+              }
+              sendToRecorder("recording-field", { session: sid, field });
+            })
+            .catch(() => {});
+        }
+        // THE SCREEN AROUND THE FIELD: the conversation, the recipient, the
+        // subject (frontApp.surroundings). Other people's words — the server
+        // reads it only to understand this message, never writes it.
+        if (bool("desktop.surroundings.read", true)) {
+          frontApp.surroundings({ chars: num("desktop.surroundings.chars", 2000), timeoutMs: num("desktop.surroundings.timeoutMs", 1400) })
+            .then((text) => {
+              if (text && sid === activeSession) sendToRecorder("recording-around", { session: sid, surroundings: text });
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => {});
-    // AND THE FIELD ITSELF, asked at the same moment (frontApp.focusedField):
-    // its kind and label, and what is already written before the cursor,
-    // which becomes the session's context and what its first paste joins.
-    if (!ours && bool("desktop.field.read", true)) {
-      frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
-        .then((field) => {
-          if (!field || sid !== activeSession) return;
-          if (typeof field.before === "string") {
-            fieldText.set(sid, field.before);
-            if (fieldText.size > 32) fieldText.delete(fieldText.keys().next().value);
-          }
-          sendToRecorder("recording-field", { session: sid, field });
-        })
-        .catch(() => {});
-    }
     pillWords = 0;
     listeningSince = Date.now();
     clearTimeout(writingTimer);

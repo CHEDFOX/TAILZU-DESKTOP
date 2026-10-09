@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld("tailzu", {
   // main → recorder: the field it is going into (kind, label, the text
   // before the cursor), when the system could say.
   onField: (cb) => ipcRenderer.on("recording-field", (_e, p) => cb(p)),
+  // main → recorder: the text on the screen around the field, when read.
+  onAround: (cb) => ipcRenderer.on("recording-around", (_e, p) => cb(p)),
   // With the session it is for: the recorder ignores a stop meant for one it
   // has already left (it used to be dropped here, so that check never ran).
   onStop: (cb) => ipcRenderer.on("stop-recording", (_e, p) => cb(p)),
