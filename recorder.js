@@ -80,11 +80,31 @@ window.tailzu.onStart((c) => {
 // known.
 const targets = new Map();
 const targetFor = (sid) => targets.get(sid) || "Desktop";
+// Sessions in a private window or a sensitive app: the server is told, and
+// keeps nothing off the screen (not even their own prior text).
+const privates = new Map();   // session → true
+// The text on the screen around the field, when it was read.
+const arounds = new Map();    // session → text
 window.tailzu.onTarget && window.tailzu.onTarget((p) => {
   if (p && typeof p.targetApp === "string" && p.targetApp) targets.set(p.session, p.targetApp.slice(0, 40));
+  if (p && p.privateField) privates.set(p.session, true);
   // Only the recent ones are worth keeping.
-  for (const k of targets.keys()) if (k < (p && p.session || 0) - 20) targets.delete(k);
+  const cut = (p && p.session || 0) - 20;
+  for (const m of [targets, privates, arounds]) for (const k of m.keys()) if (k < cut) m.delete(k);
 });
+window.tailzu.onAround && window.tailzu.onAround((p) => {
+  if (p && typeof p.surroundings === "string" && p.surroundings && !privates.get(p.session)) {
+    arounds.set(p.session, p.surroundings.slice(0, 8000));
+  }
+});
+/** The screen read for a session, put on a request (surroundings + the
+ *  private flag), the way `put` adds fields. Private wins: nothing off the
+ *  screen rides with it. */
+function withScreen(sid, put) {
+  if (privates.get(sid)) { put("privateField", "true"); return; }
+  const around = arounds.get(sid);
+  if (around) put("surroundings", around);
+}
 // The field each session is going into (frontApp.focusedField, by way of the
 // main process): its kind and label ride with every request, and what was
 // already written before the cursor is where the session's context starts,
@@ -496,8 +516,10 @@ async function getMic() {
 // "none" (repair only, restyle nothing) whenever the main process had not
 // read the account, which made live dictation read like its transcript.
 async function refineText(text, alternative, context, sid) {
-  const body = { text, targetApp: targetFor(sid === undefined ? session : sid), language: cfg.language || "auto" };
-  withField(sid === undefined ? session : sid, (k, v) => { body[k] = v; });
+  const rid = sid === undefined ? session : sid;
+  const body = { text, targetApp: targetFor(rid), language: cfg.language || "auto" };
+  withField(rid, (k, v) => { body[k] = v; });
+  withScreen(rid, (k, v) => { body[k] = v === "true" ? true : v; });
   // What the session already wrote, as on /v1/transcribe-clean.
   if (context) body.context = context.slice(-K.num("desktop.recorder.contextChars", 600));
   // The second engine's reading goes with it: the server reconciles the
@@ -671,6 +693,7 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     fd.append("audio", blob, "audio." + ext);
     fd.append("targetApp", targetFor(sid));
     withField(sid, (k, v) => fd.append(k, v));
+    withScreen(sid, (k, v) => fd.append(k, v));
     fd.append("language", cfg.language || "auto");
     // No tone field, as the phone app sends none: the server writes in the
     // account's voice (tone and preset). It used to be sent from this

@@ -81,3 +81,43 @@ test("Mac: System Events' answer, read, with the text keeping its own lines", ()
   assert.strictEqual(macFieldOf(["AXTextField", "AXSecureTextField", "", "Password", "", "no", ""].join(RS)), null);
   assert.strictEqual(macFieldOf(""), null);
 });
+
+// THE SCREEN AROUND THE FIELD (surroundings): other people's words, read only
+// where it is safe — never a private window, never a money/health app.
+const { isPrivate, looksSensitive, joinSurroundings, windowsSurroundings } = require("./frontApp.js");
+
+test("a private or incognito window is known from its title", () => {
+  assert.ok(isPrivate("Google - Google Chrome (Incognito)"));
+  assert.ok(isPrivate("DuckDuckGo — Mozilla Firefox (Private Browsing)"));
+  assert.ok(isPrivate("New InPrivate tab - Microsoft Edge"));
+  assert.ok(!isPrivate("Inbox - you@gmail.com - Gmail - Google Chrome"));
+});
+
+test("a money or health app is treated as sensitive, by name or title", () => {
+  assert.ok(looksSensitive("Chase"));
+  assert.ok(looksSensitive("Chrome: HDFC Bank"));
+  assert.ok(looksSensitive("1Password"));
+  assert.ok(looksSensitive("MyChart - patient portal"));
+  assert.ok(!looksSensitive("Slack"));
+  assert.ok(!looksSensitive("Chrome: Gmail"));
+});
+
+test("the screen is cleaned, deduped, and cut from the end", () => {
+  const parts = ["  Aarav Shah  ", "x", "::", "Can we move the sync to Friday?", "Can we move the sync to Friday?", "Reply", "Priya"];
+  const out = joinSurroundings(parts, 2000);
+  assert.strictEqual(out, "Aarav Shah\nCan we move the sync to Friday?\nReply\nPriya");
+  // Cap keeps the tail (newest, nearest the field) and drops a partial head line.
+  const big = joinSurroundings(["AAAA".repeat(30), "line two here", "the last message"], 40);
+  assert.ok(big.length <= 40);
+  assert.ok(big.endsWith("the last message"));
+  assert.ok(!big.includes("AAAA"));
+  assert.strictEqual(joinSurroundings([]), "");
+  assert.strictEqual(joinSurroundings(null), "");
+});
+
+test("Windows: the UI Automation window walk, read into a blob", () => {
+  assert.strictEqual(windowsSurroundings({ ok: true, parts: ["Design sync", "Aarav: Friday?", "x"] }, 2000),
+    "Design sync\nAarav: Friday?");
+  assert.strictEqual(windowsSurroundings({ ok: false }, 2000), "");
+  assert.strictEqual(windowsSurroundings(null, 2000), "");
+});

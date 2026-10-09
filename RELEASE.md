@@ -121,6 +121,35 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.8 — it reads the screen around the field
+
+0.3.7 knew the field; this reads what is around it. When dictation starts,
+the focused window's text — the conversation being replied to, the
+recipient, the subject — is gathered through the same accessibility layer
+(macOS Accessibility; Windows UI Automation, a bounded walk of the window)
+and sent as `surroundings`. The server treats it the way the Reply helper
+treats a pasted message: read to understand this one (who "he" is, how a
+name is spelled, what is being answered), never written into the field.
+"yeah friday works" against a thread becomes "Friday works for me".
+
+Where it does NOT read:
+- a private or incognito window (known from its title: Incognito, InPrivate,
+  Private Browsing);
+- a money or health app (Chase, a bank, 1Password, a patient portal…),
+  matched by name;
+- a password field (already, since 0.3.7).
+In those the request is marked private and the server keeps nothing off the
+screen — not the surroundings, and not even the field's own prior text,
+which in those apps is a balance or a card number.
+
+The gather is bounded and time-boxed (≤1.4 s, a few hundred nodes): a slow
+or empty read costs nothing but the help — the mic starts regardless. It
+is one shared blob, cleaned and cut to 2000 characters from the newest
+lines. Knobs: `desktop.surroundings.read` (on), `desktop.surroundings.chars`,
+`desktop.surroundings.timeoutMs`. CI runs the Windows walk for real and
+compiles the Mac gather (nativeCheck.js). Not yet tried in real apps on a
+real machine; the knob disables it instantly if it ever misbehaves.
+
 ### 0.3.7 — it knows the field it is writing into
 
 The owner: "first the screen and app awareness". The app was known

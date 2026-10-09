@@ -13,7 +13,8 @@ const fa = require("./frontApp.js");
 const which = process.argv[2];
 if (which === "mac") {
   execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-field.scpt"), "-e", fa.macFieldScript(1000)], { stdio: "inherit" });
-  console.log("the field's AppleScript compiles");
+  execFileSync("osacompile", ["-o", path.join(os.tmpdir(), "tz-around.scpt"), "-e", fa.macSurroundingsScript()], { stdio: "inherit" });
+  console.log("the field and surroundings AppleScript both compile");
 } else if (which === "win") {
   const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-EncodedCommand", Buffer.from(fa.PS, "utf16le").toString("base64")], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
@@ -24,13 +25,14 @@ if (which === "mac") {
   ps.on("exit", () => {
     clearTimeout(timer);
     const lines = out.trim().split(/\r?\n/).filter(Boolean);
-    if (lines.length !== 2) { console.error("expected two answers, got:", JSON.stringify(out)); process.exit(1); }
-    const [app, field] = lines.map((l) => JSON.parse(l));
+    if (lines.length !== 3) { console.error("expected three answers, got:", JSON.stringify(out)); process.exit(1); }
+    const [app, field, around] = lines.map((l) => JSON.parse(l));
     console.log("app:", JSON.stringify(app));
     console.log("field:", JSON.stringify(field), "→", JSON.stringify(fa.windowsField(field, 500)));
-    if (!("app" in app) || !("ok" in field)) { console.error("answers are not the shapes frontApp.js reads"); process.exit(1); }
+    console.log("around:", (around.parts || []).length, "parts →", JSON.stringify(fa.windowsSurroundings(around, 300)).slice(0, 200));
+    if (!("app" in app) || !("ok" in field) || !("ok" in around)) { console.error("answers are not the shapes frontApp.js reads"); process.exit(1); }
   });
-  ps.stdin.write("q\nf500\n");
+  ps.stdin.write("q\nf500\ns1000\n");
   ps.stdin.end();
 } else {
   console.error("usage: node nativeCheck.js win|mac");
