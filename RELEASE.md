@@ -123,17 +123,25 @@ build as a new app: it may ask again for the microphone and Accessibility.
 
 ### 0.3.6 — the pill comes apart while it listens
 
-Listening, the small pill comes apart where it sits: ✕ glides out to the
+At rest the pill is a capsule: two halves, ink and cream, and they are the
+✕ and the ✓. Hover opens it around "Tap Ctrl twice to talk" with the cream
+half a cap at the end. Listening, it comes apart: the halves round into the
+✕ and ✓ discs on their way to the edges of the screen. Stopped, they come
+home and click shut; writing, a glint runs over the shut capsule; an error
+opens it around the reason with the cap gone rose. `desktop.pill.capsule`
+turns it off (the slim pill with three squares), and its size is
+`desktop.pill.capsuleWidth`/`capsuleHeight`.
+
+Listening, the pill comes apart where it sits: ✕ glides out to the
 left edge of the screen, ✓ to the right, and a thread the voice plucks runs
 between them (slack and barely moving when you are quiet, ringing when you
 talk, plucked when a pause writes a chunk). Stopped, the halves glide home
-and go back into the pill, which is small again in its own place. The thread
+and go back into the pill, small again in its own place. The thread
 replaces the bars, which the owner asked to rethink. Only the two halves
 take clicks; the thread and the screen between them stay the app's.
 
 The pill never grows into a wide pill of dots: not to listen, and not to
-write (it writes in the small pill, a light passing over its three
-squares). Once it has written it goes straight back to rest: no "✓ 12
+write (it writes shut, small, in its own place). Once it has written it goes straight back to rest: no "✓ 12
 words", since the words are already in the field. `desktop.pill.showDone` brings the
 count back.
 

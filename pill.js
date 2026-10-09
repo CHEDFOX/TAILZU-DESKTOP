@@ -50,9 +50,16 @@ const threadOpts = () => ({
   hz: K.num("desktop.pill.threadHz", 5.5),
   sag: K.num("desktop.pill.threadSag", 3),
 });
+// THE CAPSULE. The pill is a pill: two halves, ink and cream, that are the ✕
+// and the ✓. At rest it is shut; hover opens it a little for the way in;
+// listening, it opens all the way and the halves go to the edges with the
+// thread between them; stopped, they click shut again where they were.
+// The owner, of the three dots it was: "change this … to something cool".
+const CAPSULE = () => SPLIT() && K.bool("desktop.pill.capsule", true);
 let splitT = 0;                 // 0 joined … 1 apart, at a constant pace, eased where drawn
 const thread = SP.createThread();
 let pluckedAt = -1e9;
+let snapAt = -1e9;              // the halves met: the capsule clicks shut
 
 // ---- state ------------------------------------------------------------------------
 let S = { name: "rest", at: 0, data: {} };
@@ -79,7 +86,14 @@ function setState(name, data) {
  *  so they come out of the small pill and go back into it. */
 function podSeed() {
   const R = K.num("desktop.pill.listenHeight", 38) / 2;
-  const cy = H - K.num("desktop.pill.bottomPad", 14) - P.h / 2, w = Math.max(P.w, 2 * R);
+  const cy = H - K.num("desktop.pill.bottomPad", 14) - P.h / 2;
+  if (CAPSULE()) {
+    // From the middle of each half of the capsule as it is now.
+    const x0 = W / 2 - P.w / 2, seam = x0 + P.w - P.cap;
+    const lc = (x0 + seam) / 2, rc = (seam + x0 + P.w) / 2;
+    return { x: lc - R, y: cy - R, w: rc - lc + 2 * R, h: 2 * R };
+  }
+  const w = Math.max(P.w, 2 * R);
   return { x: W / 2 - w / 2, y: cy - R, w, h: 2 * R };
 }
 
@@ -105,7 +119,7 @@ function watchScale() {
 }
 
 // Animated values. The pill's box, and one "atom" per bar.
-const P = { w: 48, h: 14, solid: 0, buttons: 0, text: 0 };
+const P = { w: 40, h: 16, solid: 0, buttons: 0, text: 0, cap: 20 };   // cap: the cream half's width
 const A = []; // { x, h, y, a, hot }
 function atoms(n) { while (A.length < n) A.push({ x: W / 2, h: 3, y: 0, a: 0, hot: 0 }); return A; }
 
@@ -115,10 +129,29 @@ function doneLabel() {
   return n === 1 ? K.txt("desktop.pill.doneOne", "1 word") : n > 0 ? K.txt("desktop.pill.done", "{n} words", { n }) : K.txt("desktop.pill.doneNone", "Done");
 }
 
+/** The capsule's shape for a state: shut (two equal halves), or open around
+ *  some words with the cream half a cap at the end. */
+function capsuleTargets(st) {
+  const g = { buttons: 0, show: 1, solid: 1, text: 0 };
+  const open = (label, h, extra = 0) => {
+    g.h = h; g.cap = Math.round(h * 0.82); g.text = 1;
+    g.w = Math.round(K.num("desktop.pill.capsulePad", 14) + extra + textW(label) + 12 + g.cap);
+  };
+  if (st === "rest" && hovered && restShown && hint) open(hint, K.num("desktop.pill.hoverHeight", 28));
+  else if (st === "error" || st === "done") {
+    open(st === "done" ? doneLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong")), K.num("desktop.pill.labelHeight", 30), st === "done" ? 18 : 0);
+  } else {
+    g.w = K.num("desktop.pill.capsuleWidth", 40); g.h = K.num("desktop.pill.capsuleHeight", 16); g.cap = g.w / 2;
+    if (st === "rest") { g.solid = 0; g.show = restShown ? 1 : 0; }
+  }
+  return g;
+}
+
 /** Where everything wants to be this frame. */
 function targets(t) {
   const st = S.name, sq = K.num("desktop.pill.atom", 3);
   const g = {};
+  if (CAPSULE()) return capsuleTargets(st);
   // SPLIT, THE PILL NEVER GROWS INTO A WIDE PILL OF DOTS. The small pill
   // comes apart where it is: the two halves leave it and it fades, and on
   // stop they come back into it, in its own place, and it writes there,
@@ -169,6 +202,7 @@ function frame() {
   const wantSplit = SPLIT() && S.name === "listening" && t * 1000 >= K.num("desktop.pill.splitDelayMs", 0);
   const splitWas = splitT;
   splitT = clamp(splitT + (wantSplit ? dt : -dt) / Math.max(0.08, K.num("desktop.pill.splitMs", 700) / 1000));
+  if (splitWas > 0 && splitT === 0) snapAt = now;
   const se = SP.easeInOut(splitT), fade = SP.fades(se);
   if (splitT > 0 || thread.energy() > 0.05) {
     thread.step(dt, bands, S.name === "listening" && now - bandsAt < 250, threadOpts());
@@ -177,12 +211,14 @@ function frame() {
   }
 
   const g = targets(t), k = K.num("desktop.pill.spring", 16);
-  const before = P.w + P.h + P.solid + P.buttons + P.text;
+  const before = P.w + P.h + P.solid + P.buttons + P.text + P.cap;
   P.w = ease(P.w, g.w, k, dt); P.h = ease(P.h, g.h, k, dt);
   P.solid = ease(P.solid, g.solid, k * .8, dt); P.buttons = ease(P.buttons, g.buttons, k * .9, dt);
   P.text = ease(P.text, g.text, k * .9, dt);
+  if (g.cap != null) P.cap = ease(P.cap, g.cap, k, dt);
   P.show = ease(P.show ?? 1, g.show, k, dt);
-  let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text - before) > 0.01;
+  let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text + P.cap - before) > 0.01;
+  if (now - snapAt < 400) moving = true;
   if (splitT !== splitWas || thread.energy() > 0.05) moving = true;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -199,7 +235,7 @@ function frame() {
   ctx.translate(shake, 0);
   // The body fades as the halves leave it, and is back before they meet.
   const bodyA = fade.body;
-  if (bodyA > 0.01) {
+  if (!CAPSULE() && bodyA > 0.01) {
     ctx.shadowColor = `rgba(0,0,0,${(0.12 + 0.26 * P.solid) * bodyA})`; ctx.shadowBlur = 8 + 14 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
     ctx.fillStyle = mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), P.solid);
     ctx.globalAlpha = P.show * bodyA * (K.num("desktop.pill.restAlpha", 0.78) + (1 - K.num("desktop.pill.restAlpha", 0.78)) * P.solid);
@@ -214,7 +250,8 @@ function frame() {
   // open, over a dark hair so it reads on a white page and a dark one alike.
   if (fade.thread > 0.01) {
     const pd = SP.pods(podSeed(), W, se, INSET());
-    const x1 = pd.lx + pd.r * 0.9, x2 = pd.rx - pd.r * 0.9;
+    const hb = CAPSULE() ? halves(se) : null;
+    const x1 = hb ? hb.lx + hb.lw * 0.45 : pd.lx + pd.r * 0.9, x2 = hb ? hb.rx - hb.rw * 0.45 : pd.rx - pd.r * 0.9;
     const n = Math.max(16, Math.min(240, Math.round((x2 - x1) / Math.max(4, K.num("desktop.pill.threadStep", 12)))));
     const boil = Math.floor(now / (1000 / Math.max(1, K.num("desktop.pill.handFps", 12))));
     const pts = thread.points(x1, x2, cy, now / 1000, n, SP.tremor(boil, K.num("desktop.pill.hand", 0.8)), threadOpts());
@@ -247,7 +284,7 @@ function frame() {
   }
 
   // The atoms.
-  const n = BARS(), mid = (n - 1) / 2, sq = K.num("desktop.pill.atom", 3), aa = atoms(n);
+  const n = CAPSULE() ? 0 : BARS(), mid = (n - 1) / 2, sq = K.num("desktop.pill.atom", 3), aa = atoms(n);
   const inner = P.h, bl = x0 + inner + 4, br = x0 + P.w - inner - 4;
   const maxH = Math.max(sq, P.h - K.num("desktop.pill.barInset", 16));
   const flashP = (now - flashAt) / 1000;
@@ -302,10 +339,11 @@ function frame() {
 
   // ✕ and ✓, while listening. The two halves, while they are out of the pill (leaving it, apart, or on
   // their way home); with the split off, the joined pill's ✕ and ✓.
-  const halves = se > 0.001;
-  if (halves || P.buttons > 0.01) {
+  if (CAPSULE()) drawCapsule(se, cy, err, t, now);
+  const apartNow = se > 0.001;
+  if (!CAPSULE() && (apartNow || P.buttons > 0.01)) {
     let lx, rx, r, b;
-    if (halves) {
+    if (apartNow) {
       const pd = SP.pods(podSeed(), W, se, INSET());
       // Out of the small pill they grow to their size; home, they shrink back into it.
       const grow = 0.3 + 0.7 * SP.smooth(0, 0.35, se);
@@ -336,8 +374,16 @@ function frame() {
   // Words: the hint on hover, the count when done, the reason on error.
   if (P.text > 0.01) {
     // With the body: a reason does not float over the thread before the halves are home.
-    ctx.save(); ctx.font = FONT(); ctx.textBaseline = "middle"; ctx.globalAlpha = P.show * outCubic(P.text) * bodyA;
-    if (S.name === "rest") {
+    const cap = CAPSULE(), tx0 = x0 + K.num("desktop.pill.capsulePad", 14);
+    ctx.save(); ctx.font = FONT(); ctx.textBaseline = "middle";
+    // In the capsule, words wait until the halves are home.
+    ctx.globalAlpha = P.show * outCubic(P.text) * (cap ? 1 - SP.smooth(0, 0.015, se) : bodyA);
+    if (cap && S.name !== "done") {
+      // In the ink, the cream cap after it (rose, for an error).
+      ctx.fillStyle = rgba(C.pale(), S.name === "rest" ? .9 : 1);
+      if (S.name === "rest") ctx.fillText(hint, tx0, cy + .5);
+      else if (S.name === "error") ctx.fillText(S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"), tx0, cy + .5);
+    } else if (S.name === "rest") {
       ctx.fillStyle = rgba(C.pale(), .88); ctx.fillText(hint, x0 + 15 + 3 * sq + 12, cy + .5);
     } else if (S.name === "done") {
       // The check draws itself, born amber, and settles to pale.
@@ -364,6 +410,72 @@ function frame() {
   // went on taking clicks where the pill had been. Asked again as it moves.
   if (pointer) hoverAt(pointer.x, pointer.y);
   return !moving;
+}
+
+// ---- the capsule ------------------------------------------------------------------
+/** The two halves at a separation `se`: where each is, how wide, how tall,
+ *  and how far each has become a disc of its own (g). */
+function halves(se) {
+  const R = K.num("desktop.pill.listenHeight", 38) / 2, g = SP.smooth(0, 0.4, se);
+  const pd = SP.pods(podSeed(), W, se, INSET());
+  const to = (a, b) => a + (b - a) * g;
+  return { lx: pd.lx, rx: pd.rx, lw: to(P.w - P.cap, 2 * R), rw: to(P.cap, 2 * R), hh: to(P.h, 2 * R), g };
+}
+
+function drawCapsule(se, cy, err, t, now) {
+  // The seam rounds off quickly, so a half is a disc soon after it leaves.
+  const hb = halves(se), g = hb.g, hh = hb.hh, outer = hh / 2, inner = Math.min(1, g * 1.8) * hh / 2, y = cy - hh / 2;
+  const solid = Math.max(P.solid, g), restA = K.num("desktop.pill.restAlpha", 0.78);
+  const a = P.show * (restA + (1 - restA) * solid);
+  ctx.save();
+  // Shut again: a small click, the capsule squashing and settling.
+  const sk = (now - snapAt) / 300, snap = sk < 1 ? Math.sin(sk * Math.PI) * (1 - sk) : 0;
+  if (snap) { ctx.translate(W / 2, cy); ctx.scale(1 + .12 * snap, 1 - .1 * snap); ctx.translate(-W / 2, -cy); }
+  const parts = [
+    { x: hb.lx - hb.lw / 2, w: hb.lw, r: [outer, inner, inner, outer], fill: mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), solid), edge: rgba(C.pale(), .16), gloss: .10 },
+    { x: hb.rx - hb.rw / 2, w: hb.rw, r: [inner, outer, outer, inner], fill: mixHex(C.pale(), C.rose(), err * (1 - g)), edge: rgba(C.ink(), .3), gloss: .45 },
+  ];
+  for (const h of parts) {
+    if (h.w < 0.5) continue;
+    ctx.globalAlpha = a;
+    ctx.shadowColor = `rgba(0,0,0,${.16 + .18 * solid})`; ctx.shadowBlur = 6 + 12 * solid; ctx.shadowOffsetY = 2 + 3 * solid;
+    ctx.fillStyle = h.fill; ctx.beginPath(); ctx.roundRect(h.x, y, h.w, hh, h.r); ctx.fill();
+    ctx.shadowColor = "transparent";
+    // Light along the top, as on a capsule.
+    ctx.save(); ctx.clip();
+    const gl = ctx.createLinearGradient(0, y, 0, y + hh * .55);
+    gl.addColorStop(0, `rgba(255,255,255,${h.gloss})`); gl.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = gl; ctx.fillRect(h.x, y, h.w, hh * .55);
+    ctx.restore();
+    ctx.strokeStyle = h.edge; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(h.x + .5, y + .5, Math.max(0, h.w - 1), hh - 1, h.r.map((r) => Math.max(0, r - .5))); ctx.stroke();
+  }
+  // Writing: a glint runs over the shut capsule, again and again.
+  if (S.name === "writing" && g < .5) {
+    ctx.save(); ctx.beginPath();
+    for (const h of parts) ctx.roundRect(h.x, y, h.w, hh, h.r);
+    ctx.clip();
+    const from = parts[0].x - 12, span = parts[1].x + parts[1].w - parts[0].x + 24;
+    const gx = from + ((t * 0.9) % 1.3) / 1.3 * span;
+    ctx.transform(1, 0, -0.7, 1, 0.7 * cy, 0);   // slanted, as light on a curve
+    const gr = ctx.createLinearGradient(gx - 6, 0, gx + 6, 0);
+    gr.addColorStop(0, "rgba(255,255,255,0)"); gr.addColorStop(.5, `rgba(255,255,255,${.42 * (1 - 2 * g)})`); gr.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.globalAlpha = a; ctx.fillStyle = gr; ctx.fillRect(gx - 6, y, 12, hh);
+    ctx.restore();
+  }
+  // ✕ on the ink half, ✓ on the cream one, as they become discs.
+  const ic = SP.smooth(0.45, 1, g);
+  if (ic > 0.01) {
+    const r = Math.max(2, hh / 2 - 5), lx = hb.lx, rx = hb.rx;
+    ctx.globalAlpha = P.show * ic;
+    if (overCancel) { ctx.fillStyle = rgba(C.pale(), .14); ctx.beginPath(); ctx.arc(lx, cy, r + 3, 0, Math.PI * 2); ctx.fill(); }
+    ctx.strokeStyle = rgba(C.pale(), .92); ctx.lineWidth = 1.7; ctx.lineCap = "round";
+    const s = r * .4;
+    ctx.beginPath(); ctx.moveTo(lx - s, cy - s); ctx.lineTo(lx + s, cy + s); ctx.moveTo(lx + s, cy - s); ctx.lineTo(lx - s, cy + s); ctx.stroke();
+    ctx.strokeStyle = C.ink(); ctx.lineWidth = 1.9; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(rx - r * .42, cy + r * .02); ctx.lineTo(rx - r * .1, cy + r * .32); ctx.lineTo(rx + r * .44, cy - r * .32); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // ---- pointer: the window lets clicks through everywhere but the pill ------------
