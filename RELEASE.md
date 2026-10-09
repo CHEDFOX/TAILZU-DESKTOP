@@ -123,13 +123,18 @@ build as a new app: it may ask again for the microphone and Accessibility.
 
 ### 0.3.6 — the pill comes apart while it listens
 
-Listening, the pill splits: ✕ glides to the left edge of the screen, ✓ to the
-right, and the body between them stretches into a thread the voice plucks
-(slack and barely moving when you are quiet, ringing when you talk, plucked
-when a pause writes a chunk). Stopped, the halves glide home and the pill is
-whole again where it started, then shows what it wrote. The thread replaces
-the bars, which the owner asked to rethink. Only the two halves take clicks;
-the thread and the screen between them stay the app's.
+Listening, the small pill comes apart where it sits: ✕ glides out to the
+left edge of the screen, ✓ to the right, and a thread the voice plucks runs
+between them (slack and barely moving when you are quiet, ringing when you
+talk, plucked when a pause writes a chunk). Stopped, the halves glide home
+and go back into the pill, which is small again in its own place. The thread
+replaces the bars, which the owner asked to rethink. Only the two halves
+take clicks; the thread and the screen between them stay the app's.
+
+The pill no longer grows into the wide listening pill with its dots first,
+and once it has written it goes straight back to rest: no "✓ 12 words",
+since the words are already in the field. `desktop.pill.showDone` brings the
+count back.
 
 For it the pill's window now spans the screen's work area, still
 transparent and click-through. `desktop.pill.split` (server) turns it off and
