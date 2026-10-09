@@ -131,9 +131,10 @@ and go back into the pill, which is small again in its own place. The thread
 replaces the bars, which the owner asked to rethink. Only the two halves
 take clicks; the thread and the screen between them stay the app's.
 
-The pill no longer grows into the wide listening pill with its dots first,
-and once it has written it goes straight back to rest: no "✓ 12 words",
-since the words are already in the field. `desktop.pill.showDone` brings the
+The pill never grows into a wide pill of dots: not to listen, and not to
+write (it writes in the small pill, a light passing over its three
+squares). Once it has written it goes straight back to rest: no "✓ 12
+words", since the words are already in the field. `desktop.pill.showDone` brings the
 count back.
 
 For it the pill's window now spans the screen's work area, still
