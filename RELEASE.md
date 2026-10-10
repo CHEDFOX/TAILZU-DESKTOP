@@ -121,6 +121,19 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.11 — the pill is pulled apart and pulled home on a thread
+
+The split pill's separation is no longer paced on a clock — it is a **damped
+spring** (pillSplit.js), so the thread between the two halves reads as a
+physical thing. Coming apart, the halves ease out and the thread stretches
+taut. On stop, the thread's tension **pulls both halves home**: a stiffer,
+lighter-damped yank that accelerates them inward and overshoots the join a
+touch, which the capsule's click-shut swallows — so it looks like the thread
+snapped the pill back into one. Both ends are driven symmetrically, so it
+reassembles exactly where it started. The four spring constants
+(`desktop.pill.splitIn/OutStiff`, `…Damp`) are server-tunable; the old
+constant-pace `desktop.pill.splitMs` is retired.
+
 ### 0.3.10 — the desk scrolls, the masthead is just the mark, Today & Insights stay fresh
 
 Three fixes to the desk window:

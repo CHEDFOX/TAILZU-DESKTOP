@@ -41,6 +41,43 @@ test("the easing glides out of place and into it, and ends where it says", () =>
   assert.ok(Math.abs(SP.easeInOut(0.5) - 0.5) < 1e-9);
 });
 
+test("the separation is a spring: it stretches out taut and is pulled home", () => {
+  // Coming apart: settles at ~1, and the stretch does not run past the edge cap.
+  const out = { x: 0, v: 0 };
+  let maxOut = 0;
+  for (let i = 0; i < 300; i++) { SP.spring(out, 1, {}, 1 / 60); maxOut = Math.max(maxOut, out.x); }
+  assert.ok(Math.abs(out.x - 1) < 0.02, `apart settles at 1 (${out.x.toFixed(3)})`);
+  assert.ok(maxOut <= 1.12 + 1e-9, "the stretch stays within its cap");
+  assert.ok(!SP.springMoving(out, 1), "and it comes to rest");
+
+  // Pulled home: a yank that overshoots the join (goes below 0) — the capsule's
+  // click-shut absorbs it — then settles at 0, overshoot bounded.
+  const home = { x: 1, v: 0 };
+  let minIn = 1;
+  for (let i = 0; i < 300; i++) { SP.spring(home, 0, {}, 1 / 60); minIn = Math.min(minIn, home.x); }
+  assert.ok(minIn < 0, `the pull overshoots the join (${minIn.toFixed(3)})`);
+  assert.ok(minIn >= -0.12 - 1e-9, "but the overshoot is bounded");
+  assert.ok(Math.abs(home.x) < 0.02, `home settles at 0 (${home.x.toFixed(3)})`);
+});
+
+test("home is pulled faster than it stretches apart — the thread's tension", () => {
+  const out = { x: 0, v: 0 }, home = { x: 1, v: 0 };
+  let tOut = Infinity, tIn = Infinity;
+  for (let i = 0; i < 1200; i++) {
+    SP.spring(out, 1, {}, 1 / 120); SP.spring(home, 0, {}, 1 / 120);
+    if (out.x >= 0.5 && tOut === Infinity) tOut = i;
+    if (home.x <= 0.5 && tIn === Infinity) tIn = i;
+  }
+  assert.ok(tIn < tOut, `the pull home reaches halfway first (${tIn} < ${tOut})`);
+});
+
+test("a settled spring reports no motion, a mid-flight one does", () => {
+  assert.ok(!SP.springMoving({ x: 0, v: 0 }, 0), "at home, at rest: still");
+  assert.ok(!SP.springMoving({ x: 1, v: 0 }, 1), "apart, at rest: still");
+  assert.ok(SP.springMoving({ x: 0.5, v: 0 }, 1), "between: moving");
+  assert.ok(SP.springMoving({ x: 1, v: -2 }, 1), "carrying speed: moving");
+});
+
 test("a click finds the half it is on, and nothing between them", () => {
   const p = SP.pods(PILL, W, 1, 22);
   assert.strictEqual(SP.podAt(p, p.lx + 5, p.cy - 5), "cancel");
