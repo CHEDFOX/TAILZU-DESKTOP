@@ -26,6 +26,47 @@
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
+  /**
+   * THE PULL. The separation is not paced on a clock — it is a DAMPED SPRING,
+   * so the thread between the halves reads as a physical thing. Coming apart
+   * (target 1) it eases out taut, well damped, barely past the edge. Going
+   * home (target 0) it is pulled: a stiff, lightly-damped yank that
+   * accelerates the halves inward and overshoots the join a touch — the
+   * capsule's click-shut (pill.js snapAt) absorbs the overshoot, so it looks
+   * like the thread's tension snapped them back into one pill.
+   *
+   * `s` is { x, v }, mutated in place and returned. `target` is 0 (home) or 1
+   * (apart). Params are read per call (a server knob lands next frame); the
+   * two directions carry their own stiffness and damping. Integrated with
+   * sub-stepped semi-implicit Euler, so a long frame cannot blow it up, and
+   * the overshoot is bounded both ways.
+   */
+  const SPRING = { outStiff: 120, outDamp: 24, inStiff: 240, inDamp: 16 };
+  function spring(s, target, opts, dt) {
+    const o = Object.assign({}, SPRING, opts);
+    const out = target > 0.5;                       // coming apart vs going home
+    const stiff = out ? o.outStiff : o.inStiff;
+    const damp = out ? o.outDamp : o.inDamp;
+    const d = Math.min(0.05, Math.max(0, +dt || 0));
+    let n = Math.max(1, Math.ceil(d / 0.008));
+    const h = d / n;
+    while (n--) {
+      const a = stiff * (target - s.x) - damp * s.v;
+      s.v += a * h;
+      s.x += s.v * h;
+    }
+    // The pull may ride a little past the join; the stretch a little past the
+    // edge. Bounded, and the velocity into a wall is spent there.
+    if (s.x < -0.12) { s.x = -0.12; if (s.v < 0) s.v = 0; }
+    else if (s.x > 1.12) { s.x = 1.12; if (s.v > 0) s.v = 0; }
+    return s;
+  }
+
+  /** True while the spring is still carrying the halves to `target`. */
+  function springMoving(s, target) {
+    return Math.abs(s.v) > 0.03 || Math.abs(target - s.x) > 0.003;
+  }
+
   /** 0 below a, 1 above b, smooth between. */
   function smooth(a, b, x) {
     const t = clamp((x - a) / (b - a));
@@ -148,5 +189,5 @@
     return (i) => amount * (2 * frac(Math.sin(i * 12.9898 + frame * 78.233) * 43758.5453) - 1);
   }
 
-  return { easeInOut, smooth, pods, podAt, fades, createThread, tremor, THREAD };
+  return { easeInOut, spring, springMoving, smooth, pods, podAt, fades, createThread, tremor, THREAD, SPRING };
 });

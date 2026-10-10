@@ -50,13 +50,24 @@ const threadOpts = () => ({
   hz: K.num("desktop.pill.threadHz", 5.5),
   sag: K.num("desktop.pill.threadSag", 3),
 });
+// THE PULL, as a damped spring (pillSplit.js spring). Coming apart eases out
+// taut (out*); going home is a stiffer, lighter-damped yank that overshoots
+// the join — the click-shut swallows the overshoot, so the thread looks like
+// it snapped the halves back together. Server-tunable, read per frame.
+const splitOpts = () => ({
+  outStiff: K.num("desktop.pill.splitOutStiff", 120),
+  outDamp: K.num("desktop.pill.splitOutDamp", 24),
+  inStiff: K.num("desktop.pill.splitInStiff", 240),
+  inDamp: K.num("desktop.pill.splitInDamp", 16),
+});
 // THE CAPSULE. The pill is a pill: two halves, ink and cream, that are the ✕
 // and the ✓. At rest it is shut; hover opens it a little for the way in;
 // listening, it opens all the way and the halves go to the edges with the
 // thread between them; stopped, they click shut again where they were.
 // The owner, of the three dots it was: "change this … to something cool".
 const CAPSULE = () => SPLIT() && K.bool("desktop.pill.capsule", true);
-let splitT = 0;                 // 0 joined … 1 apart, at a constant pace, eased where drawn
+let splitT = 0;                 // 0 joined … 1 apart (= splitState.x, a spring now)
+const splitState = { x: 0, v: 0 }; // the separation's spring: position and velocity
 const thread = SP.createThread();
 let pluckedAt = -1e9;
 let snapAt = -1e9;              // the halves met: the capsule clicks shut
@@ -200,11 +211,15 @@ function frame() {
   // together otherwise, at one pace both ways, so a stop in the middle of
   // coming apart simply turns them round.
   const wantSplit = SPLIT() && S.name === "listening" && t * 1000 >= K.num("desktop.pill.splitDelayMs", 0);
-  const splitWas = splitT;
-  splitT = clamp(splitT + (wantSplit ? dt : -dt) / Math.max(0.08, K.num("desktop.pill.splitMs", 700) / 1000));
-  if (splitWas > 0 && splitT === 0) snapAt = now;
-  const se = SP.easeInOut(splitT), fade = SP.fades(se);
-  if (splitT > 0 || thread.energy() > 0.05) {
+  const splitTarget = wantSplit ? 1 : 0;
+  const seWas = clamp(splitT);
+  SP.spring(splitState, splitTarget, splitOpts(), dt);
+  splitT = splitState.x;                       // may ride a touch past 0/1; clamped where drawn
+  const se = clamp(splitT), fade = SP.fades(se);
+  // The halves met on the way home: the capsule clicks shut, and the spring's
+  // overshoot is spent in that click.
+  if (seWas > 0.02 && se <= 0.004) snapAt = now;
+  if (se > 0.001 || thread.energy() > 0.05) {
     thread.step(dt, bands, S.name === "listening" && now - bandsAt < 250, threadOpts());
     // A pause wrote a chunk: the thread is plucked.
     if (flashAt > pluckedAt) { pluckedAt = flashAt; if (S.name === "listening") thread.pluck(0.7, threadOpts()); }
@@ -219,7 +234,7 @@ function frame() {
   P.show = ease(P.show ?? 1, g.show, k, dt);
   let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text + P.cap - before) > 0.01;
   if (now - snapAt < 400) moving = true;
-  if (splitT !== splitWas || thread.energy() > 0.05) moving = true;
+  if (SP.springMoving(splitState, splitTarget) || thread.energy() > 0.05) moving = true;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
@@ -480,7 +495,7 @@ function drawCapsule(se, cy, err, t, now) {
 
 // ---- pointer: the window lets clicks through everywhere but the pill ------------
 function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2, y: bottom - P.h, w: P.w, h: P.h }; }
-function podsNow() { return SP.pods(podSeed(), W, SP.easeInOut(splitT), INSET()); }
+function podsNow() { return SP.pods(podSeed(), W, clamp(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
   // Apart, only the two halves take the pointer: the thread and the screen
