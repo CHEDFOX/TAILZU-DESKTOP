@@ -121,6 +121,22 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.10 — the desk scrolls, the masthead is just the mark, Today & Insights stay fresh
+
+Three fixes to the desk window:
+
+- **Scrolling works again on every page.** In the desk's column layout the
+  content column had no `min-height:0`, so a flex item grew to its content's
+  full height and the scroll view never got a bounded box — every page was
+  clipped at the window's foot with no way down. One line fixes it.
+- **The masthead is the mark alone** — the "Tailzu" wordmark beside it is
+  gone, on the owner's ask. (The legacy rail, old builds only, keeps its name.)
+- **Today and Insights refresh like the phone.** A dictation happens in
+  another app, so the window's numbers were stale until you switched tabs.
+  Now the data tabs re-fetch when you return to the window or switch to them,
+  and again a moment after a dictation lands — not only Today (Insights too),
+  never over a live capture, throttled by `desktop.desk.refreshMs`.
+
 ### 0.3.9 — it can read the screen even when the app hides its text
 
 0.3.8 read the window through the accessibility layer, which most apps
