@@ -229,7 +229,12 @@
   /* ── content ───────────────────────────────────────────────────────────── */
   /* Positioned so the neural field, which is a layer rather than a node in
      the flow, has something to measure against. */
-  #main { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
+  /* min-height:0 is what lets #view scroll: in the desk's column layout #main
+     is a flex item, and without it a flex item's min-height is its content, so
+     #main grew to the page's full height and #view never got a bounded box to
+     scroll in — every desk page was clipped at the window's foot with no way
+     down. (min-width:0 does the same on the rail's row axis.) */
+  #main { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; position:relative; }
   #crumb {
     height:46px; flex:none; display:flex; align-items:center; gap:10px;
     padding:0 22px; border-bottom:1px solid var(--border); color:var(--label); font-size:13px;
@@ -420,9 +425,10 @@
     <!-- THE DESK'S MASTHEAD. Shown instead of the rail when the server sends
          desk pages (desktop.desk); the tabs are the server's navigation. -->
     <header id="mast">
+      <!-- The mark alone in the masthead; the "Tailzu" wordmark was removed on
+           the owner's ask. (The rail, legacy builds only, keeps its brand.) -->
       <div class="brand2">
         <svg viewBox="170 228 680 512" aria-hidden="true"><line x1="346" y1="402" x2="270" y2="598" stroke="#C9B08C" stroke-width="22" stroke-linecap="round"/><line x1="668" y1="478" x2="828" y2="243" stroke="#C77A3A" stroke-width="22" stroke-linecap="round"/><line x1="444" y1="394" x2="554" y2="486" stroke="#E8A23C" stroke-width="36" stroke-dasharray="11 13"/><rect x="308" y="269" width="132" height="132" rx="28" fill="currentColor"/><rect x="558" y="478" width="132" height="132" rx="28" fill="currentColor"/><rect x="178" y="598" width="132" height="132" rx="28" fill="currentColor"/></svg>
-        <b id="mastBrand">Tailzu</b>
       </div>
       <nav id="mtabs" aria-label="Pages"></nav>
       <div class="mright">
