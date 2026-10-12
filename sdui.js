@@ -2216,6 +2216,9 @@ async function paint(force) {
   // that was a dark slab across the window until the screen arrived. Now the
   // page that is up stays up, quietened and out of reach, and a thin amber
   // line runs along the top until the next one lands (#main[data-wait]).
+  // Its delay is desktop.screen.waitMs. The old knob, slowMs, still timed the
+  // black sheet on builds before this one, so the server holds that one high
+  // (a minute) and those builds simply keep the old page up instead.
   const seq = paint._seq = (paint._seq || 0) + 1;
   const fresh = force || !paint._last || paint._last !== cur.screenId;
   let slow = 0;
@@ -2229,7 +2232,7 @@ async function paint(force) {
       dropField();
       main.dataset.wait = "1";
       view.setAttribute("aria-busy", "true");
-    }, K.num("desktop.screen.slowMs", 700));
+    }, K.num("desktop.screen.waitMs", 700));
   }
   paint._last = cur.screenId;
   let screen;
