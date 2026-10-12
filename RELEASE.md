@@ -129,7 +129,11 @@ is black — a dark slab across the desk's paper until the next page landed. Now
 the page that is up **stays up**, under a veil of its own paper colour and out
 of reach, and a thin amber line runs along the top of the window until the
 next one lands (`#main[data-wait]` in app.html, set by `paint()` in sdui.js).
-The first paint after sign-in is unchanged. The server now also reads a page's
+The line's delay is a new knob, `desktop.screen.waitMs` (700 ms). The old
+`desktop.screen.slowMs` only timed the black sheet, so the server now holds it
+at a minute: builds before 0.3.12 stop showing the sheet without an update and
+just keep the old page up until the new one lands. The first paint after
+sign-in is unchanged. The server now also reads a page's
 data in parallel, so the wait is shorter on every build — the new charts on
 Today, Insights and Notes need no build at all.
 
