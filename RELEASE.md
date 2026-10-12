@@ -121,7 +121,20 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
-### 0.3.12 — no black sheet between pages
+### 0.3.12 — no black sheet between pages, and Train speaks
+
+**Train speaks, in the voice you picked.** The spoken session read its replies
+with the window's built-in synthesiser — the OS's voices — and handed it the
+dictation setting as a locale ("hinglish", which no synthesiser has), so on many
+machines it said nothing at all. Replies are now read by the server
+(`/v1/speak`, the read-aloud voice chosen in Settings, in whatever language the
+reply is in) and played through Web Audio; the built-in voice is the fallback,
+with a real locale (`speakLanguage`, e.g. en-IN). The desk's session opens by
+saying its greeting again (the server sends it to the desk only), with the
+microphone opening underneath, and the field now moves with the voice's own
+level, not only when words come back. Knobs: `desktop.voice.serverTts`,
+`desktop.voice.serverTtsWaitMs`, `desktop.voice.inputLevel`.
+
 
 When a page took more than `desktop.screen.slowMs` (700 ms) to arrive, the
 window swapped the page that was up for "Loading…" on the legacy ground, which

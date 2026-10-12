@@ -1276,13 +1276,17 @@ function startSession(n) {
     silenceMs: Math.max(K.num("desktop.voice.minSilenceMs", 600), Number(p.silenceMs) || K.num("desktop.voice.silenceMs", 1500)),
     maxTurns: Math.max(K.num("desktop.voice.minTurns", 2), Number(p.maxTurns) || K.num("desktop.voice.maxTurns", 40)),
     language: p.language ? String(p.language) : "auto",
+    // The locale the built-in voice should use when the server's cannot be
+    // had: the catalog's speakLanguage ("en-IN" for Hinglish), never the raw
+    // dictation setting, which is not a locale ("hinglish").
+    speakLanguage: p.speakLanguage ? String(p.speakLanguage) : "",
     statePath: String(p.statePath || "sessionState"),
     levelPath: String(p.levelPath || "level"),
     linePath: String(p.linePath || "line"),
     turnsPath: String(p.turnsPath || "turns"),
     greeting: String(p.greeting || "").trim(),
     node: n, turns: [], committed: "", partial: "",
-    ws: null, stream: null, ctx: null, proc: null, src: null,
+    ws: null, stream: null, ctx: null, proc: null, src: null, tts: null,
     decay: null, silence: null, level: 0,
   };
   SESSION_RUN = r;
@@ -1377,9 +1381,18 @@ function startSession(n) {
       r.src.connect(r.proc);
       r.proc.connect(r.ctx.destination);
       const inRate = r.ctx.sampleRate;
+      // The level follows the voice itself as well as the words: the words
+      // arrive a beat late, and a field that sits still while someone talks
+      // reads as a microphone that is not on.
+      const VL = K.obj("desktop.voice.inputLevel", { gate: 0.012, gain: 6 });
       r.proc.onaudioprocess = (e) => {
         if (!r.alive || !r.ws || r.ws.readyState !== 1) return;
-        r.ws.send(pcm16k(e.inputBuffer.getChannelData(0), inRate));
+        const f32 = e.inputBuffer.getChannelData(0);
+        let sum = 0;
+        for (let i = 0; i < f32.length; i += 4) sum += f32[i] * f32[i];
+        const rms = Math.sqrt(sum / Math.ceil(f32.length / 4));
+        if (rms > VL.gate) setLevel(Math.max(r.level, Math.min(1, LV.floor + rms * VL.gain)));
+        r.ws.send(pcm16k(f32, inRate));
       };
       armSilence();
     } catch (err) {
@@ -1409,32 +1422,82 @@ function startSession(n) {
     }
   }
 
-  /** Out loud, then back to listening. A browser with no voices installed
-   *  resolves immediately rather than hanging the loop on an utterance that
-   *  will never fire `onend`. */
+  /**
+   * OUT LOUD, IN THE VOICE THEY PICKED, then back to listening.
+   *
+   * This used to be the window's own synthesiser only, and that is the OS's
+   * voices: a Windows install with no Indian English voice said a Hinglish
+   * reply in nothing at all, and it was handed "hinglish" as a locale, which
+   * no synthesiser has. The reply is now read by the server (/v1/speak, the
+   * read-aloud voice chosen in Settings, which speaks whatever language the
+   * text is in) and played through Web Audio — the page's media-src admits no
+   * blob: URLs, and Web Audio needs none. Only if that fails does the built-in
+   * voice say it, with a real locale.
+   */
   function speak(text, then, voice) {
     // Once, whichever of the end, an error or the ceiling comes first. The
     // ceiling used to fire on its own schedule too: a long first reply's
     // timer ended the NEXT reply mid-sentence and opened a second microphone
     // over the first.
-    let timer = null, over = false;
-    const done = () => { if (over) return; over = true; clearTimeout(timer); then(); };
-    try {
-      const synth = window.speechSynthesis;
-      if (!synth) { done(); return; }
-      synth.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      if (voice) u.lang = voice;
-      else if (r.language && r.language !== "auto") u.lang = r.language;
-      u.onend = done;
-      u.onerror = done;
-      synth.speak(u);
-      // Some engines drop an utterance silently. A ceiling proportional to the
-      // reply keeps a dead synthesiser from ending the conversation.
-      timer = setTimeout(done,
-        Math.min(K.num("desktop.voice.ttsMaxMs", 30000),
-          K.num("desktop.voice.ttsBaseMs", 2000) + text.length * K.num("desktop.voice.ttsPerCharMs", 90)));
-    } catch { done(); }
+    let timer = null, over = false, fellBack = false;
+    const done = () => { if (over) return; over = true; clearTimeout(timer); stopTts(r); then(); };
+    const ceiling = (ms) => {
+      clearTimeout(timer);
+      timer = setTimeout(done, Math.min(K.num("desktop.voice.ttsMaxMs", 30000), ms));
+    };
+    const builtIn = () => {
+      if (over || fellBack || !r.alive) return;
+      fellBack = true;
+      try {
+        const synth = window.speechSynthesis;
+        if (!synth) { done(); return; }
+        synth.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        const lang = voice || r.speakLanguage || (/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(r.language) && r.language !== "auto" ? r.language : "");
+        if (lang) u.lang = lang;
+        u.onend = done;
+        u.onerror = done;
+        synth.speak(u);
+        // Some engines drop an utterance silently. A ceiling proportional to
+        // the reply keeps a dead synthesiser from ending the conversation.
+        ceiling(K.num("desktop.voice.ttsBaseMs", 2000) + text.length * K.num("desktop.voice.ttsPerCharMs", 90));
+      } catch { done(); }
+    };
+    if (!K.bool("desktop.voice.serverTts", true)) { builtIn(); return; }
+    // The fetch and the decode get a ceiling of their own; past it, the
+    // built-in voice says it rather than the room going quiet.
+    timer = setTimeout(() => { if (!r.tts || !r.tts.src) { stopTts(r); builtIn(); } }, K.num("desktop.voice.serverTtsWaitMs", 8000));
+    void (async () => {
+      try {
+        const tok = await bearer();
+        const res = await fetch(ENV.baseUrl + "/v1/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(tok ? { Authorization: "Bearer " + tok } : {}) },
+          body: JSON.stringify({ text, format: "mp3" }),
+        });
+        if (!res.ok) throw new Error("speak " + res.status);
+        const bytes = await res.arrayBuffer();
+        if (over || fellBack || !r.alive) return;
+        const ac = new AudioContext();
+        r.tts = { ctx: ac, src: null };
+        const buf = await ac.decodeAudioData(bytes);
+        if (over || fellBack || !r.alive || !r.tts || r.tts.ctx !== ac) { try { ac.close(); } catch {} return; }
+        const src = ac.createBufferSource();
+        src.buffer = buf;
+        src.connect(ac.destination);
+        src.onended = done;
+        r.tts.src = src;
+        src.start();
+        // The audio says how long it is; a second over that, it is over.
+        ceiling(buf.duration * 1000 + 1000);
+      } catch (err) {
+        if (over || fellBack) return;
+        console.warn("[voice] server voice unavailable, using the built-in one: " + ((err && err.message) || err));
+        stopTts(r);
+        clearTimeout(timer);
+        builtIn();
+      }
+    })();
   }
 
   /**
@@ -1471,6 +1534,15 @@ function startSession(n) {
   }
 }
 
+/** Stop the server voice mid-sentence, if it is speaking. */
+function stopTts(r) {
+  const t = r && r.tts;
+  if (!t) return;
+  r.tts = null;
+  try { t.src && (t.src.onended = null, t.src.stop()); } catch {}
+  try { t.ctx && t.ctx.close(); } catch {}
+}
+
 /** Close the microphone and its socket, leaving the loop able to open another. */
 function closeMic(r) {
   clearInterval(r.decay); r.decay = null;
@@ -1490,6 +1562,7 @@ function stopSession() {
   if (!SESSION_RUN) return;
   SESSION_RUN.alive = false;
   closeMic(SESSION_RUN);
+  stopTts(SESSION_RUN);
   try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch {}
   SESSION_RUN = null;
 }
