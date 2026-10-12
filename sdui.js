@@ -2209,20 +2209,26 @@ async function paint(force) {
   // so every screen change was three frames the eye could count: the old
   // screen gone, grey text on black, the new screen. On slide-to-begin that
   // was the blink between the pill and the session. Now the old screen holds
-  // while the next is fetched and is replaced in ONE frame when it lands. The
-  // word "Loading…" appears only if the fetch is genuinely slow — and it is
-  // opaque, so nothing under the view can show through it.
+  // while the next is fetched and is replaced in ONE frame when it lands.
+  //
+  // A GENUINELY SLOW FETCH IS NOT A BLACK SHEET. It used to swap the page
+  // for "Loading…" on the legacy ground, which is black — on the desk's paper
+  // that was a dark slab across the window until the screen arrived. Now the
+  // page that is up stays up, quietened and out of reach, and a thin amber
+  // line runs along the top until the next one lands (#main[data-wait]).
   const seq = paint._seq = (paint._seq || 0) + 1;
   const fresh = force || !paint._last || paint._last !== cur.screenId;
   let slow = 0;
-  const loading = esc(K.txt("desktop.screen.loading", "Loading…"));
+  const main = $("main");
+  const settled = () => { delete main.dataset.wait; view.removeAttribute("aria-busy"); };
   if (!paint._last) {
-    view.innerHTML = '<div class="pad" style="color:var(--label)">' + loading + "</div>";
+    view.innerHTML = '<div class="pad" style="color:var(--label)">' + esc(K.txt("desktop.screen.loading", "Loading…")) + "</div>";
   } else if (fresh) {
     slow = setTimeout(() => {
       if (seq !== paint._seq) return;
       dropField();
-      view.innerHTML = '<div class="pad" style="color:var(--label);background:var(--bg);min-height:100%">' + loading + "</div>";
+      main.dataset.wait = "1";
+      view.setAttribute("aria-busy", "true");
     }, K.num("desktop.screen.slowMs", 700));
   }
   paint._last = cur.screenId;
@@ -2232,6 +2238,7 @@ async function paint(force) {
   } catch (err) {
     clearTimeout(slow);
     if (seq !== paint._seq) return;
+    settled();
     // Out of words is not a broken screen: it is the one the server names
     // for it, in place of the one that was refused.
     const quotaScreen = K.str("quota.screenId", "paywall");
@@ -2252,6 +2259,7 @@ async function paint(force) {
   // A newer navigation started while this one was in flight. Its screen is
   // the one that should land; this one would paint over it a moment later.
   if (seq !== paint._seq) return;
+  settled();
   STATE = Object.assign({}, screen.state || {});
   STATE.desktop = Object.assign({}, LOCAL);
   // Picks belong to the thread that was on screen. A new screen has none.

@@ -242,6 +242,24 @@
   #back { background:none; border:0; color:var(--muted); cursor:pointer; padding:4px 8px; border-radius:7px; }
   #back:hover { background:var(--card); color:var(--text); }
   #view { flex:1; overflow-y:auto; overflow-x:hidden; position:relative; z-index:1; }
+  /* A SCREEN THAT IS SLOW TO ARRIVE (sdui.js paint): the page that is up
+     stays up, quietened and out of reach, and a thin amber line runs along
+     the top until the next one lands. No sheet in its place. A veil of the
+     page's own paper rather than opacity on the page: the screen's entrance
+     animation (.tz-swap) holds its opacity and would win over a rule here. */
+  #main[data-wait="1"]::before {
+    content:""; position:absolute; inset:0; z-index:2;
+    background:color-mix(in srgb, var(--d-sheet) 48%, transparent); animation:wait-veil .3s ease both;
+  }
+  #main[data-wait="1"]:has(> #view[data-look="legacy"])::before { background:color-mix(in srgb, var(--bg) 48%, transparent); }
+  @keyframes wait-veil { from { opacity:0; } to { opacity:1; } }
+  #main[data-wait="1"]::after {
+    content:""; position:absolute; left:0; right:0; top:0; height:2px; z-index:3; pointer-events:none;
+    background:linear-gradient(90deg, rgba(232,162,60,0), #E8A23C 50%, rgba(232,162,60,0)) no-repeat;
+    background-size:36% 100%; animation:wait-line 1.15s cubic-bezier(.45,0,.25,1) infinite;
+  }
+  @keyframes wait-line { from { background-position:-60% 0; } to { background-position:160% 0; } }
+  @media (prefers-reduced-motion: reduce) { #main[data-wait="1"]::after { animation:none; background:#E8A23C; opacity:.55; } }
   /* A screen that said hideChrome owns the window: no rail, no crumb, no
      scroll, and a flex column so a root asking for flex:1 can actually fill
      something. [hidden] alone cannot hide the rail — its own display:flex
