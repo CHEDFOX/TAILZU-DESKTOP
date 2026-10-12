@@ -121,6 +121,18 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.12 — no black sheet between pages
+
+When a page took more than `desktop.screen.slowMs` (700 ms) to arrive, the
+window swapped the page that was up for "Loading…" on the legacy ground, which
+is black — a dark slab across the desk's paper until the next page landed. Now
+the page that is up **stays up**, under a veil of its own paper colour and out
+of reach, and a thin amber line runs along the top of the window until the
+next one lands (`#main[data-wait]` in app.html, set by `paint()` in sdui.js).
+The first paint after sign-in is unchanged. The server now also reads a page's
+data in parallel, so the wait is shorter on every build — the new charts on
+Today, Insights and Notes need no build at all.
+
 ### 0.3.11 — the pill is pulled apart and pulled home on a thread
 
 The split pill's separation is no longer paced on a clock — it is a **damped
