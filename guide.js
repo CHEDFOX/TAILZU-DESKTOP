@@ -153,7 +153,8 @@
     ol.textContent = "";
     (items || []).slice(0, 6).forEach((it, i) => {
       const li = document.createElement("li");
-      const st = typeof it === "string" ? "todo" : it.state || "todo";
+      // agent.js says "active" for the step under way.
+      const raw = typeof it === "string" ? "todo" : it.state || "todo", st = raw === "active" ? "doing" : raw;
       li.dataset.s = st;
       const n = document.createElement("i"); const b = document.createElement("b"); b.textContent = String(i + 1); n.appendChild(b);
       const t = document.createElement("span"); t.textContent = typeof it === "string" ? it : it.text;
@@ -395,7 +396,9 @@
   const handlers = {
     show,
     hide,
-    state: (m) => { if (m.risk) S.risk = m.risk; setState(m.state, m.label); fit(); },
+    // The label, when there is one, is what it is doing ("Pressing Export"),
+    // in the eyebrow.
+    state: (m) => { if (m.risk) S.risk = m.risk; setState(m.state, m.label ? String(m.label).slice(0, 34) : ""); fit(); },
     level: (m) => { S.levelTo = Math.max(0, Math.min(1, Number(m.v) || 0)); },
     heard: (m) => { $("heard").textContent = m.text ? "“" + m.text + "”" : ""; fit(); },
     // The words at once; the voice when it is ready (`voice`): the server's
