@@ -28,6 +28,19 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
   pause writes only speech and silence is never uploaded (node --test).
 - **pasteJoin.js** — the space (or none) between two pasted stretches.
 - **app.html** + **sdui.js** — the app window, drawn from the server's screens.
+- **Ask** — tap Alt twice and ask about the app in front:
+  - **ask.js** wires it in the main process: the question's microphone, the
+    guide's window, the agent's hands.
+  - **agent.js** is the run loop. It reads the screen through the driver, asks
+    `POST /v1/agent`, points, says, and acts. It asks first before anything
+    that sends, deletes or pays (node --test).
+  - **driver.js** picks **axDriver.js** + `native/tzax.swift` on a Mac (the
+    accessibility tree) or **uiaDriver.js** on Windows (UI Automation). Each
+    is a warm helper speaking JSON lines.
+  - **guide.html** + **guide.js** + **blip.js** draw the card, the ring on
+    the target, and Blip, the one-eyed dotted presenter, peeking over the
+    card and pointing.
+  - `guide.html?demo` is a review page.
 
 Every page carries a Content-Security-Policy that runs only this folder's own
 script files, which is why no page has an inline script (neuralField.html's
@@ -83,6 +96,24 @@ window rather than recording into a history no account owns.
   talk; the final polished text pastes when you stop. Captions are display-only —
   partial text is never typed into your target app.
 - **Tone**: pick in the tray menu; applied to every dictation.
+- **Select and say**: select text, start dictating, say what to do with it
+  ("bullet points", "shorter", "in Hindi"). The selection is rewritten in place.
+- **Ask** (tap **Alt twice**, or the tray): say something about the app in
+  front.
+  - **Show**: "where's export?", "how do I turn on captions?". The guide rings
+    the thing and Blip points at it.
+  - **Explain**: "what does this error mean?". The guide answers on its card
+    and out loud.
+  - **Small jobs**: "open #design and tell them the mockups are ready". It does
+    them step by step and stops before anything risky with **Do it / Not
+    now** (or tap Alt twice). Esc or the card's ✕ stops it.
+  - **Text only**: only a text list of the screen's buttons and fields leaves
+    the machine (roles, labels, short values, a rough position). No pixels,
+    frames or window titles, and nothing from a private window or a sensitive
+    app.
+  - **Knobs**: `desktop.agent.*` and `desktop.guide.*`; off with
+    `desktop.agent.enabled`. While Ask is on, Alt twice asks instead of
+    dictating. Ctrl twice dictates.
 
 ## What comes from the backend
 
@@ -143,6 +174,7 @@ SmartScreen, and run.
   → Microphone**, macOS its own prompt. A blocked mic names the panel to open.
 - **macOS auto-paste** — enable Tailzu under **System Settings → Privacy &
   Security → Accessibility** (without it, text is still on the clipboard).
+  **Ask** needs the same permission to read and press the app's buttons.
 - **macOS hold-to-talk** — the key hook also needs **Input Monitoring**.
 - **Linux (X11)** — auto-paste needs `xdotool`.
 

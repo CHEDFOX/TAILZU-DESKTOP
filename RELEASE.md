@@ -121,6 +121,45 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.4.0 — Ask: it points at things, explains them, and does small jobs
+
+Tap **Alt twice** (or the tray's *Ask about this screen*) and say something
+about the app in front. A small guide comes up over it:
+
+- **"Where's export?" "How do I turn on captions?"** The thing gets an amber
+  ring with marching dots and a label. Blip, the films' one-eyed dotted
+  presenter, peeks over the card's edge and points at it, a dotted thread
+  from its finger to the ring. The answer is written on the card word by
+  word and said out loud (the read-aloud voice from Settings, else the
+  built-in one).
+- **"What does this error mean?"** An answer, on the card and out loud.
+- **"Open #design and tell them the mockups are ready."** It does it step by
+  step, with the plan as a checklist. It stops before anything that sends,
+  deletes or pays, quoting exactly what will happen, with **Do it / Not
+  now** (or tap Alt twice). Esc or the card's ✕ stops it.
+
+How it stays cheap and private: the screen is read as text by a warm native
+helper (`native/tzax.swift` on a Mac, the accessibility tree; `native/
+uia-agent.ps1` on Windows, UI Automation), and only roles, labels, short
+values and a rough position leave the machine — never frames, pixels or
+window titles, never a password field's value or an address bar's, nothing
+from a private window or a sensitive app. A server step (`POST /v1/agent`)
+answers free when a rule can (open an app, scroll, undo, "where's X" against
+the labels) and otherwise with one call to a small, fast model with no
+reasoning. The device decides what needs asking first and can only make the
+server's rating stricter: Enter in a composer, a key outside a text field,
+any click in a browser (pages write their own labels), a code or an e-mail
+copied from the screen. It never watches your input to stop itself (the key
+hook cannot tell its keys from yours) and never puts an old clipboard back.
+
+The explanation box is redesigned with it (`guide.html`): ink and pale with
+the films' dots under it, a mono eyebrow with the state, what you said in
+the serif, the answer in the sans. The live-caption strip (`overlay.html`)
+is restyled to match. While Ask is on, **Alt twice asks** and **Ctrl twice
+dictates**; `desktop.agent.enabled` turns Ask off (Alt dictates again).
+`guide.html?demo` shows every state. Needs the Accessibility permission the
+auto-paste already asks for. Linux has no driver yet, so no Ask.
+
 ### 0.3.13 — said with text selected, it rewrites the selection
 
 Select a paragraph, say "make this bullet points" (or "shorter", "more

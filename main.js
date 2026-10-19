@@ -28,6 +28,8 @@ const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
 const frontApp = require("./frontApp.js");
 const screenRead = require("./screenRead.js");
+const driver = require("./driver.js");
+const { createAsk } = require("./ask.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -1353,6 +1355,8 @@ ipcMain.handle("recorder:token", async (e, renew) => {
 });
 // The voice's level, band by band, from the recorder to the pill.
 ipcMain.on("dictation-level", (e, p) => {
+  // A question's voice moves the guide's dots, not the pill.
+  if (isFrom(e, recorderWin) && ask && ask.level(p)) return;
   if (!isFrom(e, recorderWin) || !p || p.session !== activeSession || !recording) return;
   if (pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
 });
@@ -1649,6 +1653,11 @@ function buildMenu() {
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
+    ...(askOn() ? [{
+      label: txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() }),
+      enabled: signedIn(),
+      click: () => { void ask.tap(); },
+    }] : []),
     {
       label: !notes ? txt("desktop.tray.notesStart", "Take notes") + "  " + prettyKey(cfg.notesHotkey)
         : notes.state === "recording" ? fmt("tray.notesStop", { time: elapsedLabel(notesElapsed()) })
@@ -1997,6 +2006,8 @@ function toggleDictation() {
   if (!recording && !requireAccount()) return;
   if (!recording && !requireWords()) return;
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
+  // One microphone: a dictation starting ends a question still open.
+  if (!recording && ask && ask.active()) ask.cancel("dictation");
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
@@ -2138,7 +2149,10 @@ function setupKeyHook() {
     // Each name becomes its own watcher with its own pair-timer, so a pair is
     // always the same key twice. One shared timer would fire on Ctrl-then-Alt,
     // which is not a gesture anyone is making on purpose.
-    const groups = cfg.tapKeys
+    // Ask's key joins them (Alt by default): its pair asks about the screen
+    // instead of dictating, while Ask is on. Off, it is a dictation key again.
+    const names = [...new Set([...cfg.tapKeys, ...(askOn() ? [askKey()] : [])])];
+    const groups = names
       .map((name) => ({ name, codes: tapCodes(name, UiohookKey) }))
       .filter((g) => {
         if (g.codes.length) return true;
@@ -2161,13 +2175,26 @@ function setupKeyHook() {
       // so retuning one does not wait for a restart.
       const taps = createTapDetector({
         names: groups.map((g) => g.name),
-        onPair: () => { if (cfg.tap) toggleDictation(); },
+        onPair: (name) => {
+          if (askOn() && name === askKey()) {
+            // Mid-dictation it still ends the dictation, as it always has.
+            if (recording) { if (cfg.tap) toggleDictation(); return; }
+            void ask.tap();
+            return;
+          }
+          if (cfg.tap) toggleDictation();
+        },
         maxHoldMs: () => num("desktop.tap.maxHoldMs", 350),
         gapMs: () => num("desktop.tap.gapMs", 400),
         minGapMs: () => num("desktop.tap.minGapMs", 70),
         otherKeyTtlMs: () => num("desktop.tap.otherKeyTtlMs", 8000),
       });
-      uIOhook.on("keydown", (e) => taps.keyDown(nameFor(e.keycode), e.keycode));
+      uIOhook.on("keydown", (e) => {
+        // Esc stops a question, or what Ask is doing. (The key reaches the
+        // app too; nothing here can hold it back.)
+        if (e.keycode === UiohookKey.Escape && ask) ask.escape();
+        taps.keyDown(nameFor(e.keycode), e.keycode);
+      });
       uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode), e.keycode));
       // Ctrl+click and Ctrl+wheel are the commonest uses of the key that press
       // no other key at all. To the detector the mouse is another key.
@@ -2236,6 +2263,68 @@ function notifyAccessibility() {
       "Text was copied. To auto-paste, enable Tailzu under System Settings → Privacy & Security → Accessibility."),
   }).show();
 }
+
+// ---- Ask: point at it, explain it, do small things (ask.js) --------------------
+// Tap Alt twice and ask about the app in front. The guide (guide.html) shows
+// what it found; the agent (agent.js) reads the screen as text through the
+// driver (driver.js) and does what was asked, asking first before anything
+// that sends, deletes or pays. Off where there is no driver (Linux) or when
+// the server says so.
+let ask = null;
+function askKey() { return str("desktop.agent.tapKey", "Alt"); }
+function askOn() { return !!ask && bool("desktop.agent.enabled", true) && driver.available(); }
+
+/** A request to the server with the account's token, renewed once on a 401,
+ *  answered as the Response itself (the guide's voice is audio, not JSON). */
+async function authorizedFetch(p, init) {
+  if (tokenStale()) await refreshSession();
+  const send = () => {
+    const headers = Object.assign({}, (init && init.headers) || {});
+    const tok = tokenNow();
+    if (tok) headers.Authorization = "Bearer " + tok;
+    return fetch(cfg.baseUrl + p, Object.assign({}, init || {}, { headers }));
+  };
+  let res = await send();
+  if (res.status === 401 && authSession && authSession.refresh_token) {
+    authSession.expires_at = 0;
+    await refreshSession();
+    if (signedIn()) res = await send();
+  }
+  return res;
+}
+
+function setupAsk() {
+  if (ask) return;
+  ask = createAsk({
+    BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt },
+    webPrefs, hardenWindow, raisePill, setBoundsExactly,
+    driver,
+    sendToRecorder,
+    createRecorderWindow,
+    recorderReady: () => !!recorderWin && !recorderWin.isDestroyed(),
+    // Questions take their ids from the same count as dictations, so the
+    // recorder never mistakes one for the other's late answer.
+    nextSession: () => ++sessionSeq,
+    recorderStart: (sid) => ({
+      baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language, session: sid,
+      strings: SHELL.notify, knobs: knobsPayload(),
+    }),
+    frontInfo: () => frontApp.frontInfo(),
+    requireAccount,
+    baseUrl: () => cfg.baseUrl,
+    token: async (renew) => {
+      if (renew && authSession) authSession.expires_at = 0;
+      if (renew || tokenStale()) await refreshSession();
+      return tokenNow();
+    },
+    authorizedFetch,
+    // The same one-at-a-time paste dictation uses; resolved once it is in.
+    paste: (text) => { paste(text); return pasting; },
+  });
+  if (askOn()) driver.start();
+}
+ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.audioIn(p); });
+ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.paused(p); });
 
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
@@ -2309,6 +2398,8 @@ ipcMain.on("dictation-idle", (e, payload) => {
 ipcMain.on("dictation-error", (e, payload) => {
   const p = fromRecorder(e, payload);
   if (!p) return;
+  // A question's failure is said on the guide's card, not as a toast.
+  if (ask && ask.error(p)) return;
   const { session, code } = p, message = String(p.message || ""), detail = String(p.detail || "");
   if (cancelled.has(session)) { cancelled.delete(session); return; }
   // `message` is words for the person, and it is all the notification says.
@@ -2470,6 +2561,7 @@ app.whenReady().then(() => {
   // The Windows helper that names the app in front starts now, so the first
   // press does not wait for PowerShell to load.
   frontApp.warmUp();
+  setupAsk();
   if (pillOn()) createPillWindow();
   // The pill follows the screens, and is raised again after sleep and on
   // unlock (see replaceFloating).
@@ -2590,4 +2682,5 @@ app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in th
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   try { uiohookRef?.stop(); } catch { /* already stopped */ }
+  try { driver.stop(); } catch { /* not running */ }
 });
