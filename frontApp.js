@@ -132,9 +132,15 @@ function kindOf(role, subrole, lbl) {
   return null;
 }
 
+// The most selected text that goes with a request. A selection is sent whole
+// or not at all: the answer is pasted over all of it, so a rewrite of only
+// its start would lose the rest.
+const SELECTION_MAX = 8000;
+
 /** The field as it leaves this computer: its kind, its label (one short
- *  line) and, only when the cursor itself was read, what is before it. */
-function fieldOf({ role, subrole, label: lbl, caret, before }, chars = 1000) {
+ *  line), only when the cursor itself was read, what is before it, and what
+ *  is selected in it. */
+function fieldOf({ role, subrole, label: lbl, caret, before, selection }, chars = 1000) {
   const kind = kindOf(role, subrole, lbl);
   if (!kind || kind === "password") return null;
   const out = { kind };
@@ -143,6 +149,9 @@ function fieldOf({ role, subrole, label: lbl, caret, before }, chars = 1000) {
   // A guess at the cursor would put a capital or a space where none
   // belongs; no cursor, no text.
   if (caret && typeof before === "string") out.before = before.slice(-chars);
+  // WHAT IS SELECTED: what they say is then about it ("make this bullet
+  // points"), and the server's rewrite of it is pasted over it.
+  if (typeof selection === "string" && selection.trim() && selection.length <= SELECTION_MAX) out.selection = selection;
   return out;
 }
 
@@ -158,7 +167,7 @@ function windowsField(o, chars) {
   if (!o || !o.ok) return null;
   return fieldOf({
     role: WIN_ROLES[o.type], subrole: o.password ? "password" : "",
-    label: o.name || o.help, caret: !!o.caret, before: o.before,
+    label: o.name || o.help, caret: !!o.caret, before: o.before, selection: o.selection,
   }, chars);
 }
 
@@ -166,20 +175,21 @@ const MAC_ROLES = { AXTextField: "field", AXTextArea: "area", AXComboBox: "combo
 const RS = "\u001e";
 /** System Events' answer (see macField), read. */
 function macFieldOf(out, chars) {
-  const [role, subrole, placeholder, description, title, caret, ...rest] = String(out || "").replace(/\r?\n$/, "").split(RS);
+  const [role, subrole, placeholder, description, title, caret, selection, ...rest] = String(out || "").replace(/\r?\n$/, "").split(RS);
   if (!role) return null;
   return fieldOf({
     role: MAC_ROLES[role], subrole,
     label: placeholder || description || title,
-    caret: caret === "yes", before: rest.join(RS),
+    caret: caret === "yes", selection, before: rest.join(RS),
   }, chars);
 }
 
 // ---- Windows ------------------------------------------------------------------
 // One PowerShell, two questions: "q" is the app in front, "f<chars>" the
 // field with the keyboard's focus (UI Automation: its control type, whether
-// it is a password, its name, and the text before the caret through the
-// TextPattern, no more than <chars> of it).
+// it is a password, its name, the text before the caret through the
+// TextPattern, no more than <chars> of it, and the selection in a field
+// that can be written in).
 const PS = `
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -TypeDefinition @'
@@ -304,6 +314,15 @@ function TzField([int]$chars) {
           [void]$r.MoveEndpointByUnit([System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start, [System.Windows.Automation.Text.TextUnit]::Character, -$chars)
           $o.before = $r.GetText($chars + 8)
           $o.caret = $true
+          # What is selected, whole or not at all (see SELECTION_MAX), and
+          # only where it can be written over: not a page's text in a browser.
+          $vp = $null
+          $ro = $false
+          if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $ro = [bool]$vp.Current.IsReadOnly }
+          if (-not $ro) {
+            $st = $sel[0].GetText(${SELECTION_MAX + 1})
+            if ($st -and $st.Length -le ${SELECTION_MAX}) { $o.selection = $st }
+          }
         }
       }
     }
@@ -439,6 +458,7 @@ end tell
 set r to attr(el, "AXRole")
 set sr to attr(el, "AXSubrole")
 set b to ""
+set sel to ""
 set caret to "no"
 if sr is not "AXSecureTextField" and r is in {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"} then
   set v to missing value
@@ -448,7 +468,18 @@ if sr is not "AXSecureTextField" and r is in {"AXTextField", "AXTextArea", "AXCo
       set v to value of attribute "AXValue" of el
       set rng to value of attribute "AXSelectedTextRange" of el
     end try
+    try
+      set sel to value of attribute "AXSelectedText" of el
+    end try
   end tell
+  -- What is selected, whole or not at all (see SELECTION_MAX).
+  try
+    if sel is missing value then error "no selection"
+    set sel to sel as text
+    if (count of sel) > ${SELECTION_MAX} then set sel to ""
+  on error
+    set sel to ""
+  end try
   -- Cut outside System Events, whose own words would read "text" as a UI element.
   try
     if v is missing value or rng is missing value then error "no cursor"
@@ -463,7 +494,7 @@ if sr is not "AXSecureTextField" and r is in {"AXTextField", "AXTextArea", "AXCo
     end if
   end try
 end if
-return r & RS & sr & RS & attr(el, "AXPlaceholderValue") & RS & attr(el, "AXDescription") & RS & attr(el, "AXTitle") & RS & caret & RS & b
+return r & RS & sr & RS & attr(el, "AXPlaceholderValue") & RS & attr(el, "AXDescription") & RS & attr(el, "AXTitle") & RS & caret & RS & sel & RS & b
 `;
 }
 function macField(chars) {
@@ -559,7 +590,7 @@ function frontInfo() {
 function frontApp() { return frontInfo().then((i) => (i ? i.label : null)); }
 
 /**
- * The field with the keyboard's focus: { kind, label?, before? }, or null
+ * The field with the keyboard's focus: { kind, label?, before?, selection? }, or null
  * (not a text field, a password field, no permission, Linux, or too slow).
  * Never waits more than `timeoutMs`.
  */

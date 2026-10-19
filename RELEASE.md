@@ -121,6 +121,26 @@ so reaching 0.2.2 is one last manual download.
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 
+### 0.3.13 — said with text selected, it rewrites the selection
+
+Select a paragraph, say "make this bullet points" (or "shorter", "more
+formal", "in Hindi"), and the paragraph is rewritten that way and put back
+in its place. It used to write the instruction itself over the selection:
+the selection never left this computer, so the server took what was said as
+a dictation. The field read at the press (frontApp.js) now reads what is
+selected too (AXSelectedText on a Mac; UI Automation's TextPattern selection
+on Windows, only in a field that can be written in), and it goes with the
+session's first request (`selection` on `/v1/transcribe-clean` and on the
+live path's `/v1/refine`). The server rewrites it to follow what was said
+and answers `replacedSelection`, joined to nothing, and the rewrite is
+pasted over the selection with the selection's own leading and trailing
+whitespace, so a paragraph selected with its line break keeps it. Words said
+over a selection that are not an instruction replace it, as typing would.
+A selection is sent whole or not at all (8,000 characters at most), never
+out of a password field, a private window or a sensitive app, and only
+once: a pause's later stretches are plain dictation after the rewrite. Same
+request, no extra round trip. `desktop.field.selection` turns it off.
+
 ### 0.3.12 — no black sheet between pages, and Train speaks
 
 **Train speaks, in the voice you picked.** The spoken session read its replies

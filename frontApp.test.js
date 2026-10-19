@@ -75,11 +75,40 @@ test("Windows: UI Automation's answer, read", () => {
 
 test("Mac: System Events' answer, read, with the text keeping its own lines", () => {
   const RS = "\u001e";
-  const out = ["AXTextArea", "", "Message #design", "", "", "yes", "Morning all,\nquick one"].join(RS) + "\n";
+  const out = ["AXTextArea", "", "Message #design", "", "", "yes", "", "Morning all,\nquick one"].join(RS) + "\n";
   assert.deepStrictEqual(macFieldOf(out, 1000), { kind: "message", label: "Message #design", before: "Morning all,\nquick one" });
-  assert.deepStrictEqual(macFieldOf(["AXTextField", "AXSearchField", "", "search", "", "no", ""].join(RS)), { kind: "search", label: "search" });
-  assert.strictEqual(macFieldOf(["AXTextField", "AXSecureTextField", "", "Password", "", "no", ""].join(RS)), null);
+  assert.deepStrictEqual(macFieldOf(["AXTextField", "AXSearchField", "", "search", "", "no", "", ""].join(RS)), { kind: "search", label: "search" });
+  assert.strictEqual(macFieldOf(["AXTextField", "AXSecureTextField", "", "Password", "", "no", "", ""].join(RS)), null);
   assert.strictEqual(macFieldOf(""), null);
+});
+
+// WHAT IS SELECTED: said with a selection, an instruction rewrites it, and the
+// rewrite is pasted over all of it — so it is read whole or not at all.
+test("the selection in the field goes with it, whole or not at all", () => {
+  const RS = "\u001e";
+  const sel = "We ship on Friday and we should tell the team.\n";
+  assert.deepStrictEqual(macFieldOf(["AXTextArea", "", "Notes", "", "", "yes", sel, "Plan:\n"].join(RS) + "\n", 1000),
+    { kind: "longtext", label: "Notes", before: "Plan:\n", selection: sel });
+  // No selection, or only whitespace: nothing to rewrite.
+  assert.strictEqual(macFieldOf(["AXTextArea", "", "Notes", "", "", "yes", " \n", "x"].join(RS)).selection, undefined);
+  // Too long to send whole: not sent, so nothing is half-rewritten.
+  assert.strictEqual(fieldOf({ role: "area", caret: true, before: "", selection: "x".repeat(8001) }).selection, undefined);
+  assert.strictEqual(fieldOf({ role: "area", caret: true, before: "", selection: "x".repeat(8000) }).selection.length, 8000);
+  // Never out of a password field.
+  assert.strictEqual(fieldOf({ role: "field", subrole: "AXSecureTextField", selection: "hunter2" }), null);
+  assert.deepStrictEqual(windowsField({ ok: true, type: "ControlType.Edit", name: "Reply", caret: true, before: "", selection: "thanks so much" }),
+    { kind: "text", label: "Reply", before: "", selection: "thanks so much" });
+});
+
+test("the field scripts read the selection where it can be written over", () => {
+  const { macFieldScript, PS } = require("./frontApp.js");
+  const mac = macFieldScript(1000);
+  assert.match(mac, /AXSelectedText"/);
+  assert.match(mac, /caret & RS & sel & RS & b/);
+  assert.match(mac, /> 8000 then set sel to ""/);
+  assert.match(PS, /ValuePattern\]::Pattern/);
+  assert.match(PS, /GetText\(8001\)/);
+  assert.match(PS, /\$st\.Length -le 8000/);
 });
 
 // THE SCREEN AROUND THE FIELD (surroundings): other people's words, read only

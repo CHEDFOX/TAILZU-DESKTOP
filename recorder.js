@@ -112,12 +112,36 @@ function withScreen(sid, put) {
 // Only when nothing has been written yet: a read that lands late must not
 // rewrite a context the session has already sent.
 const fields = new Map();
+// WHAT WAS SELECTED in that field when they started talking. What they say is
+// then about it ("make this bullet points", "shorter"): it goes with the
+// session's first request, the server rewrites it to follow what was said,
+// and the answer is pasted over it, joining nothing. Kept until a stretch
+// with words is written (a silent first stretch leaves it selected), and only
+// taken while nothing has been sent: a read that lands after the first
+// request would rewrite text the first paste already replaced.
+const selections = new Map();   // session → text
+const asked = new Set();        // sessions that have sent a request
 window.tailzu.onField && window.tailzu.onField((p) => {
   if (!p || !p.field || typeof p.field.kind !== "string") return;
   fields.set(p.session, { kind: p.field.kind, label: typeof p.field.label === "string" ? p.field.label : "" });
   if (typeof p.field.before === "string" && p.field.before && !wrote.has(p.session)) wrote.set(p.session, p.field.before);
+  if (typeof p.field.selection === "string" && p.field.selection.trim() && !asked.has(p.session)) selections.set(p.session, p.field.selection);
   for (const k of fields.keys()) if (k < (p.session || 0) - 20) fields.delete(k);
+  for (const k of selections.keys()) if (k < (p.session || 0) - 20) selections.delete(k);
+  for (const k of asked) if (k < (p.session || 0) - 20) asked.delete(k);
 });
+/** The session's selection, for the request about to go, or "". Never off a
+ *  private window (none is read there; this is the second lock). */
+function selectionFor(sid) {
+  asked.add(sid);
+  return privates.get(sid) ? "" : (selections.get(sid) || "");
+}
+/** The whitespace a selection starts and ends with. Its rewrite comes back
+ *  trimmed, and pasted over a paragraph selected with its line break, it
+ *  would join the next one; the main process puts these back around it. */
+function edgesOf(selection) {
+  return [selection.match(/^\s*/)[0].slice(0, 8), selection.match(/\s*$/)[0].slice(-8)];
+}
 /** The field's kind and label, put on a request the way `put` adds fields. */
 function withField(sid, put) {
   const f = fields.get(sid);
@@ -356,8 +380,8 @@ function flushSegment(sid) {
 }
 
 // `join`: the server's word on a space before `text` (see transcribe).
-function emitSegment(sid, text, join) { window.tailzu.segment({ session: sid, text: text, join: join }); }
-function emitResult(sid, text, join) { window.tailzu.result({ session: sid, text: text, join: join }); }
+function emitSegment(sid, text, join, edges) { window.tailzu.segment({ session: sid, text: text, join: join, edges: edges }); }
+function emitResult(sid, text, join, edges) { window.tailzu.result({ session: sid, text: text, join: join, edges: edges }); }
 /** A failure. `message` is the sentence the notification shows, and
  *  only ever words for a person; what actually went wrong travels in
  *  `extra.detail` to the main process's log, with the server's `code`
@@ -520,6 +544,9 @@ async function refineText(text, alternative, context, sid) {
   const body = { text, targetApp: targetFor(rid), language: cfg.language || "auto", tzOffsetMinutes: -new Date().getTimezoneOffset() };
   withField(rid, (k, v) => { body[k] = v; });
   withScreen(rid, (k, v) => { body[k] = v === "true" ? true : v; });
+  // Said with text selected: the server rewrites it (see selections).
+  const selection = selectionFor(rid);
+  if (selection) body.selection = selection;
   // What the session already wrote, as on /v1/transcribe-clean.
   if (context) body.context = context.slice(-K.num("desktop.recorder.contextChars", 600));
   // The second engine's reading goes with it: the server reconciles the
@@ -544,7 +571,15 @@ async function refineText(text, alternative, context, sid) {
         throw err;
       }
       const j = await res.json();
-      return (j.refinedText || "").trim();
+      const refined = (j.refinedText || "").trim();
+      if (refined) selections.delete(rid);
+      // The join the server read, as /v1/transcribe-clean gives it: none
+      // for a rewrite, which takes the selection's place, edges and all.
+      return {
+        text: refined,
+        join: typeof j.joinWithSpace === "boolean" ? j.joinWithSpace : undefined,
+        edges: j.replacedSelection && selection ? edgesOf(selection) : undefined,
+      };
     } catch (err) {
       last = err;
     }
@@ -704,6 +739,10 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     // What this session already wrote, so this stretch continues it.
     const before = wrote.get(sid) || "";
     if (before) fd.append("context", before.slice(-K.num("desktop.recorder.contextChars", 600)));
+    // Said with text selected: what they say is about it, and the answer is
+    // the selection rewritten, to paste over it (see selections).
+    const selection = selectionFor(sid);
+    if (selection) fd.append("selection", selection);
     const res = await authorized((h) => fetch(base() + "/v1/transcribe-clean", {
       method: "POST",
       headers: h,
@@ -740,15 +779,21 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     // pastes and ends it. Same text, different meaning to the main
     // process, and it must not learn the difference by guessing.
     const deliver = isSegment ? emitSegment : emitResult;
+    // A rewrite of the selection goes back in its place with its own edges.
+    const edges = json.replacedSelection && selection ? edgesOf(selection) : undefined;
     return () => {
       // Added in the order spoken, so the context reads as it was said.
-      if (cleaned) wrote.set(sid, before ? before + (join === false ? "" : " ") + cleaned : cleaned);
+      const placed = edges ? edges[0] + cleaned + edges[1] : cleaned;
+      if (cleaned) wrote.set(sid, before ? before + (join === false ? "" : " ") + placed : placed);
+      // Pasted, it takes the selection's place: the next stretch is plain
+      // dictation after it.
+      if (cleaned) selections.delete(sid);
       // ONLY THE WRITTEN TEXT IS EVER PASTED. An empty `cleanedText` is the
       // server deciding there is nothing to write: silence, noise the
       // recogniser turned into words, a stretch that was only an
       // instruction. The raw transcript used to be pasted in its place,
       // which put exactly those invented or unwritten words at the cursor.
-      if (cleaned) deliver(sid, cleaned, join);
+      if (cleaned) deliver(sid, cleaned, join, edges);
       else if (!isSegment) {
         // Nothing to write at the end. After stretches that were written,
         // or when words were heard and the writer chose to write none,
@@ -964,7 +1009,8 @@ async function finishLive(sid) {
     // An empty answer is the server saying there is nothing to write —
     // noise the recogniser turned into words. Pasting the raw words
     // instead was how they reached the field.
-    emitResult(sid, await refineText(raw, doneAlternative, wrote.get(sid), sid));
+    const refined = await refineText(raw, doneAlternative, wrote.get(sid), sid);
+    emitResult(sid, refined.text, refined.join, refined.edges);
   } catch (err) {
     // NOT THE RAW WORDS. A refine that failed (twice for a blip; a spent
     // token is renewed and resent first) used to paste the stream's own
