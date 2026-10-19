@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld("tailzu", {
   // Nobody has said anything for a long time. The mic closes itself.
   idle: (p) => ipcRenderer.send("dictation-idle", p),
   result: (text) => ipcRenderer.send("dictation-result", text),
+  // A question for the guide, recorded (Ask): the whole clip, and the first
+  // real pause in it, which ends it.
+  askAudio: (p) => ipcRenderer.send("ask-audio", p),
+  askPause: (p) => ipcRenderer.send("ask-pause", p),
   error: (msg) => ipcRenderer.send("dictation-error", msg),
   partial: (text) => ipcRenderer.send("live-partial", text),
   // How loud the voice is, band by band, while the mic is open — for the pill.
@@ -93,6 +97,19 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // main process checks the address and the checksum; progress comes back.
   installUpdate: (u) => ipcRenderer.invoke("app:installUpdate", u),
   onUpdateProgress: (cb) => ipcRenderer.on("app:updateProgress", (_e, p) => cb(p)),
+});
+
+// The guide's window (guide.html): what to show, and what the person did
+// with it. The main process answers these for that window only.
+contextBridge.exposeInMainWorld("tailzuGuide", {
+  onGuide: (cb) => ipcRenderer.on("guide", (_e, m) => cb(m)),
+  // Over the card (take clicks) or not (let them through to the app).
+  mouse: (inside) => ipcRenderer.send("guide:mouse", !!inside),
+  confirm: (yes) => ipcRenderer.send("guide:confirm", !!yes),
+  spoken: () => ipcRenderer.send("guide:spoken"),
+  dismiss: () => ipcRenderer.send("guide:dismiss"),
+  knobs: () => ipcRenderer.invoke("app:knobs"),
+  onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
 });
 
 // The note-taker's hidden window (notes.html). The main process answers these
