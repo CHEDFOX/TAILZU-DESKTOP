@@ -2022,6 +2022,9 @@ function toggleDictation() {
           frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
             .then((field) => {
               if (!field || sid !== activeSession) return;
+              // What is selected in it goes too: said with a selection, an
+              // instruction ("make this bullet points") rewrites it.
+              if (!bool("desktop.field.selection", true)) delete field.selection;
               if (typeof field.before === "string") {
                 fieldText.set(sid, field.before);
                 if (fieldText.size > 32) fieldText.delete(fieldText.keys().next().value);
@@ -2248,10 +2251,16 @@ function settleSession(session) {
 }
 
 /** A message from the recorder, and only from the recorder, with its text as
- *  a trimmed string whatever was sent; null for anything else. */
+ *  a trimmed string whatever was sent; null for anything else. A rewrite of
+ *  a selection comes with that selection's own edges (`edges`: the
+ *  whitespace it started and ended with), put back around it here so a
+ *  paragraph selected with its line break keeps it. */
 function fromRecorder(e, payload) {
   if (!isFrom(e, recorderWin) || !payload || typeof payload !== "object") return null;
-  return Object.assign({}, payload, { text: typeof payload.text === "string" ? payload.text.trim() : "" });
+  let text = typeof payload.text === "string" ? payload.text.trim() : "";
+  const ws = (s) => (typeof s === "string" && /^\s{0,8}$/.test(s) ? s : "");
+  if (text && Array.isArray(payload.edges)) text = ws(payload.edges[0]) + text + ws(payload.edges[1]);
+  return Object.assign({}, payload, { text });
 }
 
 ipcMain.on("dictation-result", (e, payload) => {
