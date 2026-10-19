@@ -1,6 +1,6 @@
 {
   "name": "tailzu-desktop",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "description": "Tailzu desktop voice dictation — hotkey → record → clean → paste. Reuses the Tailzu backend.",
   "author": "Tailzu <hello@tailzu.space>",
   "main": "main.js",
@@ -15,7 +15,8 @@
     "dist:mac:signed": "electron-builder --mac --universal --publish never",
     "test": "node --test",
     "audiotap": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/audiotap-arm64 audiotap/main.swift && swiftc -O -target x86_64-apple-macos13 -o build/audiotap-x64 audiotap/main.swift && lipo -create -output build/audiotap build/audiotap-arm64 build/audiotap-x64 && rm build/audiotap-arm64 build/audiotap-x64",
-    "tzocr": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzocr-arm64 native/tzocr.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzocr-x64 native/tzocr.swift && lipo -create -output build/tzocr build/tzocr-arm64 build/tzocr-x64 && rm build/tzocr-arm64 build/tzocr-x64"
+    "tzocr": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzocr-arm64 native/tzocr.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzocr-x64 native/tzocr.swift && lipo -create -output build/tzocr build/tzocr-arm64 build/tzocr-x64 && rm build/tzocr-arm64 build/tzocr-x64",
+    "tzax": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzax-arm64 native/tzax.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzax-x64 native/tzax.swift && lipo -create -output build/tzax build/tzax-arm64 build/tzax-x64 && rm build/tzax-arm64 build/tzax-x64"
   },
   "optionalDependencies": {
     "uiohook-napi": "^1.5.4"
@@ -33,6 +34,14 @@
       "recorder.html",
       "recorder.js",
       "frontApp.js",
+      "driver.js",
+      "axDriver.js",
+      "uiaDriver.js",
+      "agent.js",
+      "ask.js",
+      "guide.html",
+      "guide.js",
+      "blip.js",
       "screenRead.js",
       "notes.html",
       "notesRecorder.js",
@@ -59,7 +68,7 @@
       ],
       "icon": "assets/icon-mac.png",
       "artifactName": "Tailzu.${ext}",
-      "x64ArchFiles": "{**/*.node,**/audiotap,**/tzocr}",
+      "x64ArchFiles": "{**/*.node,**/audiotap,**/tzocr,**/tzax}",
       "extraResources": [
         {
           "from": "build/audiotap",
@@ -68,6 +77,10 @@
         {
           "from": "build/tzocr",
           "to": "tzocr"
+        },
+        {
+          "from": "build/tzax",
+          "to": "tzax"
         }
       ],
       "hardenedRuntime": true,
@@ -86,7 +99,13 @@
       "target": [
         "nsis"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "native/uia-agent.ps1",
+          "to": "uia-agent.ps1"
+        }
+      ]
     },
     "appx": {
       "applicationId": "Tailzu",

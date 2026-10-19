@@ -98,6 +98,8 @@ jobs:
           npm run audiotap
           # The on-device OCR helper (native/tzocr.swift, macOS Vision), same.
           npm run tzocr
+          # Ask's accessibility helper (native/tzax.swift), same.
+          npm run tzax
           # --publish never: at a repo root on CI, electron-builder infers a
           # GitHub release and demands GH_TOKEN. Publishing is the step below.
           # --universal: macos-latest runners are arm64; a plain build would ship
@@ -153,6 +155,8 @@ jobs:
       # Automation), run for real: one answer to each question, in order.
       - name: Check the field reader
         run: node nativeCheck.js win
+      - name: Check the Ask UIA helper
+        run: node nativeCheck.js winagent
       - name: Build installer
         run: |
           npm ci

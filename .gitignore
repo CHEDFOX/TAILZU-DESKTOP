@@ -17,3 +17,6 @@ build/audiotap-*
 # The on-device OCR helper, built by `npm run tzocr` (CI builds it).
 build/tzocr
 build/tzocr-*
+# Ask's accessibility helper, built by `npm run tzax` (CI builds it).
+build/tzax
+build/tzax-*
