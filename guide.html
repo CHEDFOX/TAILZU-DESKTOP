@@ -1,0 +1,203 @@
+<!doctype html>
+<!--
+  THE GUIDE. What Ask looks like: over the app you asked about, a small card
+  that says what Tailzu heard and what it found, a ring on the thing itself,
+  and Blip peeking over the card's top edge, pointing at it.
+
+    listening   the card, a row of amber dots your voice moves, Blip's
+                antenna lit (the one amber the brand allows: something live)
+    thinking    the dots fall still and a light runs along them; Blip looks up
+    showing     the answer, word by word as it is spoken; the ring on the
+                target, a dotted thread from Blip's finger to it
+    doing       the plan as a short checklist, the step being done ringed
+    confirm     the exact thing about to happen, quoted, and two buttons:
+                Do it, Not now (or tap Alt twice). Amber; pink when it cannot
+                be undone
+    done        a tick, a hop; it tucks itself away
+    error       a sentence, in pink, and a sorry brow
+
+  One window over the work area: transparent, never focused (the app you are
+  in keeps the keyboard), click-through except while the pointer is over the
+  card, and kept out of screenshots. Every size, colour, timing and word is a
+  knob (desktop.guide.*); the literals below are only for the first frame.
+
+    guide.html               the window main.js opens
+    guide.html?demo          a scripted run over a mock app, for review
+    guide.html?demo=<scene>  one scene held still (listening, thinking, point,
+                             steps, confirm, always, done, error), for screenshots
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Nothing runs but this app's own files, and nothing is fetched. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'">
+<title>Tailzu guide</title>
+<style>
+  @font-face { font-family:"Newsreader"; font-weight:400; font-style:italic; src:url(assets/fonts/newsreader-latin-400-italic.woff2) format("woff2"); }
+  @font-face { font-family:"Newsreader"; font-weight:400; font-style:normal; src:url(assets/fonts/newsreader-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family:"IBM Plex Mono"; font-weight:500; src:url(assets/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:400; src:url(assets/fonts/instrument-sans-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:500; src:url(assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:600; src:url(assets/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Noto Sans Devanagari"; font-weight:100 900; src:url(assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
+
+  :root {
+    --ink:#151210; --ink-2:#1D1916; --pale:#F3E2C6; --pale-2:rgba(243,226,198,.68); --pale-3:rgba(243,226,198,.42);
+    --rule:rgba(243,226,198,.12); --live:#E8A23C; --err:#E4587B;
+    --sans:"Instrument Sans","Noto Sans Devanagari",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --serif:"Newsreader","Noto Sans Devanagari",Georgia,serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+    --w:348px; --r:18px; --glide:.42s cubic-bezier(.2,.9,.24,1);
+  }
+  html, body { margin:0; background:transparent; overflow:hidden; user-select:none; -webkit-user-select:none; cursor:default; }
+  #fx { position:fixed; left:0; top:0; pointer-events:none; }
+
+  /* THE CARD ------------------------------------------------------------- */
+  #card {
+    position:fixed; left:0; top:0; width:var(--w); box-sizing:border-box;
+    border-radius:var(--r); background:var(--ink); color:var(--pale);
+    box-shadow: inset 0 0 0 1px var(--rule), 0 1px 0 rgba(255,255,255,.04) inset,
+      0 24px 56px -14px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.28);
+    font:400 15px/1.45 var(--sans); -webkit-font-smoothing:antialiased;
+    transform:translate3d(var(--x,0px), var(--y,0px), 0);
+    transition: transform var(--glide), opacity .26s ease, height .28s cubic-bezier(.2,.8,.2,1);
+    opacity:0; overflow:hidden;
+  }
+  #card.on { opacity:1; }
+  #card.still { transition: opacity .26s ease, height .28s cubic-bezier(.2,.8,.2,1); }
+  /* The dots under everything: the same dither the films are drawn in, too
+     faint to read as anything but paper. */
+  #card::before {
+    content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+    background-image: radial-gradient(rgba(243,226,198,.075) .7px, transparent .9px);
+    background-size:5px 5px;
+    -webkit-mask-image: linear-gradient(180deg, #000 0, rgba(0,0,0,.25) 70%, transparent);
+  }
+  #inner { position:relative; padding:15px 18px 16px; }
+
+  header { display:flex; align-items:center; gap:8px; height:22px; }
+  #lamp { width:6px; height:6px; border-radius:50%; background:var(--pale-3); flex:0 0 auto; transition:background .2s; }
+  #card[data-state="listening"] #lamp { background:var(--live); animation:lamp 1.4s ease-in-out infinite; }
+  #card[data-state="confirm"] #lamp { background:var(--live); }
+  #card[data-state="confirm"][data-risk="always"] #lamp, #card[data-state="error"] #lamp { background:var(--err); }
+  #card[data-state="done"] #lamp { background:var(--pale); }
+  @keyframes lamp { 0%,100% { box-shadow:0 0 0 0 rgba(232,162,60,.55); } 60% { box-shadow:0 0 0 6px rgba(232,162,60,0); } }
+  #eyebrow { font:500 10px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--pale-2); white-space:nowrap; }
+  #app { font:500 10px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--pale-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  #app:not(:empty)::before { content:"·"; margin-right:8px; color:var(--pale-3); }
+  #card[data-state="confirm"] #eyebrow { color:var(--live); }
+  #card[data-state="confirm"][data-risk="always"] #eyebrow, #card[data-state="error"] #eyebrow { color:var(--err); }
+  #close { margin-left:auto; flex:0 0 auto; width:24px; height:24px; border-radius:50%; border:0; padding:0; background:transparent; color:var(--pale-3);
+    display:grid; place-items:center; cursor:pointer; transition:background .15s, color .15s; }
+  #close:hover { background:rgba(243,226,198,.08); color:var(--pale); }
+  #close svg { width:10px; height:10px; }
+
+  #heard { margin:11px 0 0; font:400 italic 15.5px/1.34 var(--serif); color:var(--pale-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  #heard:empty { display:none; }
+
+  #voice { display:none; height:30px; margin-top:12px; }
+  #card[data-state="listening"] #voice, #card[data-state="thinking"] #voice { display:block; }
+  #voice canvas { display:block; width:100%; height:30px; }
+
+  #say { margin:10px 0 0; font:500 16px/1.42 var(--sans); letter-spacing:-.006em; color:var(--pale); text-wrap:pretty; }
+  #say:empty { display:none; }
+  #say .w { opacity:0; display:inline-block; transform:translateY(3px); animation:word .34s cubic-bezier(.2,.8,.2,1) forwards; }
+  @keyframes word { to { opacity:1; transform:none; } }
+  #card[data-state="error"] #say { color:var(--pale); }
+
+  #steps { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:7px; }
+  #steps:empty { display:none; }
+  #steps li { display:grid; grid-template-columns:20px 1fr; gap:10px; align-items:center; font:400 13.5px/1.3 var(--sans); color:var(--pale-2); transition:color .2s; }
+  #steps li i { width:18px; height:18px; border-radius:50%; box-sizing:border-box; border:1px solid var(--pale-3); display:grid; place-items:center;
+    font:500 9px/1 var(--mono); font-style:normal; color:var(--pale-3); position:relative; }
+  #steps li[data-s="doing"] { color:var(--pale); }
+  #steps li[data-s="doing"] i { border-color:transparent; color:var(--live); }
+  #steps li[data-s="doing"] i::after { content:""; position:absolute; inset:-1px; border-radius:50%; border:1.5px dotted var(--live); animation:spin 2.4s linear infinite; }
+  #steps li[data-s="done"] { color:var(--pale-3); }
+  #steps li[data-s="done"] i { background:var(--pale); border-color:var(--pale); color:var(--ink); }
+  #steps li[data-s="done"] i b { display:none; }
+  #steps li[data-s="done"] i::before { content:""; width:7px; height:4px; border:solid var(--ink); border-width:0 0 1.6px 1.6px; transform:translateY(-1px) rotate(-45deg); }
+  #steps li[data-s="failed"] i { border-color:var(--err); color:var(--err); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  #ask { display:none; margin-top:13px; }
+  #card[data-state="confirm"] #ask { display:block; }
+  #ask .what { font:500 10px/1.2 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--pale-3); }
+  #ask blockquote { margin:7px 0 0; padding:1px 0 1px 12px; border-left:2px solid var(--live); font:400 17px/1.36 var(--serif); color:var(--pale);
+    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+  #ask blockquote:empty { display:none; }
+  #card[data-risk="always"] #ask blockquote { border-left-color:var(--err); }
+  #ask .row { display:flex; align-items:center; gap:4px; margin-top:15px; }
+  #ask button { font:600 13.5px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
+  #ask button:active { transform:scale(.97); }
+  #yes { background:var(--pale); color:var(--ink); padding:10px 18px; }
+  #yes:hover { background:#FFF6E8; }
+  #card[data-risk="always"] #yes { background:var(--err); color:#1A0E12; }
+  #no { background:transparent; color:var(--pale-2); padding:10px 12px; }
+  #no:hover { color:var(--pale); background:rgba(243,226,198,.07); }
+  #ask kbd { margin-left:auto; font:500 9.5px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--pale-3); white-space:nowrap; }
+
+  #foot { margin-top:13px; font:500 9.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--pale-3); }
+  #foot:empty { display:none; }
+  #card[data-state="confirm"] #foot { display:none; }
+
+  /* The label on the ring. */
+  #chip { position:fixed; left:0; top:0; padding:6px 10px 6px 9px; border-radius:999px; background:var(--ink); color:var(--pale);
+    box-shadow: inset 0 0 0 1px var(--rule), 0 6px 18px rgba(0,0,0,.35);
+    font:500 10px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis;
+    opacity:0; transform:translate3d(var(--x,0px), var(--y,0px), 0) scale(.94); transition:opacity .2s ease, transform .3s cubic-bezier(.2,.9,.24,1); pointer-events:none; }
+  #chip.on { opacity:1; transform:translate3d(var(--x,0px), var(--y,0px), 0); }
+  #chip::before { content:""; display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--live); margin-right:8px; vertical-align:1px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #card, #chip { transition:opacity .2s ease; }
+    #say .w { animation:none; opacity:1; transform:none; }
+    #steps li[data-s="doing"] i::after, #card[data-state="listening"] #lamp { animation:none; }
+  }
+
+  /* THE REVIEW PAGE ONLY: an app to point at. */
+  body.demo { background:#E9E5DE; }
+  body.demo .mock { position:fixed; left:50%; top:46px; transform:translateX(-50%); width:880px; height:560px; background:#fff; border-radius:12px; overflow:hidden;
+    box-shadow:0 1px 0 rgba(0,0,0,.05), 0 18px 40px rgba(0,0,0,.14); font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; }
+  body.demo .mock .bar { height:38px; border-bottom:1px solid #ECE7DF; background:#FAF8F4; display:flex; align-items:center; gap:7px; padding:0 14px; }
+  body.demo .mock .bar i { width:11px; height:11px; border-radius:50%; background:#E2DBD1; }
+  body.demo .mock .bar b { margin-left:14px; font-weight:600; color:#6B6258; }
+  body.demo .mock .tools { position:absolute; top:48px; right:16px; display:flex; gap:8px; }
+  body.demo .mock .tools span { padding:7px 12px; border-radius:7px; background:#F3EFE8; color:#3A332C; font-weight:500; }
+  body.demo .mock .tools span.primary { background:#2F6BFF; color:#fff; }
+  body.demo .mock .side { position:absolute; left:0; top:38px; bottom:0; width:190px; border-right:1px solid #ECE7DF; background:#FBFAF7; padding:14px 12px; box-sizing:border-box; }
+  body.demo .mock .side p { margin:0 0 6px; padding:6px 8px; border-radius:6px; color:#4A4239; }
+  body.demo .mock .side p.on { background:#ECE6DC; color:#1B1712; font-weight:600; }
+  body.demo .mock .page { position:absolute; left:214px; top:96px; right:24px; }
+  body.demo .mock .page h2 { margin:0 0 10px; font-size:22px; }
+  body.demo .mock .page .ln { height:10px; border-radius:5px; background:#EFEAE2; margin:10px 0; }
+  body.demo .mock .composer { position:absolute; left:214px; right:24px; bottom:22px; height:46px; border:1px solid #DDD5C9; border-radius:10px; display:flex; align-items:center; padding:0 12px; color:#9A9083; }
+  body.demo .mock .composer em { margin-left:auto; padding:6px 12px; border-radius:7px; background:#1B1712; color:#fff; font-style:normal; font-weight:600; }
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div id="chip"></div>
+<div id="card" role="dialog" aria-live="polite" data-state="listening">
+  <div id="inner">
+    <header>
+      <i id="lamp"></i><span id="eyebrow">Listening</span><span id="app"></span>
+      <button id="close" aria-label="Stop"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
+    </header>
+    <p id="heard"></p>
+    <div id="voice"><canvas id="wave"></canvas></div>
+    <p id="say"></p>
+    <ol id="steps"></ol>
+    <div id="ask">
+      <div class="what" id="what"></div>
+      <blockquote id="quote"></blockquote>
+      <div class="row"><button id="yes">Do it</button><button id="no">Not now</button><kbd id="askHint">or tap Alt twice</kbd></div>
+    </div>
+    <div id="foot"></div>
+  </div>
+</div>
+<script src="knobs.js"></script>
+<script src="blip.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

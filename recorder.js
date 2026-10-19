@@ -73,8 +73,14 @@ window.tailzu.onStart((c) => {
   for (const k of wrote.keys()) if (!queues.has(k)) wrote.delete(k);
   sentStretches = 0;
   metered = false;
-  cfg.live ? startLive(session) : startBatch(session);
+  // ASK: a question for the guide (agent.js), not a dictation. One clip, no
+  // pause-writing and no captions; it ends on the first real pause, and it
+  // goes to the main process whole rather than to /v1/transcribe-clean.
+  if (c.mode === "ask") { asks.add(session); for (const k of asks) if (k < session - 20) asks.delete(k); }
+  cfg.live && c.mode !== "ask" ? startLive(session) : startBatch(session);
 });
+const asks = new Set();   // sessions that are questions for the guide
+let askEnded = false;     // this question's pause has been reported
 // The app each session is going into, named by the main process a moment after
 // the press (frontApp.js). "Desktop" until it arrives, or where it cannot be
 // known.
@@ -292,6 +298,7 @@ function watchLevel(sid, pausing) {
     readTo = levelCtx.currentTime;
   } catch { stopWatchingLevel(); return; }   // no meter is survivable: it just never flushes
   segmentStartedAt = lastSpeechAt = lastSoundAt = Date.now();
+  askEnded = false;
   pollLevel = () => {
     if (sid !== session || !analyser || !levelCtx) return;
     // Only what arrived since the last read, by the audio clock.
@@ -306,6 +313,14 @@ function watchLevel(sid, pausing) {
     speechMs = Math.max(0, speechMs + r.voicedMs);
     if (r.loudMs > 0) lastSoundAt = now;
     if (r.voicedMs > 0) { speaking = true; lastSpeechAt = now; return; }
+    // A question is over at its first real pause: the main process stops it.
+    if (asks.has(sid)) {
+      if (speaking && !askEnded && now - lastSpeechAt > K.num("desktop.agent.pauseEndMs", 1200)) {
+        askEnded = true;
+        if (window.tailzu.askPause) window.tailzu.askPause({ session: sid });
+      }
+      return;
+    }
     if (!pausing) return;
     // Flush only if they actually said something since the last one.
     if (speaking && now - lastSpeechAt > FLUSH_SILENCE_MS
@@ -620,7 +635,7 @@ async function startBatch(sid) {
     mediaRecorder = record(sid, mimeType);
     // Measured in every mode, so a stop can tell whether its last stretch
     // held a voice; it writes on a pause only when pausing is on.
-    watchLevel(sid, cfg.pauseFlush !== false);
+    watchLevel(sid, !asks.has(sid) && cfg.pauseFlush !== false);
     startBands(sid, stream);
   } catch (err) {
     if (sid === session) stopTracks();
@@ -660,8 +675,18 @@ function onRecorderStopped(sid, mimeType, rec, parts, startedAt) {
   // closed, since a newer session may already hold them.
   const heard = lastStretchHeard(sid), sentAny = sentStretches > 0;
   if (sid === session) { stopWatchingLevel(); stopTracks(); }
+  if (asks.has(sid)) { void handOver(sid, heard ? parts : [], type, took); return; }
   if (!heard) { void nothingToSend(sid, sentAny); return; }
   void uploadBatch(sid, parts, type, false, took, sentAny);
+}
+
+/** A question, recorded: its audio to the main process, which asks /v1/agent
+ *  with it and the screen (agent.js). No voice in it: no audio, and the guide
+ *  says it did not catch that. */
+async function handOver(sid, parts, type, took) {
+  let data = null;
+  try { if (parts.length) data = await new Blob(parts, { type }).arrayBuffer(); } catch { data = null; }
+  if (window.tailzu.askAudio) window.tailzu.askAudio({ session: sid, mime: type, data, durationMs: took });
 }
 
 function stopBatch(sid) {
