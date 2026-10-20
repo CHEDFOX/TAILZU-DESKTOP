@@ -55,7 +55,16 @@ function shape(cmd, msg) {
   if (typeof rest.ok !== "boolean") return { ok: false, error: "bad_answer" };
   if (!rest.ok) return { ...rest, error: typeof rest.error === "string" && rest.error ? rest.error : "failed" };
   if (cmd === "trusted") return { ok: true, trusted: rest.trusted === true };
-  if (cmd === "snapshot" && !Array.isArray(rest.elements)) return { ok: false, error: "bad_answer" };
+  if (cmd === "snapshot") {
+    if (!Array.isArray(rest.elements)) return { ok: false, error: "bad_answer" };
+    // The window's title is for agent.js to check on every read (a private
+    // window, a bank's site) and never to send. It is always a string, ""
+    // when unknown (an older helper sent none), so a check never sees junk.
+    const w = rest.window;
+    rest.window = w && typeof w === "object" && !Array.isArray(w)
+      ? { ...w, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" }
+      : null;
+  }
   return rest;
 }
 

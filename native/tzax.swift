@@ -5,7 +5,10 @@
 // there. This helper is that reach: it reads the focused window's
 // accessibility tree into a short list of elements with ids, and acts on those
 // ids. The list goes only to axDriver.js; the agent sends on roles, labels and
-// short values, never frames or window titles.
+// short values, never frames or window titles. The focused window's title does
+// come back, beside the list and never in it, because it is how the agent
+// tells, on every read, that the window is a private one or a bank's site;
+// like the frames, it stays on this machine.
 //
 // It is long-lived, kept warm by axDriver.js: one JSON command per line on
 // stdin, one JSON answer per line on stdout, each answer carrying its
@@ -264,6 +267,9 @@ struct Walk {
   var truncated = false
   /// The app stopped answering partway.
   var busy = false
+  /// A web page's area was there but empty: Chromium has not built the page's
+  /// tree yet.
+  var emptyWeb = false
 }
 
 /// What an id names, for as long as it is good.
@@ -748,6 +754,7 @@ func walk(app: AXUIElement, window: AXUIElement?, winFrame: CGRect?, winTitle: S
   // One place is kept for the element with the keyboard until the walk meets
   // it: where typing goes matters more than the 250th button.
   var focusSeen = focusedEl == nil
+  var webSeen = false
   while head < queue.count {
     if w.found.count >= (focusSeen ? maxCount : maxCount - 1) || visited >= maxVisited || DispatchTime.now() >= stopAt {
       w.truncated = true
@@ -805,6 +812,14 @@ func walk(app: AXUIElement, window: AXUIElement?, winFrame: CGRect?, winTitle: S
     if madeRole == "menuitem" && asBool(v[A.selected]) != true { continue } // a closed submenu is not on screen
     if (v[A.subrole] as? String) == "AXSecureTextField" { continue }
     var kids = elements(v[A.children])
+    // Only the first page area met counts: breadth first, that is the page's
+    // own. A frame inside the page has an area of its own, and an empty one
+    // (a blank helper frame, an ad not loaded) is on most pages and is no
+    // reason to read the whole app twice on every step.
+    if axRole == "AXWebArea" {
+      if !webSeen && kids.isEmpty { w.emptyWeb = true }
+      webSeen = true
+    }
     if kids.count > 60 && listRoles.contains(axRole) {
       // A long list or table: the rows on screen, not all ten thousand.
       let rows = elements(copyAttr(it.el, axRole == "AXTable" || axRole == "AXOutline" ? "AXVisibleRows" : "AXVisibleChildren"))
@@ -878,9 +893,14 @@ func snapshot(maxCount: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {
   if window == nil && winErr == .cannotComplete { return fail("app_busy") }
   var winFrame: CGRect? = nil
   var winTitle = ""
+  var fullTitle = ""
   if let win = window {
     winFrame = liveFrame(win)
-    winTitle = clean(copyAttr(win, "AXTitle") as? String, 80)
+    // Read once: cut to a label's length for the walk, which drops the static
+    // text that repeats it, and kept longer for the agent's own check.
+    let raw = copyAttr(win, "AXTitle") as? String
+    winTitle = clean(raw, 80)
+    fullTitle = clean(raw, 200)
   }
   let focusedEl = element(copyAttr(app, "AXFocusedUIElement"))
 
@@ -888,11 +908,19 @@ func snapshot(maxCount: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {
                maxCount: maxCount, stopAt: stopAt)
   // Chromium builds its tree only once asked (wake), and the first read is
   // often a sliver of it: give it a moment and read again, keeping the larger.
-  if engine != .other && !w.busy && w.found.count < 15 && msLeft(stopAt) > 300 {
+  // The menu bar is not counted (Chrome alone has ten menus, and they are
+  // there before the page is), and a page whose area is still empty is read
+  // again however much browser is around it.
+  let inWindow = w.found.filter { $0.role != "menu" }.count
+  if engine != .other && !w.busy && (w.emptyWeb || inWindow < 15) && msLeft(stopAt) > 300 {
     usleep(150_000)
     let again = walk(app: app, window: window, winFrame: winFrame, winTitle: winTitle, focusedEl: focusedEl,
                      maxCount: maxCount, stopAt: stopAt)
-    if again.found.count > w.found.count { w = again }
+    // A tie goes to the read whose page is no longer empty (both stopped at
+    // the most elements). A smaller one never wins: a second read cut short
+    // by the time left may simply not have got as far as the page.
+    if again.found.count > w.found.count
+        || (again.found.count == w.found.count && w.emptyWeb && !again.emptyWeb && !again.busy) { w = again }
   }
   if w.busy && w.found.isEmpty { return fail("app_busy") }
   let selection = (focusedEl != nil && !w.busy) ? selectionOf(focusedEl!) : ""
@@ -914,8 +942,16 @@ func snapshot(maxCount: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {
 
   var appInfo: Reply = [("name", .str(front.localizedName ?? "")), ("pid", .int(Int(pid)))]
   if let b = front.bundleIdentifier { appInfo.append(("bundleId", .str(b))) }
+  // The window: its frame, and its title for agent.js to refuse a private
+  // window or a sensitive site on every read, not only the first. Neither
+  // goes into a request; toRequestElements sends no window at all.
   var windowJ = J.null
-  if let f = winFrame { windowJ = .obj([("frame", frameJ(f))]) }
+  if window != nil {
+    var wo: Reply = []
+    if let f = winFrame { wo.append(("frame", frameJ(f))) }
+    wo.append(("title", .str(fullTitle)))
+    windowJ = .obj(wo)
+  }
   let ms = Int((DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000)
   var r = ok()
   r.append(("app", .obj(appInfo)))
@@ -942,28 +978,41 @@ func centre(_ e: Entry) -> CGPoint? {
   return CGPoint(x: r.midX, y: r.midY)
 }
 
+/// A press is AXPress and nothing else. Other actions an element lists are
+/// not a press: AXConfirm is Return in a text field (it sends the draft,
+/// submits the form), AXShowMenu opens a context menu (Chromium lists it on
+/// every node, clickable or not). Answering ok for one of those would also
+/// stop agent.js's real click, the thing that was meant. So without AXPress
+/// a row is chosen, and anything else fails, for the caller to click.
 func press(_ e: Entry) -> Reply {
   let names = actionNames(e.el)
-  for a in ["AXPress", "AXConfirm", "AXPick", "AXShowMenu"] where names.contains(a) || (names.isEmpty && a == "AXPress") {
-    let err = AXUIElementPerformAction(timed(e.el, actionTimeout), a as CFString)
+  // An action list that could not be read (a busy app) still gets the press.
+  if names.contains("AXPress") || names.isEmpty {
+    let err = AXUIElementPerformAction(timed(e.el, actionTimeout), "AXPress" as CFString)
     switch err {
     case .success:
-      return ok([("how", .str(a))])
+      return ok([("how", .str("AXPress"))])
     case .cannotComplete:
       // Done, but the app was slow to say so — typically a press that opened
       // a dialog or a menu. "Failed" here would make the caller click it again.
-      return ok([("how", .str(a)), ("slow", .bool(true))])
+      return ok([("how", .str("AXPress")), ("slow", .bool(true))])
     case .invalidUIElement:
       return fail("gone")
     default:
-      continue
+      break
     }
   }
-  // Rows and cells mostly cannot be pressed, only chosen.
-  if settable(e.el, "AXSelected"), setAttr(e.el, "AXSelected", kCFBooleanTrue) == .success {
-    return ok([("how", .str("select"))])
+  // Rows and cells mostly cannot be pressed, only chosen. A choice the app
+  // was slow to confirm may have been made, and a click on a chosen row can
+  // start renaming it (Finder), so that one is slow, not failed, too.
+  if settable(e.el, "AXSelected") {
+    switch setAttr(e.el, "AXSelected", kCFBooleanTrue) {
+    case .success: return ok([("how", .str("select"))])
+    case .cannotComplete: return ok([("how", .str("select")), ("slow", .bool(true))])
+    default: break
+    }
   }
-  return fail(names.isEmpty ? "no_action" : "press_failed")
+  return fail(names.contains("AXPress") ? "press_failed" : "no_action")
 }
 
 /// A real left click at the middle of the element, in the app it belongs to.

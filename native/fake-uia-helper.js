@@ -28,10 +28,12 @@ function snapshotAnswer(msg) {
   return {
     id: msg.id, ok: true,
     app: { name: "Fake", pid: 42 },
-    window: { frame: [0, 0, 800, 600] },
+    // The title is the device's alone (agent.js checks it, never sends it).
+    window: { frame: [0, 0, 800, 600], title: "Fake window" },
     focused: null, selection: "", scale: "pixels",
     elements: [], truncated: false, ms: 1,
     echoMax: msg.max,   // echoed so a test can tell one snapshot's answer from another's
+    echoBudget: msg.budgetMs,   // and so a test can see the walk's budget arrive
   };
 }
 
@@ -43,8 +45,25 @@ function answer(msg) {
 
 const reorderBuf = [];
 
-const rl = readline.createInterface({ input: process.stdin });
-rl.on("line", (line) => {
+// "deaf" dies the slow way: it answers the warm-up ping, then stops reading
+// (closes fd 0, so nothing reads the pipe any more) and exits only a little
+// later. Every write the driver makes in between hits a pipe nobody reads,
+// which is an EPIPE on the driver's side: it must be swallowed, and the exit
+// must settle every call still waiting. The ping is read synchronously, before
+// process.stdin exists, because Node never closes fd 0 under a stdin stream.
+if (mode === "deaf") {
+  let first = "";
+  const b = Buffer.alloc(1);
+  while (!first.endsWith("\n") && fs.readSync(0, b, 0, 1, null) === 1) first += b.toString("utf8");
+  let msg = null;
+  try { msg = JSON.parse(first); } catch { msg = null; }
+  if (msg) write(answer(msg));
+  fs.closeSync(0);
+  setTimeout(() => process.exit(1), 600);
+}
+
+const rl = mode === "deaf" ? null : readline.createInterface({ input: process.stdin });
+if (rl) rl.on("line", (line) => {
   line = line.trim();
   if (!line) return;
   let msg;

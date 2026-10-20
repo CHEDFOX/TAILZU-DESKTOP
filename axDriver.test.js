@@ -54,12 +54,31 @@ test("a snapshot comes back whole, past junk lines and a split write", async (t)
   assert.deepStrictEqual(s.elements.map((e) => e.id), ["e1", "e2", "e3"]);
   assert.strictEqual(s.focused, "e2");
   assert.strictEqual(s.scale, "points");
+  assert.deepStrictEqual(s.window, { frame: [100, 80, 800, 600], title: "Q3 plan.txt — Fake" });
   // What the helper was asked: the max, a walk budget inside the call's
   // timeout, and that timeout itself.
   assert.strictEqual(s.got.cmd, "snapshot");
   assert.strictEqual(s.got.max, 40);
   assert.strictEqual(s.got.timeoutMs, 1500);
   assert.ok(s.got.budgetMs > 0 && s.got.budgetMs <= 1200, `budget ${s.got.budgetMs}`);
+});
+
+// agent.js refuses a private window or a sensitive site from this title on
+// every read, so it is always there to test: a string of at most 200
+// characters, "" when the helper sent none. It never joins the elements.
+test("a snapshot's window always has a title string, and no window is null", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  const old = await d.snapshot({ max: 2 });
+  assert.deepStrictEqual(old.window, { frame: [100, 80, 800, 600], title: "" });
+  const long = await d.snapshot({ max: 3 });
+  assert.strictEqual(long.window.title.length, 200);
+  assert.ok(long.window.title.startsWith("Private Browsing — "));
+  assert.deepStrictEqual(long.window.frame, [100, 80, 800, 600]);
+  for (const s of [old, long]) assert.ok(!JSON.stringify(s.elements).includes("Private Browsing"));
+  const none = await d.snapshot({ max: 4 });
+  assert.strictEqual(none.ok, true);
+  assert.strictEqual(none.window, null);
 });
 
 test("trusted answers only ok and trusted", async (t) => {
@@ -206,6 +225,63 @@ test("the Swift helper knows every command the driver sends", () => {
   for (const field of ['"el"', '"text"', '"dir"', '"lines"', '"chord"', '"app"', '"max"', '"budgetMs"', '"timeoutMs"', '"prompt"']) {
     assert.ok(swift.includes(field), `tzax.swift never reads ${field}`);
   }
+});
+
+/** One Swift function's code, comments left out, from its signature to the
+ *  closing brace at the start of a line. */
+function swiftFunc(swift, signature) {
+  const at = swift.indexOf(signature);
+  assert.ok(at >= 0, `tzax.swift has no ${signature}`);
+  const end = swift.indexOf("\n}\n", at);
+  return swift.slice(at, end + 2).split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+}
+
+test("the helper's press is AXPress, a row's choice, or a failure the agent clicks", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const press = swiftFunc(swift, "func press(_ e: Entry) -> Reply {");
+  // AXConfirm is Return in a field (it sends, submits), AXShowMenu a context
+  // menu: an ok for either would also stop agent.js's real click.
+  for (const not of ["AXConfirm", "AXShowMenu", "AXPick"]) assert.ok(!press.includes(not), `press performs ${not}`);
+  assert.match(press, /AXUIElementPerformAction\(timed\(e\.el, actionTimeout\), "AXPress" as CFString\)/);
+  assert.equal((press.match(/AXUIElementPerformAction/g) || []).length, 1, "one action, AXPress");
+  assert.match(press, /"AXSelected"/);
+  assert.match(press, /fail\(/);
+  // A press or a choice the app was slow to confirm may have happened: it is
+  // an ok with slow set (agent.js never clicks on top of it), never a failure.
+  assert.equal((press.match(/case \.cannotComplete:/g) || []).length, 2);
+  assert.equal((press.match(/\("slow", \.bool\(true\)\)/g) || []).length, 2);
+});
+
+test("the helper sends the window's title beside the elements, never in them", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const snap = swiftFunc(swift, "func snapshot(maxCount: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {");
+  assert.match(snap, /copyAttr\(win, "AXTitle"\)/);
+  assert.match(snap, /fullTitle = clean\(raw, 200\)/);
+  assert.match(snap, /wo\.append\(\("title", \.str\(fullTitle\)\)\)/);
+  assert.match(snap, /r\.append\(\("window", windowJ\)\)/);
+  // An element's json has no title field, and a window element's label is
+  // its description, never its title.
+  const json = swiftFunc(swift, "func json(_ id: String) -> J {");
+  assert.ok(!/"title"/.test(json));
+  assert.match(swift, /case "window":\n\s+label = desc/);
+});
+
+test("a just-woken Chromium app is read again by its page, not by its menus", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const snap = swiftFunc(swift, "func snapshot(maxCount: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {");
+  assert.match(snap, /let inWindow = w\.found\.filter \{ \$0\.role != "menu" \}\.count/);
+  assert.match(snap, /engine != \.other && !w\.busy && \(w\.emptyWeb \|\| inWindow < 15\)/);
+  assert.ok(!/w\.found\.count < 15/.test(snap), "the menu bar still counts");
+  // The second read never wins by being smaller (cut short by the time left,
+  // it may not have reached the page); a page that filled in wins a tie.
+  assert.match(snap, /again\.found\.count > w\.found\.count\s*\|\| \(again\.found\.count == w\.found\.count && w\.emptyWeb && !again\.emptyWeb && !again\.busy\)/);
+  assert.ok(!/again\.found\.count < w\.found\.count|\|\| \(w\.emptyWeb && !again\.emptyWeb/.test(snap), "a smaller second read can win");
+  // Only the page's own area counts, the first one met breadth first: an
+  // empty frame inside a page (on most pages) must not double every read.
+  const walk = swiftFunc(swift, "func walk(app: AXUIElement,");
+  assert.match(walk, /var webSeen = false/);
+  assert.match(walk, /if axRole == "AXWebArea" \{\s*if !webSeen && kids\.isEmpty \{ w\.emptyWeb = true \}\s*webSeen = true\s*\}/);
+  assert.equal((walk.match(/w\.emptyWeb = true/g) || []).length, 1);
 });
 
 test("the helper is built and shipped with the Mac app", () => {

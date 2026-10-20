@@ -32,6 +32,10 @@
     hideAt: 0,
     speaking: false,
     lastFrame: 0,
+    // What of the window is not the work area: on a Mac the window covers
+    // the whole display so the menu bar's items can be ringed, and the card
+    // keeps clear of the menu bar and the Dock.
+    inset: { top: 0, right: 0, bottom: 0, left: 0 },
   };
   let dpr = 1, W = 0, H = 0;
 
@@ -43,19 +47,35 @@
     fx.style.width = W + "px"; fx.style.height = H + "px";
     const ww = wave.clientWidth || 312, wh = wave.clientHeight || 30;
     wave.width = Math.round(ww * dpr); wave.height = Math.round(wh * dpr);
+    capCard();
     place(true);
   }
   window.addEventListener("resize", resize);
 
   // ---- where the card goes ---------------------------------------------------
   const M = 16;                       // keep this far from the window's edge
+  const HEAD = 60;                    // room above the card for Blip's head
+  /** Where the card may be: the work area, less a margin. */
+  function room() {
+    const i = S.inset;
+    return { l: i.left + M, t: i.top + M, r: W - i.right - M, b: H - i.bottom - M };
+  }
   // The height it is growing to, not the one it is passing through.
   function cardSize() { return [card.offsetWidth || K.num("desktop.guide.width", 348), inner.offsetHeight || 120]; }
-  function clampX(x, w) { return Math.max(M, Math.min(W - M - w, x)); }
-  function clampY(y, h) { return Math.max(M + 60, Math.min(H - M - h, y)); }   // room above it for Blip's head
+  function clampX(x, w) { const a = room(); return Math.max(a.l, Math.min(a.r - w, x)); }
+  function clampY(y, h) { const a = room(); return Math.max(a.t + HEAD, Math.min(a.b - h, y)); }
+  /** Never taller than the room there is, Blip's head included: a long
+   *  answer, a plan and a quote together once pushed Do it and Not now off
+   *  the bottom of a small screen. What overflows is the answer and the
+   *  plan, which scroll; the quote and the buttons are always there. */
+  function capCard() {
+    const a = room();
+    inner.style.maxHeight = Math.max(160, Math.floor(a.b - a.t - HEAD)) + "px";
+  }
   /** The card's top-left: beside the ring if there is one, else by the anchor. */
   function layout() {
     const [cw, ch] = cardSize();
+    const a = room();
     const blipRoom = K.num("desktop.guide.blipRoom", 66);   // Blip's head sticks up this far over the card
     if (S.ring) {
       const pad = K.num("desktop.guide.ringPad", 6);
@@ -64,28 +84,31 @@
       const x = clampX(r.x + r.w / 2 - cw * .32, cw);
       const gap = 18;
       // Below, with Blip's head between the ring and the card.
-      if (r.y + r.h + gap + blipRoom + ch <= H - M) return [x, r.y + r.h + gap + blipRoom, "below"];
+      const below = Math.max(r.y + r.h + gap + blipRoom, a.t + HEAD);
+      if (below + ch <= a.b) return [x, below, "below"];
       // Above, a little further off: the thread runs down from the card to it.
-      if (r.y - gap * 2 - ch >= M + blipRoom) return [x, r.y - gap * 2 - ch, "above"];
+      if (r.y - gap * 2 - ch >= a.t + blipRoom) return [x, r.y - gap * 2 - ch, "above"];
       // Beside: whichever side has room, level with the ring.
       const y = clampY(r.y + r.h / 2 - ch / 2, ch);
-      if (r.x + r.w + gap * 2 + cw <= W - M) return [r.x + r.w + gap * 2, y, "right"];
-      if (r.x - gap * 2 - cw >= M) return [r.x - gap * 2 - cw, y, "left"];
-      return [x, clampY(H - M - ch, ch), "default"];
+      if (r.x + r.w + gap * 2 + cw <= a.r) return [r.x + r.w + gap * 2, y, "right"];
+      if (r.x - gap * 2 - cw >= a.l) return [r.x - gap * 2 - cw, y, "left"];
+      return [x, clampY(a.b - ch, ch), "default"];
     }
     if (S.anchor) {
       const [ax, ay] = S.anchor;
       const x = clampX(ax - cw * .3, cw);
-      const below = ay + 28 + blipRoom;
-      return [x, below + ch <= H - M ? below : clampY(ay - 28 - ch, ch), "anchor"];
+      const below = Math.max(ay + 28 + blipRoom, a.t + HEAD);
+      return [x, below + ch <= a.b ? below : clampY(ay - 28 - ch, ch), "anchor"];
     }
     // Nowhere in particular: low and centred, above where the pill lives.
-    return [clampX((W - cw) / 2, cw), clampY(H - M - ch - K.num("desktop.guide.bottomOffset", 110), ch), "default"];
+    return [clampX((a.l + a.r - cw) / 2, cw), clampY(a.b - ch - K.num("desktop.guide.bottomOffset", 110), ch), "default"];
   }
   function place(instant) {
     if (!S.shown) return;
-    const [x, y, where] = layout();
+    const [lx, ly, where] = layout();
     const [cw, ch] = cardSize();
+    // Whatever the ring's place, the card itself is always all on screen.
+    const x = clampX(lx, cw), y = clampY(ly, ch);
     S.where = where; S.box = { x, y, w: cw, h: ch };
     if (instant) card.classList.add("still");
     card.style.setProperty("--x", Math.round(x) + "px");
@@ -137,6 +160,7 @@
   }
   function words(el, text) {
     el.textContent = "";
+    el.scrollTop = 0;
     const parts = String(text || "").split(/(\s+)/);
     let i = 0;
     for (const p of parts) {
@@ -175,10 +199,18 @@
     const [rx, ry, rw, rh] = S.ring.frame;
     const cw = chip.offsetWidth || 80, chh = chip.offsetHeight || 24;
     const x = Math.max(M, Math.min(W - M - cw, rx - pad));
-    // Above the ring, else below it, else to its left: wherever the card is not.
+    // Above the ring, else below it, else to one side: wherever the card is
+    // not, and always on screen. A target at the very top (a tab, a toolbar,
+    // a menu-bar item) has no room above it, and the card below takes the
+    // spot under it, so the side spots sit level with it, kept in the window.
     const b = S.box, hits = (cx, cy) => b && cx < b.x + b.w && cx + cw > b.x && cy < b.y + b.h + 8 && cy + chh > b.y - 60;
-    const spots = [[x, ry - pad - 34], [x, ry + rh + pad + 10], [Math.max(M, rx - pad - cw - 12), ry + rh / 2 - chh / 2]];
-    const [cx, cy] = spots.find(([sx, sy]) => sy >= M && sy + chh <= H - M && !hits(sx, sy)) || spots[0];
+    const ring = (cx, cy) => cx < rx + rw + pad && cx + cw > rx - pad && cy < ry + rh + pad && cy + chh > ry - pad;
+    const inWin = (cx, cy) => cx >= M && cx + cw <= W - M && cy >= M && cy + chh <= H - M;
+    const level = Math.max(M, Math.min(H - M - chh, ry + rh / 2 - chh / 2));
+    const spots = [[x, ry - pad - 34], [x, ry + rh + pad + 10], [rx - pad - cw - 12, level], [rx + rw + pad + 12, level]];
+    const fits = (s) => inWin(s[0], s[1]) && !ring(s[0], s[1]);
+    const [cx, cy] = spots.find((s) => fits(s) && !hits(s[0], s[1])) || spots.find(fits)
+      || [x, Math.max(M, Math.min(H - M - chh, spots[1][1]))];
     chip.style.setProperty("--x", Math.round(cx) + "px");
     chip.style.setProperty("--y", Math.round(cy) + "px");
     chip.classList.add("on");
@@ -319,15 +351,23 @@
 
   // ---- speaking -----------------------------------------------------------------
   let tts = null;   // { ctx, src } while the server's voice plays
+  // Which sentence is being said. The main process sends the next one when
+  // this page says the last has been heard, so only the one still being said
+  // may say so: one stopped by a hush or by a newer sentence is told it was
+  // interrupted a moment later, and that would let the sentence after the
+  // newer one in at once and cut it off.
+  let saying = 0;
   function stopSpeaking() {
+    saying++;
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch { /* none */ }
     if (tts) { try { tts.src && tts.src.stop(); } catch { /* ended */ } try { tts.ctx.close(); } catch { /* closed */ } tts = null; }
     blip.speaking(false);
   }
   function speak(m) {
     stopSpeaking();
+    const n = saying;
     let over = false;
-    const done = () => { if (over) return; over = true; blip.speaking(false); bridge.spoken(); };
+    const done = () => { if (over || n !== saying) return; over = true; blip.speaking(false); bridge.spoken(); };
     // The server's voice, when the main process fetched it (/v1/speak, the
     // read-aloud voice chosen in Settings, in whatever language the answer is
     // in), played through Web Audio as the desk plays it: no blob: URL.
@@ -348,7 +388,10 @@
     builtIn();
     function builtIn() {
       // The built-in voice, with a real locale; none for that locale, and
-      // the answer is only read, never said in the wrong voice.
+      // the answer is only read, never said in the wrong voice. (Audio that
+      // would not decode falls back to it, and by then a newer sentence may
+      // be the one being said: this one is then not said at all.)
+      if (n !== saying) return;
       if (!m.speak || !window.speechSynthesis) return done();
       const u = new SpeechSynthesisUtterance(m.text);
       if (m.locale) {
@@ -359,7 +402,7 @@
         if (v) u.voice = v;
       }
       u.rate = typeof m.rate === "number" ? m.rate : 1;
-      u.onstart = () => blip.speaking(true);
+      u.onstart = () => { if (n === saying) blip.speaking(true); };
       u.onend = u.onerror = done;
       speechSynthesis.speak(u);
     }
@@ -408,8 +451,18 @@
       if (S.state === "listening" || S.state === "thinking") setState("showing");
       fit();
     },
-    voice: (m) => { if (m.audio || m.speak) speak(m); },
+    // Only for the card that is up. The main process drops a voice whose
+    // card has gone; this is the second lock. Either way the main process
+    // hears it is over, so the next sentence is not held up.
+    voice: (m) => { if (S.shown && (m.audio || m.speak)) speak(m); else bridge.spoken(); },
     hush: () => stopSpeaking(),
+    area: (m) => {
+      const i = (m && m.inset) || {};
+      const n = (v) => Math.max(0, Number(v) || 0);
+      S.inset = { top: n(i.top), right: n(i.right), bottom: n(i.bottom), left: n(i.left) };
+      capCard();
+      place(true);
+    },
     point: (m) => {
       if (!Array.isArray(m.frame) || m.frame.length !== 4) return;
       S.ring = { frame: m.frame.map(Number), caption: m.caption || "", at: performance.now() / 1000 };
@@ -491,6 +544,44 @@
       },
       done: () => { scenes.steps(); send({ type: "steps", items: [{ text: "Open #design", state: "done" }, { text: "Write the message", state: "done" }, { text: "Send it", state: "done" }] }); send({ type: "unpoint" }); send({ type: "say", text: "Sent. Priya's already typing." }); send({ type: "state", state: "done" }); },
       error: () => { send({ type: "show", state: "thinking", app: "Keynote" }); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "error" }); send({ type: "say", text: "I can't read this window yet. Turn on Tailzu under Accessibility in System Settings." }); },
+      // Everything at the longest agent.js lets it be: the card must still
+      // fit, its buttons on screen.
+      tall: () => {
+        send({ type: "show", state: "doing", app: "Slack" });
+        send({ type: "heard", text: "tell design the mockups are ready and that round two is in the deck, and ask Priya to look at the launch timeline before Friday's review" });
+        send({ type: "say", text: "Writing it in #design now. I've put the whole update in one message so it reads as one thought: the mockups, the deck with round two, and a nudge to Priya about the launch timeline before Friday's review. Check it before it goes." });
+        send({ type: "steps", items: [
+          { text: "Open #design from the sidebar", state: "done" }, { text: "Click into the message box", state: "done" },
+          { text: "Write the update about the mockups", state: "done" }, { text: "Mention Priya about the launch timeline", state: "done" },
+          { text: "Read it over once more", state: "done" }, { text: "Send it to the channel", state: "doing" },
+        ] });
+        send({ type: "point", frame: box("m-send"), caption: "Send" });
+        send({ type: "confirm", text: "Send to #design: “The mockups are ready! Round two is in the deck, page 4 onwards. @Priya could you look at the launch timeline before Friday's review? There's a question on the date for the press embargo and another on who signs off the final copy for the store listing.”", risk: "confirm" });
+      },
+      top: () => {
+        send({ type: "show", state: "thinking", app: "Chrome" });
+        send({ type: "heard", text: "which tab has the roadmap?" });
+        send({ type: "say", text: "That one, the second tab." });
+        send({ type: "point", frame: [300, 10, 70, 30], caption: "Q3 roadmap" });
+      },
+      menubar: () => {
+        const bar = document.createElement("div");
+        bar.className = "menubar";
+        bar.innerHTML = "<b>&#63743;</b><b>Keynote</b><span id=\"m-file\">File</span><span>Edit</span><span>Insert</span><span>Slide</span><span>Format</span><span>View</span>";
+        document.body.insertBefore(bar, fx);
+        send({ type: "area", inset: { top: 25, right: 0, bottom: 70, left: 0 } });
+        send({ type: "show", state: "thinking", app: "Keynote" });
+        send({ type: "heard", text: "where's save as?" });
+        send({ type: "say", text: "Under File: hold Option and it turns into Save As." });
+        send({ type: "point", frame: box("m-file"), caption: "File" });
+      },
+      long: () => {
+        send({ type: "show", state: "doing", app: "Finder" });
+        send({ type: "heard", text: "open https://docs.google.com/document/d/1x9Qe2ZlongDocumentIdThatNeverBreaks_abcdefghijklmnop/edit" });
+        send({ type: "say", text: "Your file is at /Users/priya/Library/Application_Support/Keynote/Autosave/Q3_launch_roadmap_final_v2_really_final.key" });
+        send({ type: "point", frame: box("m-composer"), caption: "Address" });
+        send({ type: "confirm", text: "Type “https://docs.google.com/document/d/1x9Qe2ZlongDocumentIdThatNeverBreaks/edit”?", risk: "confirm" });
+      },
     };
     if (scene && scenes[scene]) { scenes[scene](); return; }
     // The whole run, on a loop.

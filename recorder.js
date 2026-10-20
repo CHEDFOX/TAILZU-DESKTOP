@@ -65,6 +65,10 @@ window.tailzu.onStart((c) => {
   session = c.session || 0;
   // The knobs as of this press, from the main process's bootstrap.
   if (c.knobs) K.setKnobs(c.knobs);
+  // When the press was, so a first upload waits for the field read only as
+  // long as that read can still be coming (see fieldRead).
+  pressedAt.set(session, Date.now());
+  for (const k of pressedAt.keys()) if (k < session - 20) pressedAt.delete(k);
   // Defensive teardown: if a previous session is somehow still capturing
   // (state desync upstream), kill it completely before starting fresh —
   // never let two captures share the mic or a chunks array.
@@ -93,10 +97,14 @@ const privates = new Map();   // session → true
 const arounds = new Map();    // session → text
 window.tailzu.onTarget && window.tailzu.onTarget((p) => {
   if (p && typeof p.targetApp === "string" && p.targetApp) targets.set(p.session, p.targetApp.slice(0, 40));
-  if (p && p.privateField) privates.set(p.session, true);
+  // A private window's field is never read, so no read is coming to wait for.
+  if (p && p.privateField) { privates.set(p.session, true); fieldArrived(p.session); }
+  // Any other: the main process starts reading the field as it sends this,
+  // so the read has given up desktop.field.timeoutMs from now (see fieldRead).
+  else if (p && p.session) namedAt.set(p.session, Date.now());
   // Only the recent ones are worth keeping.
   const cut = (p && p.session || 0) - 20;
-  for (const m of [targets, privates, arounds]) for (const k of m.keys()) if (k < cut) m.delete(k);
+  for (const m of [targets, privates, arounds, namedAt]) for (const k of m.keys()) if (k < cut) m.delete(k);
 });
 window.tailzu.onAround && window.tailzu.onAround((p) => {
   if (p && typeof p.surroundings === "string" && p.surroundings && !privates.get(p.session)) {
@@ -128,7 +136,11 @@ const fields = new Map();
 const selections = new Map();   // session → text
 const asked = new Set();        // sessions that have sent a request
 window.tailzu.onField && window.tailzu.onField((p) => {
-  if (!p || !p.field || typeof p.field.kind !== "string") return;
+  if (!p) return;
+  // Any answer ends a first upload's wait, an empty one (no text field)
+  // included: there is nothing more to wait for.
+  fieldArrived(p.session);
+  if (!p.field || typeof p.field.kind !== "string") return;
   fields.set(p.session, { kind: p.field.kind, label: typeof p.field.label === "string" ? p.field.label : "" });
   if (typeof p.field.before === "string" && p.field.before && !wrote.has(p.session)) wrote.set(p.session, p.field.before);
   if (typeof p.field.selection === "string" && p.field.selection.trim() && !asked.has(p.session)) selections.set(p.session, p.field.selection);
@@ -136,6 +148,50 @@ window.tailzu.onField && window.tailzu.onField((p) => {
   for (const k of selections.keys()) if (k < (p.session || 0) - 20) selections.delete(k);
   for (const k of asked) if (k < (p.session || 0) - 20) asked.delete(k);
 });
+// THE FIRST REQUEST WAITS A MOMENT FOR THE FIELD. The main process reads the
+// field only after it has named the app (two system reads in a row), and a
+// short instruction ("shorter", "bullets") can be over before that lands. Sent
+// without it, the instruction went as plain dictation and was pasted over
+// the very text it was about. So a session's first request, when no read has
+// arrived, waits for one: at most desktop.recorder.fieldWaitMs, and never
+// past the moment the read would have given up (desktop.field.timeoutMs
+// after the app was named, or, while it has not been, 1.5 s after the press
+// plus that), so a long dictation into something that is not a text field
+// does not wait. The main process sends nothing when it finds no text
+// field, so that bound is all that ends the wait there. Only a Mac and
+// Windows read the field at all; anywhere else nothing is waited for.
+const pressedAt = new Map();    // session → when it started
+const namedAt = new Map();      // session → when the app it goes into was named
+const fieldSeen = new Set();    // sessions whose field read has answered
+const fieldWaiters = new Map(); // session → what to call when it does
+function fieldArrived(sid) {
+  if (!sid) return;
+  fieldSeen.add(sid);
+  for (const k of fieldSeen) if (k < sid - 20) fieldSeen.delete(k);
+  const wake = fieldWaiters.get(sid);
+  if (wake) { fieldWaiters.delete(sid); wake.forEach((f) => f()); }
+}
+/** Resolves when the session's field read has answered, or once waiting
+ *  longer could no longer help. At once for every request after the first. */
+function fieldRead(sid) {
+  if (asked.has(sid) || fieldSeen.has(sid) || privates.get(sid) || !K.bool("desktop.field.read", true)) return Promise.resolve();
+  // frontApp.focusedField reads nothing on Linux.
+  if (!/^(Mac|Win)/.test(navigator.platform || "")) return Promise.resolve();
+  const readMs = K.num("desktop.field.timeoutMs", 1200);
+  const givesUpAt = namedAt.has(sid) ? namedAt.get(sid) + readMs : (pressedAt.get(sid) || 0) + 1500 + readMs;
+  const ms = Math.min(K.num("desktop.recorder.fieldWaitMs", 900), givesUpAt - Date.now());
+  if (!(ms > 0)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      const rest = (fieldWaiters.get(sid) || []).filter((f) => f !== done);
+      if (rest.length) fieldWaiters.set(sid, rest); else fieldWaiters.delete(sid);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    fieldWaiters.set(sid, (fieldWaiters.get(sid) || []).concat(done));
+  });
+}
 /** The session's selection, for the request about to go, or "". Never off a
  *  private window (none is read there; this is the second lock). */
 function selectionFor(sid) {
@@ -144,9 +200,13 @@ function selectionFor(sid) {
 }
 /** The whitespace a selection starts and ends with. Its rewrite comes back
  *  trimmed, and pasted over a paragraph selected with its line break, it
- *  would join the next one; the main process puts these back around it. */
+ *  would join the next one; the main process puts these back around it.
+ *  Up to 64 characters each side, which the main process accepts: a block
+ *  of code indented deeper than a few spaces, or a run of blank lines,
+ *  otherwise lost what was cut, and even an edit that changed nothing
+ *  changed the document. */
 function edgesOf(selection) {
-  return [selection.match(/^\s*/)[0].slice(0, 8), selection.match(/\s*$/)[0].slice(-8)];
+  return [selection.match(/^\s*/)[0].slice(0, 64), selection.match(/\s*$/)[0].slice(-64)];
 }
 /** The field's kind and label, put on a request the way `put` adds fields. */
 function withField(sid, put) {
@@ -742,6 +802,9 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     // is worth telling anyone about.
     return isSegment ? null : () => emitError(sid, K.txt("desktop.mic.noAudio", "no audio captured"));
   }
+  // The session's first request carries the field read, and the selection
+  // in it, when that read is still on its way (see fieldRead).
+  await fieldRead(sid);
   // A request that never answers held the pill on "writing" until the next
   // press. It gets what a stretch of its length could need, then it fails.
   const ctl = new AbortController();
@@ -1033,8 +1096,13 @@ async function finishLive(sid) {
   try {
     // An empty answer is the server saying there is nothing to write —
     // noise the recogniser turned into words. Pasting the raw words
-    // instead was how they reached the field.
-    const refined = await refineText(raw, doneAlternative, wrote.get(sid), sid);
+    // instead was how they reached the field. The field read is waited for
+    // first (see fieldRead), so what it found before the cursor is the
+    // context; the second reading is taken before, as a press during the
+    // wait starts a new stream and clears it.
+    const alternative = doneAlternative;
+    await fieldRead(sid);
+    const refined = await refineText(raw, alternative, wrote.get(sid), sid);
     emitResult(sid, refined.text, refined.join, refined.edges);
   } catch (err) {
     // NOT THE RAW WORDS. A refine that failed (twice for a blip; a spent

@@ -130,8 +130,9 @@ about the app in front. A small guide comes up over it:
   ring with marching dots and a label. Blip, the films' one-eyed dotted
   presenter, peeks over the card's edge and points at it, a dotted thread
   from its finger to the ring. The answer is written on the card word by
-  word and said out loud (the read-aloud voice from Settings, else the
-  built-in one).
+  word and said out loud in the computer's own voice (the server's
+  read-aloud voice is a knob, desktop.agent.serverVoice, off by default: it
+  would count against the month's words).
 - **"What does this error mean?"** An answer, on the card and out loud.
 - **"Open #design and tell them the mockups are ready."** It does it step by
   step, with the plan as a checklist. It stops before anything that sends,
@@ -149,7 +150,10 @@ the labels) and otherwise with one call to a small, fast model with no
 reasoning. The device decides what needs asking first and can only make the
 server's rating stricter: Enter in a composer, a key outside a text field,
 any click in a browser (pages write their own labels), a code or an e-mail
-copied from the screen. It never watches your input to stop itself (the key
+copied from the screen. Every screen it reads is checked again for a
+private window or a sensitive app (the window's title is read for that and
+never sent), and when it cannot tell which window is in front it does not
+look. It never watches your input to stop itself (the key
 hook cannot tell its keys from yours) and never puts an old clipboard back.
 
 The explanation box is redesigned with it (`guide.html`): ink and pale with

@@ -9,6 +9,9 @@
 //   key "hang"      stays alive and never answers anything again
 //   open "noshape"  answers with no "ok" in it
 //   snapshot        is preceded by junk lines and written in two pieces
+//   snapshot max 2  has a window without a title (an older helper)
+//   snapshot max 3  has a window title longer than 200 characters
+//   snapshot max 4  has no window at all
 // Every answer carries `got` (the command as received) and `pid`, so a test
 // can see what was sent and whether the helper was started again.
 const readline = require("readline");
@@ -19,7 +22,7 @@ const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 const SNAPSHOT = {
   ok: true,
   app: { name: "Fake", pid: 4242, bundleId: "space.tailzu.fake" },
-  window: { frame: [100, 80, 800, 600] },
+  window: { frame: [100, 80, 800, 600], title: "Q3 plan.txt — Fake" },
   focused: "e2",
   selection: "",
   scale: "points",
@@ -47,7 +50,11 @@ function answer(req) {
       process.stdout.write('{"id":-7,"ok":true}\n');
       process.stdout.write('{"ok":true,"elements":[]}\n');
       process.stdout.write("\n");
-      const line = JSON.stringify({ ...base, ...SNAPSHOT }) + "\n";
+      const snap = { ...SNAPSHOT };
+      if (req.max === 2) snap.window = { frame: SNAPSHOT.window.frame };
+      if (req.max === 3) snap.window = { ...SNAPSHOT.window, title: "Private Browsing — " + "x".repeat(300) };
+      if (req.max === 4) delete snap.window;
+      const line = JSON.stringify({ ...base, ...snap }) + "\n";
       const cut = Math.floor(line.length / 2);
       process.stdout.write(line.slice(0, cut));
       setTimeout(() => process.stdout.write(line.slice(cut)), 15);
