@@ -8,7 +8,11 @@
 #   in   {"id":n,"cmd":"snapshot","max":250}
 #   out  {"id":n,"ok":true,"app":{...},"elements":[...], ...}
 # Every line is answered, in the order asked, even when UI Automation throws;
-# a line that is not JSON is answered {"ok":false,"error":"malformed"}. The
+# a line that is not JSON is answered {"ok":false,"error":"malformed"}. The one
+# exception to the order is "look" (the window's pixels and the text in them),
+# which is answered by its own thread when it is done, so the snapshot asked at
+# the same moment is not kept waiting behind it; the driver matches answers by
+# id, so the order was never what it relied on. The
 # conventions (an Add-Type C# block for Win32, $ErrorActionPreference, UTF-8
 # output, run as command text with -EncodedCommand and windowsHide by the Node
 # side) mirror frontApp.js's PowerShell, so the two read the same to anyone who
@@ -202,6 +206,308 @@ try {
   $TXP = [System.Windows.Automation.TextPattern]
   $uia = $true
 } catch {}
+
+# PIXELS FOR "LOOK": the window in front captured from the screen, made into a
+# JPEG for the picture path, and handed to Windows' own OCR for the text in it,
+# each line where it is on screen. This is its own Add-Type, apart from
+# TzAgent's, so that if System.Drawing will not load, the snapshot and every
+# action still work and look alone answers "no_capture". The C# 5 rules above
+# hold here too.
+$script:lookReady = $false
+try {
+  Add-Type -ReferencedAssemblies System.Drawing -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+public static class TzShot {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+
+  const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+  const int SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77, SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
+  const int LINE_MAX = 120;
+
+  // The window as it is drawn, in physical pixels (the helper is DPI aware),
+  // clipped to the desktop: {x, y, w, h}, or null for a window that is
+  // minimized or has nothing on screen. DWM's extended frame bounds rather
+  // than GetWindowRect: on Windows 10 and 11 the window rect takes in an
+  // invisible resize border several pixels wide on three sides, which would
+  // come out as a fringe of whatever is behind, and a maximized window's rect
+  // reaches past the screen's edge.
+  public static int[] Frame(IntPtr h) {
+    if (h == IntPtr.Zero || IsIconic(h)) return null;
+    RECT r = new RECT();
+    bool got = false;
+    try { got = DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out r, Marshal.SizeOf(typeof(RECT))) == 0; } catch (Exception) { got = false; }
+    if (!got || r.Right <= r.Left || r.Bottom <= r.Top) {
+      if (!GetWindowRect(h, out r)) return null;
+    }
+    int left = r.Left, top = r.Top, right = r.Right, bottom = r.Bottom;
+    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN), vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (vw > 0 && vh > 0) {
+      int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+      left = Math.Max(left, vx); top = Math.Max(top, vy);
+      right = Math.Min(right, vx + vw); bottom = Math.Min(bottom, vy + vh);
+    }
+    if (right - left < 1 || bottom - top < 1) return null;
+    return new int[] { left, top, right - left, bottom - top };
+  }
+
+  // The screen's pixels where the window is, as the user sees them: whatever
+  // is over the window is in them too, Tailzu's own guide included unless
+  // its content protection is on (desktop.guide.contentProtection, off by
+  // default). A locked or secure desktop throws, and the caller answers
+  // capture_failed.
+  public static Bitmap Capture(int[] f) {
+    Bitmap bmp = new Bitmap(f[2], f[3], PixelFormat.Format32bppArgb);
+    try {
+      using (Graphics g = Graphics.FromImage(bmp)) {
+        g.CopyFromScreen(f[0], f[1], 0, 0, new Size(f[2], f[3]), CopyPixelOperation.SourceCopy);
+      }
+    } catch (Exception) {
+      bmp.Dispose();
+      throw;
+    }
+    return bmp;
+  }
+
+  // A copy no longer than maxSide on its long side, or the same bitmap when it
+  // already fits. Bicubic, because the picture path exists for what is small
+  // and drawn (an equation, a chart's labels) and has to stay legible.
+  public static Bitmap Fit(Bitmap src, int maxSide) {
+    int w = src.Width, h = src.Height;
+    int longest = Math.Max(w, h);
+    if (maxSide <= 0 || longest <= maxSide) return src;
+    double k = (double)maxSide / longest;
+    int nw = Math.Max(1, (int)Math.Round(w * k)), nh = Math.Max(1, (int)Math.Round(h * k));
+    Bitmap dst = new Bitmap(nw, nh, PixelFormat.Format32bppArgb);
+    try {
+      using (Graphics g = Graphics.FromImage(dst))
+      using (ImageAttributes edges = new ImageAttributes()) {
+        g.CompositingMode = CompositingMode.SourceCopy;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        // Without it the filter reads past the edge and draws a dark rim.
+        edges.SetWrapMode(WrapMode.TileFlipXY);
+        g.DrawImage(src, new Rectangle(0, 0, nw, nh), 0, 0, w, h, GraphicsUnit.Pixel, edges);
+      }
+    } catch (Exception) {
+      dst.Dispose();
+      throw;
+    }
+    return dst;
+  }
+
+  static ImageCodecInfo jpegCodec;
+  static ImageCodecInfo JpegCodec() {
+    if (jpegCodec == null) {
+      foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders()) {
+        if (c.FormatID == ImageFormat.Jpeg.Guid) { jpegCodec = c; break; }
+      }
+    }
+    return jpegCodec;
+  }
+
+  // The bitmap as a JPEG at the given quality (1..100), base64, or null when
+  // this Windows has no JPEG encoder.
+  public static string Jpeg(Bitmap bmp, int quality) {
+    ImageCodecInfo codec = JpegCodec();
+    if (codec == null) return null;
+    using (MemoryStream ms = new MemoryStream())
+    using (EncoderParameters ps = new EncoderParameters(1)) {
+      ps.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, (long)Math.Max(1, Math.Min(100, quality)));
+      bmp.Save(ms, codec, ps);
+      return Convert.ToBase64String(ms.GetBuffer(), 0, (int)ms.Length);
+    }
+  }
+
+  // The bitmap as a BMP in memory, for the OCR's decoder: a BMP is a straight
+  // copy of the pixels, where a PNG would spend a hundred milliseconds on
+  // compression that is thrown away a moment later.
+  public static MemoryStream Bmp(Bitmap bmp) {
+    MemoryStream ms = new MemoryStream();
+    try { bmp.Save(ms, ImageFormat.Bmp); } catch (Exception) { ms.Dispose(); throw; }
+    ms.Position = 0;
+    return ms;
+  }
+
+  // A JSON string, quoted. The answer is put together here rather than with
+  // ConvertTo-Json: a few hundred lines through the cmdlet one by one take
+  // longer than the OCR did, and Windows PowerShell's encoder turns a wrapped
+  // array into {"value":[...],"Count":n}.
+  public static string Json(string s) {
+    if (s == null) return "\"\"";
+    StringBuilder sb = new StringBuilder(s.Length + 8);
+    sb.Append('"');
+    foreach (char c in s) {
+      switch (c) {
+        case '"': sb.Append("\\\""); break;
+        case '\\': sb.Append("\\\\"); break;
+        case '\n': sb.Append("\\n"); break;
+        case '\r': sb.Append("\\r"); break;
+        case '\t': sb.Append("\\t"); break;
+        default:
+          if (c < ' ' || c == '\u2028' || c == '\u2029') sb.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+          else sb.Append(c);
+          break;
+      }
+    }
+    sb.Append('"');
+    return sb.ToString();
+  }
+
+  static readonly Regex Space = new Regex("\\s+");
+
+  // Whitespace collapsed and trimmed, at most max characters, never cut
+  // between the two halves of a surrogate pair.
+  public static string Clean(string s, int max) {
+    if (string.IsNullOrEmpty(s)) return "";
+    string t = Space.Replace(s, " ").Trim();
+    if (t.Length > max) {
+      int n = max;
+      if (n > 0 && char.IsHighSurrogate(t[n - 1])) n--;
+      t = t.Substring(0, n);
+    }
+    return t;
+  }
+
+  // Text as it is compared with the window's title: case and spaces do not
+  // count, nor the ellipsis an app puts where it cut a title short.
+  public static string Key(string s) {
+    if (string.IsNullOrEmpty(s)) return "";
+    StringBuilder sb = new StringBuilder(s.Length);
+    foreach (char c in s) { if (!char.IsWhiteSpace(c)) sb.Append(char.ToLowerInvariant(c)); }
+    string k = sb.ToString();
+    if (k.EndsWith("\u2026", StringComparison.Ordinal)) k = k.Substring(0, k.Length - 1);
+    else if (k.EndsWith("...", StringComparison.Ordinal)) k = k.Substring(0, k.Length - 3);
+    return k;
+  }
+
+  // Whether an OCR line is the window's title drawn in its title bar or tab:
+  // the whole of it, a piece of it (cut short), or a line that has it inside
+  // (the title read as one line with the buttons beside it). The title never
+  // leaves the computer, and it is caught here, against the whole of it,
+  // because the device sees it capped at 200 characters and would miss a long
+  // one, or one read together with what is beside it.
+  public static bool IsTitle(string text, string titleKey) {
+    if (string.IsNullOrEmpty(titleKey)) return false;
+    string k = Key(text);
+    if (k.Length == 0) return false;
+    if (k == titleKey) return true;
+    if (k.Length >= 8 && titleKey.IndexOf(k, StringComparison.Ordinal) >= 0) return true;
+    return titleKey.Length >= 8 && k.IndexOf(titleKey, StringComparison.Ordinal) >= 0;
+  }
+
+  static string N(long v) { return v.ToString(CultureInfo.InvariantCulture); }
+
+  // One OCR line as the device gets it, or null for one with no text or no
+  // size: its text, and the box around its words (x0,y0 to x1,y1 in the
+  // picture the engine read), scaled by k back to the capture's pixels and
+  // moved by dx,dy from the window's corner to the screen's.
+  public static string Line(string text, double x0, double y0, double x1, double y1, double k, int dx, int dy) {
+    string t = Clean(text, LINE_MAX);
+    if (t.Length == 0 || !(x1 > x0) || !(y1 > y0)) return null;
+    long l = (long)Math.Round(x0 * k) + dx, tp = (long)Math.Round(y0 * k) + dy;
+    long rt = (long)Math.Round(x1 * k) + dx, b = (long)Math.Round(y1 * k) + dy;
+    return "{\"text\":" + Json(t) + ",\"frame\":[" + N(l) + "," + N(tp) + "," + N(Math.Max(1, rt - l)) + "," + N(Math.Max(1, b - tp)) + "]}";
+  }
+
+  // The whole answer, one line. idJson is the request's id as JSON already.
+  public static string Reply(string idJson, int[] frame, string title, string[] lines, string jpeg, int width, int height, string ocr, long ms) {
+    StringBuilder sb = new StringBuilder(512 + (jpeg == null ? 0 : jpeg.Length));
+    sb.Append("{\"id\":").Append(string.IsNullOrEmpty(idJson) ? "null" : idJson);
+    sb.Append(",\"ok\":true,\"window\":{\"frame\":[");
+    for (int i = 0; i < 4; i++) { if (i > 0) sb.Append(','); sb.Append(N(frame[i])); }
+    sb.Append("],\"title\":").Append(Json(title)).Append("},\"scale\":\"pixels\",\"lines\":[");
+    bool first = true;
+    if (lines != null) {
+      foreach (string l in lines) {
+        if (string.IsNullOrEmpty(l)) continue;
+        if (!first) sb.Append(',');
+        sb.Append(l);
+        first = false;
+      }
+    }
+    sb.Append("],\"image\":");
+    if (string.IsNullOrEmpty(jpeg)) sb.Append("null");
+    else sb.Append("{\"mime\":\"image/jpeg\",\"data\":\"").Append(jpeg).Append("\",\"width\":").Append(N(width)).Append(",\"height\":").Append(N(height)).Append('}');
+    sb.Append(",\"ocr\":").Append(Json(ocr)).Append(",\"ms\":").Append(N(ms)).Append('}');
+    return sb.ToString();
+  }
+
+  public static string Fail(string idJson, string error) {
+    return "{\"id\":" + (string.IsNullOrEmpty(idJson) ? "null" : idJson) + ",\"ok\":false,\"error\":" + Json(error) + "}";
+  }
+
+  // One whole line under the console writer's own lock. The reader loop
+  // answers other commands on its thread while a look is being made on
+  // another, and two answers must never run into one line.
+  public static void Send(string line) {
+    TextWriter o = Console.Out;
+    lock (o) { o.WriteLine(line); o.Flush(); }
+  }
+}
+'@
+  $script:lookReady = $true
+} catch {}
+
+# Windows.Media.Ocr (Windows 10 and later), loaded the way frontApp.js's
+# PowerShell loads it and awaited the same way, through
+# WindowsRuntimeSystemExtensions.AsTask. The types are kept and handed to the
+# look worker, which runs in a runspace of its own, rather than left for it to
+# find by name. $null when any of it will not load: look then still captures
+# the picture, and answers with no lines.
+function TzLoadWinRT {
+  try {
+    Add-Type -AssemblyName System.Runtime.WindowsRuntime
+    $at = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+    $eng = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+    $dec = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+    $sbm = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+    [void][Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+    $res = [Windows.Media.Ocr.OcrResult]
+    if ($null -eq $at -or $null -eq $eng -or $null -eq $dec -or $null -eq $sbm -or $null -eq $res) { return $null }
+    return @{ asTask = $at; engine = $eng; decoder = $dec; bitmap = $sbm; result = $res; streams = [System.IO.WindowsRuntimeStreamExtensions] }
+  } catch { return $null }
+}
+
+# A look runs on a thread of its own, never the reader loop's. OCR of a big
+# window takes a few hundred milliseconds, and the device asks for a snapshot
+# and a look at the same moment (Alt twice): made here, the look would hold the
+# snapshot past its own timeout. A small pool, opened now while nothing is
+# waiting so the first look starts at once; MTA, so the OCR engine one worker
+# makes can be used from the pool's other thread without a message pump.
+function TzOpenLookPool {
+  try {
+    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault2()
+    $pool = [runspacefactory]::CreateRunspacePool(1, 2, $iss, $Host)
+    try { $pool.ApartmentState = [System.Threading.ApartmentState]::MTA } catch {}
+    try { $pool.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread } catch {}
+    $pool.Open()
+    return $pool
+  } catch { return $null }
+}
+
+$script:winrt = $null
+$script:lookPool = $null
+$script:lookKit = $null
+$script:looks = New-Object System.Collections.Generic.List[object]
+if ($script:lookReady) {
+  $script:winrt = TzLoadWinRT
+  $script:lookPool = TzOpenLookPool
+  # Everything a worker needs, by reference: the C# and WinRT types, and one
+  # table the workers share (the OCR engine, made once).
+  $script:lookKit = @{ shot = [TzShot]; winrt = $script:winrt; shared = [hashtable]::Synchronized(@{}) }
+}
 
 # UI Automation control types onto the contract's roles. Anything not here is
 # dropped, except a Pane/Group/Custom that has a name AND can be invoked, which
@@ -556,8 +862,10 @@ function TzSnapshot([int]$max, [int]$budget) {
       $tp = $null
       if ($fe.TryGetCurrentPattern($TXP::Pattern, [ref]$tp)) {
         $ro = $false
-        $vp = $null
-        if ($fe.TryGetCurrentPattern($VP::Pattern, [ref]$vp)) { $ro = [bool]$vp.Current.IsReadOnly }
+        # Not $vp: PowerShell's names ignore case, so a local $vp would be
+        # $VP, the ValuePattern type, and $VP::Pattern would read as null.
+        $valp = $null
+        if ($fe.TryGetCurrentPattern($VP::Pattern, [ref]$valp)) { $ro = [bool]$valp.Current.IsReadOnly }
         if (-not $ro) {
           $sel = $tp.GetSelection()
           if ($sel -and $sel.Length -gt 0) {
@@ -717,10 +1025,11 @@ function TzClickEl($el, [IntPtr]$root) {
 
 function TzSetValue($el, [string]$text) {
   try { $el.SetFocus() } catch {}
-  $vp = $null
-  if ($el.TryGetCurrentPattern($VP::Pattern, [ref]$vp)) {
-    if ($vp.Current.IsReadOnly) { return @{ ok = $false; error = 'read_only' } }
-    $vp.SetValue($text)
+  # $valp, never $vp, which is $VP (see the selection in TzSnapshot).
+  $valp = $null
+  if ($el.TryGetCurrentPattern($VP::Pattern, [ref]$valp)) {
+    if ($valp.Current.IsReadOnly) { return @{ ok = $false; error = 'read_only' } }
+    $valp.SetValue($text)
     return @{ ok = $true }
   }
   return @{ ok = $false; error = 'no_value' }
@@ -785,7 +1094,7 @@ function TzKey([string]$chord) {
   for ($i = 0; $i -lt $tokens.Count - 1; $i++) { if ($MODS -contains $tokens[$i]) { $v = $VK[$tokens[$i]]; if ($v) { $modVks += $v } } }
 
   $keyVk = -1
-  $ext = $EXT -contains $keyTok
+  $extended = $EXT -contains $keyTok
   if ($VK.ContainsKey($keyTok)) {
     $keyVk = $VK[$keyTok]
   } elseif ($keyTok.Length -eq 1) {
@@ -801,8 +1110,8 @@ function TzKey([string]$chord) {
   if ($keyVk -lt 0) { return @{ ok = $false; error = 'bad_key' } }
 
   foreach ($v in $modVks) { [TzAgent]::Key([uint16]$v, $false, $false) }
-  [TzAgent]::Key([uint16]$keyVk, $false, $ext)
-  [TzAgent]::Key([uint16]$keyVk, $true, $ext)
+  [TzAgent]::Key([uint16]$keyVk, $false, $extended)
+  [TzAgent]::Key([uint16]$keyVk, $true, $extended)
   for ($i = $modVks.Count - 1; $i -ge 0; $i--) { [TzAgent]::Key([uint16]$modVks[$i], $true, $false) }
   return @{ ok = $true }
 }
@@ -899,6 +1208,242 @@ function TzOpen([string]$name) {
   return @{ ok = $true }
 }
 
+# ---- Look -----------------------------------------------------------------------
+# The window in front as a picture and as the text in it, for the device alone:
+# the OCR lines become elements it can point at before any server is asked,
+# and the picture is kept on the device unless the person lets one go to the
+# vision model. Answered in the same units as the snapshot (physical pixels,
+# global), the window's frame being exactly what the picture shows.
+$LOOK_BUDGET_MS = 1500
+$LOOK_MAX_SIDE = 1600
+$LOOK_QUALITY = 82
+
+# The worker, run in the look pool (TzOpenLookPool). It is handed everything
+# it uses, since a runspace of its own shares no variables or functions with
+# this one, and it writes its own answer line: the reader loop is meanwhile
+# blocked reading the next command and could not. $budget bounds the part that
+# waits (the OCR and the reading of its lines); the capture and the JPEG are
+# quick and run to the end. Whatever happens, the line is answered.
+$TZ_LOOK_WORKER = {
+  param($kit, $warm, $idJson, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey)
+  $ErrorActionPreference = 'SilentlyContinue'
+  $LINES_MAX = 300
+  $shot = $kit.shot
+  $rt = $kit.winrt
+
+  # An IAsyncOperation awaited no longer than $ms. $null when it has not
+  # finished by then; it goes on by itself and its result is dropped.
+  function TzAwaitFor($op, $t, $ms) {
+    $task = $rt.asTask.MakeGenericMethod($t).Invoke($null, @($op))
+    if (-not $task.Wait([int][math]::Max(1, $ms))) { return $null }
+    return $task.Result
+  }
+
+  # One OCR engine for the helper's life, shared by the pool's threads: for
+  # the user's own languages, else for the first language Windows has a
+  # recognizer for, so a language list with no OCR pack still reads something.
+  function TzOcrEngine {
+    if ($null -eq $rt) { return $null }
+    $engine = $kit.shared['engine']
+    if ($null -ne $engine) { return $engine }
+    $engineType = $rt.engine
+    try { $engine = $engineType::TryCreateFromUserProfileLanguages() } catch {}
+    if ($null -eq $engine) {
+      try {
+        $langs = $engineType::AvailableRecognizerLanguages
+        if ($null -ne $langs -and $langs.Count -gt 0) { $engine = $engineType::TryCreateFromLanguage($langs[0]) }
+      } catch {}
+    }
+    if ($null -ne $engine) { $kit.shared['engine'] = $engine }
+    return $engine
+  }
+
+  # Started with the helper, so the first look does not pay for the engine.
+  if ($warm) { $null = TzOcrEngine; return }
+
+  $sent = $false
+  $bmp = $null
+  try {
+    try { $bmp = $shot::Capture($frame) } catch { $bmp = $null }
+    if ($null -eq $bmp) { $shot::Send($shot::Fail($idJson, 'capture_failed')); $sent = $true; return }
+    # What the line-reading needs at the end, kept back from the OCR's wait.
+    $reserve = [math]::Min(200, [int]($budget / 5))
+
+    # The text first: the engine reads on threads of its own, so it works
+    # while this one makes the JPEG. Read from the capture at full size
+    # (smaller text is lost when scaled), unless the window is bigger than the
+    # engine takes, when it reads a copy and $up scales its boxes back up.
+    $ocr = 'off'
+    $task = $null
+    $sbm = $null
+    $up = 1.0
+    if ($wantOcr) {
+      $ocr = 'unavailable'
+      $eng = TzOcrEngine
+      if ($null -ne $eng) {
+        $ocr = 'timeout'
+        $src = $bmp
+        $mem = $null
+        try {
+          $engineType = $rt.engine
+          $most = 0
+          try { $most = [int]$engineType::MaxImageDimension } catch {}
+          if ($most -gt 0 -and [math]::Max($bmp.Width, $bmp.Height) -gt $most) { $src = $shot::Fit($bmp, $most); $up = $bmp.Width / $src.Width }
+          # From an in-memory stream: nothing of the screen is written to disk.
+          $mem = $shot::Bmp($src)
+          $streamsType = $rt.streams
+          $decoderType = $rt.decoder
+          $ras = $streamsType::AsRandomAccessStream($mem)
+          $dec = TzAwaitFor ($decoderType::CreateAsync($ras)) $rt.decoder ($budget - $reserve - $sw.ElapsedMilliseconds)
+          if ($null -ne $dec) { $sbm = TzAwaitFor ($dec.GetSoftwareBitmapAsync()) $rt.bitmap ($budget - $reserve - $sw.ElapsedMilliseconds) }
+          if ($null -ne $sbm) { $task = $rt.asTask.MakeGenericMethod($rt.result).Invoke($null, @($eng.RecognizeAsync($sbm))) }
+        } catch { $ocr = 'failed' } finally {
+          if ($null -ne $mem) { $mem.Dispose() }
+          if (-not [object]::ReferenceEquals($src, $bmp)) { $src.Dispose() }
+        }
+      }
+    }
+
+    # The picture: exactly the window's frame, its long side brought down to
+    # $maxSide.
+    $jpeg = $null
+    $iw = 0
+    $ih = 0
+    if ($wantImage) {
+      $small = $null
+      try {
+        $small = $shot::Fit($bmp, $maxSide)
+        $jpeg = $shot::Jpeg($small, $quality)
+        $iw = $small.Width
+        $ih = $small.Height
+      } catch { $jpeg = $null } finally {
+        if ($null -ne $small -and -not [object]::ReferenceEquals($small, $bmp)) { $small.Dispose() }
+      }
+    }
+    $bmp.Dispose()
+    $bmp = $null
+
+    # The lines: an OcrLine has no box of its own, so it is the union of its
+    # words' boxes, moved from the picture's corner to the screen's. Read
+    # until the budget is spent; what was read by then is answered. The list
+    # is made with ::new(), not New-Object: a cmdlet outside the core would be
+    # module-loaded on this runspace's first look, a tenth of a second of it.
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $task) {
+      $done = $false
+      try { $done = $task.Wait([int][math]::Max(1, $budget - $reserve - $sw.ElapsedMilliseconds)) } catch { $ocr = 'failed' }
+      if ($done) {
+        $ocr = 'ok'
+        try {
+          foreach ($ln in $task.Result.Lines) {
+            if ($lines.Count -ge $LINES_MAX) { break }
+            if ($sw.ElapsedMilliseconds -ge $budget) { $ocr = 'partial'; break }
+            # The window's title, read off its title bar or tab, is never a line.
+            if ($shot::IsTitle($ln.Text, $titleKey)) { continue }
+            $x0 = [double]::MaxValue; $y0 = [double]::MaxValue; $x1 = [double]::MinValue; $y1 = [double]::MinValue
+            foreach ($wd in $ln.Words) {
+              $r = $wd.BoundingRect
+              if ($r.X -lt $x0) { $x0 = $r.X }
+              if ($r.Y -lt $y0) { $y0 = $r.Y }
+              if ($r.X + $r.Width -gt $x1) { $x1 = $r.X + $r.Width }
+              if ($r.Y + $r.Height -gt $y1) { $y1 = $r.Y + $r.Height }
+            }
+            $j = $shot::Line($ln.Text, $x0, $y0, $x1, $y1, $up, $frame[0], $frame[1])
+            if ($j) { $lines.Add($j) }
+          }
+        } catch { if ($lines.Count -eq 0) { $ocr = 'failed' } else { $ocr = 'partial' } }
+        try { $sbm.Dispose() } catch {}
+      }
+    }
+
+    $shot::Send($shot::Reply($idJson, $frame, $title, $lines.ToArray(), $jpeg, $iw, $ih, $ocr, $sw.ElapsedMilliseconds))
+    $sent = $true
+  } catch {
+  } finally {
+    if (-not $sent) { try { $shot::Send($shot::Fail($idJson, 'exception')) } catch {} }
+    if ($null -ne $bmp) { try { $bmp.Dispose() } catch {} }
+  }
+}
+
+# Finished workers, ended and disposed, so the pool's bookkeeping does not grow
+# with every look.
+function TzLookReap {
+  for ($i = $script:looks.Count - 1; $i -ge 0; $i--) {
+    $j = $script:looks[$i]
+    if ($j.async.IsCompleted) {
+      try { [void]$j.ps.EndInvoke($j.async) } catch {}
+      try { $j.ps.Dispose() } catch {}
+      $script:looks.RemoveAt($i)
+    }
+  }
+}
+
+function TzLookRun([object[]]$argv) {
+  $psh = [powershell]::Create()
+  $psh.RunspacePool = $script:lookPool
+  [void]$psh.AddScript($TZ_LOOK_WORKER)
+  foreach ($a in $argv) { [void]$psh.AddArgument($a) }
+  $script:looks.Add(@{ ps = $psh; async = $psh.BeginInvoke() })
+}
+
+# The engine made in the background as the helper starts.
+function TzLookWarm {
+  if ($null -eq $script:lookPool -or $null -eq $script:lookKit -or $null -eq $script:lookKit.winrt) { return }
+  try { TzLookRun @($script:lookKit, $true) } catch {}
+}
+
+# Start a look; its worker answers the line. Answered here, at once, only when
+# there is nothing to look at. The window is the one in front NOW, its frame
+# and title read on this thread before the worker starts.
+function TzLookBegin($id, $msg) {
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  if (-not $script:lookReady) { return @{ id = $id; ok = $false; error = 'no_capture' } }
+  $h = [TzAgent]::GetForegroundWindow()
+  if ($h -eq [IntPtr]::Zero) { return @{ id = $id; ok = $false; error = 'no_window' } }
+  $frame = [TzShot]::Frame($h)
+  if ($null -eq $frame) { return @{ id = $id; ok = $false; error = 'no_window' } }
+  # The title for the device's own checks, capped as the snapshot's is
+  # (TzTitleCap); and whole, as a key, for the worker to keep it out of the
+  # lines (TzShot.IsTitle).
+  $whole = ''
+  try { $whole = TzClean ([TzAgent]::WindowTitle($h)) $TITLE_READ } catch {}
+  $title = TzTitleCap $whole
+  $titleKey = [TzShot]::Key($whole)
+
+  # The options, kept sane whatever is sent.
+  $budget = $LOOK_BUDGET_MS
+  $b = 0
+  if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
+  if ($budget -lt 100) { $budget = 100 } elseif ($budget -gt 10000) { $budget = 10000 }
+  $maxSide = $LOOK_MAX_SIDE
+  $m = 0
+  if ($msg.maxSide -ne $null -and [int]::TryParse("$($msg.maxSide)", [ref]$m) -and $m -gt 0) { $maxSide = $m }
+  if ($maxSide -lt 64) { $maxSide = 64 } elseif ($maxSide -gt 4096) { $maxSide = 4096 }
+  # 0..1 as the driver sends it, or a percentage.
+  $quality = $LOOK_QUALITY
+  $q = 0.0
+  if ($msg.quality -ne $null -and [double]::TryParse("$($msg.quality)", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$q) -and $q -gt 0) {
+    if ($q -le 1) { $q = $q * 100 }
+    $quality = [int][math]::Round($q)
+  }
+  if ($quality -lt 10) { $quality = 10 } elseif ($quality -gt 100) { $quality = 100 }
+  $wantOcr = -not ($msg.ocr -eq $false)
+  $wantImage = -not ($msg.image -eq $false)
+  $idJson = 'null'
+  try { $idJson = ConvertTo-Json -InputObject $id -Compress } catch {}
+
+  TzLookReap
+  $argv = @($script:lookKit, $false, $idJson, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey)
+  if ($null -ne $script:lookPool) {
+    TzLookRun $argv
+  } else {
+    # No pool (it would not open): the look runs here and the loop waits for
+    # it, which is slower but still answers within the budget.
+    $null = & $TZ_LOOK_WORKER @argv
+  }
+  return $null
+}
+
 # ---- The loop -------------------------------------------------------------------
 function TzReply($obj) {
   $json = ''
@@ -928,6 +1473,7 @@ function TzReplySnapshot($id, $snap) {
 
 try { [Console]::InputEncoding = [Text.Encoding]::UTF8 } catch {}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
+TzLookWarm
 
 while ($true) {
   $line = [Console]::In.ReadLine()
@@ -946,7 +1492,7 @@ while ($true) {
   $cmd = "$($msg.cmd)"
   try {
     switch ($cmd) {
-      'ping' { TzReply @{ id = $id; ok = $true; pong = $true; dpi = $script:dpi }; break }
+      'ping' { TzReply @{ id = $id; ok = $true; pong = $true; dpi = $script:dpi; look = [bool]$script:lookReady; ocr = ($null -ne $script:winrt); pool = ($null -ne $script:lookPool) }; break }
       'trusted' { TzReply @{ id = $id; ok = $true; trusted = $true }; break }
 
       'snapshot' {
@@ -1022,6 +1568,14 @@ while ($true) {
 
       'open' {
         $r = TzOpen "$($msg.app)"; $r.id = $id; TzReply $r; break
+      }
+
+      'look' {
+        # Answered by its worker when it is done (see TzLookBegin); here only
+        # when there is nothing to look at.
+        $r = TzLookBegin $id $msg
+        if ($null -ne $r) { TzReply $r }
+        break
       }
 
       default { TzReply @{ id = $id; ok = $false; error = 'unknown_cmd' }; break }

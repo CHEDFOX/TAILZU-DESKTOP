@@ -20,15 +20,44 @@
 //               done, or a stop: too many steps, too long, the same thing twice
 //               to no effect, Esc.
 //
+// The screen is read twice at Alt twice, while they are still speaking: the
+// tree, and a look at the window (driver.look) — its picture, and the text in
+// it read by the system's own OCR, each line with its place. The lines join
+// the tree as elements of their own (o1, o2…), so a label drawn on a canvas
+// or a web page with no accessibility can still be named and pointed at. Then
+// three ways to answer, cheapest first:
+//
+//   instant     "where's Export?" matched here, against the labels and the
+//               lines (resolver.js): the ring, "Here's Export.", done, with no
+//               request at all. The ring is up, tentatively, while they are
+//               still saying it (preview).
+//   picture     a question about something drawn ("explain this equation",
+//               "what does this chart show"): ONE cropped picture of it goes
+//               with the question, only with their permission for this app,
+//               and the card says it went. Never from a private window or a
+//               sensitive app; the window's picture is checked like its tree.
+//   text        everything else, as before; with the live caption's words
+//               as the utterance when there are some, so the server has
+//               nothing to transcribe.
+//
 // Pure logic with every dependency injected (the driver, the guide window, the
-// network, the clipboard paste, the microphone, the clock), so a whole run can
-// be played in a test without Electron, a screen or a server.
+// network, the clipboard paste, the microphone, the clock, the picture's crop
+// and its permission), so a whole run can be played in a test without
+// Electron, a screen or a server.
 
 const crypto = require("crypto");
 const frontApp = require("./frontApp.js");
+const resolver = require("./resolver.js");
 
 /** The server takes this many elements and answers 413 above it. */
 const MAX_ELEMENTS = 250;
+/** The server also measures the screen as its prompt carries it, a line an
+ *  element, and answers 413 for the whole step above AGENT_SCREEN_MAX_CHARS
+ *  (24,000 by default). A page of text read off the window line by line fills
+ *  the element list with lines of 80 characters and goes past that, so the
+ *  lines are only added while the screen stays this far inside it: such a
+ *  page goes with its first lines rather than not at all. */
+const SCREEN_CHARS = 20000;
 /** History the server takes, oldest first. Older turns fall off the front. */
 const MAX_HISTORY = 16;
 /** A run that has not finished in this long is stopped: a loop that keeps
@@ -39,8 +68,14 @@ const RUN_DEADLINE_MS = 60000;
 const SNAPSHOT_GRACE_MS = 250;
 /** How far one SCROLL goes, in lines. The protocol carries only a direction. */
 const SCROLL_LINES = 5;
+/** The server takes a picture up to this size (AGENT_IMAGE_MAX_BYTES) and
+ *  answers 413 above it; a crop that big is not sent at all. */
+const MAX_PICTURE_BYTES = 2000000;
+/** "The largest image" on screen has to be at least this big to be the
+ *  picture: smaller is an icon or an avatar, and the window says more. */
+const MIN_PICTURE = [120, 80];
 
-const TERMINAL = new Set(["action", "ask", "done", "error"]);
+const TERMINAL = new Set(["action", "ask", "done", "error", "look"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
 /** Actions that mean nothing without an element. */
 const NEEDS_ID = new Set(["press", "set", "focus"]);
@@ -63,6 +98,9 @@ const TEXT = {
   incomplete: "The answer was cut off. Try again?",
   failed: "Something went wrong.",
   signIn: "Sign in to Tailzu to use Ask.",
+  needLook: "I'd have to see the picture to answer that, and I can't look at it here.",
+  looking: "Looking",
+  pictureSent: "1 picture sent",
 };
 
 // ---- small helpers ----------------------------------------------------------
@@ -85,6 +123,8 @@ function elementsOf(snapshot) {
     ? snapshot.elements.filter((e) => e && typeof e === "object")
     : [];
 }
+/** The accessibility tree's elements, without the lines read off a picture. */
+const treeOf = (snapshot) => elementsOf(snapshot).filter((e) => e.ocr !== true);
 
 /** The element with keyboard focus: the one the snapshot names, or the first
  *  one that says so itself. */
@@ -165,6 +205,11 @@ const stripUrls = (s) => s.replace(URL_TAIL, "$1");
 // The same test as a yes or no: some URL in the text has a query or a
 // fragment. Used where stripping is not an option (the selection).
 const HAS_URL_TAIL = /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s?#]*[?#]\S/i;
+// A line read off the screen has its URLs as they are drawn, and a browser
+// draws its address bar's with no scheme ("mail.google.com/mail/u/0?tok=…"),
+// which URL_TAIL does not see: a host name with a dot, then a query.
+const BARE_URL_TAIL = /\b((?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s?#]*)?)[?#]\S+/gi;
+const stripLineUrls = (s) => stripUrls(s).replace(BARE_URL_TAIL, "$1");
 
 /**
  * The snapshot's elements as the server takes them: id, role, label, short
@@ -174,18 +219,43 @@ const HAS_URL_TAIL = /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s?#]*[?#]\S/i;
  * label is its title, which is exactly what must not leave, so a window goes
  * without one. An address bar goes without its value — the whole URL of the
  * page, logged-in links and all — and every other URL loses its query.
+ *
+ * A line read off the window's picture (an `o` id) goes as text: its words
+ * and its region, nothing else. The tree's elements come first, so on a
+ * screen with more than the cap it is the lines that are left out; and the
+ * lines stop once the screen would measure more than `chars` (SCREEN_CHARS)
+ * as the server counts it. The tree is never cut for that.
  */
-function toRequestElements(snapshot, max = MAX_ELEMENTS) {
+function toRequestElements(snapshot, max = MAX_ELEMENTS, chars = SCREEN_CHARS) {
   const cap = Math.max(0, Math.min(MAX_ELEMENTS, Number.isFinite(max) ? Math.floor(max) : MAX_ELEMENTS));
+  const budget = Number.isFinite(chars) ? chars : SCREEN_CHARS;
   const win = snapshot && snapshot.window && snapshot.window.frame;
   const focusedId = snapshot && snapshot.focused;
   const seen = new Set();
   const out = [];
+  let used = 0;
+  let linesFull = false;
   for (const e of elementsOf(snapshot)) {
     if (out.length >= cap) break;
     const id = str(e.id);
-    if (!/^e\d+$/.test(id) || seen.has(id)) continue;
+    if (!/^[eo]\d+$/.test(id) || seen.has(id)) continue;
+    // An o id is only ever a line this file made; one on anything else is not.
+    if ((id[0] === "o") !== (e.ocr === true)) continue;
     seen.add(id);
+    if (e.ocr === true) {
+      if (linesFull) continue;
+      const label = clip(stripLineUrls(squash(e.label)), 80);
+      if (!label) continue;
+      const el = { id, role: "text", label };
+      const region = regionOf(e.frame, win);
+      if (region) el.region = region;
+      // The lines come top to bottom; the first that does not fit ends them,
+      // so what goes is the top of the page, not a scatter of short lines.
+      if (used + promptChars(el) > budget) { linesFull = true; continue; }
+      used += promptChars(el);
+      out.push(el);
+      continue;
+    }
     const role = clip(squash(e.role), 20) || "text";
     const el = { id, role };
     const label = role === "window" ? "" : clip(stripUrls(squash(e.label)), 80);
@@ -201,10 +271,180 @@ function toRequestElements(snapshot, max = MAX_ELEMENTS) {
     if (e.disabled === true) el.disabled = true;
     if (e.selected === true) el.selected = true;
     if (typeof e.checked === "boolean") el.checked = e.checked;
+    used += promptChars(el);
     out.push(el);
   }
   return out;
 }
+
+/** An element's length in the server's prompt: its line there
+ *  (`e12 button "Search" @t ="…" focused`) and the line break after it,
+ *  which is what AGENT_SCREEN_MAX_CHARS counts. */
+function promptChars(el) {
+  let n = el.id.length + 1 + el.role.length + 1;
+  if (el.label) n += el.label.length + 3;
+  if (el.region) n += el.region.length + 2;
+  if (el.value) n += el.value.length + 4;
+  if (el.focused) n += 8;
+  if (el.disabled) n += 9;
+  if (el.selected) n += 9;
+  if (el.checked === true) n += 8;
+  if (el.checked === false) n += 10;
+  return n;
+}
+
+// ---- the window's picture -----------------------------------------------------
+
+const areaOf = (f) => Math.max(0, f[2]) * Math.max(0, f[3]);
+
+/** The part two frames share, or null when they do not. */
+function intersect(a, b) {
+  if (!isFrame(a) || !isFrame(b)) return null;
+  const x = Math.max(a[0], b[0]);
+  const y = Math.max(a[1], b[1]);
+  const r = Math.min(a[0] + a[2], b[0] + b[2]);
+  const btm = Math.min(a[1] + a[3], b[1] + b[3]);
+  return r > x && btm > y ? [x, y, r - x, btm - y] : null;
+}
+const overlaps = (a, b) => !!intersect(a, b);
+const contains = (f, p) => !!p && p.x >= f[0] && p.x <= f[0] + f[2] && p.y >= f[1] && p.y <= f[1] + f[3];
+
+/** The look and the tree describe the same window: their frames are the same
+ *  rectangle, give or take a border (a Windows frame's invisible edge, a
+ *  shadow). Not the same, and the focus moved between the two reads: the
+ *  lines would be placed in, and the picture taken of, another window.
+ *  Every maximized window on a display has the same frame, so the titles
+ *  are compared too when both reads have one (one may be the other cut
+ *  short). */
+function sameWindow(snap, look) {
+  const ta = squash(titleOf(snap)).toLowerCase();
+  const tb = squash(str(look && look.window && look.window.title).slice(0, 200)).toLowerCase();
+  if (ta && tb && !ta.startsWith(tb) && !tb.startsWith(ta)) return false;
+  const a = snap && snap.window && snap.window.frame;
+  const b = look && look.window && look.window.frame;
+  if (!isFrame(a) || !isFrame(b)) return !isFrame(a);
+  const both = intersect(a, b);
+  const union = areaOf(a) + areaOf(b) - (both ? areaOf(both) : 0);
+  return !!both && union > 0 && areaOf(both) / union >= 0.8;
+}
+
+/** Text compared the way two readings of the same words are: case and spaces
+ *  do not count. */
+const sameText = (a, b) => squash(a).replace(/\s+/g, "").toLowerCase() === squash(b).replace(/\s+/g, "").toLowerCase();
+
+const isAddressBar = (e) => (e.role === "field" || e.role === "combo") && ADDRESS_BAR.test(squash(e.label));
+
+/** The window's title as both reads have it, compared the way OCR text is. */
+const titleKeys = (snap, look) => [titleOf(snap), str(look && look.window && look.window.title)]
+  .map((t) => squash(t).slice(0, 200).replace(/\s+/g, "").toLowerCase())
+  .filter(Boolean);
+
+/** A line of OCR that is the window's title. A title the window shows cut
+ *  short ("Q3 budget — Confid…", or "..." as OCR reads an ellipsis) is part
+ *  of it; a line that runs the title together with the toolbar beside it
+ *  ("AutoSave Q3 budget.xlsx - Excel Search") still carries it. */
+function isTitleLine(text, titles) {
+  const key = squash(text).replace(/\s+/g, "").toLowerCase();
+  if (!key) return false;
+  const cut = key.replace(/(?:…|\.{2,})$/, "");
+  return titles.some((t) => t === key || (cut.length >= 8 && t.includes(cut)) || (t.length >= 8 && key.includes(t)));
+}
+
+/**
+ * The look's OCR lines as elements o1…oN (role "text", the line as label, its
+ * frame, ocr: true), to go after the tree's. Left out:
+ *
+ *   a line that says what a tree element over it already says — the button's
+ *   own label, read twice;
+ *   anything over a password field, which may be showing the password, and
+ *   over an address bar, the URL whose value the tree keeps to itself;
+ *   the window's title, which never leaves this computer, however it is read.
+ */
+function ocrElements(snap, look) {
+  if (!look || look.ok !== true || !Array.isArray(look.lines)) return [];
+  const tree = treeOf(snap).filter((e) => isFrame(e.frame));
+  const guarded = tree.filter((e) => e.secure === true || isAddressBar(e)).map((e) => e.frame);
+  const titles = titleKeys(snap, look);
+  const out = [];
+  for (const line of look.lines) {
+    if (!line || !isFrame(line.frame) || line.frame[2] <= 0 || line.frame[3] <= 0) continue;
+    const text = clip(squash(line.text), 120);
+    if (!text) continue;
+    if (isTitleLine(text, titles)) continue;
+    if (guarded.some((f) => overlaps(f, line.frame))) continue;
+    if (tree.some((e) => e.label && sameText(e.label, text) && overlaps(e.frame, line.frame))) continue;
+    out.push({ id: "o" + (out.length + 1), role: "text", label: text, frame: line.frame.slice(), ocr: true });
+  }
+  return out;
+}
+
+// Containers that can hold a picture the tree has no word for: a canvas, a
+// chart drawn in a cell, a diagram in a web page's region.
+const PICTURE_HOLDERS = new Set(["group", "area", "cell"]);
+
+/**
+ * The part of the window the question is about, as { frame, region }:
+ *
+ *   the image (or a big, wordless group, area or cell) under the pointer —
+ *   "what's this?" said while pointing at it; the smallest, if they nest;
+ *   else the largest image on screen, if it is at least MIN_PICTURE;
+ *   else the whole window.
+ *
+ * Frames are kept to the window's, which is all the picture has, below its
+ * own chrome (chromeBottom): the title and the page's address never leave as
+ * text, and do not leave drawn in a picture either.
+ */
+function pictureRegion(screen, look, pointer) {
+  const whole = look.window.frame;
+  const top = chromeBottom(screen, look);
+  const below = [whole[0], top, whole[2], whole[1] + whole[3] - top];
+  // A window that is all chrome (a toolbar, a title bar) has nothing below
+  // it worth a picture; what there is goes as it is.
+  const win = below[3] >= MIN_PICTURE[1] ? below : whole;
+  const tree = treeOf(screen).filter((e) => isFrame(e.frame));
+  const big = (f) => f[2] >= MIN_PICTURE[0] && f[3] >= MIN_PICTURE[1];
+  const wordless = (e) => !squash(e.label) && !squash(e.value);
+  if (pointer) {
+    const under = [];
+    for (const e of tree) {
+      const f = intersect(e.frame, win);
+      if (!f || !contains(f, pointer)) continue;
+      // A sliver is not a picture of anything; an icon is, just.
+      if (e.role === "image" ? f[2] >= 16 && f[3] >= 16 : PICTURE_HOLDERS.has(e.role) && wordless(e) && big(f)) under.push(f);
+    }
+    under.sort((x, y) => areaOf(x) - areaOf(y));
+    if (under.length) return { frame: under[0], region: "element" };
+  }
+  const images = tree.filter((e) => e.role === "image").map((e) => intersect(e.frame, win)).filter((f) => f && big(f));
+  images.sort((x, y) => areaOf(y) - areaOf(x));
+  if (images.length) return { frame: images[0], region: "element" };
+  return { frame: win.slice(), region: "window" };
+}
+
+/**
+ * How far down the window its own chrome goes: the title bar, a browser's
+ * tabs and its address bar, where the window's title and the page's whole
+ * address are drawn. The bottom of the lowest address bar, or OCR line that
+ * reads as the title, in the window's top quarter; the window's top when
+ * there is neither.
+ */
+function chromeBottom(screen, look) {
+  const win = look.window.frame;
+  const limit = win[1] + win[3] / 4;
+  let bottom = win[1];
+  for (const e of treeOf(screen)) {
+    if (isFrame(e.frame) && isAddressBar(e) && e.frame[1] < limit) bottom = Math.max(bottom, e.frame[1] + e.frame[3]);
+  }
+  const titles = titleKeys(screen, look);
+  for (const line of Array.isArray(look.lines) ? look.lines : []) {
+    if (!line || !isFrame(line.frame) || line.frame[1] >= limit) continue;
+    if (isTitleLine(line.text, titles)) bottom = Math.max(bottom, line.frame[1] + line.frame[3]);
+  }
+  return Math.min(bottom, win[1] + win[3]);
+}
+
+const hasBytes = (d) => !!(d && (d.length > 0 || d.size > 0 || d.byteLength > 0));
+const byteSize = (d) => (d ? (typeof d.size === "number" ? d.size : typeof d.byteLength === "number" ? d.byteLength : d.length || 0) : 0);
 
 // ---- what changed after an action -------------------------------------------
 
@@ -243,8 +483,10 @@ function describeChange(before, after) {
     parts.push(name ? `focus moved to ${name}` : "focus moved");
   }
 
-  const a = elementsOf(before);
-  const b = elementsOf(after);
+  // The tree only: the lines read off the first screen's picture are not read
+  // again after an action, so they would all count as gone.
+  const a = treeOf(before);
+  const b = treeOf(after);
   const byKeyA = new Map();
   for (const e of a) {
     const k = keyOf(e);
@@ -667,8 +909,10 @@ function pressMayHaveHappened(r) {
 /**
  * @param {object} deps
  * @param {object} deps.driver   the §1 driver API
- * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, hide, error }
- * @param {(req: object, audio: object|null, signal: AbortSignal) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
+ * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, hide, error, badge }:
+ *        point(frame, caption?, { tentative: true }?) and say(text, { speak, rate, locale?, append? })
+ * @param {(req: object, audio: object|null, signal: AbortSignal, image?: {mime: string, data: Buffer}|null) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
+ *        `image` only on the step that carries the picture
  * @param {(text: string) => Promise<void>} deps.paste
  * @param {() => Promise<{mime: string, data: Buffer}|null>} deps.listen
  * @param {(name: string, fallback: any) => any} [deps.knob]
@@ -677,6 +921,15 @@ function pressMayHaveHappened(r) {
  * @param {(line: string) => void} [deps.log]
  * @param {(appName: string) => boolean} [deps.sensitive]  defaults to frontApp.looksSensitive
  * @param {string|(() => string)} [deps.language]
+ * @param {(look: object, frame: number[]) => {mime: string, data: Buffer}|Promise<{mime: string, data: Buffer}|null>|null} [deps.crop]
+ *        the part of the look's picture under `frame` (driver units), as a
+ *        file. Without it there is no picture path.
+ * @param {(app: string) => "never"|"ask"|"always"|Promise<string>} [deps.pictures]
+ *        whether pictures of this app may go. Without it there is no picture path.
+ * @param {(app: string) => Promise<"once"|"always"|"no">} [deps.permit]
+ *        the guide's permission card. Without it, "ask" is no.
+ * @param {string[]|(() => string[])} [deps.names]  the names it answers to, taken
+ *        off the front of a question (its own, the guide's, their nickname for it)
  */
 function createAgent(deps) {
   const d = deps || {};
@@ -686,6 +939,9 @@ function createAgent(deps) {
   const now = typeof d.now === "function" ? d.now : Date.now;
   const platform = d.platform === "win" || d.platform === "mac" ? d.platform : process.platform === "win32" ? "win" : "mac";
   const sensitive = typeof d.sensitive === "function" ? d.sensitive : frontApp.looksSensitive;
+  // The picture path needs both the crop and the per-app policy; with
+  // either missing, no picture is taken with the look, let alone sent.
+  const canPicture = typeof d.crop === "function" && typeof d.pictures === "function";
 
   function log(line) { try { if (typeof d.log === "function") d.log(line); } catch { /* a logger must not stop a run */ } }
   function num(name, fallback) {
@@ -703,6 +959,24 @@ function createAgent(deps) {
   }
   function isSensitive(name) {
     try { return !!sensitive(name); } catch { return false; }
+  }
+  function names() {
+    try {
+      const n = typeof d.names === "function" ? d.names() : d.names;
+      const list = Array.isArray(n) ? n.filter((s) => typeof s === "string" && s.trim()) : [];
+      return list.length ? list : resolver.NAMES;
+    } catch { return resolver.NAMES; }
+  }
+  /** Their words against a screen, with this computer's bars. */
+  function matchOn(text, screen) {
+    // A window's label is its title: never something to point at, and never
+    // on the server's list either.
+    const els = elementsOf(screen).filter((e) => e.role !== "window");
+    return resolver.match(text, els, {
+      score: num("desktop.agent.matchScore", 0.85),
+      margin: num("desktop.agent.matchMargin", 0.2),
+      names: names(),
+    });
   }
 
   /** The run in progress, or null. Everything a run does checks it is still
@@ -746,6 +1020,10 @@ function createAgent(deps) {
    */
   function finish(run, how, text) {
     if (!alive(run)) return;
+    // A tentative ring is a guess at an answer that is not coming now (the
+    // look showed a private window after preview drew it off the tree, the
+    // request failed): it does not stay up beside the card.
+    if (run.tentative) { run.tentative = false; tell(run, "unpoint"); }
     if (how === "done") {
       if (text) tell(run, "state", "done", text); else tell(run, "state", "done");
     } else if (how === "error") {
@@ -777,6 +1055,22 @@ function createAgent(deps) {
     );
   }
 
+  /** Look at the window: its picture, and its text read by the system's OCR.
+   *  Always settles, with a look or { ok:false, error }. The picture itself
+   *  is only asked for when there is a way to send one. */
+  function takeLook() {
+    if (!bool("desktop.agent.look", true)) return Promise.resolve({ ok: false, error: "off" });
+    if (typeof driver.look !== "function") return Promise.resolve({ ok: false, error: "unsupported" });
+    const timeoutMs = num("desktop.agent.lookTimeoutMs", 2500);
+    const asked = Promise.resolve().then(() => driver.look({
+      budgetMs: num("desktop.agent.lookBudgetMs", 1500), timeoutMs, ocr: true, image: canPicture,
+    }));
+    return within(asked, timeoutMs + SNAPSHOT_GRACE_MS, { ok: false, error: "timeout" }).then(
+      (l) => (l && l.ok === true && l.window && isFrame(l.window.frame) ? l : { ok: false, error: str((l && l.error) || "no look") }),
+      (e) => ({ ok: false, error: errText(e) }),
+    );
+  }
+
   /** Make `snap` the screen the next request describes, with its own id maps.
    *  A failed read leaves an empty screen, not the last one: ids from an old
    *  walk would point at whatever has moved there since. */
@@ -785,6 +1079,7 @@ function createAgent(deps) {
       log(`agent ${run.tag}: screen not read (${(snap && snap.error) || "no snapshot"}); asking without it`);
       run.snapshot = { ok: false, error: (snap && snap.error) || "no snapshot", elements: [] };
     } else {
+      if (snap.linesOnly) log(`agent ${run.tag}: tree not read; using the text read off the window`);
       run.snapshot = snap;
       if (!run.firstApp && snap.app && snap.app.name) run.firstApp = str(snap.app.name);
     }
@@ -801,17 +1096,84 @@ function createAgent(deps) {
    *  here. False when it did. */
   function adoptChecked(run, snap) {
     const why = refusal(snap);
-    if (why) {
-      log(`agent ${run.tag}: the front window is ${why === "private" ? "a private one" : "a sensitive app's"}; stopping`);
-      run.snapshot = { ok: false, error: why, elements: [] };
-      run.frames = new Map();
-      run.byId = new Map();
-      run.stop = why === "private" ? "private" : "blocked";
-      finish(run, "done", why === "private" ? TEXT.blockedPrivate : TEXT.blocked);
-      return false;
-    }
+    if (why) { refuseScreen(run, why); return false; }
     adopt(run, snap);
     return true;
+  }
+
+  /** The run ends on a screen it must not read: nothing of it is kept. */
+  function refuseScreen(run, why) {
+    log(`agent ${run.tag}: the front window is ${why === "private" ? "a private one" : "a sensitive app's"}; stopping`);
+    run.snapshot = { ok: false, error: why, elements: [] };
+    run.frames = new Map();
+    run.byId = new Map();
+    run.look = null;
+    run.stop = why === "private" ? "private" : "blocked";
+    finish(run, "done", why === "private" ? TEXT.blockedPrivate : TEXT.blocked);
+  }
+
+  /** refusal() for a look: its window's title, with the tree's app name when
+   *  there is one. The picture is of a window too, and a private one's
+   *  picture is no more to be read than its tree. */
+  function lookRefusal(look, snap) {
+    if (!look || look.ok !== true) return "";
+    const title = str(look.window && look.window.title).slice(0, 200);
+    if (!title) return "";
+    const name = snap && snap.ok === true && snap.app && snap.app.name ? str(snap.app.name) : "";
+    if (frontApp.isPrivate(title)) return "private";
+    if (isSensitive(squash(name + " " + title)) || isSensitive(title)) return "sensitive";
+    return "";
+  }
+
+  /**
+   * The first screen of a run, from the two reads begun at Alt twice: the
+   * tree with the look's lines after it, and the look itself (for its
+   * picture) — or `why` it must not be read at all. Either read may be
+   * missing or failed; the other is still used. A look of some other window
+   * than the tree's is dropped whole, lines and picture. `quiet` for
+   * preview's reading of it, which the run's own reading logs after.
+   * @returns {{ why?: string, screen?: object, look?: object|null }}
+   */
+  function firstScreen(run, snap, look, quiet) {
+    const s = snap && snap.ok === true && Array.isArray(snap.elements) ? snap : null;
+    const l = look && look.ok === true && look.window && isFrame(look.window.frame) ? look : null;
+    const why = (s && refusal(s)) || (l && lookRefusal(l, s)) || "";
+    if (why) return { why };
+    let usable = l;
+    if (l && s && !sameWindow(s, l)) {
+      if (!quiet) log(`agent ${run.tag}: the look saw another window than the tree; not using it`);
+      usable = null;
+    } else if (l && s && s.scale && l.scale && s.scale !== l.scale) {
+      if (!quiet) log(`agent ${run.tag}: the look and the tree are in different units; not using the look`);
+      usable = null;
+    }
+    const lines = usable ? ocrElements(s, usable) : [];
+    if (s) return { screen: lines.length ? Object.assign({}, s, { elements: elementsOf(s).concat(lines) }) : s, look: usable };
+    // No tree (it timed out, the app has none to speak of): the lines alone
+    // are still a screen to point at, in the look's window.
+    if (lines.length) {
+      return {
+        screen: {
+          ok: true, app: null, window: { frame: usable.window.frame.slice(), title: str(usable.window.title).slice(0, 200) },
+          focused: null, selection: "", scale: usable.scale, elements: lines, truncated: false, ms: 0, linesOnly: true,
+        },
+        look: usable,
+      };
+    }
+    return { screen: snap || { ok: false, error: "no snapshot" }, look: usable };
+  }
+
+  /** The screen that preview() matches against: what of the two reads has
+   *  arrived, checked like the run's first screen. Null until the tree has
+   *  answered, and for a screen that must not be read. */
+  function previewScreen(run) {
+    if (!run.snapSeen) return null;
+    const c = run.previewCache;
+    if (c && c.snap === run.snapSeen && c.look === run.lookSeen) return c.screen;
+    const first = firstScreen(run, run.snapSeen, run.lookSeen, true);
+    const screen = first.why || !first.screen || first.screen.ok !== true ? null : { snapshot: first.screen, frames: frameMap(first.screen) };
+    run.previewCache = { snap: run.snapSeen, look: run.lookSeen, screen };
+    return screen;
   }
 
   /** "private" or "sensitive" when this screen must not be read or acted
@@ -840,7 +1202,9 @@ function createAgent(deps) {
 
   function buildRequest(run, input) {
     const snap = run.snapshot;
-    const screen = { elements: toRequestElements(snap, Math.min(MAX_ELEMENTS, num("desktop.agent.maxElements", 250))) };
+    // The window's text counts against the same budget as the elements.
+    const text = snap.ok === true && typeof snap.text === "string" && snap.text.trim() ? stripUrls(snap.text).slice(0, 4000) : "";
+    const screen = { elements: toRequestElements(snap, Math.min(MAX_ELEMENTS, num("desktop.agent.maxElements", 250)), SCREEN_CHARS - text.length) };
     const focused = focusedOf(snap);
     // The field's kind in dictation's own words (frontApp.kindOf), so the
     // server reads it the same way on both routes. Never a password's.
@@ -864,7 +1228,7 @@ function createAgent(deps) {
         if (label) screen.field.label = label;
       }
     }
-    if (snap.ok === true && typeof snap.text === "string" && snap.text.trim()) screen.text = stripUrls(snap.text).slice(0, 4000);
+    if (text) screen.text = text;
     const req = { runId: run.id, step: run.step, platform, app: appLabel(run), screen, tzOffsetMinutes: -new Date().getTimezoneOffset() };
     // With audio, the audio is the words (step 0, or the reply to an ASK).
     // Without, the run's goal goes again: the server keeps nothing between
@@ -873,6 +1237,9 @@ function createAgent(deps) {
       const utterance = clip(squash(input.utterance || run.goal), 1000);
       if (utterance) req.utterance = utterance;
     }
+    // Which part of the window the picture with this step is: one image on
+    // it, or all of it. Where it is stays here, like every other frame.
+    if (input.image && input.picture) req.picture = { region: input.picture.region === "element" ? "element" : "window" };
     const lang = language();
     if (lang) req.language = lang;
     if (run.history.length) req.history = run.history.slice(-MAX_HISTORY).map((h) => Object.assign({}, h));
@@ -894,11 +1261,21 @@ function createAgent(deps) {
     tell(run, "steps", run.plan.map((text, i) => ({ text, state: i < run.planDone ? "done" : i === run.planDone ? "active" : "todo" })));
   }
 
-  const sayOpts = (locale) => {
+  const sayOpts = (locale, append) => {
     const o = { speak: bool("desktop.agent.speak", true), rate: num("desktop.agent.voiceRate", 1.04) };
     if (locale) o.locale = locale;
+    if (append) o.append = true;
     return o;
   };
+
+  /** A tentative ring from preview() or the picture path, put away once the
+   *  answer it stood in for has come without one of its own. */
+  function dropTentative(run) {
+    if (!run.tentative) return;
+    run.tentative = false;
+    run.previewKey = "";
+    tell(run, "unpoint");
+  }
 
   /** The events before the terminal one: shown as they arrive. */
   function onEvent(run, ev) {
@@ -912,13 +1289,17 @@ function createAgent(deps) {
         break;
       }
       case "say": {
+        // A long answer comes a sentence at a time: each one after the first
+        // is added to the card (and to what is said aloud), not put in its place.
         const text = squash(ev.text);
-        if (text) tell(run, "say", clip(text, 240), sayOpts(typeof ev.locale === "string" ? ev.locale : ""));
+        if (text) tell(run, "say", clip(text, 240), sayOpts(typeof ev.locale === "string" ? ev.locale : "", ev.append === true));
         break;
       }
       case "point": {
         const frame = run.frames.get(str(ev.id));
         if (!frame) { log(`agent ${run.tag}: point at ${clip(str(ev.id), 12)} skipped: not on this screen`); break; }
+        // The answer's own ring takes the place of a tentative one.
+        run.tentative = false;
         const caption = squash(ev.caption);
         if (caption) tell(run, "point", frame, clip(caption, 120)); else tell(run, "point", frame);
         break;
@@ -1102,6 +1483,14 @@ function createAgent(deps) {
       pushHistory(run, { said, did, result: "failed", note: "no such element on screen" });
       return {};
     }
+    if (el && el.ocr === true) {
+      // A line read off the window's picture is something to point at, not
+      // a control: the driver has no element behind it to press, focus or
+      // fill, and a click at a guess is not what was asked for.
+      log(`agent ${run.tag}: ${verb} names a line of text read off the screen`);
+      pushHistory(run, { said, did, result: "failed", note: `${clip(str(a.id), 12)} is text read off the screen, not a control` });
+      return {};
+    }
     const planned = focusedOf(run.snapshot);
     const target = el || (a.kind === "type" || a.kind === "key" ? planned : null);
     const frame = target ? run.frames.get(target.id) || null : null;
@@ -1160,6 +1549,9 @@ function createAgent(deps) {
 
     run.seen.set(print, (run.seen.get(print) || 0) + 1);
     tell(run, "state", "acting", acting(a, target));
+    // From here the screen may change, and the picture taken at Alt twice
+    // shows one that may no longer be there.
+    run.acted = true;
     const r = await race(run, perform(run, a));
     if (!alive(run)) return null;
     // Give the app a moment to redraw before reading it again: a menu takes
@@ -1214,14 +1606,16 @@ function createAgent(deps) {
   async function step(run, input) {
     if (run.step > 0) tell(run, "state", "thinking");
     const audio = input.audio || null;
+    const image = input.image || null;
     run.fresh = !!audio || !!input.utterance;
     run.said = input.utterance ? clip(squash(input.utterance), 1000) : "";
     const req = buildRequest(run, input);
-    log(`agent ${run.tag}: step ${run.step} (${audio ? "audio" : "text"}, ${req.screen.elements.length} elements)`);
+    if (image) run.pictureSent = true;
+    log(`agent ${run.tag}: step ${run.step} (${audio ? "audio" : "text"}${image ? " + picture" : ""}, ${req.screen.elements.length} elements)`);
 
     let source;
     try {
-      source = d.post(req, audio, run.controller.signal);
+      source = d.post(req, audio, run.controller.signal, image);
       if (source && typeof source.then === "function") source = await race(run, source);
     } catch (e) {
       if (!alive(run)) return null;
@@ -1254,12 +1648,17 @@ function createAgent(deps) {
       close(it);
     }
 
+    // The answer is in. A tentative ring it did not replace was a guess
+    // (preview's, or the picture's "Looking"), and goes now.
+    dropTentative(run);
     if (!terminal) {
       log(`agent ${run.tag}: stream ended with no answer`);
       finish(run, "error", TEXT.incomplete);
       return null;
     }
     switch (terminal.t) {
+      case "look":
+        return lookAgain(run, input);
       case "done":
         if (run.plan) { run.planDone = run.plan.length; showPlan(run); }
         finish(run, "done", clip(squash(terminal.text), 240));
@@ -1275,6 +1674,161 @@ function createAgent(deps) {
     }
   }
 
+  // ---- the picture path -------------------------------------------------------
+
+  /** Whether pictures of this run's app may go: "never", "always" or "ask"
+   *  (anything else is asked about too). "never" with no way to send one. */
+  async function picturePolicy(run) {
+    if (!canPicture) return "never";
+    let policy;
+    try {
+      policy = await race(run, Promise.resolve().then(() => d.pictures(appLabel(run))));
+    } catch (e) {
+      log(`agent ${run.tag}: pictures() failed: ${errText(e)}`);
+      return "never";
+    }
+    return policy === "never" || policy === "always" ? policy : "ask";
+  }
+
+  /** The person's say for this app, on the guide's permission card: once,
+   *  always, or no. Asked at most once a run, and a card nobody answers
+   *  within confirmMs is a no, as a confirm is. */
+  async function askPermission(run) {
+    if (run.permit) return run.permit !== "no";
+    if (typeof d.permit !== "function") return false;
+    const asked = Promise.resolve().then(() => d.permit(appLabel(run))).then((v) => v, (e) => {
+      log(`agent ${run.tag}: permit() failed: ${errText(e)}`);
+      return "no";
+    });
+    const answer = await race(run, within(asked, num("desktop.agent.confirmMs", 30000), "no"));
+    if (!alive(run)) return false;
+    run.permit = answer === "once" || answer === "always" ? answer : "no";
+    log(`agent ${run.tag}: picture ${run.permit === "no" ? "not allowed" : `allowed (${run.permit})`}`);
+    return run.permit !== "no";
+  }
+
+  /** The part of the look's picture the question is about, cropped here:
+   *  { image, picture, frame }, or null when there is none to send. Only the
+   *  picture taken at Alt twice, and only while the screen is still the one
+   *  it shows (nothing has been done to it). */
+  async function cropPicture(run) {
+    const look = run.look;
+    if (!canPicture || !look || !look.image || run.acted) return null;
+    const { frame, region } = pictureRegion(run.snapshot, look, run.pointer);
+    let file;
+    try {
+      file = await race(run, Promise.resolve().then(() => d.crop(look, frame)));
+    } catch (e) {
+      log(`agent ${run.tag}: crop failed: ${errText(e)}`);
+      return null;
+    }
+    if (!alive(run)) return null;
+    // Only the three types the server takes: another would go labelled as a
+    // JPEG (pictureFile) and be answered about as noise.
+    if (!file || typeof file !== "object" || !hasBytes(file.data) || !/^image\/(?:jpe?g|png|webp)\b/i.test(str(file.mime))) {
+      log(`agent ${run.tag}: crop gave no picture`);
+      return null;
+    }
+    if (byteSize(file.data) > MAX_PICTURE_BYTES) {
+      log(`agent ${run.tag}: the picture is too big to send (${byteSize(file.data)} bytes)`);
+      return null;
+    }
+    return { image: { mime: str(file.mime).toLowerCase(), data: file.data }, picture: { region }, frame };
+  }
+
+  /** The picture for this step, if the person's policy and answer allow it:
+   *  the crop is made first (nothing leaves this computer for it), so a card
+   *  asking to send it never comes up for a picture there is not. */
+  async function allowedPicture(run) {
+    const policy = await picturePolicy(run);
+    if (!alive(run) || policy === "never") return null;
+    const pic = await cropPicture(run);
+    if (!pic || !alive(run)) return null;
+    if (policy === "ask" && !(await askPermission(run))) return null;
+    return alive(run) ? pic : null;
+  }
+
+  /** What is being looked at, on the screen and on the card, and the step
+   *  input that sends it. */
+  function withPicture(run, pic, input) {
+    run.previewKey = "";
+    run.tentative = true;
+    tell(run, "point", pic.frame, TEXT.looking, { tentative: true });
+    tell(run, "badge", TEXT.pictureSent);
+    return Object.assign({}, input, { image: pic.image, picture: pic.picture });
+  }
+
+  /**
+   * The text path's answer was LOOK: it needs to see the picture. The same
+   * step goes again with it — once a run, with the same permission as ever,
+   * and only while the picture still shows the screen. Otherwise the card
+   * says it can't, and the run ends.
+   */
+  async function lookAgain(run, input) {
+    log(`agent ${run.tag}: the answer needs the picture`);
+    const pic = !run.pictureSent && !run.acted && run.look && run.look.image ? await allowedPicture(run) : null;
+    if (!alive(run)) return null;
+    if (!pic) {
+      tell(run, "say", TEXT.needLook, sayOpts(""));
+      finish(run, "done");
+      return null;
+    }
+    // The words of this step (the server heard them already), so they are
+    // not transcribed twice; the recording again only when there are none.
+    const words = run.said || run.goal;
+    const again = words ? { utterance: words } : { audio: input.audio || null, utterance: input.utterance };
+    return Object.assign(withPicture(run, pic, again), { sameStep: true });
+  }
+
+  // ---- the first step -------------------------------------------------------------
+
+  /** "Where's Export?" answered here: the ring on it, "Here's Export.", and
+   *  done — no request at all. False when its frame is gone. */
+  function instant(run, text, m) {
+    const frame = run.frames.get(m.id);
+    if (!frame) return false;
+    const label = squash(m.label);
+    run.goal = text;
+    run.mode = "show";
+    tell(run, "heard", text);
+    tell(run, "say", clip(`Here's ${label.replace(/[\s.…:]+$/u, "")}.`, 240), sayOpts(""));
+    run.tentative = false;
+    tell(run, "point", frame, clip(label, 120));
+    log(`agent ${run.tag}: instant (${clip(m.id, 12)}, score ${m.score.toFixed(2)}, margin ${m.margin.toFixed(2)})`);
+    finish(run, "done");
+    return true;
+  }
+
+  /**
+   * Step 0's input, by the three paths, cheapest first: answered here
+   * (instant; null, the run is over), a picture with the question, or the
+   * words — the live caption's when there are some, else the recording.
+   */
+  async function firstInput(run, first) {
+    if (first.utterance) return { utterance: first.utterance };
+    const text = first.text || "";
+    const audio = first.audio || null;
+    if (text && bool("desktop.agent.instant", true)) {
+      const m = matchOn(text, run.snapshot);
+      if (m && m.intent === "show" && instant(run, text, m)) return null;
+    }
+    // Only a question with words: a recording nobody has transcribed yet
+    // cannot say whether it is about a picture, and no picture goes on a guess.
+    if (text && run.look && run.look.image && resolver.isVisualQuestion(text, names())) {
+      const pic = await allowedPicture(run);
+      if (!alive(run)) return null;
+      if (pic) {
+        run.goal = text;
+        return withPicture(run, pic, { utterance: text });
+      }
+    }
+    if (text && (bool("desktop.agent.useStreamText", true) || !audio)) {
+      run.goal = text;
+      return { utterance: text };
+    }
+    return audio ? { audio } : null;
+  }
+
   async function loop(run, first) {
     run.started = true;
     tell(run, "state", "thinking");
@@ -1286,13 +1840,24 @@ function createAgent(deps) {
     // will wake the run. Every way a run ends clears it.)
     run.deadlineTimer = setTimeout(() => stop(run, "deadline"), deadlineMs);
     try {
-      // The screen was being read while they spoke; the first step waits for
-      // it (never past its own timeout). A failed read still asks — "what
-      // does this error mean?" can be answered from the words alone.
-      const snap = await race(run, run.snapPromise);
+      // The screen was being read, both ways, while they spoke; the first
+      // step waits for it (never past each read's own timeout). A failed read
+      // still asks — "what does this error mean?" can be answered from the
+      // words alone. Both are checked before anything of them is used: a
+      // private window's picture is as private as its tree.
+      const got = await race(run, Promise.all([run.snapPromise, run.lookPromise]));
+      if (!alive(run) || got === ABORTED) return;
+      const [snap, look] = got;
+      const screen = firstScreen(run, snap, look);
+      if (screen.why) { refuseScreen(run, screen.why); return; }
+      adopt(run, screen.screen);
+      run.look = screen.look || null;
+      if (look && look.ok !== true && look.error !== "off" && look.error !== "unsupported") {
+        log(`agent ${run.tag}: no look (${clip(squash(look.error), 40)})`);
+      }
+      let input = await firstInput(run, first);
       if (!alive(run)) return;
-      if (!adoptChecked(run, snap)) return;
-      let input = first;
+      if (!input) { finish(run, "quiet"); return; }
       const maxSteps = Math.max(1, num("desktop.agent.maxSteps", 8));
       while (alive(run)) {
         if (run.step >= maxSteps) { stop(run, "steps"); return; }
@@ -1300,7 +1865,8 @@ function createAgent(deps) {
         const next = await step(run, input);
         if (!next || !alive(run)) return;
         input = next;
-        run.step++;
+        // The same step again, with the picture it asked for.
+        if (!next.sameStep) run.step++;
       }
     } catch (e) {
       log(`agent ${run.tag}: run failed: ${errText(e)}`);
@@ -1311,8 +1877,10 @@ function createAgent(deps) {
   /**
    * Alt twice. Refused outright for a private window or a sensitive app —
    * nothing is read. Otherwise the guide starts listening and the screen is
-   * read at the same time, while they are still speaking.
-   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean }} [opts]
+   * read at the same time, while they are still speaking: the tree, and a
+   * look at the window (its text and its picture), in parallel.
+   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number } }} [opts]
+   *        `pointer` in the driver's units (Windows: physical pixels)
    * @returns {boolean} whether a run began
    */
   function begin(opts) {
@@ -1326,6 +1894,8 @@ function createAgent(deps) {
       scheduleHide();
       return false;
     }
+    const p = o.pointer;
+    const pointer = p && typeof p.x === "number" && typeof p.y === "number" && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
     const controller = new AbortController();
     const id = crypto.randomUUID().replace(/-/g, "");
     const run = {
@@ -1335,22 +1905,61 @@ function createAgent(deps) {
       app: clip(squash(o.app), 60), firstApp: "",
       snapshot: { ok: false, error: "not read yet", elements: [] }, frames: new Map(), byId: new Map(),
       mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
-      plan: null, planDone: 0, deadline: 0, deadlineTimer: null, snapPromise: null,
+      plan: null, planDone: 0, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
+      pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
+      acted: false, pictureSent: false, permit: "",
     };
     current = run;
     callGuide("show", ["listening", { app: run.app }]);
-    run.snapPromise = takeSnapshot();
+    // Kept as they arrive, for preview(), which cannot wait for them.
+    run.snapPromise = takeSnapshot().then((s) => { run.snapSeen = s; return s; });
+    run.lookPromise = takeLook().then((l) => { run.lookSeen = l; return l; });
     log(`agent ${run.tag}: begun`);
     return true;
   }
 
-  /** The recording finished: step 0 with that audio. Resolves when the run
-   *  is over (nothing waits on it in main; the tests do). */
-  function heard(audio) {
+  /**
+   * The live caption so far, while they are still speaking. A question or an
+   * order that already names one thing on screen clearly puts a tentative
+   * ring on it — moved when the target changes, put away when the words stop
+   * naming one. Never acts, and never reads anything itself: only what the
+   * reads begun at Alt twice have brought back, checked as the run's first
+   * screen will be.
+   */
+  function preview(text) {
+    const run = current;
+    if (!run || run.started || run.over) return;
+    if (!bool("desktop.agent.instant", true)) return;
+    const screen = previewScreen(run);
+    const words = clip(squash(text), 1000);
+    const m = screen && words ? matchOn(words, screen.snapshot) : null;
+    const frame = m && (m.intent === "show" || m.intent === "do") ? screen.frames.get(m.id) || null : null;
+    const key = frame ? `${m.id}@${frame.join(",")}` : "";
+    if (key === run.previewKey) return;
+    run.previewKey = key;
+    if (!frame) {
+      if (run.tentative) { run.tentative = false; tell(run, "unpoint"); }
+      return;
+    }
+    run.tentative = true;
+    tell(run, "point", frame, clip(squash(m.label), 120), { tentative: true });
+  }
+
+  /**
+   * They stopped speaking: step 0. `audio` is the recording; `opts.text` the
+   * live caption's transcript of it (may be empty), `opts.final` whether that
+   * is the stream's final text or only what it had so far. Resolves when the
+   * run is over (nothing waits on it in main; the tests do).
+   */
+  function heard(audio, opts) {
     const run = current;
     if (!run || run.started) { log("agent: heard with no run waiting for it"); return Promise.resolve(); }
-    if (!hasAudio(audio)) { finish(run, "quiet"); return Promise.resolve(); }
-    return loop(run, { audio });
+    const o = opts || {};
+    const text = clip(squash(o.text), 1000);
+    const clipIn = hasAudio(audio) ? audio : null;
+    if (!clipIn && !text) { finish(run, "quiet"); return Promise.resolve(); }
+    if (text) log(`agent ${run.tag}: heard with ${o.final === true ? "the final" : "a partial"} caption`);
+    return loop(run, { audio: clipIn, text });
   }
 
   /** The same, with typed words instead of a recording. */
@@ -1384,7 +1993,7 @@ function createAgent(deps) {
 
   function active() { return !!current; }
 
-  return { begin, heard, typed, cancel, active };
+  return { begin, heard, typed, preview, cancel, active };
 }
 
 // ---- the network ------------------------------------------------------------
@@ -1471,6 +2080,15 @@ function audioFile(mime) {
   return { name: "ask.webm", type: "audio/webm" };
 }
 
+/** The picture's file name and type: the three the server takes, by the
+ *  crop's own type. A JPEG unless it says otherwise. */
+function pictureFile(mime) {
+  const m = str(mime).toLowerCase();
+  if (/png/.test(m)) return { name: "picture.png", type: "image/png" };
+  if (/webp/.test(m)) return { name: "picture.webp", type: "image/webp" };
+  return { name: "picture.jpg", type: "image/jpeg" };
+}
+
 const STATUS_TEXT = {
   400: "Ask couldn't read that request.",
   401: TEXT.signIn,
@@ -1485,6 +2103,9 @@ const STATUS_TEXT = {
  *   audio   multipart, a `request` field (the step as JSON) and the recording
  *           as `audio` — the request first, so the server has it before the
  *           file. Without audio, plain JSON.
+ *   image   the picture path's one picture, as an `image` part after them
+ *           (picture.jpg, .png or .webp by its type): multipart too, with or
+ *           without audio. A JSON body never carries a picture.
  *   401     the token is spent whatever its expiry said; renewed once
  *           (token(true)) and the step sent again.
  *   errors  a refusal before streaming (400/401/413/429…) arrives as JSON;
@@ -1501,21 +2122,30 @@ function makePost(opts) {
   async function tokenFor(renew) {
     try { return str(typeof o.token === "function" ? await o.token(renew) : o.token) || null; } catch { return null; }
   }
-  return async function* post(request, audio, signal) {
+  return async function* post(request, audio, signal, image) {
     const base = str(typeof o.baseUrl === "function" ? o.baseUrl() : o.baseUrl).replace(/\/+$/, "");
+    const withAudio = !!(audio && audio.data);
+    const withImage = !!(image && hasBytes(image.data));
     const send = async (tok) => {
       const headers = { Accept: "application/x-ndjson" };
       if (tok) headers.Authorization = "Bearer " + tok;
       let body;
-      if (audio && audio.data) {
+      if (withAudio || withImage) {
         body = new FormData();
         body.append("request", JSON.stringify(request));
-        const given = typeof Blob !== "undefined" && audio.data instanceof Blob ? audio.data : null;
-        const file = audioFile(audio.mime || (given && given.type));
-        // Wrapped again (no copy) so the part's type is the plain container's,
-        // agreeing with its name.
-        const blob = new Blob([audio.data], { type: file.type });
-        body.append("audio", blob, file.name);
+        if (withAudio) {
+          const given = typeof Blob !== "undefined" && audio.data instanceof Blob ? audio.data : null;
+          const file = audioFile(audio.mime || (given && given.type));
+          // Wrapped again (no copy) so the part's type is the plain container's,
+          // agreeing with its name.
+          const blob = new Blob([audio.data], { type: file.type });
+          body.append("audio", blob, file.name);
+        }
+        if (withImage) {
+          const given = typeof Blob !== "undefined" && image.data instanceof Blob ? image.data : null;
+          const file = pictureFile(image.mime || (given && given.type));
+          body.append("image", new Blob([image.data], { type: file.type }), file.name);
+        }
       } else {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(request);
@@ -1567,6 +2197,6 @@ function makePost(opts) {
 
 module.exports = {
   createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  readEvents, makePost,
-  MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, TEXT,
+  ocrElements, pictureRegion, readEvents, makePost,
+  MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, MAX_PICTURE_BYTES, SCREEN_CHARS, TEXT,
 };

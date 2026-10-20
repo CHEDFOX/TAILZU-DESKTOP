@@ -142,9 +142,10 @@ about the app in front. A small guide comes up over it:
 How it stays cheap and private: the screen is read as text by a warm native
 helper (`native/tzax.swift` on a Mac, the accessibility tree; `native/
 uia-agent.ps1` on Windows, UI Automation), and only roles, labels, short
-values and a rough position leave the machine — never frames, pixels or
-window titles, never a password field's value or an address bar's, nothing
-from a private window or a sensitive app. A server step (`POST /v1/agent`)
+values and a rough position leave the machine — never frames or window
+titles, never a password field's value or an address bar's, nothing from a
+private window or a sensitive app, and pixels only as the one picture a
+person allowed (below). A server step (`POST /v1/agent`)
 answers free when a rule can (open an app, scroll, undo, "where's X" against
 the labels) and otherwise with one call to a small, fast model with no
 reasoning. The device decides what needs asking first and can only make the
@@ -163,6 +164,32 @@ is restyled to match. While Ask is on, **Alt twice asks** and **Ctrl twice
 dictates**; `desktop.agent.enabled` turns Ask off (Alt dictates again).
 `guide.html?demo` shows every state. Needs the Accessibility permission the
 auto-paste already asks for. Linux has no driver yet, so no Ask.
+
+**Instant answers.** A question records on the live stream, so its words
+arrive while it is still being said. The device matches them against what
+is on screen itself (`resolver.js`, the server's matcher ported), and a
+confident "where's export?" rings the button as the word is said, a thinner
+dotted ring that firms up when the question ends. A question that is only
+"where is X" never reaches the server at all. A question streamed this way
+is metered as Ask, never against the month's dictation words.
+
+**Pictures.** The screen is also read from its pixels on the device: the
+helper takes one capture of the front window (ScreenCaptureKit on macOS 14+,
+`CGWindowListCreateImage` before; a screen copy on Windows) and reads its
+text with the system's own OCR (Vision; Windows.Media.Ocr). Those lines join
+the list as plain text (`o1`, `o2`, …), so a button drawn in a canvas or a
+word in a screenshot can be found too; the capture itself stays on the
+device. Only a question about something drawn ("what's this graph
+saying?", "solve this", a photo, a diagram, an equation) sends a picture:
+one JPEG of that part of the screen (the image under the pointer, else the
+biggest image, else the window), at most 1024 px, after a card asks
+**Allow once / Always for <app> / Not now** (`desktop.agent.pictures`:
+ask, always or never). The card says "1 picture sent" when one went. The
+answer streams back sentence by sentence and is spoken as it grows; maths
+comes in plain symbols (x², √, π). The text path can also say it needs to
+look, and the same step is asked again with the picture. On a Mac the
+pixels need the **Screen Recording** permission; without it Ask still works
+from the accessibility text alone.
 
 ### 0.3.13 — said with text selected, it rewrites the selection
 

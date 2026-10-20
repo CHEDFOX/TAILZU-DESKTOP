@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld("tailzu", {
   // real pause in it, which ends it.
   askAudio: (p) => ipcRenderer.send("ask-audio", p),
   askPause: (p) => ipcRenderer.send("ask-pause", p),
+  // The live stream's last word on what the question said, which can come
+  // after its clip: { session, text, final: true }.
+  askText: (p) => ipcRenderer.send("ask-text", p),
   error: (msg) => ipcRenderer.send("dictation-error", msg),
   partial: (text) => ipcRenderer.send("live-partial", text),
   // How loud the voice is, band by band, while the mic is open — for the pill.
@@ -106,6 +109,8 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   // Over the card (take clicks) or not (let them through to the app).
   mouse: (inside) => ipcRenderer.send("guide:mouse", !!inside),
   confirm: (yes) => ipcRenderer.send("guide:confirm", !!yes),
+  // The picture card's answer: "once", "always" (for this app) or "no".
+  permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),
   dismiss: () => ipcRenderer.send("guide:dismiss"),
   knobs: () => ipcRenderer.invoke("app:knobs"),

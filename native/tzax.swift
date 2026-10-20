@@ -23,16 +23,28 @@
 //   {"id":2,"cmd":"snapshot","max":250}          {"id":2,"ok":true,"app":{…},"elements":[…],…}
 //   {"id":3,"cmd":"press","el":"e7"}             {"id":3,"ok":true,"how":"AXPress"}
 //   {"id":4,"cmd":"key","chord":"cmd+k"}         {"id":4,"ok":true}
+//   {"id":5,"cmd":"look","maxSide":1600}         {"id":5,"ok":true,"window":{…},"lines":[…],"image":{…},…}
 //   anything that fails                          {"id":4,"ok":false,"error":"not_trusted"}
 //
 // It needs Accessibility, which macOS grants to the app that started it
-// (Tailzu: the same permission the field reader already uses). It takes no
-// picture, and never reads a password: a secure field is listed as one,
-// without its value.
+// (Tailzu: the same permission the field reader already uses). It never reads
+// a password: a secure field is listed as one, without its value.
+//
+// "look" is the one command that takes a picture: the focused window's own
+// pixels, read into lines of text here with Vision, plus a JPEG of it. It
+// needs Screen Recording, which it checks for and never asks for (a prompt
+// from a helper nobody sees would land over the user's app; Tailzu asks in
+// its own words). The picture goes only to axDriver.js and stays on this
+// machine unless the user lets Ask send it. A look takes longer than anything
+// else here, so it runs on a queue of its own, beside the other commands: the
+// snapshot asked for at the same moment is not kept waiting behind it.
 import AppKit
 import ApplicationServices
 import Carbon
 import Foundation
+import ImageIO
+import ScreenCaptureKit
+import Vision
 
 signal(SIGPIPE, SIG_IGN)
 
@@ -51,18 +63,29 @@ let selectionMax = 8000
 /// Busy on one command this long means stuck: the helper exits (code 3) and
 /// the driver starts a fresh one on its next call.
 let stuckNanos: UInt64 = 10_000_000_000
+/// A look's text is at most this many lines: the agent lists them beside the
+/// accessibility elements, and a request carries a few hundred at most.
+let lookMaxLines = 300
+/// A look's JPEG bigger than this is encoded again, rougher, or left out: the
+/// answer is one line on a pipe, and axDriver.js drops a line over 12 MB.
+let jpegMaxBytes = 6_000_000
 
 // MARK: - JSON out
 //
 // Written by hand rather than with JSONSerialization, which raises an
 // Objective-C exception (a crash, not an error) on a NaN. Every number here is
-// made an Int on the way in, and an answer is always exactly one line.
+// made an Int on the way in, except a look's confidences, which are written
+// with two decimals and never as NaN; an answer is always exactly one line.
 
 enum J {
   case null
   case bool(Bool)
   case int(Int)
+  case num(Double)
   case str(String)
+  /// A string with nothing in it to escape (base64): a look's picture is
+  /// hundreds of kilobytes, not worth quoting a character at a time.
+  case plain(String)
   case arr([J])
   case obj([(String, J)])
 }
@@ -100,7 +123,12 @@ func encode(_ v: J, into out: inout String) {
   case .null: out += "null"
   case .bool(let b): out += b ? "true" : "false"
   case .int(let i): out += String(i)
+  case .num(let d): out += d.isFinite ? String(format: "%.2f", d) : "null"
   case .str(let s): quote(s, into: &out)
+  case .plain(let s):
+    out += "\""
+    out += s
+    out += "\""
   case .arr(let a):
     out += "["
     for (i, x) in a.enumerated() {
@@ -306,6 +334,9 @@ final class Launch {
 
 let out = Out()
 let busy = Busy()
+/// Looks run here, one at a time, beside the main thread's commands.
+let lookQueue = DispatchQueue(label: "space.tailzu.tzax.look", qos: .userInitiated)
+let lookBusy = Busy()
 var received = 0
 var current = Snap(first: 0, last: -1)
 var previous = Snap(first: 0, last: -1)
@@ -1249,6 +1280,339 @@ func openApp(_ name: String, _ deadline: DispatchTime) -> Reply {
   return launch.failed ? fail("launch_failed") : ok([("app", .str(label))])
 }
 
+// MARK: - Looking: the window's picture and its text
+//
+// None of this runs on the main thread: a look runs on lookQueue, its text is
+// read on a global queue. ScreenCaptureKit answers through completion
+// handlers on threads of its own, and Vision on that global queue; each is
+// waited for with a semaphore that gives up at the look's budget, so a
+// capture or a read that never comes back costs a look, not the helper.
+
+/// A result that arrives on another thread, waited for no later than a
+/// deadline. One that comes after the wait gave up lands here unread.
+final class Waiter<T> {
+  private let sem = DispatchSemaphore(value: 0)
+  private let lock = NSLock()
+  private var value: T?
+
+  func put(_ v: T?) {
+    lock.lock()
+    value = v
+    lock.unlock()
+    sem.signal()
+  }
+
+  /// The value (nil when there was none), or late when the deadline came first.
+  func take(by deadline: DispatchTime) -> (value: T?, late: Bool) {
+    if sem.wait(timeout: deadline) == .timedOut { return (nil, true) }
+    lock.lock()
+    defer { lock.unlock() }
+    return (value, false)
+  }
+}
+
+/// One window as the window server lists it.
+struct Listed {
+  let id: CGWindowID
+  let frame: CGRect
+  let layer: Int
+  let name: String
+}
+
+/// The window a look takes: its number for the capture, its frame (global
+/// top-left points, like a snapshot's), and its title, which stays here like
+/// a snapshot's does.
+struct LookWindow {
+  let id: CGWindowID
+  let frame: CGRect
+  let title: String
+}
+
+/// The app's windows on screen, frontmost first. The window list is the only
+/// public place a window's number is, and its bounds are in the same global
+/// top-left points as accessibility's frames.
+func listedWindows(_ pid: pid_t) -> [Listed] {
+  guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+    return []
+  }
+  var wins: [Listed] = []
+  for w in info {
+    guard (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+          let num = w[kCGWindowNumber as String] as? NSNumber,
+          let layer = (w[kCGWindowLayer as String] as? NSNumber)?.intValue,
+          let bounds = w[kCGWindowBounds as String] as? NSDictionary,
+          let r = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+          r.width > 1, r.height > 1 else { continue }
+    if let alpha = w[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue <= 0 { continue }
+    wins.append(Listed(id: CGWindowID(num.uint32Value), frame: r, layer: layer, name: (w[kCGWindowName as String] as? String) ?? ""))
+  }
+  return wins
+}
+
+/// How far apart two frames are, edge by edge, in points.
+func apart(_ a: CGRect, _ b: CGRect) -> CGFloat {
+  abs(a.minX - b.minX) + abs(a.minY - b.minY) + abs(a.width - b.width) + abs(a.height - b.height)
+}
+
+/// The window the user is in: the app's focused window as accessibility sees
+/// it (the one a snapshot reads), found in the window list by its owner and
+/// bounds. When accessibility has no answer (not trusted, the app busy) it is
+/// the app's frontmost ordinary window: a hung app still has pixels.
+func lookWindow(_ pid: pid_t) -> LookWindow? {
+  let app = timed(AXUIElementCreateApplication(pid))
+  var winRef: CFTypeRef?
+  let err = AXUIElementCopyAttributeValue(app, "AXFocusedWindow" as CFString, &winRef)
+  var window = element(winRef)
+  if window == nil && err != .cannotComplete && err != .apiDisabled { window = element(copyAttr(app, "AXMainWindow")) }
+  var axFrame: CGRect? = nil
+  var title = ""
+  if let win = window {
+    axFrame = liveFrame(win)
+    title = clean(copyAttr(win, "AXTitle") as? String, 200)
+  }
+  // Ordinary and floating windows; not the menu bar's, the Dock's or a
+  // screen saver's, which sit on the layers above.
+  let listed = listedWindows(pid).filter { $0.layer >= 0 && $0.layer < 24 }
+  var pick: Listed? = nil
+  var focusedOne = false
+  if let f = axFrame, f.width > 0, f.height > 0 {
+    pick = listed.min(by: { apart($0.frame, f) < apart($1.frame, f) })
+    if let p = pick, apart(p.frame, f) > 8 {
+      // No window with the same bounds (an app whose idea of its own frame is
+      // a little off): the frontmost one that covers most of it, else none.
+      pick = listed.first(where: {
+        let i = $0.frame.intersection(f)
+        return !i.isNull && i.width * i.height >= 0.6 * f.width * f.height
+      })
+    } else {
+      focusedOne = pick != nil
+    }
+  } else {
+    pick = listed.first(where: { $0.layer == 0 })
+  }
+  guard let w = pick else { return nil }
+  // The title is the pictured window's, because the agent refuses a private
+  // window by it. A window that only covers the focused one may be another
+  // (the browser's private one), so it goes by its own name in the list.
+  let listedName = clean(w.name, 200)
+  let named = focusedOne || listedName.isEmpty ? title : listedName
+  return LookWindow(id: w.id, frame: w.frame, title: named.isEmpty ? listedName : named)
+}
+
+enum Shot {
+  case image(CGImage)
+  case failed(String)
+}
+
+/// The window's own pixels, whatever is over it, at the display's full
+/// resolution and without its shadow: exactly its frame. ScreenCaptureKit
+/// from macOS 14; on 13, where ScreenCaptureKit cannot take one picture, the
+/// window-list call (deprecated from 14, so never reached there).
+func capture(_ win: LookWindow, until: DispatchTime) -> Shot {
+  if #available(macOS 14.0, *) {
+    return captureWithScreenCaptureKit(win, until: until)
+  }
+  // The window-list call is looked up by name in CoreGraphics (already
+  // loaded with AppKit), not named here: the SDK obsoletes it from macOS 15,
+  // and the newer SDK CI builds with need not let Swift call it at all,
+  // however it is guarded. It is the same public function, only found at run
+  // time; the arguments are its C ones (CGWindowID and the two option sets
+  // are 32-bit, the image comes back retained). The image options are its
+  // fixed values, kCGWindowImageBoundsIgnoreFraming | ...BestResolution, so
+  // nothing of this call depends on what the SDK says about it.
+  typealias CreateImage = @convention(c) (CGRect, UInt32, CGWindowID, UInt32) -> UnsafeMutableRawPointer?
+  guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return .failed("capture_failed") }
+  let createImage = unsafeBitCast(symbol, to: CreateImage.self)
+  let options: UInt32 = (1 << 0) | (1 << 3)
+  guard let made = createImage(.null, CGWindowListOption.optionIncludingWindow.rawValue, win.id, options) else {
+    return .failed("capture_failed")
+  }
+  let image = Unmanaged<CGImage>.fromOpaque(made).takeRetainedValue()
+  guard image.width > 0, image.height > 0 else { return .failed("capture_failed") }
+  return .image(image)
+}
+
+@available(macOS 14.0, *)
+func captureWithScreenCaptureKit(_ win: LookWindow, until: DispatchTime) -> Shot {
+  let listed = Waiter<SCShareableContent>()
+  SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, _ in
+    listed.put(content)
+  }
+  let (content, lateList) = listed.take(by: until)
+  if lateList { return .failed("timeout") }
+  guard let shareable = content else { return .failed("capture_failed") }
+  guard let scWindow = shareable.windows.first(where: { $0.windowID == win.id }) else { return .failed("no_window") }
+  let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+  // The window's points times the display's pixels per point: the picture is
+  // its full resolution, the shape of its frame, so Vision's boxes map back.
+  let k = CGFloat(filter.pointPixelScale)
+  let scale = k.isFinite && k >= 0.5 && k <= 8 ? k : 2
+  let config = SCStreamConfiguration()
+  config.width = max(1, min(16384, Int((win.frame.width * scale).rounded())))
+  config.height = max(1, min(16384, Int((win.frame.height * scale).rounded())))
+  config.showsCursor = false
+  config.ignoreShadowsSingleWindow = true
+  config.captureResolution = .best
+  let shot = Waiter<CGImage>()
+  SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, _ in
+    shot.put(image)
+  }
+  let (image, lateShot) = shot.take(by: until)
+  if lateShot { return .failed("timeout") }
+  guard let picture = image, picture.width > 0, picture.height > 0 else { return .failed("capture_failed") }
+  return .image(picture)
+}
+
+/// One line of text Vision read in the window, and where it is on the screen.
+struct Line {
+  let text: String
+  let frame: CGRect
+  let conf: Float
+
+  var json: J {
+    let c = conf.isFinite ? Double(max(0, min(1, conf))) : 0
+    return .obj([("text", .str(text)), ("frame", frameJ(frame)), ("conf", .num(c))])
+  }
+}
+
+/// Vision's lines in reading order, in screen points. Its boxes are fractions
+/// of the picture with the origin at the bottom left; the picture is exactly
+/// the window, so the window's frame turns them into the global top-left
+/// points a snapshot's frames are in.
+func screenLines(_ results: [Any], in frame: CGRect) -> [Line] {
+  var found: [Line] = []
+  for case let obs as VNRecognizedTextObservation in results {
+    guard let best = obs.topCandidates(1).first else { continue }
+    let text = clean(best.string, 120)
+    let b = obs.boundingBox.standardized
+    guard !text.isEmpty, b.minX.isFinite, b.minY.isFinite, b.width.isFinite, b.height.isFinite else { continue }
+    let x0 = max(0, min(1, b.minX)), x1 = max(0, min(1, b.maxX))
+    let y0 = max(0, min(1, b.minY)), y1 = max(0, min(1, b.maxY))
+    guard x1 > x0, y1 > y0 else { continue }
+    let r = CGRect(x: frame.minX + x0 * frame.width, y: frame.minY + (1 - y1) * frame.height,
+                   width: (x1 - x0) * frame.width, height: (y1 - y0) * frame.height)
+    found.append(Line(text: text, frame: r, conf: best.confidence))
+  }
+  found.sort { a, b in
+    let ya = a.frame.minY.rounded(), yb = b.frame.minY.rounded()
+    return ya != yb ? ya < yb : a.frame.minX < b.frame.minX
+  }
+  return Array(found.prefix(lookMaxLines))
+}
+
+/// The text in the picture, read on a thread of its own while the picture is
+/// encoded on this one. A read still going when the look's time is up is
+/// cancelled: the look goes without its text rather than late.
+final class Reading {
+  let request = VNRecognizeTextRequest()
+  let done = Waiter<[Line]>()
+
+  init(_ image: CGImage, in frame: CGRect) {
+    request.recognitionLevel = .fast
+    request.usesLanguageCorrection = false
+    // Vision's default smallest text is a thirty-second of the picture's
+    // height, made for photos; on a whole window that is most of its labels.
+    // Anything from about 8 points up is read.
+    request.minimumTextHeight = Float(max(0.004, min(0.03125, 8 / max(1, frame.height))))
+    let req = request
+    let done = self.done
+    DispatchQueue.global(qos: .userInitiated).async {
+      let handler = VNImageRequestHandler(cgImage: image, options: [:])
+      do {
+        try handler.perform([req])
+        done.put(screenLines((req.results as [Any]?) ?? [], in: frame))
+      } catch {
+        done.put(nil)
+      }
+    }
+  }
+}
+
+/// The picture as a JPEG no longer than `maxSide` on its long side: drawn on
+/// white (a window's rounded corners are transparent, and a JPEG has no
+/// alpha), in sRGB, which is what a vision model expects.
+func jpeg(_ image: CGImage, maxSide: Int, quality: Double) -> (data: Data, width: Int, height: Int)? {
+  let w0 = image.width, h0 = image.height
+  guard w0 > 0, h0 > 0 else { return nil }
+  let k = min(1, Double(maxSide) / Double(max(w0, h0)))
+  let w = max(1, Int((Double(w0) * k).rounded()))
+  let h = max(1, Int((Double(h0) * k).rounded()))
+  guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+  ctx.interpolationQuality = .high
+  ctx.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+  ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+  ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+  guard let small = ctx.makeImage() else { return nil }
+  for q in [quality, min(quality, 0.5)] {
+    let data = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, small, [kCGImageDestinationLossyCompressionQuality as String: q] as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { return nil }
+    if data.length <= jpegMaxBytes { return (data: data as Data, width: w, height: h) }
+  }
+  return nil
+}
+
+func clampDouble(_ v: Any?, _ lo: Double, _ hi: Double, _ fallback: Double) -> Double {
+  guard let n = v as? NSNumber else { return fallback }
+  let d = n.doubleValue
+  return d.isFinite ? max(lo, min(hi, d)) : fallback
+}
+
+/// The focused window: its frame and title, the lines of text in it with
+/// where each one is, and a JPEG of it, as far as `budgetMs` allows.
+func look(_ req: [String: Any], _ deadline: DispatchTime) -> Reply {
+  let started = DispatchTime.now()
+  let stopAt = min(deadline - .milliseconds(120), started + .milliseconds(clampInt(req["budgetMs"], 50, 8000, 1500)))
+  let maxSide = clampInt(req["maxSide"], 64, 4096, 1600)
+  let quality = clampDouble(req["quality"], 0.3, 0.95, 0.82)
+  let wantText = (req["ocr"] as? Bool) ?? true
+  let wantImage = (req["image"] as? Bool) ?? true
+  // Checked, never asked for: CGRequestScreenCaptureAccess, or a capture
+  // without the permission, would put macOS's prompt up from here.
+  guard CGPreflightScreenCaptureAccess() else { return fail("no_screen_permission") }
+  guard let front = frontApp() else { return fail("no_app") }
+  let pid = front.processIdentifier
+  guard let win = lookWindow(pid) else { return fail("no_window") }
+
+  var lines: [J] = []
+  var image = J.null
+  if wantText || wantImage {
+    let picture: CGImage
+    switch capture(win, until: stopAt) {
+    case .image(let i): picture = i
+    case .failed(let error): return fail(error)
+    }
+    let reading = wantText ? Reading(picture, in: win.frame) : nil
+    if wantImage, let j = jpeg(picture, maxSide: maxSide, quality: quality) {
+      image = .obj([("mime", .str("image/jpeg")), ("data", .plain(j.data.base64EncodedString())),
+                    ("width", .int(j.width)), ("height", .int(j.height))])
+    }
+    if let text = reading {
+      // The text gets the rest of the budget, and a moment more when the
+      // capture used it up, as long as the answer still beats the deadline.
+      let until = max(stopAt, min(deadline - .milliseconds(100), DispatchTime.now() + .milliseconds(150)))
+      let (found, late) = text.done.take(by: until)
+      if late { text.request.cancel() }
+      lines = (found ?? []).map { $0.json }
+    }
+  }
+
+  var appInfo: Reply = [("name", .str(front.localizedName ?? "")), ("pid", .int(Int(pid)))]
+  if let b = front.bundleIdentifier { appInfo.append(("bundleId", .str(b))) }
+  let ms = Int((DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000)
+  var r = ok()
+  r.append(("app", .obj(appInfo)))
+  r.append(("window", .obj([("frame", frameJ(win.frame)), ("title", .str(win.title))])))
+  r.append(("scale", .str("points")))
+  r.append(("lines", .arr(lines)))
+  r.append(("image", image))
+  r.append(("ms", .int(ms)))
+  return r
+}
+
 // MARK: - Commands
 
 func idOf(_ v: Any?) -> J {
@@ -1330,11 +1694,18 @@ func receive(_ line: String) {
     DispatchQueue.main.async { _ = out.answer(key, id, fail("bad_request")) }
     return
   }
-  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : 1200)
+  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : (cmd == "look" ? 2500 : 1200))
   // A moment before the caller gives up, so it hears "timeout" from here.
   let deadline = got + .milliseconds(limit - 40)
   out.watch(key, id, at: deadline)
-  DispatchQueue.main.async { perform(key, id, cmd, req, deadline) }
+  switch cmd {
+  case "look":
+    // Its own queue: the agent asks for a snapshot and a look at the same
+    // moment, and the snapshot must not wait out a picture.
+    lookQueue.async { performLook(key, id, req, deadline) }
+  default:
+    DispatchQueue.main.async { perform(key, id, cmd, req, deadline) }
+  }
 }
 
 /// A command, on the main thread, in the order the lines came.
@@ -1348,11 +1719,25 @@ func perform(_ key: Int, _ id: J, _ cmd: String, _ req: [String: Any], _ deadlin
   out.answer(key, id, reply)
 }
 
+/// A look, on lookQueue, in the order the looks came; the same rule as
+/// perform's for one that waited out its time behind another.
+func performLook(_ key: Int, _ id: J, _ req: [String: Any], _ deadline: DispatchTime) {
+  if out.isAnswered(key) || DispatchTime.now() >= deadline - .milliseconds(30) { return }
+  lookBusy.begin()
+  let reply = look(req, deadline)
+  lookBusy.end()
+  out.answer(key, id, reply)
+}
+
 // MARK: - Main
 
 // The default for every element this process messages; each is also given it
 // (or actionTimeout) on its own before it is messaged.
 _ = AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), messageTimeout)
+// This process has no NSApplication, and ScreenCaptureKit expects the
+// window-server connection one would have made: asking for the main display
+// makes it, here on the main thread, before any look.
+_ = CGMainDisplayID()
 
 // stdin on its own thread; the commands run in order on the main thread,
 // whose run loop also keeps NSWorkspace's idea of the front app current.
@@ -1361,7 +1746,8 @@ let reader = Thread {
     receive(line)
   }
   // stdin closed: the app is gone, or done with us. Finish what was asked
-  // (the main queue runs in order), then go.
+  // (a look being taken, then the main queue, which runs in order), then go.
+  lookQueue.sync {}
   DispatchQueue.main.async { exit(0) }
 }
 reader.start()
@@ -1371,7 +1757,7 @@ stuckCheck.schedule(deadline: .now() + 1, repeating: 1.0)
 stuckCheck.setEventHandler {
   // _exit, not exit: exit's cleanup waits on the very thread that is stuck.
   // Nothing is lost; every answer was written straight to the pipe.
-  if busy.stuck() { _exit(3) }
+  if busy.stuck() || lookBusy.stuck() { _exit(3) }
 }
 stuckCheck.resume()
 

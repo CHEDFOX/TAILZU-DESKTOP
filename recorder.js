@@ -78,13 +78,19 @@ window.tailzu.onStart((c) => {
   sentStretches = 0;
   metered = false;
   // ASK: a question for the guide (agent.js), not a dictation. One clip, no
-  // pause-writing and no captions; it ends on the first real pause, and it
-  // goes to the main process whole rather than to /v1/transcribe-clean.
+  // pause-writing; it ends on the first real pause, and it goes to the main
+  // process whole rather than to /v1/transcribe-clean. With `live` it is
+  // streamed as well, so the guide can match the words against the screen
+  // while they are still being said, and the stream's text goes with the
+  // clip (see stopLive and finishLive). An ASK's reply records without it.
   if (c.mode === "ask") { asks.add(session); for (const k of asks) if (k < session - 20) asks.delete(k); }
-  cfg.live && c.mode !== "ask" ? startLive(session) : startBatch(session);
+  cfg.live ? startLive(session) : startBatch(session);
 });
 const asks = new Set();   // sessions that are questions for the guide
 let askEnded = false;     // this question's pause has been reported
+// A question whose clip held no voice: whatever the stream made of it (a
+// breath, the fan) is not a question either, so its final text goes empty.
+let askSilent = 0;
 // The app each session is going into, named by the main process a moment after
 // the press (frontApp.js). "Desktop" until it arrives, or where it cannot be
 // known.
@@ -742,11 +748,18 @@ function onRecorderStopped(sid, mimeType, rec, parts, startedAt) {
 
 /** A question, recorded: its audio to the main process, which asks /v1/agent
  *  with it and the screen (agent.js). No voice in it: no audio, and the guide
- *  says it did not catch that. */
-async function handOver(sid, parts, type, took) {
+ *  says it did not catch that. `text`: what the live stream has heard of it
+ *  so far ("" when it was not streamed); its last word follows as askText. */
+async function handOver(sid, parts, type, took, text) {
   let data = null;
   try { if (parts.length) data = await new Blob(parts, { type }).arrayBuffer(); } catch { data = null; }
-  if (window.tailzu.askAudio) window.tailzu.askAudio({ session: sid, mime: type, data, durationMs: took });
+  if (window.tailzu.askAudio) window.tailzu.askAudio({ session: sid, mime: type, data, durationMs: took, text: text || "" });
+}
+/** The stream's final text for a question, once: the main process waits a
+ *  moment for it after the clip (desktop.agent.finalTextMs), and goes with
+ *  what it has if it does not come. */
+function askFinal(sid, text) {
+  if (window.tailzu.askText) window.tailzu.askText({ session: sid, text: askSilent === sid ? "" : text || "", final: true });
 }
 
 function stopBatch(sid) {
@@ -951,6 +964,8 @@ async function startLive(sid) {
       type: "start", token: cfg.token, targetApp: targetFor(sid),
       language: cfg.language || "auto",
       sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
+      // A question is metered as Ask is, not as words written.
+      ...(asks.has(sid) ? { purpose: "ask" } : {}),
     })); };
     ws.onmessage = (ev) => {
       if (sid !== session) return; // message for a dead session
@@ -969,6 +984,9 @@ async function startLive(sid) {
         // Captions lost while the recording carries on: nothing to tell
         // them, the words are still being kept.
         if (liveRec && liveRec.state === "recording") { dropStream(); return; }
+        // A question already stopped has its clip on the way: the stream's
+        // failure only means its final text is what it had.
+        if (asks.has(sid) && stopped === sid) { finishLive(sid); return; }
         // The server's sentence — except the sign-in refusal, which it
         // keeps in the keyboards' old wording ("invalid or missing
         // token") because they match on it. That one is said here.
@@ -1028,6 +1046,12 @@ function stopLive(sid) {
   // Whether the recording holds a voice at all, before the meter closes.
   const heard = lastStretchHeard(sid);
   stopWatchingLevel();
+  const ask = asks.has(sid);
+  if (ask && !heard) askSilent = sid;
+  // A question's words so far, as of the stop; read again when its clip is
+  // ready, unless a newer session has the stream's text by then.
+  const saidAtStop = previewText();
+  const said = () => (!heard ? "" : sid === session ? previewText() : saidAtStop);
   // The recording first, so its last words are in before the mic closes.
   if (liveRec && liveRec.state !== "inactive") {
     const rec = liveRec, parts = liveChunks, took = Date.now() - liveAt;
@@ -1036,13 +1060,28 @@ function stopLive(sid) {
     liveRec = null;
     rec.onstop = () => {
       const type = rec.mimeType || "audio/webm";
+      if (ask) { void handOver(sid, heard ? parts.slice() : [], type, took, said()); return; }
       if (heard) void uploadBatch(sid, parts.slice(), type, false, took, false);
       else void nothingToSend(sid, false);
     };
-    try { rec.stop(); recordedSession = sid; } catch { /* nothing recorded: the stream's text is the fallback */ }
+    try { rec.stop(); recordedSession = sid; } catch {
+      // Nothing recorded: the stream's text is the fallback. A question's
+      // onstop will not come, so it goes now with the words alone, rather
+      // than after the main process has given up waiting for its clip.
+      if (ask) void handOver(sid, [], rec.mimeType || "audio/webm", took, said());
+    }
+  } else if (ask) {
+    // No recording beside the stream (the microphone was not open yet, or
+    // no recorder would start): the stream's words are all the question
+    // there is, and none at all is one nobody heard.
+    void handOver(sid, [], "audio/webm", Date.now() - liveAt, said());
   }
   teardownLiveGraph();
   stopTracks();
+  // A question whose stream has already gone (it dropped, or never opened)
+  // will hear no more: its final text is what it had, now, rather than
+  // after the watchdog.
+  if (ask && !ws) { finishLive(sid); return; }
   try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
   // If "done" never arrives (server hiccup), finish with what we have —
   // but only for THIS session (checked inside finishLive).
@@ -1081,6 +1120,16 @@ async function finishLive(sid) {
   // goes on, and stopping still writes it.
   if (liveRec && liveRec.state === "recording") { dropStream(); return; }
   const raw = previewText();
+  // A question: nothing is written or refined. The stream's last word on
+  // what was said goes to the main process, which may be waiting for it.
+  if (asks.has(sid)) {
+    teardownLive();
+    // Over before they stopped, with no recording beside it: what the
+    // stream heard is the whole question.
+    if (stopped !== sid) void handOver(sid, [], "audio/webm", Date.now() - liveAt, raw);
+    askFinal(sid, raw);
+    return;
+  }
   // The recording is being written (stopLive → uploadBatch): the stream
   // only had to draw the captions, and it has.
   const recorded = recordedSession === sid || liveChunks.length > 0;

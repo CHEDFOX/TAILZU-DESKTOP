@@ -5,10 +5,15 @@
   and Blip peeking over the card's top edge, pointing at it.
 
     listening   the card, a row of amber dots your voice moves, Blip's
-                antenna lit (the one amber the brand allows: something live)
+                antenna lit (the one amber the brand allows: something live);
+                a light, dotted, breathing ring on what the words so far seem
+                to name (tentative: no thread, no label, the card stays put)
     thinking    the dots fall still and a light runs along them; Blip looks up
-    showing     the answer, word by word as it is spoken; the ring on the
-                target, a dotted thread from Blip's finger to it
+    showing     the answer, word by word as it is spoken, growing a sentence
+                at a time when it is long; the ring on the target, a dotted
+                thread from Blip's finger to it
+    permission  may a picture go: Allow once, Always for <app>, Not now; the
+                header then says "1 picture sent" when one did
     doing       the plan as a short checklist, the step being done ringed
     confirm     the exact thing about to happen, quoted, and two buttons:
                 Do it, Not now (or tap Alt twice). Amber; pink when it cannot
@@ -30,7 +35,10 @@
                              and the hard cases: tall (a confirm with everything
                              at its longest), top (a target at the window's top
                              edge), menubar (a Mac's File menu), long (a URL and
-                             a path with nowhere to break)
+                             a path with nowhere to break); and the picture
+                             layer: tentative (a guess ringed while they talk),
+                             permission (the picture card), growing (an answer
+                             about a picture, a sentence at a time)
 -->
 <html>
 <head>
@@ -105,6 +113,14 @@
   #card[data-state="confirm"][data-risk="always"] #eyebrow, #card[data-state="error"] #eyebrow { color:var(--err); }
   #close { margin-left:auto; flex:0 0 auto; width:24px; height:24px; border-radius:50%; border:0; padding:0; background:transparent; color:var(--pale-3);
     display:grid; place-items:center; cursor:pointer; transition:background .15s, color .15s; }
+  /* What went with the question, said plainly where the card begins: "1
+     picture sent". A quiet chip, never amber: it is a record, not a light. */
+  #badge { margin-left:auto; flex:0 0 auto; font:500 9px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--pale-2);
+    padding:4px 8px 4px 7px; border-radius:999px; box-shadow:inset 0 0 0 1px var(--rule); background:rgba(243,226,198,.04); white-space:nowrap; }
+  #badge:empty { display:none; }
+  #badge::before { content:""; display:inline-block; width:5px; height:4px; margin-right:6px; vertical-align:1px; border-radius:1px;
+    box-shadow:inset 0 0 0 1px var(--pale-2); }
+  #badge:not(:empty) + #close { margin-left:4px; }
   #close:hover { background:rgba(243,226,198,.08); color:var(--pale); }
   #close svg { width:10px; height:10px; }
 
@@ -157,6 +173,26 @@
   #no:hover { color:var(--pale); background:rgba(243,226,198,.07); }
   #ask kbd { margin-left:auto; font:500 9.5px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--pale-3); white-space:nowrap; }
 
+  /* May a picture go. Three answers on one row; a long app name gives way
+     (it is in the header too) rather than push Not now off it. */
+  #permit { display:none; margin-top:12px; }
+  #card[data-state="permission"] #permit { display:block; }
+  #card[data-state="permission"] #lamp { background:var(--live); }
+  #card[data-state="permission"] #eyebrow { color:var(--live); }
+  #card[data-state="permission"] #foot { display:none; }
+  #permitText { margin:0; padding:1px 0 1px 12px; border-left:2px solid var(--live); font:400 16px/1.38 var(--serif); color:var(--pale); overflow-wrap:anywhere; }
+  #permitText:empty { display:none; }
+  #permit .row { display:flex; align-items:center; gap:4px; margin-top:14px; }
+  #permit button { font:600 13px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; white-space:nowrap; transition:background .15s, color .15s, transform .1s; }
+  #permit button:active { transform:scale(.97); }
+  #once { flex:none; background:var(--pale); color:var(--ink); padding:10px 14px; }
+  #once:hover { background:#FFF6E8; }
+  #always { background:transparent; color:var(--pale); padding:10px 12px; box-shadow:inset 0 0 0 1px rgba(243,226,198,.3);
+    flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  #always:hover { background:rgba(243,226,198,.07); }
+  #notnow { flex:none; background:transparent; color:var(--pale-2); padding:10px 8px; }
+  #notnow:hover { color:var(--pale); background:rgba(243,226,198,.07); }
+
   #foot { margin-top:13px; font:500 9.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--pale-3); }
   #foot:empty { display:none; }
   #card[data-state="confirm"] #foot { display:none; }
@@ -196,6 +232,10 @@
     font:13px/1 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; box-shadow:0 1px 0 rgba(0,0,0,.08); }
   body.demo .menubar b, body.demo .menubar span { padding:4px 8px; border-radius:4px; }
   body.demo .mock .composer em { margin-left:auto; padding:6px 12px; border-radius:7px; background:#1B1712; color:#fff; font-style:normal; font-weight:600; }
+  /* A picture on the page: an equation, as a slide or a scan would have it. */
+  body.demo .mock .fig { margin-top:20px; width:330px; height:128px; border-radius:8px; background:#FBFAF7; box-shadow:inset 0 0 0 1px #ECE7DF;
+    display:grid; place-items:center; font:italic 400 30px/1 Georgia,"Times New Roman",serif; color:#1B1712; letter-spacing:.01em; }
+  body.demo .mock .fig sup, body.demo .mock .fig sub { font-size:.5em; line-height:0; }
 </style>
 </head>
 <body>
@@ -204,7 +244,7 @@
 <div id="card" role="dialog" aria-live="polite" data-state="listening">
   <div id="inner">
     <header>
-      <i id="lamp"></i><span id="eyebrow">Listening</span><span id="app"></span>
+      <i id="lamp"></i><span id="eyebrow">Listening</span><span id="app"></span><span id="badge"></span>
       <button id="close" aria-label="Stop"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
     </header>
     <p id="heard"></p>
@@ -215,6 +255,10 @@
       <div class="what" id="what"></div>
       <blockquote id="quote"></blockquote>
       <div class="row"><button id="yes">Do it</button><button id="no">Not now</button><kbd id="askHint">or tap Alt twice</kbd></div>
+    </div>
+    <div id="permit">
+      <p id="permitText"></p>
+      <div class="row"><button id="once">Allow once</button><button id="always">Always</button><button id="notnow">Not now</button></div>
     </div>
     <div id="foot"></div>
   </div>
