@@ -132,6 +132,7 @@ test("look answers in the §A shape, with the contract's defaults sent", async (
     assert.strictEqual(l.image.width, 800);
     assert.strictEqual(typeof l.ms, "number");
     assert.strictEqual(l.ocr, "ok", "the helper's OCR state rides along");
+    assert.deepStrictEqual(l.titleFrames, [[-1820, 50, 800, 31]], "where the title is drawn, frames only");
     // { budgetMs = 1500, maxSide = 1600, quality = 0.82, ocr = true, image = true }
     assert.deepStrictEqual(l.echo, { budgetMs: 1500, maxSide: 1600, quality: 0.82, ocr: true, image: true });
   } finally { d.stop(); }
@@ -171,6 +172,40 @@ test("look has its own timeout, and a snapshot asked after it is not held behind
     assert.strictEqual(l.ok, true, "the look outlived the action timeout on its own one");
     assert.deepStrictEqual(order, ["snapshot", "look"]);
     assert.strictEqual((await d.press("e1")).ok, true);
+  } finally { d.stop(); }
+});
+
+test("a look asked with a snapshot, as Alt twice asks (snapshot first), is not held behind the walk", async () => {
+  // The fake reads its lines one at a time, as uia-agent.ps1 does, and a
+  // snapshot holds the reader 500 ms; a look is answered 300 ms after its line
+  // is read. Read behind the walk, a look with 700 ms would time out.
+  const d = fakeDriver("walk");
+  try {
+    assert.strictEqual((await d.trusted()).ok, true, "warm");
+    const t0 = Date.now();
+    // agent.begin: takeSnapshot() then takeLook(), each one turn of the
+    // microtask queue in.
+    const snap = Promise.resolve().then(() => d.snapshot({ max: 3 }));
+    const look = Promise.resolve().then(() => d.look({ timeoutMs: 700 }));
+    const [s, l] = await Promise.all([snap, look]);
+    assert.strictEqual(s.ok, true, JSON.stringify(s));
+    assert.strictEqual(l.ok, true, `the look was read first and answered beside the walk: ${JSON.stringify(l).slice(0, 120)}`);
+    assert.ok(l.readAt - t0 < 200, `the look's line was read at once (${l.readAt - t0} ms)`);
+  } finally { d.stop(); }
+});
+
+test("a look's line carries the moment the driver stops waiting for it", async () => {
+  const d = fakeDriver("normal");
+  try {
+    await d.trusted();
+    let before = Date.now();
+    let l = await d.look({ timeoutMs: 2000 });
+    assert.ok(l.echoDeadline >= before + 2000 && l.echoDeadline <= l.readAt + 2000, `explicit: ${l.echoDeadline - before}`);
+    before = Date.now();
+    l = await d.look();
+    assert.ok(l.echoDeadline >= before + 2500 && l.echoDeadline <= l.readAt + 2500, "the default timeout");
+    // The other commands are as they were.
+    assert.strictEqual((await d.snapshot({ max: 2 })).echoBudget, 900);
   } finally { d.stop(); }
 });
 
@@ -242,6 +277,7 @@ test("a look answer that keeps to nothing is made to keep to the contract", asyn
     assert.strictEqual(l.lines[0].conf, 0.5, "a confidence is kept when one is sent");
     assert.strictEqual(l.image, null, "a picture with no data is none");
     assert.strictEqual(l.ms, 0);
+    assert.deepStrictEqual(l.titleFrames, Array.from({ length: 8 }, (_, i) => [0, i, 800, 31]), "frames only, with a size, at most 8");
   } finally { d.stop(); }
   const nw = fakeDriver("nowindow");
   try { assert.deepStrictEqual(await nw.look(), { ok: false, error: "no_window" }); } finally { nw.stop(); }
@@ -629,10 +665,11 @@ test("look: the command starts a worker off the reader loop, which answers its o
   const begin = psFunction(ps, "TzLookBegin");
   assert.match(begin, /error = 'no_capture'/);
   assert.match(begin, /error = 'no_window'/);
-  assert.match(begin, /\[TzShot\]::Frame\(\$h\)/);
+  assert.match(begin, /\$hwnd = \[TzAgent\]::GetForegroundWindow\(\)/);
+  assert.match(begin, /\[TzShot\]::Frame\(\$hwnd\)/);
   // The title as the snapshot gives it, capped with its end kept; the whole
   // of it goes to the worker only as the key it keeps out of the lines.
-  assert.match(begin, /\$whole = TzClean \(\[TzAgent\]::WindowTitle\(\$h\)\) \$TITLE_READ/);
+  assert.match(begin, /\$whole = TzClean \(\[TzAgent\]::WindowTitle\(\$hwnd\)\) \$TITLE_READ/);
   assert.match(begin, /\$title = TzTitleCap \$whole/);
   assert.match(begin, /\$titleKey = \[TzShot\]::Key\(\$whole\)/);
   // The budget kept sane, and the worker run on the pool (inline only when
@@ -644,6 +681,9 @@ test("look: the command starts a worker off the reader loop, which answers its o
   assert.match(run, /\$psh\.RunspacePool = \$script:lookPool/);
   assert.match(run, /BeginInvoke\(\)/);
   assert.doesNotMatch(run, /EndInvoke|\.Wait\(/, "never waits for the worker");
+  // In a scope of its own, so nothing a look made (the window's pixels, its
+  // JPEG) stays behind in the pool's long-lived runspace.
+  assert.match(run, /\[void\]\$psh\.AddScript\(\$TZ_LOOK_WORKER, \$true\)/);
   // The pool: opened at start, MTA, and the engine warmed in it.
   const pool = psFunction(ps, "TzOpenLookPool");
   assert.match(pool, /CreateRunspacePool\(1, 2,/);
@@ -654,6 +694,20 @@ test("look: the command starts a worker off the reader loop, which answers its o
   // One whole line under the console writer's own lock, so the worker's
   // answer and the loop's never run into one line.
   assert.match(ps, /lock \(o\) \{ o\.WriteLine\(line\); o\.Flush\(\); \}/);
+});
+
+test("look: a look that waited behind another line is cut to the time the driver has left", () => {
+  const ps = PS_TEXT();
+  const begin = psFunction(ps, "TzLookBegin");
+  // The deadline, read as the driver sends it (epoch ms), against the same clock.
+  assert.match(begin, /\$msg\.deadline/);
+  assert.match(begin, /\$left = \[long\]\$dl - \[DateTimeOffset\]::UtcNow\.ToUnixTimeMilliseconds\(\) - \$LOOK_MARGIN_MS/);
+  assert.match(begin, /if \(\$left -lt 100\) \{ return @\{ id = \$id; ok = \$false; error = 'timeout' \} \}/, "given up on: not made");
+  assert.match(begin, /if \(\$budget -gt \$left\) \{ \$budget = \[int\]\$left \}/);
+  assert.ok(begin.indexOf("$msg.deadline") > begin.indexOf("$budget = 10000"), "cut after the budget is made sane");
+  // The helper's margin is the driver's.
+  const margin = Number(/\$LOOK_MARGIN_MS = (\d+)/.exec(ps)[1]);
+  assert.strictEqual(margin, Number(/const LOOK_MARGIN_MS = (\d+);/.exec(fs.readFileSync(path.join(__dirname, "uiaDriver.js"), "utf8"))[1]));
 });
 
 test("look: the worker's waits are bounded by the budget, and it always answers", () => {
@@ -683,6 +737,8 @@ test("look: the worker's waits are bounded by the budget, and it always answers"
   assert.match(worker, /\$LINES_MAX = 300/);
   assert.match(worker, /foreach \(\$wd in \$ln\.Words\)[\s\S]*?\$wd\.BoundingRect/);
   assert.match(worker, /\$shot::Line\(\$ln\.Text, \$x0, \$y0, \$x1, \$y1, \$up, \$frame\[0\], \$frame\[1\]\)/);
+  // The capture too: the window's own handle, waited for what is left.
+  assert.match(worker, /\$shot::Capture\(\$hwnd, \$frame, \[int\]\[math\]::Max\(1, \$budget - \$sw\.ElapsedMilliseconds\)\)/);
   // Every way out answers: a capture that fails, and anything else.
   assert.match(worker, /\$shot::Fail\(\$idJson, 'capture_failed'\)/);
   assert.match(worker, /finally \{\s*if \(-not \$sent\) \{ try \{ \$shot::Send\(\$shot::Fail\(\$idJson, 'exception'\)\) \} catch \{\} \}/);
@@ -712,17 +768,57 @@ test("look: the window's title is kept out of the lines, against the whole of it
   const ps = PS_TEXT();
   const at = ps.indexOf("$TZ_LOOK_WORKER = {");
   const worker = ps.slice(at, ps.indexOf("\nfunction ", at));
-  const skip = worker.indexOf("if ($shot::IsTitle($ln.Text, $titleKey)) { continue }");
+  const skip = worker.indexOf("if ($shot::IsTitle($ln.Text, $titleKey)) {");
   assert.ok(skip > 0, "a title line is skipped");
   assert.ok(skip < worker.indexOf("$shot::Line($ln.Text"), "before it becomes a line");
+  // Only where it was goes back (frames, no text), with the title bar's band:
+  // the device cuts the picture below them (agent.js chromeBottom).
+  const skipped = worker.slice(skip, worker.indexOf("$shot::Line($ln.Text"));
+  assert.match(skipped, /\$titleFrames\.Add\(\$b\)/);
+  assert.match(skipped, /\$shot::Box\(\$x0, \$y0, \$x1, \$y1, \$up, \$frame\[0\], \$frame\[1\]\)/, "moved as the lines are");
+  assert.match(skipped, /continue/);
+  assert.doesNotMatch(skipped, /\$ln\.Text[^,]/, "the title's text goes nowhere");
+  assert.match(worker, /if \(\$titleBand\) \{ \$titleFrames\.Add\(\$titleBand\) \}/);
+  assert.match(worker, /\$shot::Reply\(\$idJson, \$frame, \$title, \$lines\.ToArray\(\), \$titleFrames\.ToArray\(\), /);
+  assert.match(psFunction(ps, "TzLookBegin"), /\$titleBand = \[TzShot\]::TitleBand\(\$hwnd, \$frame\)/);
   const cs = [...ps.matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).find((c) => /class TzShot\b/.test(c));
   const key = cs.slice(cs.indexOf("public static string Key("), cs.indexOf("public static bool IsTitle("));
-  assert.match(key, /if \(!char\.IsWhiteSpace\(c\)\) sb\.Append\(char\.ToLowerInvariant\(c\)\)/, "case and spaces do not count");
+  assert.match(key, /if \(char\.IsWhiteSpace\(ch\)\) continue;/, "spaces do not count");
+  assert.match(key, /sb\.Append\(char\.ToLowerInvariant\(c\)\)/, "nor case");
   assert.match(key, /\\u2026/, "nor a trailing ellipsis");
+  // Nor which dash or quote it was read with: the same rule as agent.js textKey.
+  assert.match(key, /\(c >= '\\u2010' && c <= '\\u2015'\) \|\| c == '\\u2212'\) c = '-'/);
+  assert.match(key, /c == '\\u2018' \|\| c == '\\u2019' \|\| c == '\\u201a' \|\| c == '\\u201b' \|\| c == '\\u2032'\) c = '\\''/);
+  assert.match(key, /\(c >= '\\u201c' && c <= '\\u201f'\) \|\| c == '\\u2033'\) c = '"'/);
+  // The reply: at most 8 frames.
+  const reply = cs.slice(cs.indexOf("public static string Reply("), cs.indexOf("public static string Fail("));
+  assert.match(reply, /string\[\] titleFrames/);
+  assert.match(reply, /boxes >= 8/);
+  // The title bar: from the frame's top to the client area's, a quarter of the window at most.
+  const band = cs.slice(cs.indexOf("public static string TitleBand("), cs.indexOf("public static string Box("));
+  assert.match(band, /ClientToScreen\(h, ref p\)/);
+  assert.match(band, /int band = p\.Y - f\[1\];/);
+  assert.match(band, /if \(band < 1 \|\| band > f\[3\] \/ 4\) return null;/);
   const is = cs.slice(cs.indexOf("public static bool IsTitle("), cs.indexOf("static string N("));
   assert.match(is, /if \(k == titleKey\) return true;/, "the title");
   assert.match(is, /k\.Length >= 8 && titleKey\.IndexOf\(k, StringComparison\.Ordinal\) >= 0/, "a piece of it");
   assert.match(is, /titleKey\.Length >= 8 && k\.IndexOf\(titleKey, StringComparison\.Ordinal\) >= 0/, "a line with it inside");
+});
+
+test("snapshot: a Store app in its frame is named by the app inside, as frontApp.js names it", () => {
+  const ps = PS_TEXT();
+  const snap = psFunction(ps, "TzSnapshot");
+  const at = snap.indexOf("$appName = ''");
+  assert.ok(at > 0);
+  const naming = snap.slice(at, snap.indexOf("$window = $null", at));
+  assert.match(naming, /if \(\$p -and \$p\.ProcessName -eq 'ApplicationFrameHost'\)/);
+  assert.match(naming, /\[TzAgent\]::FindWindowEx\(\$h, \[IntPtr\]::Zero, 'Windows\.UI\.Core\.CoreWindow', \[IntPtr\]::Zero\)/);
+  assert.match(naming, /GetWindowThreadProcessId\(\$core, \[ref\]\$coreId\)/);
+  assert.match(naming, /if \(\$coreId -ne 0 -and \$coreId -ne \$procId\)/);
+  assert.ok(naming.indexOf("ApplicationFrameHost") < naming.indexOf("$appName = $p.ProcessName"), "before the name is read");
+  // The pid stays the window's own.
+  assert.match(snap, /\$o\.app = @\{ name = \$appName; pid = \[int\]\$procId \}/);
+  assert.match(ps, /public static extern IntPtr FindWindowEx\(IntPtr parent, IntPtr after, string cls, IntPtr title\);/);
 });
 
 test("look: the worker calls no cmdlet", () => {
@@ -741,12 +837,38 @@ test("look: the C# captures the window as drawn, and encodes with a quality", ()
   // Its own Add-Type, so a System.Drawing that will not load costs only look.
   assert.match(ps, /try \{\s*Add-Type -ReferencedAssemblies System\.Drawing -ErrorAction Stop -TypeDefinition @'/);
   assert.match(ps, /\$script:lookReady = \$true\s*\} catch \{\}/);
-  // The visible frame (DWM), clipped to the desktop; the screen's pixels.
+  // The visible frame (DWM), clipped to the desktop.
   assert.match(cs, /DWMWA_EXTENDED_FRAME_BOUNDS = 9/);
   assert.match(cs, /GetWindowRect\(h, out r\)/, "the plain rect when DWM has none");
   assert.match(cs, /SM_CXVIRTUALSCREEN/);
   assert.match(cs, /IsIconic\(h\)/);
-  assert.match(cs, /CopyFromScreen\(f\[0\], f\[1\], 0, 0, new Size\(f\[2\], f\[3\]\), CopyPixelOperation\.SourceCopy\)/);
+  // The window's own pixels, never the screen's: what is over it (a toast,
+  // another app's topmost window, Tailzu's card and pill) is not read or sent.
+  assert.doesNotMatch(cs, /CopyFromScreen|BitBlt|GetDC\(|GetWindowDC/, "nothing copied off the screen");
+  assert.match(cs, /static extern bool PrintWindow\(IntPtr h, IntPtr hdc, uint flags\)/);
+  assert.match(cs, /const uint PW_RENDERFULLCONTENT = 2;/);
+  assert.match(cs, /ok = PrintWindow\(h, hdc, PW_RENDERFULLCONTENT\)/);
+  const capture = cs.slice(cs.indexOf("public static Bitmap Capture("), cs.indexOf("sealed class Printing"));
+  assert.match(capture, /public static Bitmap Capture\(IntPtr h, int\[\] f, int ms\)/);
+  // The frame cut out of the whole window rect, which must still hold it.
+  assert.match(capture, /int cx = f\[0\] - wr\.Left, cy = f\[1\] - wr\.Top;/);
+  assert.match(capture, /cx \+ f\[2\] > ww \|\| cy \+ f\[3\] > wh\) return null;/);
+  assert.match(capture, /whole\.Clone\(new Rectangle\(cx, cy, f\[2\], f\[3\]\)/);
+  // A window PrintWindow could not draw comes back black: no picture.
+  assert.match(capture, /if \(Blank\(bmp\)\) \{ bmp\.Dispose\(\); return null; \}/);
+  assert.match(cs, /if \(\(row\[x\] & 0xFFFFFF\) != 0\) return false;/);
+  // Bounded: on a thread of its own, waited for no longer than it was given.
+  const printing = cs.slice(cs.indexOf("sealed class Printing"), cs.indexOf("static bool Blank("));
+  assert.match(printing, /t\.IsBackground = true;/);
+  assert.match(printing, /t\.Join\(Math\.Max\(1, ms\)\);/);
+  assert.match(printing, /if \(ok && !late\) \{ done = bmp; bmp = null; \}/, "a late picture is the thread's to throw away");
+  // A window Windows scales for the screen is drawn at its own size: measured
+  // in its own units, then brought to the frame's (webrtc bug 8112).
+  assert.match(printing, /SetThreadDpiAwarenessContext\(GetWindowDpiAwarenessContext\(h\)\)/);
+  assert.ok(printing.indexOf("SetThreadDpiAwarenessContext") < printing.indexOf("GetWindowRect(h, out r)"), "measured after taking on its awareness");
+  assert.match(printing, /new Bitmap\(r\.Right - r\.Left, r\.Bottom - r\.Top, PixelFormat\.Format32bppRgb\)/, "no alpha to go black");
+  assert.match(capture, /if \(whole\.Width != ww \|\| whole\.Height != wh\) \{\s*Bitmap big = Resized\(whole, ww, wh\);/);
+  assert.ok(capture.indexOf("Resized(whole") < capture.indexOf("whole.Clone("), "scaled before the frame is cut");
   // JPEG with a Quality parameter; long side brought down to maxSide.
   assert.match(cs, /System\.Drawing\.Imaging\.Encoder\.Quality/);
   assert.match(cs, /ImageFormat\.Jpeg\.Guid/);

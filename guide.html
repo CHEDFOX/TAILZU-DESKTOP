@@ -221,8 +221,19 @@
   #always { background:transparent; color:var(--pale); padding:10px 12px; box-shadow:inset 0 0 0 1px rgba(243,226,198,.3);
     flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
   #always:hover { background:rgba(243,226,198,.07); }
+  #always[hidden] { display:none; }
   #notnow { flex:none; background:transparent; color:var(--pale-2); padding:10px 8px; }
   #notnow:hover { color:var(--pale); background:rgba(243,226,198,.07); }
+
+  /* A way past what stopped the answer (the Mac's Screen Recording page):
+     one button under what it says, on the finished card only. */
+  #offer { margin-top:13px; }
+  #offer[hidden] { display:none; }
+  #card[data-state="permission"] #offer, #card[data-state="confirm"] #offer { display:none; }
+  #offerBtn { font:600 13px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; background:var(--pale); color:var(--ink); padding:10px 14px;
+    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:background .15s, transform .1s; }
+  #offerBtn:hover { background:#FFF6E8; }
+  #offerBtn:active { transform:scale(.97); }
 
   #foot { margin-top:13px; font:500 9.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--pale-3); }
   #foot:empty { display:none; }
@@ -312,6 +323,7 @@
     <div id="voice"><canvas id="wave"></canvas></div>
     <p id="say"></p>
     <ol id="steps"></ol>
+    <div id="offer" hidden><button id="offerBtn"></button></div>
     <div id="ask">
       <div class="what" id="what"></div>
       <blockquote id="quote"></blockquote>

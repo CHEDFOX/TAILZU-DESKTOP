@@ -37,7 +37,8 @@ const PILL_PHASES = new Set(["listening", "thinking", "showing", "closing"]);
 
 /**
  * What a question may do with the pill, given what the pill is doing now
- * (`now`: { state: main's pill state, recording }).
+ * (`now`: { state: main's pill state, recording, first }). `first`: this
+ * is a question's first phase (its card's show).
  *
  * DICTATION ALWAYS WINS THE PILL. While one records or writes, nothing
  * changes. Closing, and giving it back (null), touch only a pill that is
@@ -48,13 +49,18 @@ const PILL_PHASES = new Set(["listening", "thinking", "showing", "closing"]);
  *   "rest"   give it back
  *   "ask"    the next phase of the question that has it
  *   "take"   the first phase: put on the display under the cursor first
+ *
+ * A new question asked while the last card is still up or folding finds the
+ * pill already "ask", and is still a first phase: it is put under the cursor
+ * again, or the new card opened on the display the last one was on, while
+ * they looked at another.
  */
 function pillAskMove(phase, now) {
   const o = now || {};
   if (o.recording || o.state === "listening" || o.state === "writing") return null;
   if (phase == null) return o.state === "ask" ? "rest" : null;
   if (!PILL_PHASES.has(phase)) return null;
-  if (o.state === "ask") return "ask";
+  if (o.state === "ask") return o.first && phase !== "closing" ? "take" : "ask";
   return phase === "closing" ? null : "take";
 }
 
@@ -101,6 +107,7 @@ function createAsk(ctx) {
   let confirmWait = null;  // the card's Do it / Not now, while it is up
   let confirmAt = 0;       // when that card was put up
   let permitWait = null;   // the picture card's Allow once / Always / Not now, while it is up
+  let offered = null;      // the button on the card that is up (guide offer), until it is clicked or the card goes
   // THE LIVE STREAM'S WORDS, for the question recording now. Partials as they
   // come (shown to the agent as previews), the text so far with the clip, and
   // the stream's final text, which can arrive a moment after the clip or
@@ -122,6 +129,7 @@ function createAsk(ctx) {
   let pillPhase = null;
   let pillAt = null;
   let drawSeq = 0;         // the marks' ids, d1, d2, ...: never reused, so one fading out is never taken for a new one
+  let marksHere = 0;       // marks drawn on the guide's display since it was put there, or last cleared
   // None of this file's timers keeps a process alive by itself: in the app
   // Electron does that, and the tests end when their run does.
   const soft = (t) => { if (t && typeof t.unref === "function") t.unref(); return t; };
@@ -162,6 +170,7 @@ function createAsk(ctx) {
         // being drawn on the other, round whatever was there. They go; the
         // answer draws on in this one's.
         send({ type: "clear" });
+        marksHere = 0;
         send({ type: "area", inset: insetOf(display, bounds) });
         dock();
         return true;
@@ -171,6 +180,7 @@ function createAsk(ctx) {
     bounds = Object.assign({}, area);
     ready = false;
     queue.length = 0;
+    marksHere = 0;
     // THE PILL'S RECIPE: never focused (the app you asked about keeps the
     // keyboard, and a paste still lands in it), click-through except over the
     // card, over full-screen apps and every Space. A Mac's frameless panel is
@@ -232,8 +242,9 @@ function createAsk(ctx) {
    * The pill to a phase of the question: "listening", "thinking", "showing",
    * "closing". Main says no while a dictation has it (null). Each phase once:
    * the same one again is asked of main only when the card needs to know
-   * where the pill is now (`fresh`, at show). Returns the capsule in screen
-   * DIP, or null.
+   * where the pill is now (`fresh`, at show, which is always a question's
+   * first phase: main puts the pill under the cursor for it). Returns the
+   * capsule in screen DIP, or null.
    */
   function pillTo(phase, fresh) {
     if (!docking()) return null;
@@ -241,7 +252,7 @@ function createAsk(ctx) {
     if (phase === "closing" && pillPhase === null) return null;
     if (!fresh && phase === pillPhase) return pillAt;
     let r = null;
-    try { r = ctx.pillAsk(phase); } catch (e) { console.warn("[ask] the pill would not take the question:", (e && e.message) || e); }
+    try { r = ctx.pillAsk(phase, !!fresh); } catch (e) { console.warn("[ask] the pill would not take the question:", (e && e.message) || e); }
     pillPhase = phase;
     if (phase !== "closing") {
       const ok = r && [r.x, r.y, r.w, r.h].every((v) => typeof v === "number" && Number.isFinite(v)) && r.w > 0 && r.h > 0;
@@ -315,8 +326,11 @@ function createAsk(ctx) {
   // What the agent draws (agent.js draw) comes in the driver's units, frames
   // [x, y, w, h] and points [x, y], and goes to the guide in its window's own.
   // A mark is drawn where the guide is or not at all: one with any part off
-  // its window is dropped, and the window never moves for one (only a ring
-  // takes the guide to another display).
+  // its window is dropped. The window moves for a mark only when it is the
+  // first on the guide's display and lies on another (draw): the card opens
+  // on the pill's display, under the pointer, and the app asked about can
+  // be on the next one, where every mark of an answer that only draws
+  // ("1, 2, 3") was dropped.
   const onWindow = {
     frame: (f) => !!bounds && f[2] >= 0 && f[3] >= 0 && f[0] < bounds.width && f[1] < bounds.height && f[0] + f[2] > 0 && f[1] + f[3] > 0,
     point: (p) => !!bounds && p[0] >= 0 && p[1] >= 0 && p[0] <= bounds.width && p[1] <= bounds.height,
@@ -364,6 +378,16 @@ function createAsk(ctx) {
     else if (kind === "label") return null;
     return out;
   }
+  /** Where a mark is, in screen DIP: the middle of its frame, or its first
+   *  point. Null when it has no place to be, or is no mark the guide draws. */
+  function markPlace(mark) {
+    const m = mark && typeof mark === "object" ? mark : {};
+    if (!MARKS.has(String(m.kind || ""))) return null;
+    const s = [m.frame, m.at, m.from, Array.isArray(m.points) ? m.points[0] : null].find((v) => Array.isArray(v));
+    if (!s) return null;
+    if (s.length === 4) { const r = dip(s); return r && { x: r.x + r.w / 2, y: r.y + r.h / 2 }; }
+    return dipPoint(s);
+  }
 
   // ---- what the agent drives ---------------------------------------------------
   // What agent.js calls (its §3 guide), turned into the guide window's
@@ -375,6 +399,7 @@ function createAsk(ctx) {
       clearTimeout(hideTimer);
       if (confirmWait) confirmWait(false);
       if (permitWait) permitWait("no");
+      offered = null;
       // A new card: whatever the last one was still saying stops.
       quiet();
       // THE CARD GROWS OUT OF THE PILL. The pill first: main parts it on the
@@ -464,6 +489,15 @@ function createAsk(ctx) {
       });
     },
     hide() { hide(); },
+    // A button on the finished card for what stopped the answer: only
+    // "screenSettings", the Mac's Screen Recording page (agent.js
+    // TEXT.needScreen), and only where this computer can open it. Its click
+    // opens that page and nothing else (guide:offer).
+    offer(kind) {
+      if (kind !== "screenSettings" || typeof ctx.screenSettings !== "function" || !shown) return;
+      offered = kind;
+      send({ type: "offer", kind, text: txt("desktop.agent.screenSettingsButton", "Open Screen Recording settings") });
+    },
     error(msg) {
       if (confirmWait) confirmWait(false);
       if (permitWait) permitWait("no");
@@ -475,15 +509,24 @@ function createAsk(ctx) {
       if (msg) send({ type: "say", text: String(msg) });
     },
     // A mark on the screen while it explains (agent.js draw): converted to
-    // the guide's own coordinates, given a fresh id, or dropped.
+    // the guide's own coordinates, given a fresh id, or dropped. The first
+    // one on the guide's display, when it lies on another, takes the guide
+    // there, as a ring does; after that the guide stays with what it has
+    // drawn, and a mark elsewhere is dropped.
     draw(mark) {
       if (!shown || !win || win.isDestroyed()) return;
-      const m = markOf(mark);
-      if (!m) return;
+      let m = markOf(mark);
+      if (!m && marksHere === 0) {
+        const p = markPlace(mark);
+        const d = p && displayFor(p);
+        if (d && !sameRect(bounds, areaOf(d))) { ensureWindow(d); showWindow(); m = markOf(mark); }
+      }
+      if (!m) { console.log("[ask] a mark was dropped: it is not on the guide's display, or it is not one it can draw"); return; }
       m.id = "d" + (++drawSeq);
+      marksHere++;
       send(m);
     },
-    clear() { send({ type: "clear" }); },
+    clear() { marksHere = 0; send({ type: "clear" }); },
   };
   /** An error only this file knows of, on a card it then puts away itself. */
   function cardError(msg) {
@@ -498,6 +541,7 @@ function createAsk(ctx) {
     clearTimeout(hideTimer);
     const was = shown;
     shown = false;
+    offered = null;
     if (confirmWait) confirmWait(false);
     if (permitWait) permitWait("no");
     quiet();
@@ -547,7 +591,9 @@ function createAsk(ctx) {
     const tok = voiceTok;
     const got = voice(text, opts);
     speech = speech.then(() => got).then((m) => {
-      if (!m || tok !== voiceTok || !shown || listening) return undefined;
+      // Nor while a dictation records: its microphone would write Blip's
+      // words into what they are writing.
+      if (!m || tok !== voiceTok || !shown || listening || (ctx.dictating && ctx.dictating())) return undefined;
       send(m);
       return spoken();
     });
@@ -566,6 +612,15 @@ function createAsk(ctx) {
   function afterSpeech() {
     const cap = new Promise((r) => soft(setTimeout(r, Math.max(0, num("desktop.agent.voiceWaitMs", 15000)) + 2000)));
     return Promise.race([speech, cap]);
+  }
+  /** Everything the card has been given to say, said, however long that
+   *  takes: each sentence is held up at most voiceWaitMs, so it settles. A
+   *  finished answer's card stays up for it (agent.js scheduleHide): timed
+   *  from the end of the stream, it put the card away, and the voice with
+   *  it, two sentences into an answer that came as eight. */
+  function allSaid() {
+    const s = speech;
+    return s.then(() => (speech === s ? undefined : allSaid()));
   }
   /** The sentence out loud, as a message for the guide. The built-in voice
    *  with a real locale, by default: the server's voice (/v1/speak, the
@@ -596,34 +651,59 @@ function createAsk(ctx) {
   // "Always for <app>", which this computer remembers (main.js's local
   // state). The knob turns pictures off everywhere.
   const appKey = (name) => String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
-  /** "never", "always" or "ask", for pictures of this app. */
+  // WHAT "ALWAYS" IS REMEMBERED BY: the question's app as frontApp.js
+  // names it for that (its pictureKey), set as the question begins. The
+  // app's own name, never a window's title: a browser's label is the page's
+  // title, which the page writes ("Always for Chrome: Dashboard" covered any
+  // page calling itself that), and every Store app on Windows seen only as
+  // its frame is "Application Frame Host". Those have no key, and no Always.
+  let pictureApp = null;   // { label, key } of the question's app
+  /** The key for `app`, when it is the question's app and has one; else null. */
+  function pictureKey(app) {
+    const p = pictureApp;
+    return p && p.key && appKey(p.label) === appKey(app) ? p.key : null;
+  }
+  /** "never", "always" or "ask", for pictures of this app. "always" only
+   *  ever from this computer's own list: the server may turn pictures off
+   *  everywhere, but a server value that skipped the card would send a
+   *  picture of whatever is in front with nobody asked. */
   function pictures(app) {
-    const k = str("desktop.agent.pictures", "ask");
-    if (k === "never") return "never";
-    const key = appKey(app);
+    if (str("desktop.agent.pictures", "ask") === "never") return "never";
+    const key = appKey(pictureKey(app));
     const always = typeof ctx.picturesAlways === "function" ? ctx.picturesAlways() : [];
     if (key && Array.isArray(always) && always.some((a) => appKey(a) === key)) return "always";
-    return k === "always" ? "always" : "ask";
+    return "ask";
   }
   /** The picture card, until it is answered: "once", "always" (remembered
    *  for this app) or "no". Unanswered in confirmMs, put away, or the card
-   *  replaced, it is no. */
-  function permit(app) {
+   *  replaced, it is no. `about.region`: "window" when the picture is the
+   *  whole window, which the card then says, not "this part". */
+  function permit(app, about) {
     if (permitWait) permitWait("no");
-    // The name whole, as the run has it (up to 60): "Always for <app>" must
-    // remember the very name pictures() is asked about next time, or a long
-    // one is asked about every time. The card cuts it short on screen itself.
+    // The name whole, as the run has it (up to 60). The card cuts it short
+    // on screen itself.
     const name = String(app || "").replace(/\s+/g, " ").trim().slice(0, 60);
-    send({ type: "permission", app: name, text: txt("desktop.agent.permitText", "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu.") });
+    // Remembered by the very key pictures() looks for next time. Without
+    // one the card offers no Always, and a guide that still shows the
+    // button sends this once and remembers nothing.
+    const key = String(pictureKey(app) || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    const whole = !!about && about.region === "window";
+    send({
+      type: "permission", app: name, always: !!key,
+      text: whole
+        ? txt("desktop.agent.permitWindowText", "To answer that I need to see it: one picture of this window, sent to Tailzu and the AI providers it uses to answer.")
+        : txt("desktop.agent.permitText", "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu and the AI providers it uses to answer."),
+    });
     return new Promise((resolve) => {
       let timer = null;
       const answer = (choice) => {
         clearTimeout(timer);
         if (permitWait !== answer) return;
         permitWait = null;
-        const c = choice === "once" || choice === "always" ? choice : "no";
-        if (c === "always" && name && typeof ctx.allowPicturesAlways === "function") {
-          try { ctx.allowPicturesAlways(name); } catch { /* still yes, for this once */ }
+        let c = choice === "once" || choice === "always" ? choice : "no";
+        if (c === "always" && !key) c = "once";
+        if (c === "always" && typeof ctx.allowPicturesAlways === "function") {
+          try { ctx.allowPicturesAlways(key); } catch { /* still yes, for this once */ }
         }
         resolve(c);
       };
@@ -646,15 +726,16 @@ function createAsk(ctx) {
    * The part of the look's picture under `frame`, as a JPEG no longer on its
    * long side than desktop.agent.pictureMaxSide. The picture is exactly the
    * look's window, so a frame in the driver's units maps into it by the
-   * window's frame and the picture's own size; a frame that misses the
-   * window, or is too thin to see anything in, is the whole window instead.
-   * Null when there is no picture to crop.
+   * window's frame and the picture's own size. No frame is the whole window.
+   * Null when there is no picture to crop, and when the frame misses the
+   * window or is too small in the picture to see anything in: the whole
+   * window in its place sent the title bar and the address bar, which the
+   * part asked about was cut below, on a card that asked about "this part".
    *
    * `frame` comes back with it: the part of the window the picture really
    * shows, in the driver's units (the frame asked for, cut to the window, or
    * the whole window). The answer's marks in the picture are places in THIS
-   * picture: an icon too small to crop on a 4K window sent the whole window,
-   * and a circle the model put in its middle was drawn in the icon's.
+   * picture.
    */
   function crop(look, frame) {
     try {
@@ -662,20 +743,20 @@ function createAsk(ctx) {
       const win = look && look.window && look.window.frame;
       const ok = (f) => Array.isArray(f) && f.length === 4 && f.every((n) => typeof n === "number" && Number.isFinite(n));
       if (!img || typeof img.data !== "string" || !img.data || !ok(win) || win[2] <= 0 || win[3] <= 0 || !ctx.nativeImage) return null;
+      if (frame != null && !ok(frame)) return null;
       const pic = ctx.nativeImage.createFromBuffer(Buffer.from(img.data, "base64"));
       if (!pic || pic.isEmpty()) return null;
       const size = pic.getSize();
       const sx = size.width / win[2], sy = size.height / win[3];
       let rect = { x: 0, y: 0, width: size.width, height: size.height };
       let shows = win.slice();
-      if (ok(frame)) {
+      if (frame != null) {
         const x0 = Math.max(0, Math.floor((frame[0] - win[0]) * sx)), y0 = Math.max(0, Math.floor((frame[1] - win[1]) * sy));
         const x1 = Math.min(size.width, Math.ceil((frame[0] + frame[2] - win[0]) * sx)), y1 = Math.min(size.height, Math.ceil((frame[1] + frame[3] - win[1]) * sy));
-        if (x1 - x0 >= 8 && y1 - y0 >= 8) {
-          rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
-          const l = Math.max(frame[0], win[0]), t = Math.max(frame[1], win[1]);
-          shows = [l, t, Math.min(frame[0] + frame[2], win[0] + win[2]) - l, Math.min(frame[1] + frame[3], win[1] + win[3]) - t];
-        }
+        if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+        rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+        const l = Math.max(frame[0], win[0]), t = Math.max(frame[1], win[1]);
+        shows = [l, t, Math.min(frame[0] + frame[2], win[0] + win[2]) - l, Math.min(frame[1] + frame[3], win[1] + win[3]) - t];
       }
       let out = rect.x === 0 && rect.y === 0 && rect.width === size.width && rect.height === size.height ? pic : pic.crop(rect);
       const max = Math.max(64, num("desktop.agent.pictureMaxSide", 1024));
@@ -840,6 +921,12 @@ function createAsk(ctx) {
     // The language dictation is set to, so a question is heard and answered
     // in it too ("auto" and none are the server's own choice).
     language: () => (typeof ctx.language === "function" ? ctx.language() : ctx.language) || "",
+    // The names it answers to, their own for it among them, taken off the
+    // front of a question here as the server takes them: "Jarvis, where's
+    // export?" was matched with "jarvis" in it, and found nothing.
+    names: ctx.names,
+    // A finished answer's card stays up until all of it has been said.
+    afterSpeech: allSaid,
     platform: platform === "win32" ? "win" : "mac",
     now: () => Date.now(),
     log: (...a) => console.log("[ask]", ...a),
@@ -931,6 +1018,7 @@ function createAsk(ctx) {
       return;
     }
     begun = true;
+    pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
     agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer });
     if (!agent.active()) { dropListening(); return; }   // refused: a private window, a bank
     if (early) { const a = early; early = null; answer(a.audio, a.said); return; }
@@ -957,6 +1045,15 @@ function createAsk(ctx) {
   ipcMain.on("guide:confirm", (e, yes) => { if (fromGuide(e) && confirmWait) confirmWait(!!yes); });
   ipcMain.on("guide:permit", (e, choice) => { if (fromGuide(e) && permitWait) permitWait(String(choice || "")); });
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
+  // The card's button (guide offer): only the one it was given, once. The
+  // settings page comes up over the card, which goes: there is nothing more
+  // to do on it.
+  ipcMain.on("guide:offer", (e, kind) => {
+    if (!fromGuide(e) || !offered || String(kind || "") !== offered) return;
+    offered = null;
+    try { ctx.screenSettings(); } catch (err) { console.warn("[ask] the settings would not open:", (err && err.message) || err); }
+    cancel("settings");
+  });
   ipcMain.on("guide:spoken", (e) => { if (fromGuide(e) && spokenWait) spokenWait(); });
 
   return {
@@ -989,11 +1086,16 @@ function createAsk(ctx) {
     recorderGone() { if (clipDue) noClip(); },
     owns(sid) { return sid === session && sid !== 0; },
     active: () => listening || !!onAudio || !!naming || !!finalWait || agent.active(),
+    /** A card is up: a run's, or a finished answer's, which may still be
+     *  saying it. A dictation starting puts it away (main.js toggleDictation). */
+    shown: () => shown,
     escape() {
       // The agent's own Escape, heard by the same hook: for a moment after
       // it sends one, an Esc is its, not theirs.
       if (Date.now() < selfEscUntil) return false;
-      if (listening || onAudio || naming || finalWait || agent.active() || confirmWait || permitWait) { cancel("esc"); return true; }
+      // A finished answer's card too: it stays up while it is said, and Esc
+      // is how its voice is stopped.
+      if (listening || onAudio || naming || finalWait || agent.active() || confirmWait || permitWait || shown) { cancel("esc"); return true; }
       return false;
     },
   };

@@ -32,12 +32,14 @@
 //
 // "look" is the one command that takes a picture: the focused window's own
 // pixels, read into lines of text here with Vision, plus a JPEG of it. It
-// needs Screen Recording, which it checks for and never asks for (a prompt
-// from a helper nobody sees would land over the user's app; Tailzu asks in
-// its own words). The picture goes only to axDriver.js and stays on this
-// machine unless the user lets Ask send it. A look takes longer than anything
-// else here, so it runs on a queue of its own, beside the other commands: the
-// snapshot asked for at the same moment is not kept waiting behind it.
+// needs Screen Recording, which it checks for and never asks for: a prompt
+// from a helper nobody sees would land over the user's app, so asking, and
+// saying why, is the app's to do. Without it a look answers
+// no_screen_permission, for the app to tell the user so. The picture goes
+// only to axDriver.js and stays on this machine unless the user lets Ask
+// send it. A look takes longer than anything else here, so it runs on a
+// queue of its own, beside the other commands: the snapshot asked for at the
+// same moment is not kept waiting behind it.
 import AppKit
 import ApplicationServices
 import Carbon
@@ -1326,6 +1328,25 @@ struct LookWindow {
   let id: CGWindowID
   let frame: CGRect
   let title: String
+  /// The title bar's row, where the title is drawn: sent as a frame only
+  /// (titleFrames), for agent.js to cut the picture below it even when the
+  /// OCR did not read the title there, or did not run.
+  var titleBand: CGRect? = nil
+}
+
+/// A window's title bar row, from its traffic lights: they sit centred in it,
+/// in a plain title bar and in a unified toolbar alike, so the row is as far
+/// below their middle as its top is above it. The window's width; nil for a
+/// window without them (a panel, an app that draws its own) or a row taller
+/// than a quarter of the window.
+func titleBand(_ win: AXUIElement, _ frame: CGRect) -> CGRect? {
+  for attr in ["AXCloseButton", "AXMinimizeButton", "AXZoomButton"] {
+    guard let b = element(copyAttr(win, attr)), let f = liveFrame(b), f.width > 0, f.height > 0 else { continue }
+    let h = (2 * (f.midY - frame.minY)).rounded(.up)
+    guard h > 0, h <= frame.height / 4 else { return nil }
+    return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: h)
+  }
+  return nil
 }
 
 /// The app's windows on screen, frontmost first. The window list is the only
@@ -1396,7 +1417,11 @@ func lookWindow(_ pid: pid_t) -> LookWindow? {
   // (the browser's private one), so it goes by its own name in the list.
   let listedName = clean(w.name, 200)
   let named = focusedOne || listedName.isEmpty ? title : listedName
-  return LookWindow(id: w.id, frame: w.frame, title: named.isEmpty ? listedName : named)
+  // The title bar only of the window accessibility named: the buttons are
+  // that window's.
+  var band: CGRect? = nil
+  if focusedOne, let ax = window { band = titleBand(ax, w.frame) }
+  return LookWindow(id: w.id, frame: w.frame, title: named.isEmpty ? listedName : named, titleBand: band)
 }
 
 enum Shot {
@@ -1500,6 +1525,20 @@ func screenLines(_ results: [Any], in frame: CGRect) -> [Line] {
   return Array(found.prefix(lookMaxLines))
 }
 
+/// Vision's names for the user's preferred languages, out of those it reads
+/// (`supported`, at the request's level), in the user's order. Matched on the
+/// language: "zh-Hant-TW" is zh-Hant first, then zh-Hans; "fr-CA" is fr-FR.
+func ocrLanguages(_ preferred: [String], _ supported: [String]) -> [String] {
+  let lang = { (tag: String) -> String in tag.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? "" }
+  var found: [String] = []
+  for p in preferred {
+    let tag = p.replacingOccurrences(of: "_", with: "-").lowercased()
+    let same = supported.filter { !lang($0).isEmpty && lang($0) == lang(tag) }
+    for s in same.filter({ tag.hasPrefix($0.lowercased()) }) + same where !found.contains(s) { found.append(s) }
+  }
+  return found
+}
+
 /// The text in the picture, read on a thread of its own while the picture is
 /// encoded on this one. A read still going when the look's time is up is
 /// cancelled: the look goes without its text rather than late.
@@ -1510,6 +1549,21 @@ final class Reading {
   init(_ image: CGImage, in frame: CGRect) {
     request.recognitionLevel = .fast
     request.usesLanguageCorrection = false
+    // In the user's own languages, as Windows' OCR is. .fast has recognizers
+    // for Latin scripts only, and on a Japanese or Russian window it makes
+    // Latin junk of every label, which would go out as the window's text; so
+    // a user who reads a language only .accurate has gets .accurate. It is
+    // slower, and a read that runs past the budget goes without its lines.
+    let preferred = Locale.preferredLanguages
+    let fast = ocrLanguages(preferred, (try? request.supportedRecognitionLanguages()) ?? [])
+    request.recognitionLevel = .accurate
+    let accurate = ocrLanguages(preferred, (try? request.supportedRecognitionLanguages()) ?? [])
+    if accurate.contains(where: { !fast.contains($0) }) {
+      request.recognitionLanguages = accurate
+    } else {
+      request.recognitionLevel = .fast
+      if !fast.isEmpty { request.recognitionLanguages = fast }
+    }
     // Vision's default smallest text is a thirty-second of the picture's
     // height, made for photos; on a whole window that is most of its labels.
     // Anything from about 8 points up is read.
@@ -1608,6 +1662,7 @@ func look(_ req: [String: Any], _ deadline: DispatchTime) -> Reply {
   r.append(("window", .obj([("frame", frameJ(win.frame)), ("title", .str(win.title))])))
   r.append(("scale", .str("points")))
   r.append(("lines", .arr(lines)))
+  r.append(("titleFrames", .arr(win.titleBand.map { [frameJ($0)] } ?? [])))
   r.append(("image", image))
   r.append(("ms", .int(ms)))
   return r

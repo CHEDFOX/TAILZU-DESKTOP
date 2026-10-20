@@ -51,7 +51,11 @@ function harness(opts = {}) {
           if (ch !== "guide" || self.destroyed) return;
           sent.push(m); log.push("guide:" + m.type);
           // The page says when it has finished saying something.
-          if (m.type === "voice" && !opts.mute) setImmediate(() => ipc.emit("guide:spoken", { sender: self.webContents }));
+          // `sayMs`: how long each sentence takes it to say.
+          if (m.type === "voice" && !opts.mute) {
+            const spoke = () => ipc.emit("guide:spoken", { sender: self.webContents });
+            if (opts.sayMs) setTimeout(spoke, opts.sayMs); else setImmediate(spoke);
+          }
         },
         once: (ev, f) => { if (ev === "did-finish-load") setImmediate(f); },
         on: (ev, f) => { self.wc[ev] = f; },
@@ -126,8 +130,9 @@ function harness(opts = {}) {
     recorderReady: () => true,
     nextSession: () => ++seq,
     recorderStart: (sid) => ({ session: sid, knobs: {} }),
-    frontInfo: opts.frontInfo || (async () => opts.info || { label: "Keynote" }),
+    frontInfo: opts.frontInfo || (async () => opts.info || { label: "Keynote", pictureKey: "Keynote" }),
     dictating: () => !!opts.dictating,
+    names: opts.names,
     language: opts.language,
     requireAccount: () => opts.signedIn !== false,
     baseUrl: () => "https://api.test",
@@ -156,6 +161,7 @@ function harness(opts = {}) {
       return ndjson(script);
     },
     paste: async () => {},
+    screenSettings: opts.screenSettings,
   });
   return { ask, sent, recorder, log, windows, requests, speakCalls, ipc, actions, calls, allowed, deps: () => deps,
     heardCalls: () => calls.filter((c) => c[0] === "heard"),
@@ -584,6 +590,52 @@ test("the next sentence waits until the guide has said the one before", async ()
   assert.deepStrictEqual(h.sent.filter((m) => m.type === "voice").map((m) => m.text), ["First.", "Second."]);
 });
 
+// An answer that came a sentence at a time, far faster than it is said.
+const LONG_ANSWER = [[
+  { t: "heard", text: "explain this equation, step by step", mode: "show" },
+  { t: "say", text: "S1." }, { t: "say", text: "S2.", append: true }, { t: "say", text: "S3.", append: true },
+  { t: "say", text: "S4.", append: true }, { t: "say", text: "S5.", append: true }, { t: "say", text: "S6.", append: true },
+  { t: "done" },
+]];
+
+test("a long answer is said to its end before its card goes: doneMs counts from the last sentence said", async () => {
+  const h = harness({ steps: LONG_ANSWER, sayMs: 40, knobs: { "desktop.agent.doneMs": 30 } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.types().includes("hide"), 3000);
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "voice").map((m) => m.text), ["S1.", "S2.", "S3.", "S4.", "S5.", "S6."]);
+  const t = h.types();
+  assert.ok(t.lastIndexOf("voice") < t.indexOf("hide"), t.join(","));
+});
+
+test("a finished answer's card still talking is shown(), and Esc puts it away and stops the voice", async () => {
+  const h = harness({ steps: LONG_ANSWER, sayMs: 40, knobs: { "desktop.agent.doneMs": 5000 } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  assert.strictEqual(h.ask.active(), false, "the run is over");
+  assert.strictEqual(h.ask.shown(), true, "its card is not: a dictation starting puts it away (main.js)");
+  assert.strictEqual(h.ask.escape(), true);
+  const voiced = h.sent.filter((m) => m.type === "voice").length;
+  assert.ok(h.types().includes("hide"));
+  assert.strictEqual(h.ask.shown(), false);
+  await sleep(150);
+  assert.strictEqual(h.sent.filter((m) => m.type === "voice").length, voiced, "nothing more said");
+});
+
+test("nothing is said while a dictation records: its microphone would write it down", async () => {
+  const opts = { steps: LONG_ANSWER, sayMs: 40, knobs: { "desktop.agent.doneMs": 5000 } };
+  const h = harness(opts);
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "voice"));
+  opts.dictating = true;
+  const voiced = h.sent.filter((m) => m.type === "voice").length;
+  await sleep(250);
+  assert.strictEqual(h.sent.filter((m) => m.type === "voice").length, voiced);
+  h.ask.cancel("test over");
+});
+
 test("an ASK's question is said before the microphone opens for the reply, never while it records", async () => {
   const h = harness({
     knobs: { "desktop.agent.serverVoice": true },
@@ -835,23 +887,94 @@ test("begin gets where the pointer was at Alt twice, in the driver's units", asy
 
 // ---- the picture (v2: the picture layer) ---------------------------------------
 
-test("pictures: never by the knob; always for an app said yes to; else ask", () => {
-  const h = harness({ allowed: ["Keynote"] });
-  const pictures = h.deps().pictures;
-  assert.strictEqual(pictures("Keynote"), "always");
-  assert.strictEqual(pictures("  keynote "), "always", "the app's name, however it is cased");
-  assert.strictEqual(pictures("Safari"), "ask");
-  assert.strictEqual(pictures(""), "ask");
-  assert.strictEqual(harness({ allowed: ["Keynote"], knobs: { "desktop.agent.pictures": "never" } }).deps().pictures("Keynote"), "never");
-  assert.strictEqual(harness({ knobs: { "desktop.agent.pictures": "always" } }).deps().pictures("Safari"), "always");
-  assert.strictEqual(harness({ knobs: { "desktop.agent.pictures": "sometimes" } }).deps().pictures("Safari"), "ask", "a value it does not know asks");
-});
-
-async function permitCard(opts) {
+/** A question begun about the app in front (`info`), and its card up. */
+async function begun(opts) {
   const h = harness(Object.assign({ knobs: { "desktop.agent.doneMs": 5000 } }, opts));
   await h.ask.tap();
   await until(() => h.types().includes("show"));
-  const answer = h.deps().permit("Keynote");
+  return h;
+}
+
+test("pictures: never by the knob; always only for the question's app, said yes to on this computer; else ask", async () => {
+  {
+    const h = harness({ allowed: ["Keynote"] });
+    assert.strictEqual(h.deps().pictures("Keynote"), "ask", "no question yet: no app to have said yes to");
+  }
+  {
+    const h = await begun({ allowed: ["Keynote"] });
+    const pictures = h.deps().pictures;
+    assert.strictEqual(pictures("Keynote"), "always");
+    assert.strictEqual(pictures("  keynote "), "always", "the app's name, however it is cased");
+    assert.strictEqual(pictures("Safari"), "ask", "not the question's app");
+    assert.strictEqual(pictures(""), "ask");
+    h.ask.cancel("test over");
+  }
+  {
+    // A browser's label is the page's title: nothing to remember Always by,
+    // and a yes kept from before under that title is not one now.
+    const h = await begun({ allowed: ["Chrome: Dashboard"], info: { label: "Chrome: Dashboard", pictureKey: null } });
+    assert.strictEqual(h.deps().pictures("Chrome: Dashboard"), "ask");
+    h.ask.cancel("test over");
+  }
+  {
+    const h = await begun({ allowed: ["Keynote"], knobs: { "desktop.agent.pictures": "never" } });
+    assert.strictEqual(h.deps().pictures("Keynote"), "never");
+    h.ask.cancel("test over");
+  }
+  {
+    // The server can turn pictures off; it can never skip the card.
+    const h = await begun({ knobs: { "desktop.agent.pictures": "always" } });
+    assert.strictEqual(h.deps().pictures("Keynote"), "ask");
+    h.ask.cancel("test over");
+  }
+  assert.strictEqual(harness({ knobs: { "desktop.agent.pictures": "sometimes" } }).deps().pictures("Safari"), "ask", "a value it does not know asks");
+});
+
+test("a Mac that has not let Tailzu see the screen: the card says so, its one button opens Screen Recording and puts it away", async () => {
+  // The real agent: a look refused for the permission, a text answer that
+  // needs the picture (LOOK), and the card's words and button.
+  const steps = [[{ t: "heard", text: "what does this graph show", mode: "show" }, { t: "look", why: "a chart" }], [{ t: "done" }]];
+  const opened = [];
+  const h = harness({ steps, look: { ok: false, error: "no_screen_permission" }, screenSettings: () => opened.push(1), knobs: { "desktop.agent.doneMs": 5000 } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.clip();
+  await until(() => h.types().includes("offer"));
+  const offer = h.sent.find((m) => m.type === "offer");
+  assert.deepStrictEqual(offer, { type: "offer", kind: "screenSettings", text: "Open Screen Recording settings" });
+  assert.ok(h.said(/Screen Recording/), "the card says what to turn on");
+  assert.strictEqual(h.requests.length, 1, "no picture went, nor a second step for one");
+  const win = h.windows[0];
+  // Not the guide's own window, or not the button it was given: nothing.
+  h.ipc.emit("guide:offer", { sender: {} }, "screenSettings");
+  h.ipc.emit("guide:offer", { sender: win.webContents }, "somethingElse");
+  assert.deepStrictEqual(opened, []);
+  assert.strictEqual(h.ask.shown(), true);
+  h.ipc.emit("guide:offer", { sender: win.webContents }, "screenSettings");
+  assert.deepStrictEqual(opened, [1], "opened once");
+  assert.strictEqual(h.ask.shown(), false, "the card goes: the settings are over it");
+  h.ipc.emit("guide:offer", { sender: win.webContents }, "screenSettings");
+  assert.deepStrictEqual(opened, [1], "a second click is nothing");
+});
+
+test("no way to open the settings here (Windows): the words alone, no button", async () => {
+  const steps = [[{ t: "heard", text: "what does this graph show", mode: "show" }, { t: "look", why: "a chart" }], [{ t: "done" }]];
+  const h = harness({ steps, look: { ok: false, error: "no_screen_permission" }, knobs: { "desktop.agent.doneMs": 5000 } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.clip();
+  await until(() => h.said(/Screen Recording/));
+  await sleep(20);
+  assert.strictEqual(h.types().includes("offer"), false);
+  h.ipc.emit("guide:offer", { sender: h.windows[0].webContents }, "screenSettings");
+  assert.strictEqual(h.ask.shown(), true, "a click on a button never given is nothing");
+  h.ask.cancel("test over");
+});
+
+async function permitCard(opts, about) {
+  const h = await begun(opts);
+  const app = (opts && opts.info && opts.info.label) || "Keynote";
+  const answer = h.deps().permit(app, about);
   await until(() => h.types().includes("permission"));
   return { h, answer, win: h.windows[0] };
 }
@@ -861,11 +984,41 @@ test("the picture card asks, with the app's name; Always remembers the app, Allo
     const { h, answer, win } = await permitCard();
     const card = h.sent.find((m) => m.type === "permission");
     assert.strictEqual(card.app, "Keynote");
-    assert.ok(/picture/.test(card.text));
+    assert.strictEqual(card.always, true);
+    assert.ok(/picture of this part of the screen/.test(card.text));
+    assert.ok(/AI providers/.test(card.text), "it says who else the picture goes to");
     h.ipc.emit("guide:permit", { sender: {} }, "always");   // not the guide's own window
     h.ipc.emit("guide:permit", { sender: win.webContents }, "always");
     assert.strictEqual(await answer, "always");
     assert.deepStrictEqual(h.allowed, ["Keynote"]);
+    h.ask.cancel("test over");
+  }
+  {
+    // The whole window is said as such: there is no part of it to point at.
+    const { h, answer } = await permitCard(undefined, { region: "window" });
+    assert.ok(/picture of this window/.test(h.sent.find((m) => m.type === "permission").text));
+    h.ask.cancel("test over");
+    assert.strictEqual(await answer, "no");
+  }
+  {
+    // No key to remember it by (a browser's page): no Always on the card, and
+    // an Always from a guide that still shows one is this once only.
+    const { h, answer, win } = await permitCard({ info: { label: "Chrome: Dashboard", pictureKey: null } });
+    const card = h.sent.find((m) => m.type === "permission");
+    assert.strictEqual(card.app, "Chrome: Dashboard");
+    assert.strictEqual(card.always, false);
+    h.ipc.emit("guide:permit", { sender: win.webContents }, "always");
+    assert.strictEqual(await answer, "once");
+    assert.deepStrictEqual(h.allowed, [], "nothing remembered");
+    h.ask.cancel("test over");
+  }
+  {
+    // Remembered by the app's key, not by the label on the card.
+    const { h, answer, win } = await permitCard({ info: { label: "Calculator", pictureKey: "Windows Calculator" } });
+    h.ipc.emit("guide:permit", { sender: win.webContents }, "always");
+    assert.strictEqual(await answer, "always");
+    assert.deepStrictEqual(h.allowed, ["Windows Calculator"]);
+    assert.strictEqual(h.deps().pictures("Calculator"), "always");
     h.ask.cancel("test over");
   }
   {
@@ -907,7 +1060,7 @@ test("the picture card unanswered in confirmMs is no; Esc and Alt twice are no a
 
 /** A stand-in for Electron's nativeImage: a picture is only its size, and
  *  what was done to it is written down. */
-function fakeImages() {
+function fakeImages(width = 2400, height = 1600) {
   const done = [];
   const image = (w, h) => ({
     isEmpty: () => w === 0,
@@ -920,7 +1073,7 @@ function fakeImages() {
     },
     toJPEG: (q) => { done.push(["jpeg", q, w, h]); return Buffer.from([0xff, 0xd8, w & 255, h & 255]); },
   });
-  return { done, nativeImage: { createFromBuffer: (buf) => { done.push(["decode", buf.toString()]); return buf.length ? image(2400, 1600) : image(0, 0); } } };
+  return { done, nativeImage: { createFromBuffer: (buf) => { done.push(["decode", buf.toString()]); return buf.length ? image(width, height) : image(0, 0); } } };
 }
 // The window at [100, 40] 1200 x 800 in the driver's units, captured at 2x.
 const LOOK = { ok: true, window: { frame: [100, 40, 1200, 800] }, image: { mime: "image/jpeg", data: Buffer.from("pic").toString("base64"), width: 2400, height: 1600 } };
@@ -949,12 +1102,20 @@ test("crop: the whole window, scaled down to pictureMaxSide on its long side", (
   assert.deepStrictEqual(g.done[2], ["resize", { height: 500, quality: "good" }]);
 });
 
-test("crop: a frame off the window, or a sliver of one, is the whole window; nothing to crop is null", () => {
+test("crop: a frame off the window, or too small in the picture to see, is no picture, never the whole window; nothing to crop is null", () => {
   const f = fakeImages();
   const h = harness({ nativeImage: f.nativeImage });
-  assert.ok(h.deps().crop(LOOK, [3000, 3000, 50, 50]));
-  assert.ok(h.deps().crop(LOOK, [400, 240, 2, 300]));
-  assert.ok(!f.done.some((d) => d[0] === "crop"), "never a crop of nothing");
+  assert.strictEqual(h.deps().crop(LOOK, [3000, 3000, 50, 50]), null);
+  assert.strictEqual(h.deps().crop(LOOK, [400, 240, 2, 300]), null);
+  assert.strictEqual(h.deps().crop(LOOK, [400, 240, 300]), null, "a frame that is not one");
+  assert.ok(!f.done.some((d) => d[0] === "crop" || d[0] === "jpeg"), "never a crop of nothing, and nothing in its place");
+  // An icon on a 4K window whose look came at 1600 px: 16 x 16 in the
+  // driver's units is under 8 px of the picture. The whole window in its
+  // place sent the title bar and the address bar with it.
+  const g = fakeImages(1600, 875);
+  const wide = { ok: true, window: { frame: [0, 0, 3840, 2100] }, image: LOOK.image };
+  assert.strictEqual(harness({ nativeImage: g.nativeImage }).deps().crop(wide, [120, 300, 16, 16]), null);
+  assert.ok(!g.done.some((d) => d[0] === "jpeg"));
   // Part of it off the window's edge: only the part on it.
   h.deps().crop(LOOK, [1200, 700, 400, 400]);
   assert.deepStrictEqual(f.done.find((d) => d[0] === "crop")[1], { x: 2200, y: 1320, width: 200, height: 280 });
@@ -969,11 +1130,9 @@ test("crop: says which part of the window the picture shows, for the answer's ma
   assert.deepStrictEqual(h.deps().crop(LOOK, [400, 240, 300, 200]).frame, [400, 240, 300, 200]);
   // Cut to the window.
   assert.deepStrictEqual(h.deps().crop(LOOK, [1200, 700, 400, 400]).frame, [1200, 700, 100, 140]);
-  // Too thin to crop, off the window, or no frame at all: the whole window
-  // went, and its marks are places in the whole window.
-  for (const f of [[400, 240, 2, 300], [3000, 3000, 50, 50], null]) {
-    assert.deepStrictEqual(h.deps().crop(LOOK, f).frame, [100, 40, 1200, 800], JSON.stringify(f));
-  }
+  // No frame at all: the whole window went, and its marks are places in
+  // the whole window.
+  assert.deepStrictEqual(h.deps().crop(LOOK, null).frame, [100, 40, 1200, 800]);
   // The window's own frame is never handed out to be changed.
   const out = h.deps().crop(LOOK, null);
   out.frame[0] = -1;
@@ -1033,6 +1192,20 @@ test("instant: the words ring Export while they are said, and the answer comes w
   await until(() => h.sent.some((m) => m.type === "point" && !m.tentative));
   assert.strictEqual(h.requests.length, 0, "answered here, with no /v1/agent call");
   assert.ok(h.said(/Export/));
+});
+
+test("instant: the name they gave it is taken off the front, as its own is", async () => {
+  const h = harness({ names: () => ["Tailzu", "Blip", "Jarvis"], knobs: { "desktop.agent.finalTextMs": 1000, "desktop.agent.doneMs": 5000 } });
+  await h.ask.tap();
+  const sid = h.lastSession();
+  await sleep(20);
+  h.ask.partial({ session: sid, text: "Jarvis, where's the export" });
+  await until(() => h.sent.some((m) => m.type === "point" && m.tentative));
+  await h.ask.tap();
+  h.ask.audioIn({ session: sid, mime: "audio/webm", data: new Uint8Array([1]).buffer, text: "Jarvis, where's the export" });
+  h.ask.textIn({ session: sid, text: "Jarvis, where's the export button", final: true });
+  await until(() => h.sent.some((m) => m.type === "point" && !m.tentative));
+  assert.strictEqual(h.requests.length, 0, "answered here, with no /v1/agent call");
 });
 
 test("text: the stream's words go as the utterance, with no audio to transcribe", async () => {
@@ -1133,6 +1306,19 @@ test("picture: Allow once sends one crop of the equation with the words, and the
   assert.deepStrictEqual(h.allowed, [], "Allow once is not remembered");
 });
 
+test("picture: with no image to send alone, the card says the whole window, ringed on screen before it asks", async () => {
+  const { h } = await pictureQuestion({ snap: Object.assign({}, PIC_SNAP, { elements: SNAP.elements }) });
+  await until(() => h.types().includes("permission"));
+  const card = h.sent.findIndex((m) => m.type === "permission");
+  assert.ok(/one picture of this window/.test(h.sent[card].text), h.sent[card].text);
+  const ring = h.sent.findIndex((m) => m.type === "point" && m.tentative);
+  assert.ok(ring !== -1 && ring < card, "what would go is on screen while the card asks");
+  h.ipc.emit("guide:permit", { sender: h.windows[0].webContents }, "once");
+  await until(() => h.requests.length === 1);
+  assert.deepStrictEqual(h.requests[0].req.picture, { region: "window" });
+  h.ask.cancel("test over");
+});
+
 test("picture: Not now asks from the words alone, with nothing of the picture", async () => {
   const { h, f } = await pictureQuestion();
   await until(() => h.types().includes("permission"));
@@ -1183,7 +1369,7 @@ test("picture: an app said Always to sends with no card; pictures never sends no
 
 test("picture: Always for an app with a long name is remembered by that whole name", async () => {
   const name = "Microsoft PowerPoint — Presenter View (Extended Display)";   // 56 characters
-  const { h } = await pictureQuestion({ info: { label: name } });
+  const { h } = await pictureQuestion({ info: { label: name, pictureKey: name } });
   await until(() => h.types().includes("permission"));
   assert.strictEqual(h.sent.find((m) => m.type === "permission").app, name);
   h.ipc.emit("guide:permit", { sender: h.windows[0].webContents }, "always");
@@ -1225,7 +1411,7 @@ const RECORDER_JS = fs.readFileSync(path.join(__dirname, "recorder.js"), "utf8")
 
 function recorderPage(o = {}) {
   const opts = Object.assign({ voiced: true, finalText: "", done: true }, o);
-  const out = [], on = {}, sockets = [], fetches = [];
+  const out = [], on = {}, sockets = [], fetches = [], procs = [];
   // Its timers never keep the test process alive.
   const soft = (t) => { if (t && t.unref) t.unref(); return t; };
   class FakeWS {
@@ -1260,11 +1446,12 @@ function recorderPage(o = {}) {
     constructor() { this.sampleRate = 48000; this.destination = {}; }
     get currentTime() { return (Date.now() - t0) / 1000; }
     createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
-    createScriptProcessor() { return { connect() {}, disconnect() {} }; }
+    createScriptProcessor() { const p = { connect() {}, disconnect() {} }; procs.push(p); return p; }
     createAnalyser() { return { connect() {}, fftSize: 2048, frequencyBinCount: 1024, getByteFrequencyData() {}, getFloatTimeDomainData() {} }; }
     close() {}
   }
-  const tz = { token: async () => "tok" };
+  // The main process's token (recorder:token): `opts.token` plays it.
+  const tz = { token: opts.token || (async () => "tok") };
   for (const k of ["onStart", "onTarget", "onField", "onAround", "onStop", "onCancel"]) tz[k] = (cb) => { on[k] = cb; };
   // Copied out of the page's realm, so they compare as plain objects here.
   for (const k of ["segment", "idle", "result", "askAudio", "askPause", "askText", "error", "partial"]) tz[k] = (p) => out.push([k, p && typeof p === "object" ? Object.assign({}, p) : p]);
@@ -1286,6 +1473,8 @@ function recorderPage(o = {}) {
   return {
     out, fetches, sockets,
     ws: () => sockets[sockets.length - 1],
+    // A frame of the microphone's audio, as the audio graph hands it over.
+    audio: () => { const p = procs[procs.length - 1]; if (p && p.onaudioprocess) p.onaudioprocess({ inputBuffer: { getChannelData: () => new Float32Array(4096) } }); },
     start: (p) => on.onStart(Object.assign({ baseUrl: "https://api.test", pauseFlush: false }, p)),
     stop: (session) => on.onStop({ session }),
     end: () => on.onCancel({}),
@@ -1370,6 +1559,29 @@ test("recorder: a recorder that will not stop hands the question over with the s
   r.end();
 });
 
+test("recorder: the stream starts with the token as it is now, renewed when spent; what was said meanwhile, and a stop, go after the start", async () => {
+  let release;
+  const asked = [];
+  // A token spent while the laptop slept: renewing it takes a moment.
+  const r = recorderPage({ token: (renew) => { asked.push(renew); return new Promise((res) => { release = () => res("fresh"); }); } });
+  r.start({ session: 7, live: true, mode: "ask", token: "spent" });
+  await until(() => r.sockets.length === 1 && r.ws().readyState === 1 && release);
+  r.audio(); r.audio();
+  assert.deepStrictEqual(r.ws().sent, [], "nothing goes before the start: the server would drop it");
+  r.stop(7);
+  release();
+  await until(() => r.ws().sent.length >= 4);
+  const sent = r.ws().sent;
+  const start = JSON.parse(sent[0]);
+  assert.strictEqual(start.type, "start");
+  assert.strictEqual(start.token, "fresh", "not the spent one it was started with");
+  assert.strictEqual(start.purpose, "ask");
+  assert.deepStrictEqual(asked, [false], "renewed only if spent: main decides");
+  assert.ok([sent[1], sent[2]].every((f) => typeof f !== "string" && f.byteLength > 0), "the audio held for it, then");
+  assert.strictEqual(JSON.parse(sent[3]).type, "stop", "the stop after it all");
+  r.end();
+});
+
 test("recorder: an ASK's reply records one clip with no stream, as before", async () => {
   const r = recorderPage();
   r.start({ session: 13, live: false, mode: "ask" });
@@ -1424,13 +1636,14 @@ function fakePill(o = {}) {
     state: "rest", phase: null, recording: false, calls: [], moved: 0, on: o.on !== false,
     bounds: o.bounds || { x: WORK.x, y: WORK.y + WORK.height - 132 - 4, width: WORK.width, height: 132 },
   };
-  p.pillAsk = (phase) => {
+  p.pillAsk = (phase, first) => {
     p.calls.push(phase);
     if (!p.on) return null;
-    const move = pillAskMove(phase, { state: p.state, recording: p.recording });
+    const move = pillAskMove(phase, { state: p.state, recording: p.recording, first });
     if (!move) return null;
     if (move === "rest") { p.state = "rest"; p.phase = null; return null; }
-    if (move === "take") p.moved++;
+    // Put under the cursor: on the display it is on now (o.under).
+    if (move === "take") { p.moved++; if (o.under) p.bounds = o.under(); }
     p.state = "ask"; p.phase = phase;
     return capsuleRect(p.bounds, PILL_KNOBS);
   };
@@ -1458,6 +1671,12 @@ test("pillAskMove: dictation always wins the pill; closing and giving it back to
   assert.strictEqual(pillAskMove("thinking", { state: "ask" }), "ask");
   assert.strictEqual(pillAskMove("closing", { state: "ask" }), "ask");
   assert.strictEqual(pillAskMove(null, { state: "ask" }), "rest");
+  // A new question's first phase while the last card still has it (up, or
+  // folding) puts it under the cursor again; dictation still wins.
+  assert.strictEqual(pillAskMove("listening", { state: "ask", first: true }), "take");
+  assert.strictEqual(pillAskMove("closing", { state: "ask", first: true }), "ask");
+  assert.strictEqual(pillAskMove("listening", { state: "listening", first: true }), null);
+  assert.strictEqual(pillAskMove("listening", { state: "ask", recording: true, first: true }), null);
   // Not the question's: closing and letting go leave it as it is.
   assert.strictEqual(pillAskMove("closing", { state: "rest" }), null);
   assert.strictEqual(pillAskMove(null, { state: "rest" }), null);
@@ -1554,12 +1773,38 @@ test("a new question while the card folds turns it round: the same window, the p
   await h.ask.tap();
   await until(() => pill.calls.length === 5);
   assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "closing", "listening"]);
-  assert.strictEqual(pill.moved, 1, "still the question's pill: it is not moved again");
+  assert.strictEqual(pill.moved, 2, "a new question's first phase: put under the cursor again, here the same display");
   await sleep(450);
   assert.ok(!pill.calls.includes(null), pill.calls.join(","));
   assert.strictEqual(h.windows.length, 1);
   assert.strictEqual(h.windows[0].visible, true);
   assert.strictEqual(pill.state, "ask");
+  h.ask.cancel("test");
+});
+
+test("a new question while the last card is still up, the pointer now on another display: the pill and the card go there", async () => {
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  let cursor = { x: 500, y: 400 };
+  const displayAt = (p) => (p.x < 1500 ? A : B);
+  // main's pillBounds: the foot of the work area under the cursor.
+  const under = () => { const wa = displayAt(cursor).workArea; return { x: wa.x, y: wa.y + wa.height - 132 - 4, width: wa.width, height: 132 }; };
+  const pill = fakePill({ under });
+  const h = harness({ pill, platform: "darwin", knobs: { "desktop.agent.doneMs": 5000 }, screen: {
+    getCursorScreenPoint: () => cursor, getDisplayNearestPoint: displayAt,
+  } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  assert.strictEqual(h.windows[0].o.x, WORK.x, "the answer is up on A");
+  // They move to B and ask again, the answer still up on A.
+  cursor = { x: 2000, y: 300 };
+  await h.ask.tap();
+  await until(() => h.types().filter((t) => t === "show").length === 2);
+  assert.strictEqual(pill.moved, 2);
+  assert.deepStrictEqual(h.windows[0].bounds, B.bounds, "the new card opens where they are");
+  const last = docks(h).pop();
+  assert.ok(last.pill && last.pill.x > 0 && !("seed" in last), "tied to the pill, there");
   h.ask.cancel("test");
 });
 
@@ -1701,13 +1946,15 @@ test("a mark goes to the guide in its window's own coordinates, with a fresh id 
   h.ask.cancel("test");
 });
 
-test("a mark off the guide's window is dropped, and the window never moves for one", async () => {
+test("a mark off the guide's window is dropped, and once one is drawn there the window never moves for another", async () => {
   const A = { workArea: WORK, bounds: WORK };
   const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
   const h = harness({ platform: "darwin", screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B) } });
   await h.ask.tap();
   await until(() => h.types().includes("show"));
   const g = h.deps().guide;
+  g.draw({ kind: "scribble", frame: [2400, 300, 10, 10] });                  // no such kind: it moves nothing
+  g.draw({ kind: "box", frame: [1450, 800, 200, 200] });                     // partly on it: drawn
   g.draw({ kind: "box", frame: [2400, 300, 80, 30] });                       // on the other display
   g.draw({ kind: "arrow", from: [500, 400], to: [2400, 300] });              // one end off
   g.draw({ kind: "path", points: [[200, 500], [400, 500], [400, 9999]] });   // one point off
@@ -1715,11 +1962,38 @@ test("a mark off the guide's window is dropped, and the window never moves for o
   g.draw({ kind: "scribble", frame: [300, 200, 10, 10] });                   // no such kind
   g.draw({ kind: "box" });                                                   // nowhere
   g.draw({ kind: "path", points: [[300, 200]] });                            // one point is no path
-  g.draw({ kind: "box", frame: [1450, 800, 200, 200] });                     // partly on it: drawn
   const marks = h.sent.filter((m) => m.type === "draw");
   assert.deepStrictEqual(marks.map((m) => [m.id, m.kind]), [["d1", "box"]]);
   assert.strictEqual(h.windows.length, 1);
   assert.strictEqual(h.windows[0].bounds, undefined, "never moved");
+  h.ask.cancel("test");
+});
+
+test("the pointer on one display and the app on the other: the first mark takes the guide to the app's, and the answer's marks are drawn there", async () => {
+  // The pointer, and so the pill and the card, on A; the spreadsheet on B.
+  // The answer only draws: three numbers, no ring.
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const snap = Object.assign({}, SNAP, { window: { frame: [1600, 40, 1600, 900] }, elements: [
+    { id: "e8", role: "button", label: "Data", frame: [1900, 60, 60, 24] },
+    { id: "e15", role: "button", label: "Filter", frame: [2300, 100, 60, 24] },
+    { id: "e40", role: "cell", label: "Region", frame: [1700, 300, 120, 24] },
+  ] });
+  const h = harness({ snap, platform: "darwin", knobs: { "desktop.agent.doneMs": 5000 }, steps: [[
+    { t: "heard", text: "how do I add a filter to this column", mode: "show" },
+    { t: "say", text: "Select the column, open the Data tab, then press Filter." },
+    { t: "draw", kind: "number", target: { id: "e40" }, n: 1 },
+    { t: "draw", kind: "number", target: { id: "e8" }, n: 2 },
+    { t: "draw", kind: "number", target: { id: "e15" }, n: 3 },
+    { t: "done" },
+  ]], screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B) } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  const draws = h.sent.filter((m) => m.type === "draw");
+  assert.deepStrictEqual(draws.map((m) => m.n), [1, 2, 3], "every step drawn");
+  assert.deepStrictEqual(h.windows[0].bounds, B.bounds, "the guide went to the app's display");
+  assert.deepStrictEqual(draws[0].frame, [1700 - 1500, 300, 120, 24], "in its own coordinates there");
   h.ask.cancel("test");
 });
 
@@ -1804,7 +2078,7 @@ for (const [moment, cfg, reach] of DICTATION_MOMENTS) {
     const pill = fakePill();
     const answers = [];
     const ask = pill.pillAsk;
-    pill.pillAsk = (phase) => { const r = ask(phase); answers.push([phase, pill.state, r]); return r; };
+    pill.pillAsk = (phase, first) => { const r = ask(phase, first); answers.push([phase, pill.state, r]); return r; };
     const o = { pill, later: null, release: null };
     const opts = { pill, knobs: cfg.knobs, steps: cfg.steps, get dictating() { return pill.recording; } };
     if (cfg.slowFront) opts.frontInfo = () => new Promise((r) => { o.release = r; });
@@ -1812,8 +2086,9 @@ for (const [moment, cfg, reach] of DICTATION_MOMENTS) {
     await reach(h, o);
     // toggleDictation: the question let go of while it still has the pill
     // (its closing is the only thing asked of it then), and the dictation in.
+    // A finished answer's card still up is put away too: it may be talking.
     const took = answers.length;
-    if (h.ask.active()) h.ask.cancel("dictation");
+    if (h.ask.active() || h.ask.shown()) h.ask.cancel("dictation");
     assert.ok(answers.slice(took).every(([phase]) => phase === "closing"), JSON.stringify(answers.slice(took)));
     const from = answers.length;
     pill.dictate();

@@ -83,6 +83,8 @@ function lookShape(rest) {
     if (!f || typeof l.text !== "string" || !l.text.trim()) continue;
     lines.push({ text: l.text.slice(0, LOOK_TEXT), frame: f, conf: clampNum(l.conf, 0, 1, 0) });
   }
+  // Where the title bar is (frames only), for agent.js to cut the picture below.
+  const titleFrames = (Array.isArray(rest.titleFrames) ? rest.titleFrames : []).map(rect).filter((f) => f && f[2] > 0 && f[3] > 0).slice(0, 8);
   const im = rest.image;
   const image = im && typeof im === "object" && LOOK_MIMES.has(im.mime) && typeof im.data === "string" && im.data
     && Number.isInteger(im.width) && im.width > 0 && Number.isInteger(im.height) && im.height > 0
@@ -93,6 +95,7 @@ function lookShape(rest) {
     window: { frame, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" },
     scale: rest.scale === "pixels" ? "pixels" : "points",
     lines,
+    titleFrames,
     image,
     ms: Number.isFinite(rest.ms) ? rest.ms : 0,
   };

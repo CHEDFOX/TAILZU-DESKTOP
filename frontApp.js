@@ -101,9 +101,12 @@ function mergeScreen(axText, ocrText, chars = 2000) {
   return out;
 }
 
+/** The app's name as the system gave it, on one line. */
+const rawName = (app) => String(app || "").replace(/\.exe$/i, "").replace(/[\r\n<>]+/g, " ").trim();
+
 /** "Chrome: Gmail", "Slack", "WhatsApp". At most 40 characters, one line. */
 function label(app, title) {
-  const raw = String(app || "").replace(/\.exe$/i, "").replace(/[\r\n<>]+/g, " ").trim();
+  const raw = rawName(app);
   if (!raw) return null;
   const name = SHORT[raw.toLowerCase()] || raw;
   if (!BROWSERS.test(raw)) return name.slice(0, 40);
@@ -205,6 +208,7 @@ public static class TzFg {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
 }
 '@
 $uia = $false
@@ -366,6 +370,16 @@ while ($true) {
   [void][TzFg]::GetWindowText($h, $sb, 512)
   $name = ''
   $p = Get-Process -Id $procId
+  # A Store app (Calculator, Settings, Mail, Phone Link) is drawn in a frame
+  # that ApplicationFrameHost owns, so every one of them was named
+  # "Application Frame Host". The app is the CoreWindow inside the frame,
+  # and its own process names it.
+  if ($p -and $p.ProcessName -eq 'ApplicationFrameHost') {
+    $core = [TzFg]::FindWindowEx($h, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', [IntPtr]::Zero)
+    [uint32]$coreId = 0
+    if ($core -ne [IntPtr]::Zero) { [void][TzFg]::GetWindowThreadProcessId($core, [ref]$coreId) }
+    if ($coreId -ne 0 -and $coreId -ne $procId) { $hosted = Get-Process -Id $coreId; if ($hosted) { $p = $hosted } }
+  }
   if ($p) {
     $name = $p.ProcessName
     try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $name = $d } } catch {}
@@ -581,6 +595,24 @@ function linuxApp() {
   });
 }
 
+// Windows' frame for a Store app (Calculator, Settings, Mail), named for
+// itself when what is inside it could not be told.
+const FRAME_HOST = /^application\s*frame\s*host$/i;
+
+/**
+ * What Ask's "Always for <app>" is remembered by: the app's own name, or null
+ * where there is no name that stays the app's. A browser's label is the
+ * page's: its site comes from the tab's title, which the page writes, so
+ * "Always for Chrome: Dashboard" would have covered any page calling itself
+ * that, and a title with no site in it is the page's own name. And a Store
+ * app the helper could not see into is only its frame, the same for all of
+ * them.
+ */
+function pictureKey(app, name) {
+  const raw = rawName(app);
+  return !name || BROWSERS.test(raw) || FRAME_HOST.test(raw) ? null : name;
+}
+
 /** The front window, as the app's name plus what the screen around it may be:
  *  its label, and whether it is private (incognito) or sensitive (money,
  *  health) — in both of which the screen is not read. null when unknown. */
@@ -589,7 +621,10 @@ function infoFrom(app, title) {
   if (!name) return null;
   // The raw window title rides back only to MATCH the window for a screen
   // capture (screenRead.js); it is used in the main process and never sent.
-  return { label: name, title: String(title || "").slice(0, 200), private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title) };
+  return {
+    label: name, title: String(title || "").slice(0, 200), private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title),
+    pictureKey: pictureKey(app, name),
+  };
 }
 
 /** The front window: { label, private, sensitive }, or null. ≤1.5 s. */
@@ -633,6 +668,6 @@ function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* go
 
 module.exports = {
   frontApp, frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
-  label, siteOf, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
+  label, siteOf, infoFrom, pictureKey, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
   isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
 };

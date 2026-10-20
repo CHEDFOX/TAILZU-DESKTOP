@@ -55,6 +55,7 @@ public static class TzAgent {
   [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr proc, uint access, out IntPtr tok);
   [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr tok, int cls, out uint info, uint len, out uint ret);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
   [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -207,9 +208,9 @@ try {
   $uia = $true
 } catch {}
 
-# PIXELS FOR "LOOK": the window in front captured from the screen, made into a
-# JPEG for the picture path, and handed to Windows' own OCR for the text in it,
-# each line where it is on screen. This is its own Add-Type, apart from
+# PIXELS FOR "LOOK": the window in front, its own pixels (never the screen's),
+# made into a JPEG for the picture path, and handed to Windows' own OCR for the
+# text in it, each line where it is on screen. This is its own Add-Type, apart from
 # TzAgent's, so that if System.Drawing will not load, the snapshot and every
 # action still work and look alone answers "no_capture". The C# 5 rules above
 # hold here too.
@@ -225,14 +226,21 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 public static class TzShot {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+  [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr GetWindowDpiAwarenessContext(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
 
   const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+  const uint PW_RENDERFULLCONTENT = 2;
   const int SM_XVIRTUALSCREEN = 76, SM_YVIRTUALSCREEN = 77, SM_CXVIRTUALSCREEN = 78, SM_CYVIRTUALSCREEN = 79;
   const int LINE_MAX = 120;
 
@@ -262,22 +270,116 @@ public static class TzShot {
     return new int[] { left, top, right - left, bottom - top };
   }
 
-  // The screen's pixels where the window is, as the user sees them: whatever
-  // is over the window is in them too, Tailzu's own guide included unless
-  // its content protection is on (desktop.guide.contentProtection, off by
-  // default). A locked or secure desktop throws, and the caller answers
-  // capture_failed.
-  public static Bitmap Capture(int[] f) {
-    Bitmap bmp = new Bitmap(f[2], f[3], PixelFormat.Format32bppArgb);
+  // The window's own pixels, exactly its frame f, or null when they cannot be
+  // had within ms. PrintWindow, never a copy of the screen: whatever is over
+  // the window (a toast with a code in it, another app's always-on-top
+  // window, Tailzu's own card, pill and marks) is not in them, so it is never
+  // read as the window's text or sent in its picture, which is what the Mac's
+  // capture of the one window gives too. PW_RENDERFULLCONTENT has DWM draw
+  // it, so a window drawn with DirectComposition (Chromium, Electron, the
+  // XAML apps) comes out as it looks rather than black. It draws the whole
+  // window rect, the invisible resize borders with it, so the frame is cut
+  // out of that. A window that will not be drawn (an elevated one, one kept
+  // out of captures) is not looked at: there is no falling back to the
+  // screen, which would bring back everything over it.
+  public static Bitmap Capture(IntPtr h, int[] f, int ms) {
+    RECT wr;
+    if (h == IntPtr.Zero || !GetWindowRect(h, out wr)) return null;
+    int ww = wr.Right - wr.Left, wh = wr.Bottom - wr.Top;
+    int cx = f[0] - wr.Left, cy = f[1] - wr.Top;
+    // Moved or resized since its frame was read: the picture would not be
+    // the frame the lines are measured against.
+    if (ww < 1 || wh < 1 || cx < 0 || cy < 0 || cx + f[2] > ww || cy + f[3] > wh) return null;
+    Bitmap whole = new Printing(h).Take(ms);
+    if (whole == null) return null;
     try {
-      using (Graphics g = Graphics.FromImage(bmp)) {
-        g.CopyFromScreen(f[0], f[1], 0, 0, new Size(f[2], f[3]), CopyPixelOperation.SourceCopy);
+      // A window not made for this screen's DPI is drawn at its own, smaller
+      // size, and Windows scales it only on the screen: scaled here the same
+      // way, so the picture is what the user sees and the lines land on it.
+      if (whole.Width != ww || whole.Height != wh) {
+        Bitmap big = Resized(whole, ww, wh);
+        whole.Dispose();
+        whole = big;
       }
-    } catch (Exception) {
-      bmp.Dispose();
-      throw;
+      Bitmap bmp = whole.Clone(new Rectangle(cx, cy, f[2], f[3]), PixelFormat.Format32bppArgb);
+      if (Blank(bmp)) { bmp.Dispose(); return null; }
+      return bmp;
+    } finally {
+      whole.Dispose();
     }
-    return bmp;
+  }
+
+  // PrintWindow on a thread of its own, waited for no longer than the look
+  // can spare: an app that has stopped answering can hold it, and the look
+  // then goes without a picture rather than late, its worker free for the
+  // next one. A picture finished after that is thrown away by the thread.
+  sealed class Printing {
+    readonly IntPtr h;
+    readonly object gate = new object();
+    Bitmap done;
+    bool late;
+
+    public Printing(IntPtr h) { this.h = h; }
+
+    void Run() {
+      Bitmap bmp = null;
+      bool ok = false;
+      try {
+        // The window measured in its own units, which are the ones it draws
+        // in: this thread takes on the window's DPI awareness (it is this
+        // thread's alone), so a window Windows scales for the screen is
+        // measured at the size it is drawn at.
+        try { SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(h)); } catch (Exception) { }
+        RECT r;
+        if (!GetWindowRect(h, out r) || r.Right <= r.Left || r.Bottom <= r.Top) return;
+        // No alpha: whatever PrintWindow leaves in a pixel's fourth byte is
+        // never taken for transparency, which scaling would turn to black.
+        bmp = new Bitmap(r.Right - r.Left, r.Bottom - r.Top, PixelFormat.Format32bppRgb);
+        using (Graphics g = Graphics.FromImage(bmp)) {
+          IntPtr hdc = g.GetHdc();
+          try { ok = PrintWindow(h, hdc, PW_RENDERFULLCONTENT); } finally { g.ReleaseHdc(hdc); }
+        }
+      } catch (Exception) {
+        ok = false;
+      } finally {
+        lock (gate) {
+          if (ok && !late) { done = bmp; bmp = null; }
+        }
+        if (bmp != null) bmp.Dispose();
+      }
+    }
+
+    public Bitmap Take(int ms) {
+      Thread t = new Thread(Run);
+      t.IsBackground = true;
+      t.Start();
+      t.Join(Math.Max(1, ms));
+      lock (gate) {
+        late = true;
+        Bitmap b = done;
+        done = null;
+        return b;
+      }
+    }
+  }
+
+  // Whether every pixel is black, which is what PrintWindow draws for a
+  // window it could not (one kept out of captures, some video and games). A
+  // black picture is no picture: it is not read, nor sent to be described.
+  static bool Blank(Bitmap bmp) {
+    BitmapData d = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+    try {
+      int[] row = new int[bmp.Width];
+      for (int y = 0; y < bmp.Height; y++) {
+        Marshal.Copy(new IntPtr(d.Scan0.ToInt64() + (long)y * d.Stride), row, 0, row.Length);
+        for (int x = 0; x < row.Length; x++) {
+          if ((row[x] & 0xFFFFFF) != 0) return false;
+        }
+      }
+      return true;
+    } finally {
+      bmp.UnlockBits(d);
+    }
   }
 
   // A copy no longer than maxSide on its long side, or the same bitmap when it
@@ -288,7 +390,12 @@ public static class TzShot {
     int longest = Math.Max(w, h);
     if (maxSide <= 0 || longest <= maxSide) return src;
     double k = (double)maxSide / longest;
-    int nw = Math.Max(1, (int)Math.Round(w * k)), nh = Math.Max(1, (int)Math.Round(h * k));
+    return Resized(src, Math.Max(1, (int)Math.Round(w * k)), Math.Max(1, (int)Math.Round(h * k)));
+  }
+
+  // A copy of src drawn at nw x nh.
+  static Bitmap Resized(Bitmap src, int nw, int nh) {
+    int w = src.Width, h = src.Height;
     Bitmap dst = new Bitmap(nw, nh, PixelFormat.Format32bppArgb);
     try {
       using (Graphics g = Graphics.FromImage(dst))
@@ -381,11 +488,22 @@ public static class TzShot {
   }
 
   // Text as it is compared with the window's title: case and spaces do not
-  // count, nor the ellipsis an app puts where it cut a title short.
+  // count, nor the ellipsis an app puts where it cut a title short, nor which
+  // dash or quote mark it was read with: OCR reads the em dash in a title
+  // ("Report - Word" for "Report", em dash, "Word") as a hyphen, a curly
+  // quote as a straight one, and a title read so was let through as a line
+  // (agent.js textKey, the same rule).
   public static string Key(string s) {
     if (string.IsNullOrEmpty(s)) return "";
     StringBuilder sb = new StringBuilder(s.Length);
-    foreach (char c in s) { if (!char.IsWhiteSpace(c)) sb.Append(char.ToLowerInvariant(c)); }
+    foreach (char ch in s) {
+      if (char.IsWhiteSpace(ch)) continue;
+      char c = ch;
+      if ((c >= '\u2010' && c <= '\u2015') || c == '\u2212') c = '-';
+      else if (c == '\u2018' || c == '\u2019' || c == '\u201a' || c == '\u201b' || c == '\u2032') c = '\'';
+      else if ((c >= '\u201c' && c <= '\u201f') || c == '\u2033') c = '"';
+      sb.Append(char.ToLowerInvariant(c));
+    }
     string k = sb.ToString();
     if (k.EndsWith("\u2026", StringComparison.Ordinal)) k = k.Substring(0, k.Length - 1);
     else if (k.EndsWith("...", StringComparison.Ordinal)) k = k.Substring(0, k.Length - 3);
@@ -409,6 +527,32 @@ public static class TzShot {
 
   static string N(long v) { return v.ToString(CultureInfo.InvariantCulture); }
 
+  // The band at the top of the window that is its title bar (and a classic
+  // menu bar under it): from the frame's top down to where the client area
+  // starts, as JSON [x,y,w,h] in the frame's units, or null when the client
+  // area starts at the top (an app that draws its own title bar: Chromium,
+  // Office, the Store apps), or the band is not a title bar's size. The title
+  // is drawn there, and the device cuts the picture below it (agent.js
+  // chromeBottom) even when the OCR did not read it, or did not run.
+  public static string TitleBand(IntPtr h, int[] f) {
+    if (h == IntPtr.Zero || f == null || f.Length != 4) return null;
+    POINT p = new POINT();
+    try { if (!ClientToScreen(h, ref p)) return null; } catch (Exception) { return null; }
+    int band = p.Y - f[1];
+    if (band < 1 || band > f[3] / 4) return null;
+    return "[" + N(f[0]) + "," + N(f[1]) + "," + N(f[2]) + "," + N(band) + "]";
+  }
+
+  // An OCR line's box alone, no text, as JSON [x,y,w,h] on the screen (the
+  // same transform as Line), or null for one with no size: where a line that
+  // is the window's title was, for the device to cut the picture below it.
+  public static string Box(double x0, double y0, double x1, double y1, double k, int dx, int dy) {
+    if (!(x1 > x0) || !(y1 > y0)) return null;
+    long l = (long)Math.Round(x0 * k) + dx, tp = (long)Math.Round(y0 * k) + dy;
+    long rt = (long)Math.Round(x1 * k) + dx, b = (long)Math.Round(y1 * k) + dy;
+    return "[" + N(l) + "," + N(tp) + "," + N(Math.Max(1, rt - l)) + "," + N(Math.Max(1, b - tp)) + "]";
+  }
+
   // One OCR line as the device gets it, or null for one with no text or no
   // size: its text, and the box around its words (x0,y0 to x1,y1 in the
   // picture the engine read), scaled by k back to the capture's pixels and
@@ -422,7 +566,8 @@ public static class TzShot {
   }
 
   // The whole answer, one line. idJson is the request's id as JSON already.
-  public static string Reply(string idJson, int[] frame, string title, string[] lines, string jpeg, int width, int height, string ocr, long ms) {
+  // titleFrames: where the title is drawn (TitleBand, Box), frames only.
+  public static string Reply(string idJson, int[] frame, string title, string[] lines, string[] titleFrames, string jpeg, int width, int height, string ocr, long ms) {
     StringBuilder sb = new StringBuilder(512 + (jpeg == null ? 0 : jpeg.Length));
     sb.Append("{\"id\":").Append(string.IsNullOrEmpty(idJson) ? "null" : idJson);
     sb.Append(",\"ok\":true,\"window\":{\"frame\":[");
@@ -435,6 +580,18 @@ public static class TzShot {
         if (!first) sb.Append(',');
         sb.Append(l);
         first = false;
+      }
+    }
+    sb.Append("],\"titleFrames\":[");
+    first = true;
+    int boxes = 0;
+    if (titleFrames != null) {
+      foreach (string t in titleFrames) {
+        if (string.IsNullOrEmpty(t) || boxes >= 8) continue;
+        if (!first) sb.Append(',');
+        sb.Append(t);
+        first = false;
+        boxes++;
       }
     }
     sb.Append("],\"image\":");
@@ -880,6 +1037,17 @@ function TzSnapshot([int]$max, [int]$budget) {
   $appName = ''
   try {
     $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    # A Store app (Calculator, Settings, Mail) is drawn in a frame that
+    # ApplicationFrameHost owns, so every one of them was named "Application
+    # Frame Host": the sensitive-app check saw that, not the app. The app is
+    # the CoreWindow inside the frame, named by its own process, as
+    # frontApp.js names it. pid stays the frame's, which is the window here.
+    if ($p -and $p.ProcessName -eq 'ApplicationFrameHost') {
+      $core = [TzAgent]::FindWindowEx($h, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', [IntPtr]::Zero)
+      [uint32]$coreId = 0
+      if ($core -ne [IntPtr]::Zero) { [void][TzAgent]::GetWindowThreadProcessId($core, [ref]$coreId) }
+      if ($coreId -ne 0 -and $coreId -ne $procId) { $hosted = Get-Process -Id $coreId -ErrorAction SilentlyContinue; if ($hosted) { $p = $hosted } }
+    }
     if ($p) { $appName = $p.ProcessName; try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $appName = $d } } catch {} }
   } catch {}
 
@@ -1217,15 +1385,18 @@ function TzOpen([string]$name) {
 $LOOK_BUDGET_MS = 1500
 $LOOK_MAX_SIDE = 1600
 $LOOK_QUALITY = 82
+# What uiaDriver.js allows a look outside its budget (its LOOK_MARGIN_MS): the
+# JPEG, and an answer a few hundred KB long written and read.
+$LOOK_MARGIN_MS = 800
 
 # The worker, run in the look pool (TzOpenLookPool). It is handed everything
 # it uses, since a runspace of its own shares no variables or functions with
 # this one, and it writes its own answer line: the reader loop is meanwhile
-# blocked reading the next command and could not. $budget bounds the part that
-# waits (the OCR and the reading of its lines); the capture and the JPEG are
-# quick and run to the end. Whatever happens, the line is answered.
+# blocked reading the next command and could not. $budget bounds the parts that
+# wait (the capture, the OCR and the reading of its lines); the JPEG is quick
+# and runs to the end. Whatever happens, the line is answered.
 $TZ_LOOK_WORKER = {
-  param($kit, $warm, $idJson, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey)
+  param($kit, $warm, $idJson, $hwnd, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey, $titleBand)
   $ErrorActionPreference = 'SilentlyContinue'
   $LINES_MAX = 300
   $shot = $kit.shot
@@ -1264,7 +1435,7 @@ $TZ_LOOK_WORKER = {
   $sent = $false
   $bmp = $null
   try {
-    try { $bmp = $shot::Capture($frame) } catch { $bmp = $null }
+    try { $bmp = $shot::Capture($hwnd, $frame, [int][math]::Max(1, $budget - $sw.ElapsedMilliseconds)) } catch { $bmp = $null }
     if ($null -eq $bmp) { $shot::Send($shot::Fail($idJson, 'capture_failed')); $sent = $true; return }
     # What the line-reading needs at the end, kept back from the OCR's wait.
     $reserve = [math]::Min(200, [int]($budget / 5))
@@ -1329,6 +1500,11 @@ $TZ_LOOK_WORKER = {
     # is made with ::new(), not New-Object: a cmdlet outside the core would be
     # module-loaded on this runspace's first look, a tenth of a second of it.
     $lines = [System.Collections.Generic.List[string]]::new()
+    # Where the title is drawn, as frames with no text: the title bar's band,
+    # and every line dropped below for being the title. The device cuts the
+    # picture below them (agent.js chromeBottom); it never sees those lines.
+    $titleFrames = [System.Collections.Generic.List[string]]::new()
+    if ($titleBand) { $titleFrames.Add($titleBand) }
     if ($null -ne $task) {
       $done = $false
       try { $done = $task.Wait([int][math]::Max(1, $budget - $reserve - $sw.ElapsedMilliseconds)) } catch { $ocr = 'failed' }
@@ -1338,8 +1514,6 @@ $TZ_LOOK_WORKER = {
           foreach ($ln in $task.Result.Lines) {
             if ($lines.Count -ge $LINES_MAX) { break }
             if ($sw.ElapsedMilliseconds -ge $budget) { $ocr = 'partial'; break }
-            # The window's title, read off its title bar or tab, is never a line.
-            if ($shot::IsTitle($ln.Text, $titleKey)) { continue }
             $x0 = [double]::MaxValue; $y0 = [double]::MaxValue; $x1 = [double]::MinValue; $y1 = [double]::MinValue
             foreach ($wd in $ln.Words) {
               $r = $wd.BoundingRect
@@ -1347,6 +1521,12 @@ $TZ_LOOK_WORKER = {
               if ($r.Y -lt $y0) { $y0 = $r.Y }
               if ($r.X + $r.Width -gt $x1) { $x1 = $r.X + $r.Width }
               if ($r.Y + $r.Height -gt $y1) { $y1 = $r.Y + $r.Height }
+            }
+            # The window's title, read off its title bar or tab, is never a
+            # line; only where it was goes back.
+            if ($shot::IsTitle($ln.Text, $titleKey)) {
+              if ($titleFrames.Count -lt 8) { $b = $shot::Box($x0, $y0, $x1, $y1, $up, $frame[0], $frame[1]); if ($b) { $titleFrames.Add($b) } }
+              continue
             }
             $j = $shot::Line($ln.Text, $x0, $y0, $x1, $y1, $up, $frame[0], $frame[1])
             if ($j) { $lines.Add($j) }
@@ -1356,7 +1536,7 @@ $TZ_LOOK_WORKER = {
       }
     }
 
-    $shot::Send($shot::Reply($idJson, $frame, $title, $lines.ToArray(), $jpeg, $iw, $ih, $ocr, $sw.ElapsedMilliseconds))
+    $shot::Send($shot::Reply($idJson, $frame, $title, $lines.ToArray(), $titleFrames.ToArray(), $jpeg, $iw, $ih, $ocr, $sw.ElapsedMilliseconds))
     $sent = $true
   } catch {
   } finally {
@@ -1381,7 +1561,12 @@ function TzLookReap {
 function TzLookRun([object[]]$argv) {
   $psh = [powershell]::Create()
   $psh.RunspacePool = $script:lookPool
-  [void]$psh.AddScript($TZ_LOOK_WORKER)
+  # In a scope of its own ($true), not dot-sourced into the runspace's global
+  # one: the pool's runspaces live as long as the helper, and what the worker
+  # left there (the window's pixels as a BMP, its JPEG, the decoded bitmap)
+  # would be kept, a window's worth per runspace, until the next look landed
+  # on it. All a worker keeps for the next is in $kit.shared.
+  [void]$psh.AddScript($TZ_LOOK_WORKER, $true)
   foreach ($a in $argv) { [void]$psh.AddArgument($a) }
   $script:looks.Add(@{ ps = $psh; async = $psh.BeginInvoke() })
 }
@@ -1393,28 +1578,43 @@ function TzLookWarm {
 }
 
 # Start a look; its worker answers the line. Answered here, at once, only when
-# there is nothing to look at. The window is the one in front NOW, its frame
-# and title read on this thread before the worker starts.
+# there is nothing to look at, or no time left to look. The window is the one
+# in front NOW, its handle, frame and title read on this thread before the
+# worker starts.
 function TzLookBegin($id, $msg) {
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
   if (-not $script:lookReady) { return @{ id = $id; ok = $false; error = 'no_capture' } }
-  $h = [TzAgent]::GetForegroundWindow()
-  if ($h -eq [IntPtr]::Zero) { return @{ id = $id; ok = $false; error = 'no_window' } }
-  $frame = [TzShot]::Frame($h)
+  $hwnd = [TzAgent]::GetForegroundWindow()
+  if ($hwnd -eq [IntPtr]::Zero) { return @{ id = $id; ok = $false; error = 'no_window' } }
+  $frame = [TzShot]::Frame($hwnd)
   if ($null -eq $frame) { return @{ id = $id; ok = $false; error = 'no_window' } }
   # The title for the device's own checks, capped as the snapshot's is
   # (TzTitleCap); and whole, as a key, for the worker to keep it out of the
   # lines (TzShot.IsTitle).
   $whole = ''
-  try { $whole = TzClean ([TzAgent]::WindowTitle($h)) $TITLE_READ } catch {}
+  try { $whole = TzClean ([TzAgent]::WindowTitle($hwnd)) $TITLE_READ } catch {}
   $title = TzTitleCap $whole
   $titleKey = [TzShot]::Key($whole)
+  # The title bar's band, read now with the frame it is measured against.
+  $titleBand = $null
+  try { $titleBand = [TzShot]::TitleBand($hwnd, $frame) } catch {}
 
   # The options, kept sane whatever is sent.
   $budget = $LOOK_BUDGET_MS
   $b = 0
   if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
   if ($budget -lt 100) { $budget = 100 } elseif ($budget -gt 10000) { $budget = 10000 }
+  # When the driver stops waiting, by the clock both sides read. This loop
+  # reads one line at a time, so a look can sit behind a snapshot's walk
+  # while the driver's clock runs: the budget is cut to what is left, less
+  # what the driver allows for outside it, and a look the driver has given
+  # up on is not made at all.
+  $dl = 0.0
+  if ($msg.deadline -ne $null -and [double]::TryParse("$($msg.deadline)", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$dl) -and $dl -gt 0) {
+    $left = [long]$dl - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $LOOK_MARGIN_MS
+    if ($left -lt 100) { return @{ id = $id; ok = $false; error = 'timeout' } }
+    if ($budget -gt $left) { $budget = [int]$left }
+  }
   $maxSide = $LOOK_MAX_SIDE
   $m = 0
   if ($msg.maxSide -ne $null -and [int]::TryParse("$($msg.maxSide)", [ref]$m) -and $m -gt 0) { $maxSide = $m }
@@ -1433,7 +1633,7 @@ function TzLookBegin($id, $msg) {
   try { $idJson = ConvertTo-Json -InputObject $id -Compress } catch {}
 
   TzLookReap
-  $argv = @($script:lookKit, $false, $idJson, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey)
+  $argv = @($script:lookKit, $false, $idJson, $hwnd, $frame, $title, $budget, $maxSide, $quality, $wantOcr, $wantImage, $sw, $titleKey, $titleBand)
   if ($null -ne $script:lookPool) {
     TzLookRun $argv
   } else {

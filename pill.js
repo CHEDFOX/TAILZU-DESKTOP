@@ -91,6 +91,9 @@ let beadHot = 0;                // amber (listening) … cream
 let beadSlow = 0;               // the slow pulse while it thinks
 const motionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
 const REDUCED = () => !!(motionQuery && motionQuery.matches);
+// Under it a question's bead is still and the frames stop; turned off with a
+// question up, the bead starts to breathe again now, not at the next phase.
+if (motionQuery && motionQuery.addEventListener) motionQuery.addEventListener("change", () => wake());
 
 // ---- state ------------------------------------------------------------------------
 let S = { name: "rest", at: 0, data: {} };
@@ -283,8 +286,9 @@ function frame() {
   const beadTarget = asking && !shutting ? 1 : 0;
   if (shutting) bead = Math.min(bead, 1 - Math.pow(clamp((t * 1000 - shutAt) / Math.max(1, K.num("desktop.pill.askBeadMs", 160))), 2));
   else bead = ease(bead, beadTarget, 14, dt);
-  beadHot = ease(beadHot, asking && phase === "listening" ? 1 : 0, 9, dt);
-  beadSlow = ease(beadSlow, asking && phase === "thinking" ? 1 : 0, 6, dt);
+  const hotTarget = asking && phase === "listening" ? 1 : 0, slowTarget = asking && phase === "thinking" ? 1 : 0;
+  beadHot = ease(beadHot, hotTarget, 9, dt);
+  beadSlow = ease(beadSlow, slowTarget, 6, dt);
   // Shut, and the click spent: back to rest by itself, unless main has
   // already said so (it does, once the guide's window has gone).
   if (shutting && askTarget === 0 && !SP.springMoving(askGap, 0) && bead < 0.01 && now - snapAt > 320) setState("rest");
@@ -302,8 +306,11 @@ function frame() {
   // Listening and thinking the bead breathes, and closing it is on its way
   // in. Showing it is still: once the gap and the bead have settled, the
   // frames stop for as long as the card is up (a confirm's is thirty seconds),
-  // as they do at rest.
-  if ((asking && (phase === "listening" || phase === "thinking" || phase === "closing")) || SP.springMoving(askGap, askTarget) || Math.abs(bead - beadTarget) > 0.005 || beadHot > 0.005 || beadSlow > 0.005) moving = true;
+  // as they do at rest. Under reduced motion it never breathes (drawBead),
+  // and they stop once it has come to its colour, listening and thinking too.
+  const breathing = !REDUCED() && ((asking && (phase === "listening" || phase === "thinking")) || beadHot > 0.005 || beadSlow > 0.005);
+  if (breathing || (asking && phase === "closing") || SP.springMoving(askGap, askTarget) || Math.abs(bead - beadTarget) > 0.005
+    || Math.abs(beadHot - hotTarget) > 0.005 || Math.abs(beadSlow - slowTarget) > 0.005) moving = true;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
@@ -454,8 +461,9 @@ function frame() {
     ctx.beginPath(); ctx.moveTo(rx - r * .38, cy + r * .02); ctx.lineTo(rx - r * .1, cy + r * .3); ctx.lineTo(rx + r * .4, cy - r * .3); ctx.stroke();
     ctx.globalAlpha = P.show;
   }
-  // Ask, without the capsule: the bead on the small pill's top edge.
-  if (!CAPSULE() && bead > 0.01) drawBead(cx, y0, Infinity, now);
+  // Ask, without the capsule: the bead on the small pill's top edge, while
+  // the pill is there (not while its body has gone to the edges as discs).
+  if (!CAPSULE() && bead > 0.01 && se <= 0.004) drawBead(cx, y0, Infinity, now);
 
   // Words: the hint on hover, the count when done, the reason on error.
   if (P.text > 0.01) {
@@ -556,7 +564,10 @@ function drawCapsule(se, cy, err, t, now) {
   }
   // The bead in the gap, never wider than the gap leaves room for: it comes
   // out of the seam as the halves part, and goes back into it as they shut.
-  if (bead > 0.01 && ag > 2) drawBead(W / 2, cy, (ag - 2) / 2, now);
+  // Only with the halves home: a dictation that took the pill from a
+  // question left it hanging alone in the middle as they flew to the
+  // edges, and a question asked as they came back put it there before them.
+  if (bead > 0.01 && ag > 2 && se <= 0.004) drawBead(W / 2, cy, (ag - 2) / 2, now);
   // ✕ on the ink half, ✓ on the cream one, as they become discs.
   const ic = SP.smooth(0.45, 1, g);
   if (ic > 0.01) {
@@ -581,8 +592,11 @@ function drawCapsule(se, cy, err, t, now) {
  */
 function drawBead(x, y, room, now) {
   const R = K.num("desktop.pill.askBead", 3.5), s = now / 1000, still = REDUCED();
-  const breath = 0.5 + 0.5 * Math.sin(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askBreathS", 1.25)));
-  const pulse = 0.5 - 0.5 * Math.cos(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askPulseS", 1.8)));
+  // With reduced motion its glow and its light hold still too, at the top
+  // of a breath, as the guide's lamp and thinking light do: only its size
+  // held, and it went on pulsing its glow, and blinking while it thought.
+  const breath = still ? 1 : 0.5 + 0.5 * Math.sin(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askBreathS", 1.25)));
+  const pulse = still ? 1 : 0.5 - 0.5 * Math.cos(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askPulseS", 1.8)));
   // It breathes in from its full size, never out past it: the gap is cut to fit it.
   // With reduced motion it does not grow or shrink, only fades in and out.
   const size = still ? 1 : (1 - 0.22 * beadHot * (1 - breath) - 0.1 * beadSlow * (1 - pulse)) * bead;

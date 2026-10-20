@@ -180,6 +180,7 @@ test("a look comes back with its window, its lines and its picture", async (t) =
   assert.deepStrictEqual(r.window, { frame: [100, 50, 800, 600], title: "Q3 plan.txt — Fake" });
   assert.strictEqual(r.scale, "points");
   assert.deepStrictEqual(r.lines, FAKE_LINES);
+  assert.deepStrictEqual(r.titleFrames, [[100, 50, 800, 28]], "where the title bar is, a frame only");
   assert.strictEqual(r.image.mime, "image/jpeg");
   assert.deepStrictEqual([r.image.width, r.image.height], [1600, 1200]);
   assert.ok(Buffer.from(r.image.data, "base64").subarray(0, 2).equals(Buffer.from([0xff, 0xd8])), "a JPEG");
@@ -259,6 +260,7 @@ test("a look's answer is cleaned: what cannot be placed goes, a picture that is 
     assert.ok(typeof l.text === "string" && l.text.trim() && l.text.length <= 120);
     assert.ok(Array.isArray(l.frame) && l.frame.length === 4 && l.frame.every(Number.isFinite) && l.frame[2] >= 0 && l.frame[3] >= 0);
   }
+  assert.deepStrictEqual(r.titleFrames, Array.from({ length: 8 }, (_, i) => [100, 50 + i, 800, 28]), "frames only, with a size, at most 8");
   // Without a window there is nothing to place anything by.
   assert.deepStrictEqual(await d.look({ maxSide: 995 }), { ok: false, error: "bad_answer" });
 });
@@ -297,6 +299,16 @@ test("look's arguments are clamped before they reach the helper", async (t) => {
   assert.deepStrictEqual([small.got.budgetMs, small.got.maxSide, small.got.quality], [50, 64, 0.82]);
   const junk = await d.look("whatever");
   assert.deepStrictEqual([junk.got.budgetMs, junk.got.maxSide, junk.got.quality, junk.got.ocr, junk.got.image], [1500, 1600, 0.82, true, true]);
+});
+
+test("the Mac look says where the title bar is: the traffic lights' row, of the window accessibility named", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const band = swift.slice(swift.indexOf("func titleBand("), swift.indexOf("func listedWindows("));
+  assert.match(band, /for attr in \["AXCloseButton", "AXMinimizeButton", "AXZoomButton"\]/);
+  assert.match(band, /let h = \(2 \* \(f\.midY - frame\.minY\)\)\.rounded\(\.up\)/);
+  assert.match(band, /guard h > 0, h <= frame\.height \/ 4 else \{ return nil \}/);
+  assert.match(swift, /if focusedOne, let ax = window \{ band = titleBand\(ax, w\.frame\) \}/);
+  assert.match(swift, /r\.append\(\("titleFrames", \.arr\(win\.titleBand\.map \{ \[frameJ\(\$0\)\] \} \?\? \[\]\)\)\)/);
 });
 
 test("look on a machine without the helper resolves, never rejects", async () => {
@@ -495,6 +507,22 @@ test("the helper reads text fast and plain, and encodes the picture as asked", (
   assert.match(code, /clean\(best\.string, 120\)/);
 });
 
+// .fast reads Latin scripts only: on a Japanese or Russian window it makes
+// Latin junk of every label, which would go out as the window's text.
+test("the helper reads text in the user's languages, .accurate only for one .fast cannot read", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const init = swiftFunc(swift, "  init(_ image: CGImage, in frame: CGRect) {");
+  assert.match(init, /let preferred = Locale\.preferredLanguages/);
+  // Each level's own list, from Vision, never one written out here.
+  assert.match(init, /let fast = ocrLanguages\(preferred, \(try\? request\.supportedRecognitionLanguages\(\)\) \?\? \[\]\)\s*request\.recognitionLevel = \.accurate\s*let accurate = ocrLanguages\(preferred, \(try\? request\.supportedRecognitionLanguages\(\)\) \?\? \[\]\)/);
+  assert.match(init, /if accurate\.contains\(where: \{ !fast\.contains\(\$0\) \}\) \{\s*request\.recognitionLanguages = accurate\s*\} else \{\s*request\.recognitionLevel = \.fast\s*if !fast\.isEmpty \{ request\.recognitionLanguages = fast \}\s*\}/);
+  assert.ok(init.indexOf("request.recognitionLevel = .accurate") < init.indexOf("VNImageRequestHandler"), "chosen before the read starts");
+  // Matched on the language, the one the tag names first, in the user's order.
+  const langs = swiftFunc(swift, "func ocrLanguages(_ preferred: [String], _ supported: [String]) -> [String] {");
+  assert.match(langs, /let same = supported\.filter \{ !lang\(\$0\)\.isEmpty && lang\(\$0\) == lang\(tag\) \}/);
+  assert.match(langs, /for s in same\.filter\(\{ tag\.hasPrefix\(\$0\.lowercased\(\)\) \}\) \+ same where !found\.contains\(s\) \{ found\.append\(s\) \}/);
+});
+
 // The agent refuses a private window by the look's title, so the title must
 // be the pictured window's: a window that only covers the focused one may be
 // another one (the browser's private window over its ordinary one).
@@ -503,7 +531,7 @@ test("the helper's look is titled by the window in its picture", () => {
   const win = swiftFunc(swift, "func lookWindow(_ pid: pid_t) -> LookWindow? {");
   assert.match(win, /if let p = pick, apart\(p\.frame, f\) > 8 \{[\s\S]*?\} else \{\s*focusedOne = pick != nil\s*\}/);
   assert.match(win, /let named = focusedOne \|\| listedName\.isEmpty \? title : listedName/);
-  assert.match(win, /return LookWindow\(id: w\.id, frame: w\.frame, title: named\.isEmpty \? listedName : named\)/);
+  assert.match(win, /return LookWindow\(id: w\.id, frame: w\.frame, title: named\.isEmpty \? listedName : named, titleBand: band\)/);
   assert.equal((win.match(/LookWindow\(/g) || []).length, 1, "one way out with a window");
 });
 

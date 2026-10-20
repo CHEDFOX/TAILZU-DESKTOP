@@ -114,6 +114,8 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),
   dismiss: () => ipcRenderer.send("guide:dismiss"),
+  // The finished card's button ("screenSettings"): main opens that page only.
+  offer: (kind) => ipcRenderer.send("guide:offer", String(kind || "")),
   knobs: () => ipcRenderer.invoke("app:knobs"),
   onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
 });

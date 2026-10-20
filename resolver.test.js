@@ -193,6 +193,23 @@ test("isVisualQuestion: finding, pressing, written things and orders are not", (
   }
 });
 
+test("isVisualQuestion: an order that also puts the answer somewhere is not, since the picture's run never acts", () => {
+  for (const q of [
+    "calculate the total and type it in the reply box", "solve this and paste the answer into the chat",
+    "evaluate the formula in B2 and put it in C2", "compute the average and send it to #finance",
+    "fill in the amount field with the sum of these, calculate it", "describe this image and paste it into the reply",
+  ]) {
+    assert.strictEqual(isVisualQuestion(q), false, q);
+  }
+  // Working it out, or explaining it, still is; and those words as nouns are no order.
+  for (const q of [
+    "solve this equation", "calculate the total", "calculate this and add up the rest", "solve this and write out the steps",
+    "what's the answer? type it in the box", "identify the type of graph", "summarize the chart in this post",
+  ]) {
+    assert.strictEqual(isVisualQuestion(q), true, q);
+  }
+});
+
 test("isVisualQuestion: how to do something to a picture is about the app, not the picture", () => {
   for (const q of [
     "how do I insert an image", "can I add a chart here?", "how can I crop this photo", "how to create a pie chart",

@@ -143,6 +143,31 @@ test("a private or incognito window is known from its title", () => {
   assert.ok(!isPrivate("Inbox - you@gmail.com - Gmail - Google Chrome"));
 });
 
+test("Ask's Always is kept by the app's own name: never a page's title, never the frame every Store app shares", () => {
+  const { infoFrom } = require("./frontApp.js");
+  assert.strictEqual(infoFrom("Slack", "general - Acme - Slack").pictureKey, "Slack");
+  assert.strictEqual(infoFrom("Microsoft PowerPoint", "Q3.pptx - PowerPoint").pictureKey, "Microsoft PowerPoint");
+  // A browser: the site in its label is the tab's title, which the page writes.
+  assert.strictEqual(infoFrom("Google Chrome", "Dashboard - Google Chrome").label, "Chrome: Dashboard");
+  assert.strictEqual(infoFrom("Google Chrome", "Dashboard - Google Chrome").pictureKey, null);
+  assert.strictEqual(infoFrom("Safari", "lecture3.pdf").pictureKey, null);
+  assert.strictEqual(infoFrom("msedge.exe", "Inbox - Outlook - Microsoft Edge").pictureKey, null);
+  // Windows' frame for a Store app, when what is in it could not be told.
+  assert.strictEqual(infoFrom("Application Frame Host", "Calculator").pictureKey, null);
+  assert.strictEqual(infoFrom("ApplicationFrameHost.exe", "Settings").pictureKey, null);
+  assert.strictEqual(infoFrom("", "anything"), null);
+});
+
+test("Windows: a Store app is named by the app in its frame, not by the frame's own process", () => {
+  const { PS } = require("./frontApp.js");
+  assert.match(PS, /\$p\.ProcessName -eq 'ApplicationFrameHost'/);
+  assert.match(PS, /FindWindowEx\(\$h, \[IntPtr\]::Zero, 'Windows\.UI\.Core\.CoreWindow', \[IntPtr\]::Zero\)/,
+    "the title is passed as a null pointer: PowerShell hands $null to a string parameter as \"\", which finds only untitled windows");
+  assert.match(PS, /GetWindowThreadProcessId\(\$core, \[ref\]\$coreId\)/);
+  // Then named as any other app is, from that process.
+  assert.ok(PS.indexOf("CoreWindow") < PS.indexOf("$name = $p.ProcessName"));
+});
+
 test("a money or health app is treated as sensitive, by name or title", () => {
   assert.ok(looksSensitive("Chase"));
   assert.ok(looksSensitive("Chrome: HDFC Bank"));
