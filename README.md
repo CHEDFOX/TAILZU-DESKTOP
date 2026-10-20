@@ -33,7 +33,8 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
     guide's window, the agent's hands.
   - **agent.js** is the run loop. It reads the screen through the driver, asks
     `POST /v1/agent`, points, says, and acts. It asks first before anything
-    that sends, deletes or pays (node --test).
+    that sends, deletes or pays (node --test). **resolver.js** matches a
+    question to the screen on the device, for the instant answers.
   - **driver.js** picks **axDriver.js** + `native/tzax.swift` on a Mac (the
     accessibility tree) or **uiaDriver.js** on Windows (UI Automation). Each
     is a warm helper speaking JSON lines.
@@ -107,10 +108,17 @@ window rather than recording into a history no account owns.
   - **Small jobs**: "open #design and tell them the mockups are ready". It does
     them step by step and stops before anything risky with **Do it / Not
     now** (or tap Alt twice). Esc or the card's ✕ stops it.
-  - **Text only**: only a text list of the screen's buttons and fields leaves
-    the machine (roles, labels, short values, a rough position). No pixels,
-    frames or window titles, and nothing from a private window or a sensitive
-    app.
+  - **Instant**: the question streams as it is said, and a plain "where's
+    X" is matched on the device (`resolver.js`) and ringed before the
+    question ends, with no server call.
+  - **Pictures**: "what's this graph saying?", "solve this". The window is
+    also read from its pixels on the device (the system's own OCR), and a
+    question about something drawn sends one cropped picture, after a card
+    asks **Allow once / Always for this app / Not now**.
+  - **Mostly text**: what leaves the machine is a text list of the screen's
+    buttons, fields and OCR'd lines (roles, labels, short values, a rough
+    position), plus that one picture when allowed. No frames or window
+    titles, and nothing from a private window or a sensitive app.
   - **Knobs**: `desktop.agent.*` and `desktop.guide.*`; off with
     `desktop.agent.enabled`. While Ask is on, Alt twice asks instead of
     dictating. Ctrl twice dictates.
@@ -174,7 +182,9 @@ SmartScreen, and run.
   → Microphone**, macOS its own prompt. A blocked mic names the panel to open.
 - **macOS auto-paste** — enable Tailzu under **System Settings → Privacy &
   Security → Accessibility** (without it, text is still on the clipboard).
-  **Ask** needs the same permission to read and press the app's buttons.
+  **Ask** needs the same permission to read and press the app's buttons,
+  and **Screen Recording** to read text drawn as pixels and to send a
+  picture (it works without it, from the accessibility text alone).
 - **macOS hold-to-talk** — the key hook also needs **Input Monitoring**.
 - **Linux (X11)** — auto-paste needs `xdotool`.
 

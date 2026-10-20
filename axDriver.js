@@ -1,7 +1,9 @@
 // THE MAC'S HANDS FOR ASK — the macOS half of driver.js (contract §1).
 //
 // Ask has to read the app in front as a list of elements with ids, and press,
-// type into, scroll and focus them. The accessibility work is done by a small
+// type into, scroll and focus them; and, for the questions a list of buttons
+// cannot answer, look at the window itself (look: its picture and the text
+// in it, read on this machine). The accessibility work is done by a small
 // Swift helper (native/tzax.swift, built to build/tzax and shipped beside the
 // app like audiotap and tzocr). Starting it costs more than asking it, so it is
 // kept warm: one child process, one JSON command per line on its stdin, one
@@ -16,16 +18,23 @@ const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-/** The default time each call waits for its answer. */
+/** The default time each call waits for its answer. A look takes a picture
+ *  and reads it, slower than anything else, so it has its own. */
 const SNAPSHOT_MS = 1500;
 const ACTION_MS = 1200;
+const LOOK_MS = 2500;
 /** After a call timed out, how long the helper may stay silent before it is
  *  taken for hung and killed (its own watchdog answers before the caller
  *  gives up, so a silent helper is a stuck one). */
 const WEDGE_MS = 3000;
-/** One answer line is a snapshot at most: a few hundred elements. Anything
- *  this long without a newline is garbage and is dropped. */
-const MAX_LINE = 4 << 20;
+/** The longest answer line is a look's: a JPEG in base64 (the helper keeps
+ *  it under 6 MB, about 8 in base64) and a few hundred lines of text.
+ *  Anything this long without a newline is garbage and is dropped. */
+const MAX_LINE = 12 << 20;
+/** What a look's lines and picture may be, whatever the helper sent. */
+const LOOK_LINES = 300;
+const LOOK_TEXT = 120;
+const LOOK_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const DIRS = new Set(["up", "down", "left", "right"]);
 const ELEMENT_ID = /^e\d{1,7}$/;
@@ -48,6 +57,47 @@ function clampInt(v, lo, hi, fallback) {
   return Math.max(lo, Math.min(hi, Math.round(n)));
 }
 
+function clampNum(v, lo, hi, fallback) {
+  const n = typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
+}
+
+/** [x, y, w, h] of finite numbers with no negative size, or null. */
+function rect(f) {
+  if (!Array.isArray(f) || f.length !== 4 || !f.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  return f[2] >= 0 && f[3] >= 0 ? f.slice() : null;
+}
+
+/** A look as callers see it. The window and its frame are what everything
+ *  else is placed by, so a look without them is no look; a line that cannot
+ *  be placed is dropped, and a picture that is not one is null. The title is
+ *  for agent.js to refuse a private window by, as a snapshot's is. */
+function lookShape(rest) {
+  const w = rest.window;
+  const frame = w && typeof w === "object" && !Array.isArray(w) ? rect(w.frame) : null;
+  if (!frame) return { ok: false, error: "bad_answer" };
+  const lines = [];
+  for (const l of Array.isArray(rest.lines) ? rest.lines : []) {
+    if (lines.length >= LOOK_LINES) break;
+    const f = l && typeof l === "object" ? rect(l.frame) : null;
+    if (!f || typeof l.text !== "string" || !l.text.trim()) continue;
+    lines.push({ text: l.text.slice(0, LOOK_TEXT), frame: f, conf: clampNum(l.conf, 0, 1, 0) });
+  }
+  const im = rest.image;
+  const image = im && typeof im === "object" && LOOK_MIMES.has(im.mime) && typeof im.data === "string" && im.data
+    && Number.isInteger(im.width) && im.width > 0 && Number.isInteger(im.height) && im.height > 0
+    ? { mime: im.mime, data: im.data, width: im.width, height: im.height }
+    : null;
+  return {
+    ...rest,
+    window: { frame, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" },
+    scale: rest.scale === "pixels" ? "pixels" : "points",
+    lines,
+    image,
+    ms: Number.isFinite(rest.ms) ? rest.ms : 0,
+  };
+}
+
 /** The answer as callers see it: the helper's fields without its id, and a
  *  failure for anything that is not a well-formed answer. */
 function shape(cmd, msg) {
@@ -65,6 +115,7 @@ function shape(cmd, msg) {
       ? { ...w, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" }
       : null;
   }
+  if (cmd === "look") return lookShape(rest);
   return rest;
 }
 
@@ -72,7 +123,7 @@ function shape(cmd, msg) {
  * A driver around one helper process. Everything it touches is injectable for
  * the tests: `bin` (the helper's path) and `args`, `spawn`, `platform`,
  * `exists`, and the timeouts (`snapshotTimeoutMs`, `actionTimeoutMs`,
- * `wedgeMs`).
+ * `lookTimeoutMs`, `wedgeMs`).
  */
 function createAxDriver(opts = {}) {
   const spawn = opts.spawn || childProcess.spawn;
@@ -81,6 +132,7 @@ function createAxDriver(opts = {}) {
   const args = Array.isArray(opts.args) ? opts.args : [];
   const snapshotMs = clampInt(opts.snapshotTimeoutMs, 50, 60000, SNAPSHOT_MS);
   const actionMs = clampInt(opts.actionTimeoutMs, 50, 60000, ACTION_MS);
+  const lookMs = clampInt(opts.lookTimeoutMs, 50, 60000, LOOK_MS);
   const wedgeMs = clampInt(opts.wedgeMs, 50, 60000, WEDGE_MS);
 
   let child = null;
@@ -129,12 +181,18 @@ function createAxDriver(opts = {}) {
       c.stdout.setEncoding("utf8");
       c.stdout.on("data", (d) => {
         if (child === c) heardAt = Date.now();
+        // Only a piece with a newline in it can end a line, so the others are
+        // only added on. A look's answer comes in a hundred pieces, and
+        // searching what came so far on each one also copies it whole: a
+        // quarter of a second of the main process on a big picture.
         buf += d;
-        let nl;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl);
-          buf = buf.slice(nl + 1);
-          if (line.trim()) onLine(c, line);
+        if (d.indexOf("\n") >= 0) {
+          let nl;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (line.trim()) onLine(c, line);
+          }
         }
         if (buf.length > MAX_LINE) buf = "";
       });
@@ -248,6 +306,21 @@ function createAxDriver(opts = {}) {
       const a = typeof appName === "string" ? appName.trim() : "";
       if (!a || a.length > 120) return refuse("bad_app");
       return call("open", { app: a }, actionMs);
+    }),
+    look: safe((o) => {
+      const opt = o && typeof o === "object" ? o : {};
+      const timeoutMs = clampInt(opt.timeoutMs, 100, 10000, lookMs);
+      // The helper's budget for the picture and its text, well inside the
+      // call's time: it answers with the picture and whatever text it has
+      // read by then, rather than nothing.
+      const budgetMs = Math.max(50, Math.min(clampInt(opt.budgetMs, 50, 8000, 1500), timeoutMs - 400));
+      return call("look", {
+        budgetMs,
+        maxSide: clampInt(opt.maxSide, 64, 4096, 1600),
+        quality: clampNum(opt.quality, 0.3, 0.95, 0.82),
+        ocr: opt.ocr !== false,
+        image: opt.image !== false,
+      }, timeoutMs);
     }),
   };
 }

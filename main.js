@@ -2358,11 +2358,28 @@ function setupAsk() {
     authorizedFetch,
     // The same one-at-a-time paste dictation uses; resolved once it is in.
     paste: (text) => { paste(text); return pasting; },
+    // A question's picture is cropped here, from the window the driver
+    // captured at Alt twice, before anything of it leaves (ask.js crop).
+    nativeImage,
+    // The apps whose pictures may go without the card asking each time:
+    // "Always for <app>" on it. This computer's own choice, kept with the
+    // rest of what it remembers about itself, never sent anywhere.
+    picturesAlways: () => (Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : []),
+    allowPicturesAlways: (name) => {
+      const list = Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : [];
+      const key = String(name || "").trim().slice(0, 60);
+      if (!key || list.some((a) => a.toLowerCase() === key.toLowerCase())) return;
+      // Kept short: past a hundred apps, the ones said yes to longest ago go.
+      localState.askPicturesAlways = list.concat(key).slice(-100);
+      saveLocalState();
+    },
   });
   if (askOn()) driver.start();
 }
 ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.audioIn(p); });
 ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.paused(p); });
+// The live stream's final text for a question, after (or before) its clip.
+ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn(p); });
 
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
@@ -2463,8 +2480,11 @@ ipcMain.on("dictation-error", (e, payload) => {
 });
 
 // Live partials from the recorder → overlay captions (current session only).
+// A question's go to Ask instead, which matches them against the screen while
+// they are still being said; they are never captions, and never typed.
 ipcMain.on("live-partial", (e, payload) => {
   const p = fromRecorder(e, payload);
+  if (p && ask && ask.partial(p)) return;
   if (!p || p.session !== activeSession) return;
   if (pillOn()) pill("caption", { text: p.text });
   else overlayText(p.text);

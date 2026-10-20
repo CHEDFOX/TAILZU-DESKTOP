@@ -7,6 +7,9 @@
 //   node fake-uia-helper.js <mode> [stateFile]
 //
 // Every mode answers `ping` at once, so the driver's warm-up resolves fast.
+// The look modes: "slowlook" (a look answered late, everything else at once),
+// "hanglook" (a look never answered), "biglook" (a 2 MB picture), "badlook"
+// (a look that keeps to none of the contract), "nowindow" and "noframe".
 const fs = require("fs");
 const readline = require("readline");
 
@@ -37,9 +40,51 @@ function snapshotAnswer(msg) {
   };
 }
 
+// A look in the contract's shape (v2 §A). The picture's bytes are not a JPEG,
+// only base64 of the right shape; "biglook" makes it as long as a real one of a
+// large window, so the answer spans many reads on the driver's side.
+function lookAnswer(msg) {
+  const data = mode === "biglook" ? "A".repeat(2000000) : "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD";
+  return {
+    id: msg.id, ok: true,
+    window: { frame: [-1820, 50, 800, 600], title: "Fake window" },
+    scale: "pixels",
+    lines: [
+      { text: "Export as PDF", frame: [-1800, 70, 94, 18] },
+      { text: "x\u00b2 + 1 = 0", frame: [-1700, 350, 120, 30] },
+    ],
+    image: { mime: "image/jpeg", data, width: 800, height: 600 },
+    ocr: "ok", ms: 4,
+    // Echoed so a test can see the options arrive as the driver sent them.
+    echo: { budgetMs: msg.budgetMs, maxSide: msg.maxSide, quality: msg.quality, ocr: msg.ocr, image: msg.image },
+  };
+}
+
+// A look answer that keeps to nothing: lines without text or frames, far too
+// many and too long, a picture with no data.
+function badLookAnswer(msg) {
+  const lines = [null, { text: 5, frame: [1, 2, 3, 4] }, { text: "no frame" }, { text: "   ", frame: [1, 2, 3, 4] },
+    { text: "short frame", frame: [1, 2, 3] }];
+  for (let i = 0; i < 400; i++) lines.push({ text: `line ${i} ` + "w".repeat(200), frame: [0, i * 10, 50, 9], conf: 0.5 });
+  return {
+    id: msg.id, ok: true,
+    window: { frame: [0, 0, 800, 600], title: 42 },
+    scale: "points",
+    lines,
+    image: { mime: "image/jpeg", data: "", width: 800, height: 600 },
+    ms: "soon",
+  };
+}
+
 function answer(msg) {
   if (msg.cmd === "ping") return { id: msg.id, ok: true, pong: true };
   if (msg.cmd === "snapshot") return snapshotAnswer(msg);
+  if (msg.cmd === "look") {
+    if (mode === "badlook") return badLookAnswer(msg);
+    if (mode === "nowindow") return { id: msg.id, ok: false, error: "no_window" };
+    if (mode === "noframe") return { ...lookAnswer(msg), window: { title: "x" } };
+    return lookAnswer(msg);
+  }
   return { id: msg.id, ok: true, cmd: msg.cmd };
 }
 
@@ -104,6 +149,19 @@ if (rl) rl.on("line", (line) => {
     case "die":
       if (spawnNo === 1) { process.exit(1); }   // the first helper dies on the first command
       write(answer(msg));
+      break;
+
+    case "slowlook":
+      // As the real helper does: a look is made on a thread of its own and
+      // answered when done, while everything asked after it is answered at
+      // once, ahead of it.
+      if (msg.cmd === "look") setTimeout(() => write(answer(msg)), 400);
+      else write(answer(msg));
+      break;
+
+    case "hanglook":
+      // A look that never comes back; everything else answers.
+      if (msg.cmd !== "look") write(answer(msg));
       break;
 
     case "normal":

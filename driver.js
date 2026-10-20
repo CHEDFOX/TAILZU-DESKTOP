@@ -7,7 +7,7 @@ const none = {
   trusted: async () => ({ ok: true, trusted: false }),
   snapshot: async () => UNSUPPORTED, press: async () => UNSUPPORTED, click: async () => UNSUPPORTED,
   setValue: async () => UNSUPPORTED, focus: async () => UNSUPPORTED, scroll: async () => UNSUPPORTED,
-  key: async () => UNSUPPORTED, open: async () => UNSUPPORTED,
+  key: async () => UNSUPPORTED, open: async () => UNSUPPORTED, look: async () => UNSUPPORTED,
 };
 
 function pick(platform) {

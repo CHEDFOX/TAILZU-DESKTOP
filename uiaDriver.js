@@ -16,7 +16,60 @@ const { spawn: nodeSpawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const DEFAULTS = { snapshotTimeout: 1500, actionTimeout: 1200, openTimeout: 6000, warmupMs: 8000 };
+const DEFAULTS = { snapshotTimeout: 1500, actionTimeout: 1200, openTimeout: 6000, lookTimeout: 2500, warmupMs: 8000 };
+
+/** What a look spends outside the helper's own budget: the capture and the
+ *  JPEG, which the budget does not cut short, and an answer a few hundred KB
+ *  long written by one process and read by the other. */
+const LOOK_MARGIN_MS = 800;
+/** The contract's caps on a look's lines (§A). The helper keeps to them; they
+ *  are held here too so a caller never gets more whatever comes back. */
+const LOOK_LINES_MAX = 300;
+const LOOK_TEXT_MAX = 120;
+
+function clampInt(v, lo, hi, fallback) {
+  const n = Number(v);
+  if (v == null || v === "" || !Number.isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.round(n)));
+}
+
+const isFrame = (f) => Array.isArray(f) && f.length === 4 && f.every((n) => typeof n === "number" && Number.isFinite(n));
+
+/** A look's answer as callers get it (§A). The window's frame is what
+ *  everything else is measured against (the picture is exactly that frame,
+ *  scaled; the lines are in the same global pixels), so an answer without one
+ *  is no answer. Lines with no text or no frame are dropped, and a picture
+ *  without data is null. Windows' OCR gives no confidence, so a line carries
+ *  `conf` only if the helper ever sends one. */
+function shapeLook(r) {
+  if (!r || typeof r !== "object") return { ok: false, error: "bad_answer" };
+  if (r.ok !== true) return { ok: false, error: typeof r.error === "string" && r.error ? r.error : "failed" };
+  const { id: _id, ...rest } = r;
+  const w = rest.window;
+  if (!w || typeof w !== "object" || !isFrame(w.frame) || !(w.frame[2] > 0) || !(w.frame[3] > 0)) return { ok: false, error: "bad_answer" };
+  const lines = [];
+  for (const l of Array.isArray(rest.lines) ? rest.lines : []) {
+    if (lines.length >= LOOK_LINES_MAX) break;
+    if (!l || typeof l !== "object" || typeof l.text !== "string" || !l.text.trim() || !isFrame(l.frame)) continue;
+    const line = { text: l.text.slice(0, LOOK_TEXT_MAX), frame: l.frame };
+    if (typeof l.conf === "number" && Number.isFinite(l.conf)) line.conf = l.conf;
+    lines.push(line);
+  }
+  const im = rest.image;
+  const image = im && typeof im === "object" && typeof im.data === "string" && im.data &&
+    typeof im.mime === "string" && /^image\//.test(im.mime) && im.width > 0 && im.height > 0
+    ? { mime: im.mime, data: im.data, width: im.width, height: im.height }
+    : null;
+  return {
+    ...rest,
+    ok: true,
+    window: { frame: w.frame, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" },
+    scale: "pixels",
+    lines,
+    image,
+    ms: typeof rest.ms === "number" && Number.isFinite(rest.ms) ? rest.ms : 0,
+  };
+}
 
 /** The helper script, found in dev (native/) and in the packaged app
  *  (process.resourcesPath, via the build.extraResources entry). Resolved
@@ -67,7 +120,7 @@ function createUiaDriver(opts = {}) {
   const spawnFn = opts.spawn || nodeSpawn;
   const command = opts.command || defaultCommand();
   const cfg = { ...DEFAULTS };
-  for (const k of ["snapshotTimeout", "actionTimeout", "openTimeout", "warmupMs"]) {
+  for (const k of ["snapshotTimeout", "actionTimeout", "openTimeout", "lookTimeout", "warmupMs"]) {
     if (opts[k] != null) cfg[k] = opts[k];
   }
 
@@ -130,6 +183,11 @@ function createUiaDriver(opts = {}) {
     c.stdout.on("data", (d) => {
       if (child !== c) return;
       buf += d;
+      // Only a piece with a newline in it can end a line. A look's answer
+      // (a JPEG in base64) comes in hundreds of pieces, and searching all
+      // that came so far on each one also copies it: a 3 MB answer read 4 KB
+      // at a time held the main process for half a second.
+      if (d.indexOf("\n") < 0) return;
       let i;
       while ((i = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, i).trim();
@@ -215,12 +273,38 @@ function createUiaDriver(opts = {}) {
     },
     key(chord) { return send("key", { chord }, cfg.actionTimeout); },
     open(appName) { return send("open", { app: appName }, cfg.openTimeout); },
+    // The window in front as a picture and as the text in it (§A). Slower
+    // than any other call, so it has its own timeout: by default the larger
+    // of lookTimeout and the budget asked for plus what a look spends outside
+    // it, so a longer budget is honoured; an explicit timeoutMs wins, and the
+    // budget is then cut to fit inside it. The helper makes the look on a
+    // thread of its own, so a snapshot asked at the same moment is not held.
+    look(o) {
+      try {
+        const opt = o && typeof o === "object" ? o : {};
+        const asked = clampInt(opt.budgetMs, 100, 10000, 1500);
+        const t = opt.timeoutMs != null
+          ? clampInt(opt.timeoutMs, 200, 30000, cfg.lookTimeout)
+          : Math.max(cfg.lookTimeout, asked + LOOK_MARGIN_MS);
+        const budgetMs = Math.max(100, Math.min(asked, t - LOOK_MARGIN_MS));
+        const maxSide = clampInt(opt.maxSide, 64, 4096, 1600);
+        // 0..1, as the contract has it; a percentage is taken as one.
+        let quality = Number(opt.quality);
+        if (opt.quality == null || !(quality > 0)) quality = 0.82;
+        else if (quality > 1) quality /= 100;
+        quality = Math.max(0.1, Math.min(1, quality));
+        return send("look", { budgetMs, maxSide, quality, ocr: opt.ocr !== false, image: opt.image !== false }, t)
+          .then(shapeLook, () => ({ ok: false, error: "failed" }));
+      } catch {
+        return Promise.resolve({ ok: false, error: "failed" });
+      }
+    },
   };
 }
 
 // The default instance is the real Windows driver. Its methods are spread onto
 // the exports so the module itself is the §1 API (available, start, stop,
-// trusted, snapshot, press, click, setValue, focus, scroll, key, open).
+// trusted, snapshot, press, click, setValue, focus, scroll, key, open, look).
 const instance = createUiaDriver();
 module.exports = {
   available: instance.available,
@@ -235,6 +319,7 @@ module.exports = {
   scroll: instance.scroll,
   key: instance.key,
   open: instance.open,
+  look: instance.look,
   createUiaDriver,
   scriptPath,
   defaultCommand,

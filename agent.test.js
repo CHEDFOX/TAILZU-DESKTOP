@@ -4,10 +4,12 @@
 // the accessibility helper, the guide window, the server and the person — so
 // each is a fake that records what it was asked and answers from a script:
 //
-//   driver  a queue of snapshots (the last one repeats) and canned answers
+//   driver  a queue of snapshots (the last one repeats) and canned answers;
+//           a look, when the test gives one
 //   guide   records every call; confirm answers yes, no, or never
 //   post    one list of events per step, with optional gates to hold the
-//           stream open mid-way; records every request it was sent
+//           stream open mid-way; records every request it was sent, and the
+//           picture that went with it
 //
 // Nothing in this file touches Electron, a screen or the network.
 
@@ -15,7 +17,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  readEvents, makePost, TEXT,
+  ocrElements, pictureRegion, readEvents, makePost, SCREEN_CHARS, TEXT,
 } = require("./agent.js");
 
 // ---- fixtures ---------------------------------------------------------------
@@ -41,7 +43,7 @@ const never = () => new Promise(() => {});
 
 // ---- fakes ------------------------------------------------------------------
 
-function fakeDriver(snaps, results) {
+function fakeDriver(snaps, results, look) {
   const calls = [];
   let n = 0;
   const drv = { calls };
@@ -51,6 +53,13 @@ function fakeDriver(snaps, results) {
     n++;
     return typeof s === "function" ? s(n) : s;
   };
+  // Only a driver given a look has one, as the v1 drivers had none.
+  if (look !== undefined) {
+    drv.look = async (opts) => {
+      calls.push(["look", opts]);
+      return typeof look === "function" ? look(opts) : look;
+    };
+  }
   for (const m of ["press", "click", "setValue", "focus", "scroll", "key", "open"]) {
     drv[m] = async (...args) => {
       calls.push([m, ...args]);
@@ -58,8 +67,8 @@ function fakeDriver(snaps, results) {
       return typeof r === "function" ? r(...args) : r || { ok: true };
     };
   }
-  /** Everything but the snapshots. */
-  drv.acts = () => calls.filter((c) => c[0] !== "snapshot");
+  /** Everything but the reads. */
+  drv.acts = () => calls.filter((c) => c[0] !== "snapshot" && c[0] !== "look");
   drv.snapshots = () => calls.filter((c) => c[0] === "snapshot").length;
   return drv;
 }
@@ -67,7 +76,7 @@ function fakeDriver(snaps, results) {
 function fakeGuide(confirm) {
   const calls = [];
   const g = { calls };
-  for (const m of ["show", "state", "heard", "say", "point", "unpoint", "steps", "hide", "error"]) {
+  for (const m of ["show", "state", "heard", "say", "point", "unpoint", "steps", "hide", "error", "badge"]) {
     g[m] = (...args) => { calls.push([m, ...args]); };
   }
   g.confirm = (text, risk) => {
@@ -83,8 +92,8 @@ function fakeGuide(confirm) {
  *  a gate that holds the stream open. */
 function fakePost(scripts) {
   const requests = [];
-  async function* post(req, audio, signal) {
-    requests.push({ req: JSON.parse(JSON.stringify(req)), audio, signal });
+  async function* post(req, audio, signal, image) {
+    requests.push({ req: JSON.parse(JSON.stringify(req)), audio, signal, image: image || null });
     const step = requests.length - 1;
     const s = scripts[step];
     const list = typeof s === "function" ? s(req) : s || [{ t: "done" }];
@@ -102,7 +111,7 @@ function rig(o = {}) {
   let clock = 1_000_000;
   const logs = [];
   const pasted = [];
-  const driver = fakeDriver(o.snaps || [SLACK], o.results);
+  const driver = fakeDriver(o.snaps || [SLACK], o.results, o.look);
   const guide = o.guide || fakeGuide(o.confirm);
   const post = fakePost(o.scripts || []);
   const knobs = Object.assign({
@@ -120,6 +129,7 @@ function rig(o = {}) {
     now: () => clock,
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
+    crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -1048,6 +1058,50 @@ test("toRequestElements caps the list at max, and never above 250", () => {
   assert.deepStrictEqual(toRequestElements(null), []);
 });
 
+/** The screen as the server measures it against AGENT_SCREEN_MAX_CHARS: its
+ *  prompt's line for each element (prompt.ts elementLine), and a line break. */
+function serverChars(els) {
+  return els.reduce((n, e) => {
+    let line = `${e.id} ${e.role}`;
+    if (e.label) line += ` "${e.label}"`;
+    if (e.region) line += ` @${e.region}`;
+    if (e.value) line += ` ="${e.value}"`;
+    if (e.focused) line += " focused";
+    if (e.disabled) line += " disabled";
+    if (e.selected) line += " selected";
+    if (e.checked === true) line += " checked";
+    if (e.checked === false) line += " unchecked";
+    return n + line.length + 1;
+  }, 0);
+}
+
+test("toRequestElements: a page of text read off the window stops inside the server's screen budget; the tree is never cut for it", () => {
+  const long = "The committee reviewed every line of the budget again and found nothing to change at all";
+  const tree = [
+    EXPORT,
+    { id: "e2", role: "field", label: "Notes from the planning meeting, kept by the whole team", value: long + " " + long, frame: [500, 300, 300, 30], focused: true },
+  ];
+  // Three hundred long lines down the left of the window: the region of each
+  // is two letters, the label 80 characters, about 97 each.
+  const lines = Array.from({ length: 300 }, (_, i) => ({ id: `o${i + 1}`, role: "text", label: `${i} ${long}`, frame: [10, 40 + i * 1.8, 250, 2], ocr: true }));
+  const out = toRequestElements(snap(tree.concat(lines)));
+  assert.deepStrictEqual(out.slice(0, 2).map((e) => e.id), ["e1", "e2"]);
+  const sent = out.slice(2);
+  // The top of the page, in order, and well short of the 248 the count allows.
+  assert.ok(sent.length > 150 && sent.length < 248, `${sent.length} lines`);
+  assert.deepStrictEqual(sent.map((e) => e.id), sent.map((_, i) => `o${i + 1}`));
+  assert.ok(serverChars(out) <= SCREEN_CHARS, `${serverChars(out)} chars`);
+  // With every line in, the server would have refused the step (413).
+  assert.ok(serverChars(toRequestElements(snap(tree.concat(lines)), 250, 1e9)) > 24000);
+  // A tree over the budget on its own goes whole, as it always has; no line goes with it.
+  const big = Array.from({ length: 200 }, (_, i) => ({ id: `e${i + 1}`, role: "field", label: "L".repeat(80), value: "V".repeat(60), frame: [10, 10, 10, 10] }));
+  const both = toRequestElements(snap(big.concat(lines.slice(0, 10))));
+  assert.strictEqual(both.length, 200);
+  assert.ok(both.every((e) => e.id[0] === "e"));
+  // The window's text takes its share of the budget first.
+  assert.ok(toRequestElements(snap(tree.concat(lines)), 250, SCREEN_CHARS - 4000).length < out.length);
+});
+
 test("frameMap maps ids to frames for one snapshot, skipping bad frames", () => {
   const m = frameMap(snap([EXPORT, { id: "e9", role: "text", label: "x", frame: [1, 2] }]));
   assert.deepStrictEqual([...m], [["e1", [700, 20, 80, 30]]]);
@@ -1464,4 +1518,729 @@ test("a whole run over makePost and a streamed body", async () => {
   assert.deepStrictEqual(guide.of("point"), [["point", [700, 20, 80, 30]]]);
   assert.deepStrictEqual(guide.of("state").at(-1), ["state", "done"]);
   assert.ok(fetch.calls[0].init.body instanceof FormData);
+});
+
+// ---- v2: the look, the instant answer, the picture ------------------------------
+
+/** A look at the Slack window: two lines of its text (one the Export button's
+ *  own label, read again) and its picture. */
+function lookOf(lines, extra) {
+  return Object.assign({
+    ok: true, window: { frame: WIN, title: "design | Slack" }, scale: "points",
+    lines, image: { mime: "image/jpeg", data: Buffer.from("the whole window").toString("base64"), width: 900, height: 600 }, ms: 120,
+  }, extra);
+}
+const L_EXPORT = { text: "Export", frame: [702, 22, 70, 24], conf: 0.9 };            // over the Export button
+const L_REVENUE = { text: "Quarterly revenue", frame: [300, 200, 200, 20], conf: 0.95 }; // centre
+const L_EQUATION = { text: "x² + 2x + 1 = 0", frame: [300, 300, 160, 24], conf: 0.8 };
+const LOOK = lookOf([L_EXPORT, L_REVENUE, L_EQUATION]);
+const CROPPED = { mime: "image/jpeg", data: Buffer.from("just the picture") };
+
+test("begin reads the tree and looks at the window at once; the look's lines join as o elements", async () => {
+  const r = rig({ look: LOOK, scripts: [[heardShow("what's the revenue?"), { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await sleep(1);
+  // Both reads are asked for at Alt twice, before a word has been heard.
+  assert.deepStrictEqual(r.driver.calls.map((c) => c[0]).sort(), ["look", "snapshot"]);
+  const lookOpts = r.driver.calls.find((c) => c[0] === "look")[1];
+  assert.deepStrictEqual(lookOpts, { budgetMs: 1500, timeoutMs: 2500, ocr: true, image: false }, "no picture is asked for without a way to send one");
+  await r.agent.heard(AUDIO);
+  const [req] = r.post.reqs();
+  assert.deepStrictEqual(req.screen.elements.slice(4), [
+    { id: "o1", role: "text", label: "Quarterly revenue", region: "c" },
+    { id: "o2", role: "text", label: "x² + 2x + 1 = 0", region: "c" },
+  ], "after the tree; the line that only repeats the button's label is left out");
+  assert.ok(!JSON.stringify(req).includes("frame"));
+  assert.ok(!JSON.stringify(req).includes("design | Slack"), "the window's title never goes");
+});
+
+test("ocrElements: nothing over a password field or an address bar, and never the window's title", () => {
+  const s = snap([
+    { id: "e1", role: "field", label: "Password", secure: true, frame: [100, 100, 200, 30] },
+    { id: "e2", role: "field", label: "Address and search bar", frame: [100, 40, 600, 30] },
+    { id: "e3", role: "button", label: "Sign in", frame: [100, 150, 80, 30] },
+  ], { window: { frame: WIN, title: "Q3 layoffs — draft" } });
+  const look = lookOf([
+    { text: "hunter2", frame: [110, 105, 60, 20] },                                  // the password, shown
+    { text: "mail.google.com/mail/u/0/#inbox/FMfcgzQXJ", frame: [120, 45, 400, 20] }, // the URL
+    { text: "Q3 layoffs — draft", frame: [300, 5, 200, 16] },                        // the title bar
+    { text: "Q3 layoffs", frame: [300, 60, 100, 16] },                               // a cut-short title
+    { text: "SIGN  IN", frame: [105, 155, 60, 20] },                                 // the button, again
+    { text: "Sign in", frame: [500, 500, 60, 20] },                                  // the same words elsewhere
+    { text: "Forgot it?", frame: [100, 200, 80, 20] },
+    { text: "   ", frame: [100, 230, 80, 20] },
+    { text: "no frame" },
+  ], { window: { frame: WIN, title: "Q3 layoffs — draft" } });
+  assert.deepStrictEqual(ocrElements(s, look), [
+    { id: "o1", role: "text", label: "Sign in", frame: [500, 500, 60, 20], ocr: true },
+    { id: "o2", role: "text", label: "Forgot it?", frame: [100, 200, 80, 20], ocr: true },
+  ]);
+  assert.deepStrictEqual(ocrElements(s, { ok: false, error: "timeout" }), []);
+
+  // The title as OCR reads it: cut short with three dots, or run together
+  // with the toolbar beside it.
+  const titled = snap([], { window: { frame: WIN, title: "Q3 budget.xlsx - Excel" } });
+  const bar = lookOf([
+    { text: "Q3 budget.xls...", frame: [300, 5, 120, 16] },
+    { text: "AutoSave Off Q3 budget.xlsx - Excel Search", frame: [0, 5, 900, 16] },
+    { text: "Excel", frame: [10, 40, 40, 16] },                                      // too short to say
+    { text: "Revenue", frame: [10, 80, 60, 16] },
+  ], { window: { frame: WIN, title: "Q3 budget.xlsx - Excel" } });
+  assert.deepStrictEqual(ocrElements(titled, bar).map((e) => e.label), ["Excel", "Revenue"]);
+});
+
+test("toRequestElements: a line goes as text with its words and region only, and its URL loses its query", () => {
+  const s = snap([
+    EXPORT,
+    { id: "o1", role: "button", label: "Reset at https://x.test/r?token=abc#f", frame: [100, 100, 300, 20], ocr: true, value: "v", focused: true },
+    { id: "o2", role: "text", label: "made up", frame: [100, 130, 300, 20] },   // an o id on a tree element
+    { id: "e9", role: "text", label: "not a line", frame: [100, 160, 300, 20], ocr: true },
+  ]);
+  assert.deepStrictEqual(toRequestElements(s), [
+    { id: "e1", role: "button", label: "Export", region: "tr" },
+    { id: "o1", role: "text", label: "Reset at https://x.test/r", region: "tl" },
+  ]);
+  // An address as a browser draws it, with no scheme, loses its query and
+  // fragment too; a sentence that ends in a question mark keeps it.
+  const drawn = snap([
+    { id: "o1", role: "text", label: "mail.google.com/mail/u/0/#inbox/FMfcgzQXJ", frame: [100, 40, 400, 20], ocr: true },
+    { id: "o2", role: "text", label: "Open accounts.example.co.uk/reset?token=s3cr3t now", frame: [100, 70, 400, 20], ocr: true },
+    { id: "o3", role: "text", label: "Is it on example.com?", frame: [100, 100, 400, 20], ocr: true },
+  ]);
+  assert.deepStrictEqual(toRequestElements(drawn).map((e) => e.label), [
+    "mail.google.com/mail/u/0/", "Open accounts.example.co.uk/reset now", "Is it on example.com?",
+  ]);
+});
+
+test("driver.js with no driver for the platform has every call the two drivers have, look included, each unsupported", async () => {
+  const stub = require("./driver.js").pick("linux");
+  for (const k of Object.keys(require("./axDriver.js"))) assert.strictEqual(typeof stub[k], "function", k);
+  assert.deepStrictEqual(await stub.look({ ocr: true }), { ok: false, error: "unsupported" });
+  // …which a run takes as no look at all, not as a failed one.
+  const r = rig({ scripts: [[heardShow("hi"), { t: "done" }]] });
+  r.driver.look = stub.look;
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.reqs().length, 1);
+  assert.ok(!r.logs.some((l) => /no look/.test(l)));
+});
+
+test("the look knob off, or a driver with no look, reads the tree alone", async () => {
+  const off = rig({ look: LOOK, knobs: { "desktop.agent.look": false }, scripts: [[heardShow("hi"), { t: "done" }]] });
+  off.agent.begin({ app: "Slack" });
+  await off.agent.heard(AUDIO);
+  assert.ok(!off.driver.calls.some((c) => c[0] === "look"));
+  assert.strictEqual(off.post.reqs()[0].screen.elements.length, 4);
+  assert.ok(!off.logs.some((l) => /no look/.test(l)), "a look not taken is not a failure");
+});
+
+test("a look that fails, or never answers, is given up on: the run asks with the tree", async () => {
+  const failed = rig({ look: { ok: false, error: "no_screen_permission" }, scripts: [[heardShow("hi"), { t: "done" }]] });
+  failed.agent.begin({ app: "Slack" });
+  await failed.agent.heard(AUDIO);
+  assert.strictEqual(failed.post.reqs()[0].screen.elements.length, 4);
+  assert.ok(failed.logs.some((l) => /no look \(no_screen_permission\)/.test(l)));
+
+  const hung = rig({ look: () => never(), knobs: { "desktop.agent.lookTimeoutMs": 30 }, scripts: [[heardShow("hi"), { t: "done" }]] });
+  hung.agent.begin({ app: "Slack" });
+  const t0 = Date.now();
+  await hung.agent.heard(AUDIO);
+  assert.strictEqual(hung.post.requests.length, 1);
+  assert.ok(Date.now() - t0 < 1500, "within the look's own timeout and a little");
+  assert.ok(hung.logs.some((l) => /no look \(timeout\)/.test(l)));
+});
+
+test("a look of a window with the same frame but another title is another window: not used", async () => {
+  // Two maximized windows share a frame; the titles tell them apart.
+  const titled = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e2", window: { frame: WIN, title: "design | Slack" } });
+  const other = lookOf([L_REVENUE], { window: { frame: WIN, title: "Budget - Excel" } });
+  const r = rig({
+    snaps: [titled], look: other, crop: () => CROPPED, pictures: () => "always",
+    scripts: [[heardShow("explain this equation"), { t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  const [{ req, image }] = r.post.requests;
+  assert.strictEqual(req.screen.elements.length, 4);
+  assert.strictEqual(image, null);
+  assert.ok(r.logs.some((l) => /another window/.test(l)));
+
+  // The same title, one read of it cut short: the same window.
+  const cut = lookOf([L_REVENUE], { window: { frame: WIN, title: "design | Sla" } });
+  const same = rig({ snaps: [titled], look: cut, scripts: [[heardShow("hi"), { t: "done" }]] });
+  same.agent.begin({ app: "Slack" });
+  await same.agent.heard(AUDIO);
+  assert.strictEqual(same.post.reqs()[0].screen.elements.length, 5);
+});
+
+test("a look of another window than the tree's is not used: no lines, no picture", async () => {
+  const other = lookOf([L_REVENUE], { window: { frame: [1000, 0, 500, 400], title: "Notes" } });
+  const r = rig({
+    look: other, crop: () => CROPPED, pictures: () => "always",
+    scripts: [[heardShow("explain this equation"), { t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  const [{ req, image }] = r.post.requests;
+  assert.strictEqual(req.screen.elements.length, 4);
+  assert.strictEqual(image, null);
+  assert.ok(r.logs.some((l) => /another window/.test(l)));
+});
+
+test("no tree, but a look: its lines are the screen, and can be pointed at instantly", async () => {
+  const r = rig({ snaps: [{ ok: false, error: "timeout" }], look: lookOf([L_REVENUE]) });
+  r.agent.begin({ app: "Figma" });
+  await r.agent.heard(AUDIO, { text: "where's quarterly revenue?", final: true });
+  assert.strictEqual(r.post.requests.length, 0);
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [300, 200, 200, 20], "Quarterly revenue"]]);
+  assert.ok(r.logs.some((l) => /tree not read; using the text read off the window/.test(l)));
+});
+
+test("a private or sensitive window's look ends the run: nothing is sent, nothing pointed at, even instantly", async () => {
+  for (const [title, text] of [["New Incognito Tab - Google Chrome", TEXT.blockedPrivate], ["Chase Online - Accounts", TEXT.blocked]]) {
+    const r = rig({ look: lookOf([L_REVENUE], { window: { frame: WIN, title } }), crop: () => CROPPED, pictures: () => "always" });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO, { text: "where's export?", final: true });
+    assert.strictEqual(r.post.requests.length, 0, title);
+    assert.deepStrictEqual(r.guide.of("point"), [], title);
+    assert.deepStrictEqual(r.guide.of("say"), [], title);
+    assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", text], title);
+  }
+});
+
+// ---- the instant answer --------------------------------------------------------
+
+test("instant: a clear “where's X?” in the caption is answered here — ring, words, done, no request", async () => {
+  const r = rig({ look: LOOK });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO, { text: "Hey Tailzu, where's export?", final: true });
+  assert.strictEqual(r.post.requests.length, 0, "no /v1/agent call at all");
+  assert.deepStrictEqual(r.guide.of("heard"), [["heard", "Hey Tailzu, where's export?"]]);
+  assert.deepStrictEqual(r.guide.of("say"), [["say", "Here's Export.", { speak: true, rate: 1.04 }]]);
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [700, 20, 80, 30], "Export"]]);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+  assert.deepStrictEqual(r.driver.acts(), []);
+  assert.strictEqual(r.agent.active(), false);
+  assert.ok(r.logs.some((l) => /: instant \(e1, score 1\.00/.test(l)));
+  assert.ok(!r.logs.join("\n").includes("Export"), "the log carries ids, not the screen's words");
+});
+
+test("instant: a line read off the window is pointed at the same way", async () => {
+  const r = rig({ look: LOOK });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO, { text: "where is quarterly revenue", final: false });
+  assert.strictEqual(r.post.requests.length, 0);
+  assert.deepStrictEqual(r.guide.of("say"), [["say", "Here's Quarterly revenue.", { speak: true, rate: 1.04 }]]);
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [300, 200, 200, 20], "Quarterly revenue"]]);
+});
+
+test("not instant — an order, no clear match, the knob off — goes the text way, with the caption's words as JSON", async () => {
+  const cases = [
+    ["click export", {}],
+    ["where's save", { snaps: [snap([{ id: "e1", role: "button", label: "Save", frame: [0, 0, 50, 20] }, { id: "e2", role: "button", label: "Save", frame: [100, 0, 50, 20] }])] }],
+    ["where's export", { knobs: { "desktop.agent.instant": false } }],
+    ["turn on captions", {}],
+  ];
+  for (const [text, o] of cases) {
+    const r = rig(Object.assign({ scripts: [[heardDo(text), { t: "done" }]] }, o));
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO, { text, final: true });
+    assert.strictEqual(r.post.requests.length, 1, text);
+    const [{ req, audio, image }] = r.post.requests;
+    assert.strictEqual(audio, null, text);
+    assert.strictEqual(image, null, text);
+    assert.strictEqual(req.utterance, text, text);
+    assert.strictEqual(req.picture, undefined, text);
+  }
+});
+
+test("useStreamText off: the recording goes, as before; with no recording the words still do", async () => {
+  const r = rig({ knobs: { "desktop.agent.useStreamText": false }, scripts: [[heardDo("turn on captions"), { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO, { text: "turn on captions", final: true });
+  assert.strictEqual(r.post.requests[0].audio, AUDIO);
+  assert.strictEqual(r.post.reqs()[0].utterance, undefined);
+
+  const words = rig({ knobs: { "desktop.agent.useStreamText": false }, scripts: [[heardDo("turn on captions"), { t: "done" }]] });
+  words.agent.begin({ app: "Slack" });
+  await words.agent.heard(null, { text: "turn on captions", final: true });
+  assert.strictEqual(words.post.requests[0].audio, null);
+  assert.strictEqual(words.post.reqs()[0].utterance, "turn on captions");
+});
+
+test("heard with no recording and no words ends quietly; the v1 call (audio only) works as it did", async () => {
+  const r = rig();
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(null, { text: "  ", final: true });
+  assert.strictEqual(r.post.requests.length, 0);
+  assert.strictEqual(r.agent.active(), false);
+
+  const v1 = rig({ look: LOOK, scripts: [[heardShow("where's export?"), { t: "done" }]] });
+  v1.agent.begin({ app: "Slack" });
+  await v1.agent.heard(AUDIO);
+  assert.strictEqual(v1.post.requests[0].audio, AUDIO, "with no words, the recording is the words");
+});
+
+// ---- preview ----------------------------------------------------------------------
+
+test("preview: a tentative ring as soon as the words name one thing, moved when they change, gone when they stop", async () => {
+  const r = rig({ look: LOOK, scripts: [[heardDo("click send"), { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await sleep(1);   // the reads begun at Alt twice have come back
+  r.agent.preview("where's");
+  r.agent.preview("where's exp");
+  assert.deepStrictEqual(r.guide.of("point"), [], "half a word names nothing");
+  r.agent.preview("where's export");
+  r.agent.preview("where's export");
+  r.agent.preview("Where's Export?");
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [700, 20, 80, 30], "Export", { tentative: true }]], "drawn once while the target stays");
+  r.agent.preview("where's export as");
+  assert.strictEqual(r.guide.of("unpoint").length, 1);
+  r.agent.preview("where's quarterly revenue");
+  r.agent.preview("click send");
+  assert.deepStrictEqual(r.guide.of("point").slice(1), [
+    ["point", [300, 200, 200, 20], "Quarterly revenue", { tentative: true }],
+    ["point", [720, 520, 60, 40], "Send", { tentative: true }],
+  ]);
+  assert.strictEqual(r.guide.of("unpoint").length, 1, "moved, not put away and drawn again");
+  assert.deepStrictEqual(r.driver.acts(), [], "never acts");
+  assert.strictEqual(r.post.requests.length, 0, "never asks");
+
+  // "click send" is an order: the text way. Its ring stood in for an answer
+  // that came without one, so it goes when the answer is in.
+  await r.agent.heard(AUDIO, { text: "click send", final: true });
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.strictEqual(r.guide.of("unpoint").length, 2);
+  r.agent.preview("where's export");
+  assert.strictEqual(r.guide.of("point").length, 3, "nothing once the run has begun");
+});
+
+test("preview draws nothing before the tree is read, on a private screen, or with the instant knob off", async () => {
+  let release;
+  const late = new Promise((res) => { release = res; });
+  const r = rig({ snaps: [() => late.then(() => SLACK)] });
+  r.agent.begin({ app: "Slack" });
+  r.agent.preview("where's export");
+  assert.deepStrictEqual(r.guide.of("point"), []);
+  release();
+  await sleep(1);
+  r.agent.preview("where's export");
+  assert.strictEqual(r.guide.of("point").length, 1);
+  r.agent.cancel("test");
+
+  const priv = rig({ snaps: [snap([EXPORT], { window: { frame: WIN, title: "Private Browsing - Safari" } })] });
+  priv.agent.begin({ app: "Safari" });
+  await sleep(1);
+  priv.agent.preview("where's export");
+  assert.deepStrictEqual(priv.guide.of("point"), []);
+  priv.agent.cancel("test");
+
+  const privLook = rig({ look: lookOf([], { window: { frame: WIN, title: "InPrivate - Edge" } }) });
+  privLook.agent.begin({ app: "Edge" });
+  await sleep(1);
+  privLook.agent.preview("where's export");
+  assert.deepStrictEqual(privLook.guide.of("point"), [], "a private window's look rules out its tree too");
+  privLook.agent.cancel("test");
+
+  const off = rig({ knobs: { "desktop.agent.instant": false } });
+  off.agent.begin({ app: "Slack" });
+  await sleep(1);
+  off.agent.preview("where's export");
+  assert.deepStrictEqual(off.guide.of("point"), []);
+  off.agent.cancel("test");
+});
+
+test("a ring preview drew off the tree goes when the look then shows a private window", async () => {
+  let release;
+  const late = new Promise((res) => { release = res; });
+  const r = rig({ look: () => late.then(() => lookOf([], { window: { frame: WIN, title: "InPrivate - Microsoft Edge" } })) });
+  r.agent.begin({ app: "Edge" });
+  await sleep(1);
+  r.agent.preview("where's export");
+  assert.strictEqual(r.guide.of("point").length, 1, "the tree alone said where");
+  release();
+  await r.agent.heard(AUDIO, { text: "where's export", final: true });
+  assert.strictEqual(r.post.requests.length, 0);
+  assert.strictEqual(r.guide.of("point").length, 1, "not answered instantly either");
+  assert.strictEqual(r.guide.of("unpoint").length, 1);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blockedPrivate]);
+});
+
+test("a tentative ring does not outlive a request that failed", async () => {
+  const r = rig({ look: LOOK });
+  // Its own agent over the rig's driver and guide, with a post that throws.
+  const agent = createAgent({
+    driver: r.driver, guide: r.guide, knob: (_n, f) => (_n === "desktop.agent.doneMs" ? 1 : f), platform: "mac",
+    post: () => { throw new Error("offline"); },
+  });
+  agent.begin({ app: "Slack" });
+  await sleep(1);
+  agent.preview("click send");
+  assert.strictEqual(r.guide.of("point").length, 1);
+  await agent.heard(AUDIO, { text: "click send", final: true });
+  assert.strictEqual(r.guide.of("unpoint").length, 1);
+  assert.strictEqual(r.guide.of("error").at(-1)[1], TEXT.network);
+});
+
+test("preview with no run, or a cancelled one, does nothing", () => {
+  const r = rig();
+  r.agent.preview("where's export");
+  r.agent.begin({ app: "Slack" });
+  r.agent.cancel("esc");
+  r.agent.preview("where's export");
+  assert.deepStrictEqual(r.guide.of("point"), []);
+});
+
+// ---- the picture ------------------------------------------------------------------
+
+const CHART = { id: "e5", role: "image", label: "", frame: [250, 150, 400, 300] };       // under the pointer
+const AVATAR = { id: "e6", role: "image", label: "Sam", frame: [20, 520, 32, 32] };
+const PICTURED = snap([EXPORT, COMPOSER, SEND, HEADING, CHART, AVATAR], { focused: "e2" });
+
+function pictureRig(o = {}) {
+  const crops = [];
+  const permits = [];
+  const policies = [];
+  const r = rig(Object.assign({
+    snaps: [PICTURED],
+    look: lookOf([L_REVENUE, L_EQUATION]),
+    crop: (look, frame) => { crops.push([look, frame]); return CROPPED; },
+    pictures: (app) => { policies.push(app); return "ask"; },
+    permit: async (app) => { permits.push(app); return "once"; },
+    scripts: [[
+      heardShow("explain this equation"),
+      { t: "say", text: "It's a quadratic." },
+      { t: "say", text: "It factors as (x + 1)².", append: true },
+      { t: "done" },
+    ]],
+  }, o));
+  return Object.assign(r, { crops, permits, policies });
+}
+
+test("picture: a question about a drawing sends ONE crop of the image under the pointer, with permission, said as it comes", async () => {
+  const r = pictureRig();
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await sleep(1);
+  const lookOpts = r.driver.calls.find((c) => c[0] === "look")[1];
+  assert.strictEqual(lookOpts.image, true, "the picture is taken at Alt twice, when there is a way to send it");
+  await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+
+  assert.deepStrictEqual(r.policies, ["Slack"]);
+  assert.deepStrictEqual(r.permits, ["Slack"]);
+  assert.strictEqual(r.crops.length, 1);
+  assert.strictEqual(r.crops[0][0].image.data, LOOK.image.data, "the look itself, picture and window");
+  assert.deepStrictEqual(r.crops[0][1], [250, 150, 400, 300]);
+
+  assert.strictEqual(r.post.requests.length, 1);
+  const [{ req, audio, image }] = r.post.requests;
+  assert.strictEqual(audio, null, "the words go, not the recording");
+  assert.deepStrictEqual(image, { mime: "image/jpeg", data: CROPPED.data });
+  assert.strictEqual(req.utterance, "explain this equation");
+  assert.deepStrictEqual(req.picture, { region: "element" });
+  assert.ok(!JSON.stringify(req).includes("250"), "where the picture is stays here");
+
+  assert.deepStrictEqual(r.guide.of("point")[0], ["point", [250, 150, 400, 300], "Looking", { tentative: true }]);
+  assert.deepStrictEqual(r.guide.of("badge"), [["badge", "1 picture sent"]]);
+  assert.deepStrictEqual(r.guide.of("say"), [
+    ["say", "It's a quadratic.", { speak: true, rate: 1.04 }],
+    ["say", "It factors as (x + 1)².", { speak: true, rate: 1.04, append: true }],
+  ]);
+  assert.strictEqual(r.guide.of("unpoint").length, 1, "the Looking ring goes with the answer");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+});
+
+test("picture: permission refused goes the text way; never asks nobody and crops nothing; always asks nobody", async () => {
+  const no = pictureRig({ permit: async () => "no" });
+  no.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await no.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.strictEqual(no.post.requests[0].image, null);
+  assert.strictEqual(no.post.reqs()[0].picture, undefined);
+  assert.strictEqual(no.post.reqs()[0].utterance, "explain this equation");
+  assert.deepStrictEqual(no.guide.of("badge"), []);
+
+  const never_ = pictureRig({ pictures: () => "never" });
+  never_.agent.begin({ app: "Slack" });
+  await never_.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.deepStrictEqual(never_.permits, []);
+  assert.deepStrictEqual(never_.crops, []);
+  assert.strictEqual(never_.post.requests[0].image, null);
+
+  const always = pictureRig({ pictures: async () => "always" });
+  always.agent.begin({ app: "Slack" });
+  await always.agent.heard(AUDIO, { text: "what does this chart show", final: true });
+  assert.deepStrictEqual(always.permits, []);
+  assert.ok(always.post.requests[0].image);
+
+  const unanswered = pictureRig({ permit: () => never(), knobs: { "desktop.agent.confirmMs": 20 } });
+  unanswered.agent.begin({ app: "Slack" });
+  await unanswered.agent.heard(AUDIO, { text: "solve this", final: true });
+  assert.strictEqual(unanswered.post.requests[0].image, null, "a card nobody answers is a no");
+});
+
+test("picture: without crop or pictures there is no picture path, and the look takes no picture", async () => {
+  for (const missing of [{ crop: undefined }, { pictures: undefined }]) {
+    const r = pictureRig(missing);
+    r.agent.begin({ app: "Slack" });
+    await sleep(1);
+    assert.strictEqual(r.driver.calls.find((c) => c[0] === "look")[1].image, false);
+    await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+    assert.strictEqual(r.post.requests[0].image, null);
+    assert.deepStrictEqual(r.permits, []);
+  }
+  // No permit with "ask" is a no.
+  const noCard = pictureRig({ permit: undefined });
+  noCard.agent.begin({ app: "Slack" });
+  await noCard.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.strictEqual(noCard.post.requests[0].image, null);
+});
+
+test("picture: no words, a question that is not about a picture, or no picture in the look: no picture", async () => {
+  const noWords = pictureRig();
+  noWords.agent.begin({ app: "Slack" });
+  await noWords.agent.heard(AUDIO);
+  assert.strictEqual(noWords.post.requests[0].image, null);
+  assert.deepStrictEqual(noWords.permits, []);
+
+  const notVisual = pictureRig();
+  notVisual.agent.begin({ app: "Slack" });
+  await notVisual.agent.heard(AUDIO, { text: "what does this error mean", final: true });
+  assert.strictEqual(notVisual.post.requests[0].image, null);
+
+  const noImage = pictureRig({ look: lookOf([L_EQUATION], { image: null }) });
+  noImage.agent.begin({ app: "Slack" });
+  await noImage.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.strictEqual(noImage.post.requests[0].image, null);
+  assert.deepStrictEqual(noImage.policies, []);
+});
+
+test("picture: a crop that throws, comes back empty or is too big to send sends no picture", async () => {
+  for (const crop of [
+    () => { throw new Error("bad image"); },
+    async () => null,
+    () => ({ mime: "image/jpeg", data: Buffer.alloc(0) }),
+    () => ({ mime: "text/plain", data: Buffer.from("x") }),
+    () => ({ mime: "image/gif", data: Buffer.from("GIF89a") }),          // not a type the server takes
+    () => ({ mime: "image/jpeg", data: Buffer.alloc(2000001) }),
+  ]) {
+    const r = pictureRig({ crop });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+    assert.strictEqual(r.post.requests[0].image, null);
+    assert.deepStrictEqual(r.permits, [], "nobody is asked to send a picture there is not");
+  }
+});
+
+test("pictureRegion: the image under the pointer, else the largest big one, else the window", () => {
+  const look = lookOf([]);
+  // Under the pointer, the smallest of what nests there.
+  const nest = snap([
+    { id: "e1", role: "group", label: "", frame: [100, 100, 600, 400] },
+    { id: "e2", role: "image", label: "", frame: [200, 200, 200, 150] },
+  ]);
+  assert.deepStrictEqual(pictureRegion(nest, look, { x: 250, y: 250 }), { frame: [200, 200, 200, 150], region: "element" });
+  assert.deepStrictEqual(pictureRegion(nest, look, { x: 650, y: 450 }), { frame: [100, 100, 600, 400], region: "element" }, "a big wordless group");
+  // A labelled or small group is not a picture; the largest big image is.
+  const many = snap([
+    { id: "e1", role: "group", label: "Sidebar", frame: [0, 0, 200, 600] },
+    { id: "e2", role: "image", label: "", frame: [300, 50, 130, 90] },
+    { id: "e3", role: "image", label: "", frame: [300, 200, 300, 200] },
+    { id: "e4", role: "image", label: "", frame: [700, 10, 100, 60] },     // under the size
+    { id: "o1", role: "image", label: "", frame: [0, 0, 900, 600], ocr: true },
+  ]);
+  assert.deepStrictEqual(pictureRegion(many, look, { x: 50, y: 50 }), { frame: [300, 200, 300, 200], region: "element" });
+  assert.deepStrictEqual(pictureRegion(many, look, null), { frame: [300, 200, 300, 200], region: "element" });
+  // Only what the picture has: cut to the window.
+  const spilling = snap([{ id: "e1", role: "image", label: "", frame: [800, 500, 300, 300] }]);
+  assert.deepStrictEqual(pictureRegion(spilling, look, { x: 850, y: 550 }), { frame: [800, 500, 100, 100], region: "element" });
+  // Nothing at all: the window.
+  assert.deepStrictEqual(pictureRegion(snap([EXPORT]), look, { x: 5, y: 5 }), { frame: [0, 0, 900, 600], region: "window" });
+  assert.deepStrictEqual(pictureRegion({ ok: false, elements: [] }, look, null), { frame: [0, 0, 900, 600], region: "window" });
+  // A sliver under the pointer is not the picture.
+  const sliver = snap([{ id: "e1", role: "image", label: "", frame: [10, 10, 4, 300] }]);
+  assert.strictEqual(pictureRegion(sliver, look, { x: 11, y: 50 }).region, "window");
+});
+
+test("pictureRegion: never the window's own chrome — its title bar, its tabs, its address bar", () => {
+  // A browser: tabs, then the address bar, then the page.
+  const browser = snap([
+    { id: "e1", role: "image", label: "", frame: [8, 8, 16, 16] },                       // a tab's icon
+    { id: "e2", role: "field", label: "Address and search bar", value: "https://bank.test/?s=1", frame: [80, 40, 700, 30] },
+    { id: "e3", role: "group", label: "", frame: [0, 0, 900, 600] },                     // the whole window, wordless
+  ], { app: { name: "Google Chrome", pid: 7 }, window: { frame: WIN, title: "Statement - Google Chrome" } });
+  const look = lookOf([{ text: "Statement", frame: [30, 8, 120, 16] }], { window: { frame: WIN, title: "Statement - Google Chrome" } });
+  // The window: from below the address bar down.
+  assert.deepStrictEqual(pictureRegion(browser, look, null), { frame: [0, 70, 900, 530], region: "window" });
+  // The pointer on a tab's icon: not a picture of the page, nor of the tab.
+  assert.deepStrictEqual(pictureRegion(browser, look, { x: 12, y: 12 }), { frame: [0, 70, 900, 530], region: "window" });
+  // A wordless group that covers the window is cut below the chrome too.
+  assert.deepStrictEqual(pictureRegion(browser, look, { x: 400, y: 300 }), { frame: [0, 70, 900, 530], region: "element" });
+
+  // No address bar: the title, as OCR read it in the title bar, is the edge.
+  const doc = snap([], { window: { frame: WIN, title: "Q3 budget.xlsx - Excel" } });
+  const bar = lookOf([
+    { text: "AutoSave Off Q3 budget.xlsx - Excel Search", frame: [0, 4, 900, 20] },
+    { text: "Q3 budget.xlsx - Excel", frame: [300, 500, 300, 20] },                      // far down: the page's own words
+  ], { window: { frame: WIN, title: "Q3 budget.xlsx - Excel" } });
+  assert.deepStrictEqual(pictureRegion(doc, bar, null), { frame: [0, 24, 900, 576], region: "window" });
+  // A window that is all chrome goes as it is.
+  const strip = lookOf([{ text: "Q3 budget.xlsx - Excel", frame: [0, 0, 900, 140] }], { window: { frame: [0, 0, 900, 200], title: "Q3 budget.xlsx - Excel" } });
+  assert.deepStrictEqual(pictureRegion(doc, strip, null).frame, [0, 0, 900, 200]);
+});
+
+test("picture: with no image on screen the window goes, as a window", async () => {
+  const r = pictureRig({ snaps: [SLACK], pictures: () => "always" });
+  r.agent.begin({ app: "Slack", pointer: { x: 5, y: 5 } });
+  await r.agent.heard(AUDIO, { text: "what's this?", final: true });
+  assert.deepStrictEqual(r.crops[0][1], WIN);
+  assert.deepStrictEqual(r.post.reqs()[0].picture, { region: "window" });
+});
+
+// ---- LOOK: the text way asks for the picture ------------------------------------------
+
+test("look: the text way decides it needs the picture — the same step again, with it", async () => {
+  const r = pictureRig({
+    scripts: [
+      [heardShow("what does this mean?"), { t: "say", text: "Let me look." }, { t: "look", why: "it is a drawing" }],
+      [heardShow("what does this mean?"), { t: "say", text: "A rising line." }, { t: "done" }],
+    ],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 2);
+  const [a, b] = r.post.requests;
+  assert.strictEqual(a.image, null);
+  assert.strictEqual(a.audio, AUDIO);
+  assert.strictEqual(b.req.step, 0, "the same step");
+  assert.strictEqual(b.req.runId, a.req.runId);
+  assert.strictEqual(b.audio, null, "the words the server heard, not the recording again");
+  assert.strictEqual(b.req.utterance, "what does this mean?");
+  assert.deepStrictEqual(b.image, { mime: "image/jpeg", data: CROPPED.data });
+  assert.deepStrictEqual(b.req.picture, { region: "element" });
+  assert.deepStrictEqual(r.permits, ["Slack"]);
+  assert.deepStrictEqual(r.guide.of("badge"), [["badge", "1 picture sent"]]);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+});
+
+test("look: once a run; with no picture, no permission or an out-of-date one, it says it can't", async () => {
+  const twice = pictureRig({
+    pictures: () => "always",
+    scripts: [[heardShow("what is that"), { t: "look", why: "" }], [heardShow("what is that"), { t: "look", why: "" }], [{ t: "done" }]],
+  });
+  twice.agent.begin({ app: "Slack" });
+  await twice.agent.heard(AUDIO);
+  assert.strictEqual(twice.post.requests.length, 2, "one picture a run");
+  assert.deepStrictEqual(twice.guide.of("say").at(-1), ["say", TEXT.needLook, { speak: true, rate: 1.04 }]);
+  assert.deepStrictEqual(twice.guide.of("state").at(-1), ["state", "done"]);
+
+  for (const o of [{ look: undefined }, { pictures: () => "never" }, { permit: async () => "no" }, { crop: undefined }]) {
+    const r = pictureRig(Object.assign({ scripts: [[heardShow("what is that"), { t: "look", why: "" }], [{ t: "done" }]] }, o));
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    assert.strictEqual(r.post.requests.length, 1, JSON.stringify(Object.keys(o)));
+    assert.deepStrictEqual(r.guide.of("say").at(-1), ["say", TEXT.needLook, { speak: true, rate: 1.04 }]);
+    assert.strictEqual(r.agent.active(), false);
+  }
+
+  // A no on the card earlier in the run is not asked again.
+  const declined = pictureRig({
+    permit: async (app) => { declined.permits.push(app); return "no"; },
+    scripts: [[heardShow("explain this equation"), { t: "look", why: "" }], [{ t: "done" }]],
+  });
+  declined.agent.begin({ app: "Slack" });
+  await declined.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.strictEqual(declined.permits.length, 1);
+  assert.strictEqual(declined.post.requests.length, 1);
+
+  // After an action the picture shows a screen that may be gone.
+  const acted = pictureRig({
+    pictures: () => "always",
+    snaps: [PICTURED, PICTURED, PICTURED],
+    scripts: [[heardDo("open export and explain the chart"), press("e1")], [heardDo("open export and explain the chart"), { t: "look", why: "" }], [{ t: "done" }]],
+  });
+  acted.agent.begin({ app: "Slack" });
+  await acted.agent.heard(AUDIO);
+  assert.strictEqual(acted.post.requests.length, 2);
+  assert.ok(acted.post.requests.every((q) => q.image === null));
+  assert.deepStrictEqual(acted.guide.of("say").at(-1), ["say", TEXT.needLook, { speak: true, rate: 1.04 }]);
+});
+
+test("cancel while the permission card is up: nothing is sent", async () => {
+  const r = pictureRig({ permit: () => never() });
+  r.agent.begin({ app: "Slack" });
+  const run = r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  await sleep(5);
+  r.agent.cancel("esc");
+  await run;
+  assert.strictEqual(r.post.requests.length, 0);
+  assert.deepStrictEqual(r.guide.of("badge"), []);
+});
+
+// ---- the rest of the run, with lines in it ----------------------------------------
+
+test("an action on a line read off the screen is not run: it is text, not a control", async () => {
+  const r = rig({ look: LOOK, scripts: [[heardDo("click quarterly revenue"), press("o1")], [{ t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), []);
+  assert.deepStrictEqual(r.guide.of("confirm"), []);
+  const [, second] = r.post.reqs();
+  assert.deepStrictEqual([second.history[0].did, second.history[0].result], ["PRESS o1", "failed"]);
+  assert.match(second.history[0].note, /o1 is text read off the screen/);
+});
+
+test("the server's point at a line rings the line's own frame", async () => {
+  const r = rig({ look: LOOK, scripts: [[heardShow("what's the revenue?"), { t: "point", id: "o1", caption: "Here" }, { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [300, 200, 200, 20], "Here"]]);
+});
+
+test("after an action, the lines from Alt twice are not counted as gone", () => {
+  const before = snap([EXPORT, SEND].concat(ocrElements(SLACK, LOOK)));
+  assert.strictEqual(before.elements.length, 4);
+  assert.strictEqual(describeChange(before, snap([EXPORT, SEND])), "nochange");
+});
+
+test("a screen with lines in it still finds copying from them risky", () => {
+  const lines = ocrElements(SLACK, lookOf([{ text: "Your code is 482 913", frame: [300, 100, 200, 20] }]));
+  const s = Object.assign({}, SLACK, { elements: SLACK.elements.concat(lines) });
+  assert.strictEqual(classifyRisk({ kind: "type", text: "482913", risk: "free" }, s), "confirm");
+});
+
+// ---- makePost: the picture ------------------------------------------------------
+
+test("makePost: a picture makes it multipart, with or without audio; its part is named by its type", async () => {
+  const fetch = fakeFetch([ndjson([{ t: "done" }])]);
+  const post = makePost({ baseUrl: "https://x", token: async () => "t", fetch });
+  await collect(post(REQ, null, undefined, { mime: "image/jpeg", data: Buffer.from("jpeg bytes") }));
+  let { init } = fetch.calls[0];
+  assert.ok(init.body instanceof FormData);
+  assert.strictEqual(init.headers["Content-Type"], undefined);
+  assert.deepStrictEqual([...init.body.keys()], ["request", "image"]);
+  assert.deepStrictEqual(JSON.parse(init.body.get("request")), REQ);
+  const pic = init.body.get("image");
+  assert.strictEqual(pic.name, "picture.jpg");
+  assert.strictEqual(pic.type, "image/jpeg");
+  assert.strictEqual(Buffer.from(await pic.arrayBuffer()).toString(), "jpeg bytes");
+
+  await collect(post(REQ, AUDIO, undefined, { mime: "image/png", data: Buffer.from("png") }));
+  init = fetch.calls[1].init;
+  assert.deepStrictEqual([...init.body.keys()], ["request", "audio", "image"], "the request first, then the files");
+  assert.strictEqual(init.body.get("image").name, "picture.png");
+  assert.strictEqual(init.body.get("image").type, "image/png");
+
+  await collect(post(REQ, null, undefined, { data: new Blob(["w"], { type: "image/webp" }) }));
+  assert.strictEqual(fetch.calls[2].init.body.get("image").name, "picture.webp");
+
+  // An empty picture is no picture: plain JSON.
+  await collect(post(REQ, null, undefined, { mime: "image/jpeg", data: Buffer.alloc(0) }));
+  assert.strictEqual(fetch.calls[3].init.headers["Content-Type"], "application/json");
+});
+
+test("makePost: a 401 with a picture sends the picture again", async () => {
+  const fetch = fakeFetch([jsonError(401, { code: "unauthorized" }), ndjson([{ t: "done" }])]);
+  const post = makePost({ baseUrl: "https://x", token: async (renew) => (renew ? "fresh" : "stale"), fetch });
+  await collect(post(REQ, null, undefined, { mime: "image/jpeg", data: Buffer.from("j") }));
+  assert.strictEqual(fetch.calls.length, 2);
+  assert.ok(fetch.calls[1].init.body.get("image"));
 });

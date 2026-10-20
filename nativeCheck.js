@@ -4,7 +4,8 @@
 //   node nativeCheck.js win   the PowerShell answers an app question and a
 //                             field question, one JSON line each, in order
 //   node nativeCheck.js mac   the field's AppleScript compiles (running it
-//                             needs Accessibility, which a CI Mac lacks)
+//                             needs Accessibility, which a CI Mac lacks); the
+//                             OCR and Ask helpers build and answer
 //   node nativeCheck.js winagent  Ask's Windows UIA helper answers a ping and
 //                             a snapshot (shapes only; a runner has no app)
 const { execFileSync, spawn } = require("child_process");
@@ -30,27 +31,50 @@ if (which === "mac") {
   // same universal way, then spoken to in its line protocol: it must answer a
   // ping, say whether it is trusted (a CI Mac is not, so only the shape is
   // checked), answer a garbled line instead of dying, answer a snapshot one
-  // way or the other, and exit when its stdin closes.
+  // way or the other, answer a look, and exit when its stdin closes. A look
+  // runs beside the other commands, so answers are matched by id, not order.
   execFileSync("npm", ["run", "tzax"], { stdio: "inherit", cwd: __dirname });
   const ax = require("child_process").spawnSync(path.join(__dirname, "build", "tzax"), [], {
-    input: ['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"trusted"}', "not json", '{"id":3,"cmd":"snapshot","max":20}'].join("\n") + "\n",
-    encoding: "utf8", timeout: 20000,
+    input: ['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"trusted"}', "not json", '{"id":3,"cmd":"snapshot","max":20}',
+      '{"id":4,"cmd":"look","maxSide":640,"budgetMs":4500,"timeoutMs":6000}', '{"id":5,"cmd":"ping"}'].join("\n") + "\n",
+    encoding: "utf8", timeout: 30000, maxBuffer: 64 << 20,
   });
   const said = String(ax.stdout || "").trim().split("\n").filter(Boolean);
-  console.log("tzax said:", said.join(" | ").slice(0, 600));
+  console.log("tzax said:", said.map((l) => l.replace(/"data":"[^"]{40}[^"]*"/, '"data":"…"')).join(" | ").slice(0, 900));
   if (ax.error || ax.status !== 0) { console.error("tzax did not exit cleanly:", ax.error || ax.status, ax.signal || ""); process.exit(1); }
   let answers;
   try { answers = said.map((l) => JSON.parse(l)); } catch { console.error("tzax wrote a line that is not JSON"); process.exit(1); }
-  const [ping, trust, bad, snap] = answers;
-  if (answers.length !== 4
-    || !ping || ping.id !== 1 || ping.ok !== true || ping.pong !== true
-    || !trust || trust.id !== 2 || trust.ok !== true || typeof trust.trusted !== "boolean"
-    || !bad || bad.id !== null || bad.ok !== false
-    || !snap || snap.id !== 3 || typeof snap.ok !== "boolean" || (snap.ok ? !Array.isArray(snap.elements) : typeof snap.error !== "string")) {
+  const byId = new Map(answers.map((a) => [a && a.id, a]));
+  const [ping, trust, bad, snap, look, again] = [1, 2, null, 3, 4, 5].map((id) => byId.get(id));
+  if (answers.length !== 6
+    || !ping || ping.ok !== true || ping.pong !== true
+    || !trust || trust.ok !== true || typeof trust.trusted !== "boolean"
+    || !bad || bad.ok !== false
+    || !snap || typeof snap.ok !== "boolean" || (snap.ok ? !Array.isArray(snap.elements) : typeof snap.error !== "string")
+    || !again || again.ok !== true || again.pong !== true) {
     console.error("tzax's answers are not the shapes axDriver.js reads");
     process.exit(1);
   }
-  console.log(`the accessibility helper answers (trusted: ${trust.trusted}; snapshot: ${snap.ok ? snap.elements.length + " elements" : snap.error})`);
+  // The look: a CI Mac has no Screen Recording (no_screen_permission), or no
+  // window in front; with both it takes a real picture, which must then be
+  // the shape axDriver.js reads. Never a timeout: that is a capture that hung
+  // (the look was given most of its six seconds, room for a cold runner's
+  // first ScreenCaptureKit call; the runner is trusted, so it may get that far).
+  const LOOK_REFUSALS = ["no_screen_permission", "no_app", "no_window", "capture_failed"];
+  const isFrame = (f) => Array.isArray(f) && f.length === 4 && f.every(Number.isFinite);
+  if (!look || typeof look.ok !== "boolean"
+    || (!look.ok && !LOOK_REFUSALS.includes(look.error))
+    || (look.ok && (!look.window || !isFrame(look.window.frame) || typeof look.window.title !== "string" || look.scale !== "points"
+      || !Array.isArray(look.lines) || look.lines.length > 300
+      || look.lines.some((l) => typeof l.text !== "string" || !isFrame(l.frame) || typeof l.conf !== "number")
+      || !(look.image === null || (look.image.mime === "image/jpeg" && typeof look.image.data === "string"
+        && Buffer.from(look.image.data, "base64").subarray(0, 2).equals(Buffer.from([0xff, 0xd8]))
+        && Math.max(look.image.width, look.image.height) <= 640))))) {
+    console.error("tzax's look is not the shape axDriver.js reads:", JSON.stringify(look && { ...look, image: look.image && "…" }).slice(0, 400));
+    process.exit(1);
+  }
+  console.log(`the accessibility helper answers (trusted: ${trust.trusted}; snapshot: ${snap.ok ? snap.elements.length + " elements" : snap.error}; `
+    + `look: ${look.ok ? look.lines.length + " lines, " + (look.image ? look.image.width + "x" + look.image.height + " picture" : "no picture") + " in " + look.ms + " ms" : look.error})`);
 } else if (which === "win") {
   const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-EncodedCommand", Buffer.from(fa.PS, "utf16le").toString("base64")], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });

@@ -24,7 +24,7 @@
     shown: false,
     state: "listening",
     risk: "confirm",
-    ring: null,          // { frame:[x,y,w,h], caption, at }
+    ring: null,          // { frame:[x,y,w,h], caption, at, tentative }
     where: "default",    // where the card went: below / above / right / left (of the ring), anchor, default
     box: null,           // the card's rectangle as laid out (where it is going, not where it is)
     anchor: null,        // [x, y]: where to be when there is nothing to ring
@@ -72,14 +72,21 @@
     const a = room();
     inner.style.maxHeight = Math.max(160, Math.floor(a.b - a.t - HEAD)) + "px";
   }
+  /** The ring the card keeps beside. A tentative one while they are still
+   *  talking is not: the guess changes with their words, and the card they
+   *  are watching would chase it across the screen. */
+  function placedRing() {
+    return S.ring && !(S.ring.tentative && S.state === "listening") ? S.ring : null;
+  }
   /** The card's top-left: beside the ring if there is one, else by the anchor. */
   function layout() {
     const [cw, ch] = cardSize();
     const a = room();
     const blipRoom = K.num("desktop.guide.blipRoom", 66);   // Blip's head sticks up this far over the card
-    if (S.ring) {
+    const ring = placedRing();
+    if (ring) {
       const pad = K.num("desktop.guide.ringPad", 6);
-      const [rx, ry, rw, rh] = S.ring.frame;
+      const [rx, ry, rw, rh] = ring.frame;
       const r = { x: rx - pad, y: ry - pad, w: rw + 2 * pad, h: rh + 2 * pad };
       const x = clampX(r.x + r.w / 2 - cw * .32, cw);
       const gap = 18;
@@ -127,6 +134,7 @@
     showing: () => K.txt("desktop.guide.showing", "Here"),
     doing: () => K.txt("desktop.guide.doing", "Doing it"),
     confirm: () => (S.risk === "always" ? K.txt("desktop.guide.confirmAlways", "Can't be undone") : K.txt("desktop.guide.confirm", "Check first")),
+    permission: () => K.txt("desktop.guide.permission", "Needs a look"),
     done: () => K.txt("desktop.guide.done", "Done"),
     error: () => K.txt("desktop.guide.error", "Couldn't"),
   };
@@ -152,15 +160,21 @@
     switch (S.state) {
       case "listening": return "listening";
       case "thinking": return "thinking";
-      case "confirm": return "confirm";
+      case "confirm": case "permission": return "confirm";
       case "done": return "done";
       case "error": return "oops";
-      default: return S.ring ? "point" : "peek";
+      default: return S.ring && !S.ring.tentative ? "point" : "peek";
     }
   }
-  function words(el, text) {
-    el.textContent = "";
-    el.scrollTop = 0;
+  /** The words, each rising into place a moment after the one before.
+   *  `append`: added after what is there, and only the new words rise; an
+   *  answer that grows a sentence at a time keeps the ones already read
+   *  still, and follows the new ones down unless they have scrolled up to
+   *  read back. */
+  function words(el, text, append) {
+    const follow = append && el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    if (!append) { el.textContent = ""; el.scrollTop = 0; }
+    else if (el.childNodes.length) el.appendChild(document.createTextNode(" "));
     const parts = String(text || "").split(/(\s+)/);
     let i = 0;
     for (const p of parts) {
@@ -171,6 +185,7 @@
       w.style.animationDelay = Math.min(1600, i++ * K.num("desktop.guide.wordMs", 34)) + "ms";
       el.appendChild(w);
     }
+    if (follow) requestAnimationFrame(() => el.scrollTo({ top: el.scrollHeight, behavior: reduced ? "auto" : "smooth" }));
   }
   function setSteps(items) {
     const ol = $("steps");
@@ -194,7 +209,7 @@
 
   // ---- the ring and its label --------------------------------------------------
   function placeChip() {
-    if (!S.ring || !S.ring.caption) { chip.classList.remove("on"); return; }
+    if (!S.ring || !S.ring.caption || S.ring.tentative) { chip.classList.remove("on"); return; }
     const pad = K.num("desktop.guide.ringPad", 6);
     const [rx, ry, rw, rh] = S.ring.frame;
     const cw = chip.offsetWidth || 80, chh = chip.offsetHeight || 24;
@@ -234,6 +249,7 @@
   }
   function drawRing(t) {
     const R = S.ring; if (!R) return;
+    if (R.tentative) { drawHint(t, R); return; }
     const pad = K.num("desktop.guide.ringPad", 6);
     const k = Math.min(1, (t - R.at) / .32), e = 1 - Math.pow(1 - k, 3);
     const back = 1 + (1 - e) * .28 + Math.sin(Math.PI * k) * .04;
@@ -266,10 +282,36 @@
     }
     ctx.restore();
   }
+  /** The tentative ring: what their words so far seem to name, or the part
+   *  of the window a picture is being taken of. Drawn lightly — a thin
+   *  dotted line that breathes, no glow, no ripple, no thread and no label —
+   *  so a guess that changes with the next word never reads as an answer.
+   *  The answer's own ring lands in its place. */
+  function drawHint(t, R) {
+    const pad = K.num("desktop.guide.ringPad", 6);
+    const k = Math.min(1, (t - R.at) / .24), e = 1 - Math.pow(1 - k, 3);
+    const breath = reduced ? 1 : .62 + .38 * (.5 + .5 * Math.sin((t - R.at) * K.num("desktop.guide.hintPulse", 4.2) - Math.PI / 2));
+    const [fx0, fy0, fw, fh] = R.frame;
+    const cx = fx0 + fw / 2, cy = fy0 + fh / 2;
+    const grow = 1 + (1 - e) * .1 + (reduced ? 0 : (breath - .62) * .035);
+    const w = (fw + 2 * pad) * grow, h = (fh + 2 * pad) * grow;
+    const x = cx - w / 2, y = cy - h / 2, rad = Math.min(12, h / 2);
+    ctx.save();
+    ctx.globalAlpha = e * breath * (S.hideAt ? Math.max(0, 1 - (t - S.hideAt) / .25) : 1);
+    ctx.lineCap = "round";
+    // Round dots, each with an ink rim so they hold on a white page, the
+    // way the ring's own marching dots do; walking slowly round.
+    ctx.setLineDash([0, K.num("desktop.guide.hintGap", 6)]);
+    ctx.lineDashOffset = reduced ? 0 : -t * 9;
+    roundRect(ctx, x, y, w, h, rad);
+    ctx.strokeStyle = "rgba(15,13,11,.4)"; ctx.lineWidth = 3.8; ctx.stroke();
+    ctx.strokeStyle = K.color("desktop.guide.hint", "#E8A23C"); ctx.lineWidth = 2.6; ctx.stroke();
+    ctx.restore();
+  }
   /** The thread: dots from Blip's fingertip to the nearest edge of the ring. */
   function drawThread(t, rc) {
     const R = S.ring;
-    if (!R) return;
+    if (!R || R.tentative) return;
     // From Blip's finger; or, when the card sits above the ring and Blip
     // cannot reach past it, from the card's own bottom edge.
     let tip = blip.fingertip();
@@ -334,9 +376,11 @@
     drawRing(t);
     const rc = card.getBoundingClientRect();
     if (rc.width) {
-      const right = S.ring && (S.ring.frame[0] + S.ring.frame[2] / 2) > rc.left + rc.width * .62;
+      const right = S.ring && !S.ring.tentative && (S.ring.frame[0] + S.ring.frame[2] / 2) > rc.left + rc.width * .62;
       const ax = right ? rc.right - 54 : rc.left + 54;
-      if (S.ring) { const c = [S.ring.frame[0] + S.ring.frame[2] / 2, S.ring.frame[1] + S.ring.frame[3] / 2]; blip.lookAt(c); blip.pointAt(S.where === "above" ? null : c); }
+      if (S.state === "permission") { const y = $("once").getBoundingClientRect(); blip.lookAt([y.left + y.width / 2, y.top + y.height / 2]); blip.pointAt(null); }
+      // A tentative ring is looked at, not pointed at.
+      else if (S.ring) { const c = [S.ring.frame[0] + S.ring.frame[2] / 2, S.ring.frame[1] + S.ring.frame[3] / 2]; blip.lookAt(c); blip.pointAt(S.where === "above" || S.ring.tentative ? null : c); }
       else if (S.state === "confirm") { const y = $("yes").getBoundingClientRect(); blip.lookAt([y.left + y.width / 2, y.top + y.height / 2]); blip.pointAt(null); }
       else if (S.state === "thinking") { blip.lookAt([ax - 40, rc.top - 160]); blip.pointAt(null); }
       else { blip.lookAt(null); blip.pointAt(null); }
@@ -416,6 +460,7 @@
     $("app").textContent = m.app || "";
     $("heard").textContent = "";
     $("say").textContent = "";
+    $("badge").textContent = "";
     setSteps([]);
     S.risk = "confirm";
     setState(m.state || "listening", m.label);
@@ -431,8 +476,9 @@
     S.shown = false;
     blip.pose("hidden");
     S.hideAt = performance.now() / 1000;
-    // Blip ducks first, then the card goes.
-    setTimeout(() => { if (!S.shown) { card.classList.remove("on"); chip.classList.remove("on"); S.ring = null; } }, 160);
+    // Blip ducks first, then the card goes. (Its badge with it: emptied
+    // now, the header would jump while the card is still fading.)
+    setTimeout(() => { if (!S.shown) { card.classList.remove("on"); chip.classList.remove("on"); S.ring = null; $("badge").textContent = ""; } }, 160);
     bridge.mouse(false);
     wake();
   }
@@ -446,9 +492,12 @@
     heard: (m) => { $("heard").textContent = m.text ? "“" + m.text + "”" : ""; fit(); },
     // The words at once; the voice when it is ready (`voice`): the server's
     // audio, or the built-in voice with a locale.
+    // `append`: the next sentence of an answer that is still coming.
+    // An answer while the picture card is still up means it was settled
+    // without a click (no answer in time): the card answers, its buttons go.
     say: (m) => {
-      words($("say"), m.text);
-      if (S.state === "listening" || S.state === "thinking") setState("showing");
+      words($("say"), m.text, m.append === true);
+      if (S.state === "listening" || S.state === "thinking" || S.state === "permission") setState("showing");
       fit();
     },
     // Only for the card that is up. The main process drops a voice whose
@@ -463,14 +512,33 @@
       capCard();
       place(true);
     },
+    // `tentative`: a guess while they are still talking (it leaves the card
+    // listening), or the part of the window a picture is of. The same guess
+    // again leaves the ring as it is; an answer's own ring replaces it.
     point: (m) => {
       if (!Array.isArray(m.frame) || m.frame.length !== 4) return;
-      S.ring = { frame: m.frame.map(Number), caption: m.caption || "", at: performance.now() / 1000 };
+      const frame = m.frame.map(Number);
+      if (!frame.every(Number.isFinite)) return;
+      const tentative = m.tentative === true;
+      if (tentative && S.ring && S.ring.tentative && S.ring.frame.every((v, i) => Math.abs(v - frame[i]) < 1)) return;
+      S.ring = { frame, caption: tentative ? "" : m.caption || "", at: performance.now() / 1000, tentative };
       chip.textContent = S.ring.caption;
-      if (S.state === "listening" || S.state === "thinking") setState("showing");
+      if (!tentative && (S.state === "listening" || S.state === "thinking")) setState("showing");
       else blip.pose(poseFor());
       place(false);
       wake();
+    },
+    badge: (m) => { $("badge").textContent = m.text ? String(m.text).slice(0, 32) : ""; },
+    // May a picture go: once, always for this app, or not now.
+    permission: (m) => {
+      const app = String(m.app || "").trim();
+      $("permitText").textContent = String(m.text || "");
+      $("once").textContent = K.txt("desktop.guide.permitOnce", "Allow once");
+      $("always").textContent = app ? K.txt("desktop.guide.permitAlways", "Always for {app}", { app }) : K.txt("desktop.guide.permitAlwaysHere", "Always here");
+      $("always").title = $("always").textContent;
+      $("notnow").textContent = K.txt("desktop.guide.permitNo", "Not now");
+      setState("permission");
+      fit();
     },
     unpoint: () => { S.ring = null; chip.classList.remove("on"); blip.pose(poseFor()); place(false); },
     steps: (m) => { setSteps(m.items); fit(); },
@@ -489,6 +557,11 @@
 
   $("yes").addEventListener("click", () => { bridge.confirm(true); setState("doing"); fit(); });
   $("no").addEventListener("click", () => { bridge.confirm(false); });
+  // Whichever it is, the answer is on its way next: with the picture, or
+  // from the words alone.
+  for (const [id, choice] of [["once", "once"], ["always", "always"], ["notnow", "no"]]) {
+    $(id).addEventListener("click", () => { if (S.state !== "permission") return; bridge.permit(choice); setState("thinking"); fit(); });
+  }
   $("close").addEventListener("click", () => bridge.dismiss());
   card.addEventListener("mouseenter", () => bridge.mouse(true));
   card.addEventListener("mouseleave", () => bridge.mouse(false));
@@ -502,7 +575,7 @@
     let cb = () => {};
     return {
       onGuide: (f) => { cb = f; }, send: (m) => cb(m),
-      confirm: (y) => console.log("confirm", y), mouse: () => {}, spoken: () => {}, dismiss: () => console.log("dismiss"),
+      confirm: (y) => console.log("confirm", y), permit: (c) => console.log("permit", c), mouse: () => {}, spoken: () => {}, dismiss: () => console.log("dismiss"),
     };
   }
   if (DEMO) runDemo(params.get("demo"));
@@ -513,7 +586,8 @@
     mock.innerHTML = `<div class="bar"><i></i><i></i><i></i><b>Q3 launch — Keynote</b></div>
       <div class="tools"><span>Share</span><span id="m-export">Export</span><span class="primary">Play</span></div>
       <div class="side"><p class="on"># design</p><p># launch</p><p># general</p><p>Priya</p><p>Anthony</p></div>
-      <div class="page"><h2>Mockups, round two</h2><div class="ln" style="width:92%"></div><div class="ln" style="width:84%"></div><div class="ln" style="width:66%"></div></div>
+      <div class="page"><h2>Mockups, round two</h2><div class="ln" style="width:92%"></div><div class="ln" style="width:84%"></div><div class="ln" style="width:66%"></div>
+        <div class="fig" id="m-fig"><span>&int;<sub>0</sub><sup>1</sup> x<sup>2</sup> dx = &#8531;</span></div></div>
       <div class="composer" id="m-composer">Message #design<em id="m-send">Send</em></div>`;
     document.body.insertBefore(mock, fx);
     const send = (m) => bridge.send(m);
@@ -574,6 +648,34 @@
         send({ type: "heard", text: "where's save as?" });
         send({ type: "say", text: "Under File: hold Option and it turns into Save As." });
         send({ type: "point", frame: box("m-file"), caption: "File" });
+      },
+      // The instant layer: "where's ex…", and a guess ringed while they are
+      // still saying it. The card listens on where it was.
+      tentative: () => {
+        scenes.listening();
+        send({ type: "point", frame: box("m-export"), caption: "Export", tentative: true });
+      },
+      // The picture layer: may a picture of this go, for an app not yet allowed.
+      permission: () => {
+        const f = box("m-fig");
+        send({ type: "show", state: "thinking", app: "Keynote", anchor: { x: f[0] + f[2] - 60, y: f[1] + f[3] - 24 } });
+        send({ type: "heard", text: "explain this equation" });
+        send({ type: "permission", app: "Keynote", text: "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu." });
+      },
+      // …and the answer to it, a sentence at a time as the model writes,
+      // beside the picture it is about.
+      growing: () => {
+        send({ type: "show", state: "thinking", app: "Keynote" });
+        send({ type: "heard", text: "explain this equation" });
+        send({ type: "point", frame: box("m-fig"), caption: "Looking", tentative: true });
+        send({ type: "badge", text: "1 picture sent" });
+        const said = [
+          "It's the area under the curve y = x² from x = 0 to x = 1.",
+          "The integral of x² is x³/3.",
+          "At 1 that's 1/3, and at 0 it's 0, so the area is 1/3.",
+          "So the curve leaves a third of the unit square under it.",
+        ];
+        said.forEach((text, i) => setTimeout(() => send(i ? { type: "say", text, append: true } : { type: "say", text }), 400 + i * 900));
       },
       long: () => {
         send({ type: "show", state: "doing", app: "Finder" });

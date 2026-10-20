@@ -113,6 +113,148 @@ test("every action verb reaches the helper and resolves", async () => {
   } finally { d.stop(); }
 });
 
+// ---- look (v2 §A) ----------------------------------------------------------------
+test("look answers in the §A shape, with the contract's defaults sent", async () => {
+  const d = fakeDriver("normal");
+  try {
+    const l = await d.look();
+    assert.strictEqual(l.ok, true, JSON.stringify(l).slice(0, 200));
+    assert.strictEqual("id" in l, false, "the request id is the driver's, not the caller's");
+    assert.deepStrictEqual(l.window, { frame: [-1820, 50, 800, 600], title: "Fake window" });
+    assert.strictEqual(l.scale, "pixels");
+    assert.deepStrictEqual(l.lines, [
+      { text: "Export as PDF", frame: [-1800, 70, 94, 18] },
+      { text: "x\u00b2 + 1 = 0", frame: [-1700, 350, 120, 30] },
+    ]);
+    assert.deepStrictEqual(Object.keys(l.image).sort(), ["data", "height", "mime", "width"]);
+    assert.strictEqual(l.image.mime, "image/jpeg");
+    assert.ok(typeof l.image.data === "string" && l.image.data.length > 0);
+    assert.strictEqual(l.image.width, 800);
+    assert.strictEqual(typeof l.ms, "number");
+    assert.strictEqual(l.ocr, "ok", "the helper's OCR state rides along");
+    // { budgetMs = 1500, maxSide = 1600, quality = 0.82, ocr = true, image = true }
+    assert.deepStrictEqual(l.echo, { budgetMs: 1500, maxSide: 1600, quality: 0.82, ocr: true, image: true });
+  } finally { d.stop(); }
+});
+
+test("look's options are sent sane, and the budget always fits inside the call's timeout", async () => {
+  const d = fakeDriver("normal");
+  try {
+    let e = (await d.look({ budgetMs: 900, maxSide: 1024, quality: 0.5, ocr: false, image: false })).echo;
+    assert.deepStrictEqual(e, { budgetMs: 900, maxSide: 1024, quality: 0.5, ocr: false, image: false });
+    e = (await d.look({ budgetMs: 5, maxSide: 99999, quality: 82 })).echo;
+    assert.deepStrictEqual(e, { budgetMs: 100, maxSide: 4096, quality: 0.82, ocr: true, image: true }, "clamped; a percentage read as one");
+    e = (await d.look({ budgetMs: "soon", maxSide: -3, quality: "x" })).echo;
+    assert.deepStrictEqual(e, { budgetMs: 1500, maxSide: 64, quality: 0.82, ocr: true, image: true }, "junk falls back");
+    // A longer budget is honoured (the timeout grows with it)...
+    assert.strictEqual((await d.look({ budgetMs: 4000 })).echo.budgetMs, 4000);
+    // ...but an explicit timeout wins, and the budget is cut to fit inside it.
+    assert.strictEqual((await d.look({ budgetMs: 1500, timeoutMs: 1000 })).echo.budgetMs, 200);
+    assert.strictEqual((await d.look({ timeoutMs: 500 })).echo.budgetMs, 100);
+    assert.strictEqual((await d.look(null)).ok, true, "no options at all");
+  } finally { d.stop(); }
+  // The default timeout is the contract's 2500 ms.
+  const js = fs.readFileSync(path.join(__dirname, "uiaDriver.js"), "utf8");
+  assert.match(js, /lookTimeout: 2500/);
+});
+
+test("look has its own timeout, and a snapshot asked after it is not held behind it", async () => {
+  // The fake makes a look as the real helper does, on its own, answering it
+  // 400 ms later while it answers everything else at once.
+  const d = fakeDriver("slowlook", null, { actionTimeout: 150, snapshotTimeout: 150 });
+  try {
+    const order = [];
+    const look = d.look().then((r) => { order.push("look"); return r; });
+    const snap = d.snapshot({ max: 3 }).then((r) => { order.push("snapshot"); return r; });
+    const [l, s] = await Promise.all([look, snap]);
+    assert.strictEqual(s.ok, true, "the snapshot answered inside its 150 ms");
+    assert.strictEqual(l.ok, true, "the look outlived the action timeout on its own one");
+    assert.deepStrictEqual(order, ["snapshot", "look"]);
+    assert.strictEqual((await d.press("e1")).ok, true);
+  } finally { d.stop(); }
+});
+
+test("a look that never comes back resolves timeout within its own timeout", async () => {
+  const d = fakeDriver("hanglook", null, { lookTimeout: 500 });
+  try {
+    let t0 = Date.now();
+    assert.deepStrictEqual(await d.look({ timeoutMs: 300 }), { ok: false, error: "timeout" });
+    let took = Date.now() - t0;
+    assert.ok(took >= 280 && took < 1200, `explicit: ${took} ms`);
+    // Without one: the larger of lookTimeout and the budget plus the margin.
+    t0 = Date.now();
+    assert.deepStrictEqual(await d.look({ budgetMs: 100 }), { ok: false, error: "timeout" });
+    took = Date.now() - t0;
+    assert.ok(took >= 850 && took < 2000, `default: ${took} ms`);
+    // The helper is still answering everything else.
+    assert.strictEqual((await d.snapshot({ max: 2 })).ok, true);
+  } finally { d.stop(); }
+});
+
+test("a window-sized picture arrives whole across many reads", async () => {
+  const d = fakeDriver("biglook");
+  try {
+    const l = await d.look();
+    assert.strictEqual(l.ok, true);
+    assert.strictEqual(l.image.data.length, 2000000);
+    assert.strictEqual(l.lines.length, 2);
+  } finally { d.stop(); }
+});
+
+test("an answer read in small pieces, its newline arriving with the start of the next answer, is read whole and in order", async () => {
+  const { EventEmitter } = require("node:events");
+  const pieces = [];
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdout.setEncoding = () => {};
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => {};
+  child.kill = () => {};
+  child.stdin.write = (s) => {
+    const m = JSON.parse(s);
+    if (m.cmd === "ping") { setImmediate(() => child.stdout.emit("data", JSON.stringify({ id: m.id, ok: true }) + "\n")); return; }
+    if (m.cmd === "look") {
+      const look = JSON.stringify({ id: m.id, ok: true, window: { frame: [0, 0, 800, 600], title: "" }, scale: "pixels", lines: [],
+        image: { mime: "image/jpeg", data: "A".repeat(300000), width: 800, height: 600 }, ms: 1 });
+      // A stray line for nobody, started in the same piece as the look's newline.
+      const all = look + "\n" + JSON.stringify({ id: 999, ok: true }) + "\n";
+      for (let i = 0; i < all.length; i += 4096) pieces.push(all.slice(i, i + 4096));
+      setImmediate(function next() { if (pieces.length) { child.stdout.emit("data", pieces.shift()); setImmediate(next); } });
+    }
+  };
+  const d = createUiaDriver({ spawn: () => child, command: { cmd: "x", args: [] }, warmupMs: 1000 });
+  const l = await d.look({ timeoutMs: 3000 });
+  assert.strictEqual(l.ok, true);
+  assert.strictEqual(l.image.data.length, 300000);
+  d.stop();
+});
+
+test("a look answer that keeps to nothing is made to keep to the contract", async () => {
+  const d = fakeDriver("badlook");
+  try {
+    const l = await d.look();
+    assert.strictEqual(l.ok, true);
+    assert.strictEqual(l.window.title, "", "a title that is not a string is empty");
+    assert.strictEqual(l.scale, "pixels", "Windows answers in physical pixels, always");
+    assert.strictEqual(l.lines.length, 300, "at most 300 lines");
+    assert.ok(l.lines.every((x) => typeof x.text === "string" && x.text.trim() && x.text.length <= 120 && x.frame.length === 4));
+    assert.strictEqual(l.lines[0].text.slice(0, 7), "line 0 ", "the junk lines were dropped, the good ones kept in order");
+    assert.strictEqual(l.lines[0].conf, 0.5, "a confidence is kept when one is sent");
+    assert.strictEqual(l.image, null, "a picture with no data is none");
+    assert.strictEqual(l.ms, 0);
+  } finally { d.stop(); }
+  const nw = fakeDriver("nowindow");
+  try { assert.deepStrictEqual(await nw.look(), { ok: false, error: "no_window" }); } finally { nw.stop(); }
+  const nf = fakeDriver("noframe");
+  try { assert.deepStrictEqual(await nf.look(), { ok: false, error: "bad_answer" }, "no frame, nothing to measure against"); } finally { nf.stop(); }
+});
+
+test("look on a helper that cannot be spawned resolves unavailable", async () => {
+  const d = createUiaDriver({ spawn() { throw new Error("no such binary"); }, command: { cmd: "nope", args: [] }, warmupMs: 200 });
+  assert.deepStrictEqual(await d.look({ timeoutMs: 300 }), { ok: false, error: "unavailable" });
+  d.stop();
+});
+
 test("answers are matched by id even when they come back out of order", async () => {
   const d = fakeDriver("reorder");
   try {
@@ -181,7 +323,7 @@ test("a helper that cannot be spawned resolves unavailable, never throws", async
 });
 
 test("the module is the §1 API and start/stop are idempotent", () => {
-  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open"]) {
+  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look"]) {
     assert.strictEqual(typeof defaultExport[name], "function", `exports.${name}`);
   }
   // Idempotent and non-throwing even on a platform with no helper.
@@ -305,15 +447,42 @@ test("the helper is per-monitor DPI aware before UI Automation loads", () => {
 
 test("the helper's C# stays C# 5, which Windows PowerShell 5.1 compiles", () => {
   const ps = PS_TEXT();
-  const m = ps.match(/Add-Type -TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/);
-  assert.ok(m, "the C# block");
-  const cs = m[1];
-  assert.doesNotMatch(cs, /\$"/, "no interpolated strings");
-  assert.doesNotMatch(cs, /=>/, "no expression-bodied members or lambdas");
-  assert.doesNotMatch(cs, /\bout var\b/, "no out var");
-  assert.doesNotMatch(cs, /\?\./, "no null-conditional");
-  assert.doesNotMatch(cs, /\bnameof\(/, "no nameof");
-  assert.doesNotMatch(cs, /\(\s*\w+\s*,\s*\w+\s*\)\s+\w+\s*\(/, "no tuple returns");
+  // Every block: TzAgent's, and the look's own (TzShot).
+  const blocks = [...ps.matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]);
+  assert.strictEqual(blocks.length, 2, "two C# blocks");
+  assert.ok(blocks.some((cs) => /class TzAgent\b/.test(cs)) && blocks.some((cs) => /class TzShot\b/.test(cs)));
+  for (const cs of blocks) {
+    assert.doesNotMatch(cs, /\$"/, "no interpolated strings");
+    assert.doesNotMatch(cs, /=>/, "no expression-bodied members or lambdas");
+    assert.doesNotMatch(cs, /\bout var\b/, "no out var");
+    assert.doesNotMatch(cs, /\?\./, "no null-conditional");
+    assert.doesNotMatch(cs, /\bnameof\(/, "no nameof");
+    assert.doesNotMatch(cs, /\(\s*\w+\s*,\s*\w+\s*\)\s+\w+\s*\(/, "no tuple returns");
+    assert.doesNotMatch(cs, /\{\s*get;[^}]*\}\s*=/, "no auto-property initializers");
+    assert.doesNotMatch(cs, /\bcatch\s*\([^)]*\)\s*when\b/, "no exception filters");
+    // C# reads U+2028/U+2029 as line breaks, so one typed into a char
+    // literal splits it; they must be written as escapes.
+    assert.doesNotMatch(cs, /[\u2028\u2029]/, "no raw line separators");
+  }
+});
+
+test("no two variables in the helper differ only by case", () => {
+  // PowerShell's names ignore case: a local $vp IS the script's $VP (the
+  // ValuePattern type), and once assigned, $VP::Pattern reads as null. That
+  // broke setValue and the selection before, and a look worker's $k once
+  // overwrote its $K. So every spelling of a name must be the one spelling.
+  const code = PS_TEXT().replace(/@'\r?\n[\s\S]*?\r?\n'@/g, "").replace(/#.*$/gm, "");
+  const seen = new Map();
+  for (const v of code.match(/\$(?:script:)?[A-Za-z_][A-Za-z0-9_]*/g) || []) {
+    const k = v.toLowerCase();
+    if (!seen.has(k)) seen.set(k, new Set());
+    seen.get(k).add(v);
+  }
+  const clashes = [...seen.values()].filter((s) => s.size > 1).map((s) => [...s].join("/"));
+  assert.deepStrictEqual(clashes, []);
+  // The two that clashed, fixed where they were.
+  assert.match(psFunction(PS_TEXT(), "TzSetValue"), /TryGetCurrentPattern\(\$VP::Pattern, \[ref\]\$valp\)/);
+  assert.match(psFunction(PS_TEXT(), "TzSnapshot"), /TryGetCurrentPattern\(\$VP::Pattern, \[ref\]\$valp\)/);
 });
 
 test("the walk has a time budget and comes back truncated when it runs out", () => {
@@ -451,6 +620,169 @@ test("OPEN launches only an app by its name: paths, shares, URLs and schemes are
   assert.ok(lnk > 0 && lnk < store && store < appPaths && appPaths < onPath && onPath < loose, "lookup order");
   const notApp = new RegExp(ps.match(/\$OPEN_NOT_APP = '\(\?i\)([^']+)'/)[1], "i");
   assert.ok(notApp.test("Uninstall Slack") && notApp.test("Slack Readme") && !notApp.test("Slack"));
+});
+
+test("look: the command starts a worker off the reader loop, which answers its own line", () => {
+  const ps = PS_TEXT();
+  // The command: answered here only when there is nothing to look at.
+  assert.match(ps, /'look' \{[\s\S]*?\$r = TzLookBegin \$id \$msg\s*if \(\$null -ne \$r\) \{ TzReply \$r \}/);
+  const begin = psFunction(ps, "TzLookBegin");
+  assert.match(begin, /error = 'no_capture'/);
+  assert.match(begin, /error = 'no_window'/);
+  assert.match(begin, /\[TzShot\]::Frame\(\$h\)/);
+  // The title as the snapshot gives it, capped with its end kept; the whole
+  // of it goes to the worker only as the key it keeps out of the lines.
+  assert.match(begin, /\$whole = TzClean \(\[TzAgent\]::WindowTitle\(\$h\)\) \$TITLE_READ/);
+  assert.match(begin, /\$title = TzTitleCap \$whole/);
+  assert.match(begin, /\$titleKey = \[TzShot\]::Key\(\$whole\)/);
+  // The budget kept sane, and the worker run on the pool (inline only when
+  // the pool would not open).
+  assert.match(begin, /\$msg\.budgetMs/);
+  assert.match(begin, /if \(\$budget -lt 100\) \{ \$budget = 100 \} elseif \(\$budget -gt 10000\) \{ \$budget = 10000 \}/);
+  assert.match(begin, /TzLookRun \$argv/);
+  const run = psFunction(ps, "TzLookRun");
+  assert.match(run, /\$psh\.RunspacePool = \$script:lookPool/);
+  assert.match(run, /BeginInvoke\(\)/);
+  assert.doesNotMatch(run, /EndInvoke|\.Wait\(/, "never waits for the worker");
+  // The pool: opened at start, MTA, and the engine warmed in it.
+  const pool = psFunction(ps, "TzOpenLookPool");
+  assert.match(pool, /CreateRunspacePool\(1, 2,/);
+  assert.match(pool, /ApartmentState\]::MTA/);
+  assert.match(pool, /\$pool\.Open\(\)/);
+  assert.ok(ps.indexOf("\nTzLookWarm\n") > 0 && ps.indexOf("\nTzLookWarm\n") < ps.indexOf("while ($true)"), "warmed before the loop");
+  assert.match(psFunction(ps, "TzLookReap"), /EndInvoke[\s\S]*Dispose\(\)/);
+  // One whole line under the console writer's own lock, so the worker's
+  // answer and the loop's never run into one line.
+  assert.match(ps, /lock \(o\) \{ o\.WriteLine\(line\); o\.Flush\(\); \}/);
+});
+
+test("look: the worker's waits are bounded by the budget, and it always answers", () => {
+  const ps = PS_TEXT();
+  const at = ps.indexOf("$TZ_LOOK_WORKER = {");
+  const worker = ps.slice(at, ps.indexOf("\nfunction ", at));
+  assert.ok(at > 0, "the worker");
+  // Awaited only as long as is left; never frontApp's fixed 8 s.
+  assert.match(worker, /function TzAwaitFor\(\$op, \$t, \$ms\)[\s\S]*?if \(-not \$task\.Wait\(\[int\]\[math\]::Max\(1, \$ms\)\)\) \{ return \$null \}/);
+  assert.doesNotMatch(worker, /Wait\(8000\)/);
+  const waits = worker.match(/\.Wait\(/g) || [];
+  assert.strictEqual(waits.length, 2, "the await helper's and the OCR's, both bounded");
+  assert.match(worker, /\$task\.Wait\(\[int\]\[math\]::Max\(1, \$budget - \$reserve - \$sw\.ElapsedMilliseconds\)\)/);
+  assert.match(worker, /if \(\$sw\.ElapsedMilliseconds -ge \$budget\) \{ \$ocr = 'partial'; break \}/);
+  // OCR from an in-memory stream: nothing of the screen is written to disk.
+  assert.match(worker, /\$shot::Bmp\(\$src\)/);
+  assert.match(worker, /AsRandomAccessStream\(\$mem\)/);
+  assert.match(worker, /CreateAsync\(\$ras\)/);
+  assert.match(worker, /GetSoftwareBitmapAsync\(\)/);
+  assert.match(worker, /RecognizeAsync\(\$sbm\)/);
+  assert.doesNotMatch(ps, /GetTempFileName|GetFileFromPathAsync|\.Save\("|\$env:TEMP/, "no file anywhere");
+  // The engine for the user's languages, else the first Windows has.
+  assert.match(worker, /TryCreateFromUserProfileLanguages\(\)/);
+  assert.match(worker, /AvailableRecognizerLanguages/);
+  assert.match(worker, /MaxImageDimension/);
+  // Lines: the union of the words' boxes, moved to the screen, at most 300.
+  assert.match(worker, /\$LINES_MAX = 300/);
+  assert.match(worker, /foreach \(\$wd in \$ln\.Words\)[\s\S]*?\$wd\.BoundingRect/);
+  assert.match(worker, /\$shot::Line\(\$ln\.Text, \$x0, \$y0, \$x1, \$y1, \$up, \$frame\[0\], \$frame\[1\]\)/);
+  // Every way out answers: a capture that fails, and anything else.
+  assert.match(worker, /\$shot::Fail\(\$idJson, 'capture_failed'\)/);
+  assert.match(worker, /finally \{\s*if \(-not \$sent\) \{ try \{ \$shot::Send\(\$shot::Fail\(\$idJson, 'exception'\)\) \} catch \{\} \}/);
+});
+
+test("look: the worker is handed exactly what it takes, in its order", () => {
+  // The worker runs in a runspace of its own and gets its arguments by
+  // position (AddArgument), so a name added to one list and not the other, or
+  // in another place, shifts every later one into the wrong parameter with no
+  // error at all.
+  const ps = PS_TEXT();
+  const at = ps.indexOf("$TZ_LOOK_WORKER = {");
+  const params = /param\(([^)]*)\)/.exec(ps.slice(at))[1].split(",").map((s) => s.trim());
+  const argv = /\$argv = @\(([^)]*)\)/.exec(psFunction(ps, "TzLookBegin"))[1].split(",").map((s) => s.trim());
+  assert.strictEqual(argv.length, params.length, `${argv.length} arguments for ${params.length} parameters`);
+  assert.deepStrictEqual(argv.slice(0, 2), ["$script:lookKit", "$false"], "the kit, and not the warm-up");
+  assert.deepStrictEqual(params.slice(0, 2), ["$kit", "$warm"]);
+  assert.deepStrictEqual(argv.slice(2), params.slice(2), "the rest by the same names, in the same order");
+  // The warm-up passes the first two only.
+  assert.match(psFunction(ps, "TzLookWarm"), /TzLookRun @\(\$script:lookKit, \$true\)/);
+});
+
+test("look: the window's title is kept out of the lines, against the whole of it", () => {
+  // The device drops a line that is its (200-character) title; the helper
+  // has the whole title and also catches a long one, and one read together
+  // with what is beside it in the title bar.
+  const ps = PS_TEXT();
+  const at = ps.indexOf("$TZ_LOOK_WORKER = {");
+  const worker = ps.slice(at, ps.indexOf("\nfunction ", at));
+  const skip = worker.indexOf("if ($shot::IsTitle($ln.Text, $titleKey)) { continue }");
+  assert.ok(skip > 0, "a title line is skipped");
+  assert.ok(skip < worker.indexOf("$shot::Line($ln.Text"), "before it becomes a line");
+  const cs = [...ps.matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).find((c) => /class TzShot\b/.test(c));
+  const key = cs.slice(cs.indexOf("public static string Key("), cs.indexOf("public static bool IsTitle("));
+  assert.match(key, /if \(!char\.IsWhiteSpace\(c\)\) sb\.Append\(char\.ToLowerInvariant\(c\)\)/, "case and spaces do not count");
+  assert.match(key, /\\u2026/, "nor a trailing ellipsis");
+  const is = cs.slice(cs.indexOf("public static bool IsTitle("), cs.indexOf("static string N("));
+  assert.match(is, /if \(k == titleKey\) return true;/, "the title");
+  assert.match(is, /k\.Length >= 8 && titleKey\.IndexOf\(k, StringComparison\.Ordinal\) >= 0/, "a piece of it");
+  assert.match(is, /titleKey\.Length >= 8 && k\.IndexOf\(titleKey, StringComparison\.Ordinal\) >= 0/, "a line with it inside");
+});
+
+test("look: the worker calls no cmdlet", () => {
+  // A pool runspace starts with the core commands only; anything else
+  // (New-Object, ConvertTo-Json) is module-loaded on its first look.
+  const ps = PS_TEXT();
+  const at = ps.indexOf("$TZ_LOOK_WORKER = {");
+  const code = ps.slice(at, ps.indexOf("\nfunction ", at)).replace(/#.*$/gm, "");
+  assert.deepStrictEqual(code.match(/\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b/g) || [], []);
+});
+
+test("look: the C# captures the window as drawn, and encodes with a quality", () => {
+  const ps = PS_TEXT();
+  const cs = [...ps.matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).find((c) => /class TzShot\b/.test(c));
+  assert.ok(cs, "TzShot");
+  // Its own Add-Type, so a System.Drawing that will not load costs only look.
+  assert.match(ps, /try \{\s*Add-Type -ReferencedAssemblies System\.Drawing -ErrorAction Stop -TypeDefinition @'/);
+  assert.match(ps, /\$script:lookReady = \$true\s*\} catch \{\}/);
+  // The visible frame (DWM), clipped to the desktop; the screen's pixels.
+  assert.match(cs, /DWMWA_EXTENDED_FRAME_BOUNDS = 9/);
+  assert.match(cs, /GetWindowRect\(h, out r\)/, "the plain rect when DWM has none");
+  assert.match(cs, /SM_CXVIRTUALSCREEN/);
+  assert.match(cs, /IsIconic\(h\)/);
+  assert.match(cs, /CopyFromScreen\(f\[0\], f\[1\], 0, 0, new Size\(f\[2\], f\[3\]\), CopyPixelOperation\.SourceCopy\)/);
+  // JPEG with a Quality parameter; long side brought down to maxSide.
+  assert.match(cs, /System\.Drawing\.Imaging\.Encoder\.Quality/);
+  assert.match(cs, /ImageFormat\.Jpeg\.Guid/);
+  assert.match(cs, /if \(maxSide <= 0 \|\| longest <= maxSide\) return src;/);
+  assert.match(cs, /InterpolationMode\.HighQualityBicubic/);
+  // Lines at most 120 characters; the answer built as one JSON line.
+  assert.match(cs, /const int LINE_MAX = 120;/);
+  assert.match(cs, /\\"scale\\":\\"pixels\\"/);
+  assert.match(cs, /\\"mime\\":\\"image\/jpeg\\"/);
+  // The ping says whether look is ready, for the logs.
+  assert.match(ps, /look = \[bool\]\$script:lookReady; ocr = \(\$null -ne \$script:winrt\)/);
+});
+
+// The look's answer is put together by TzShot.Json rather than ConvertTo-Json,
+// so its escaper is the one thing between OCR'd text and a line the driver
+// cannot parse. C# cannot run here; its switch is read from the script and
+// played back, and what it makes goes through a real JSON parser.
+test("look: TzShot's JSON escaper, as written, round-trips through a real parser", () => {
+  const cs = [...PS_TEXT().matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).find((c) => /class TzShot\b/.test(c));
+  const body = cs.slice(cs.indexOf("public static string Json("), cs.indexOf("static readonly Regex Space"));
+  // case '<char>': sb.Append("<escape>"); break;  (C#'s \" \\ \n \r \t read as JSON's)
+  const lit = (s) => (s === '"' ? '"' : JSON.parse(`"${s}"`));
+  const cases = new Map();
+  for (const m of body.matchAll(/case '((?:\\.|[^'\\]))': sb\.Append\("((?:\\.|[^"\\])*)"\); break;/g)) cases.set(lit(m[1]), lit(m[2]));
+  assert.deepStrictEqual([...cases.keys()].sort(), ["\t", "\n", "\r", '"', "\\"].sort(), "the switch's cases");
+  // Everything else below a space, and the two separators JavaScript once
+  // took for line ends, as \uXXXX; the rest as itself.
+  assert.match(body, /if \(c < ' ' \|\| c == '\\u2028' \|\| c == '\\u2029'\) sb\.Append\("\\\\u"\)\.Append\(\(\(int\)c\)\.ToString\("x4"/);
+  const esc = (s) => '"' + [...s].map((c) => cases.get(c) ??
+    (c < " " || c === "\u2028" || c === "\u2029" ? "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0") : c)).join("") + '"';
+  for (const s of ['say "hi"', "C:\\Users\\me", "two\nlines\r\n", "tab\there", "\u0001\u001f\u007f", "x\u2028y\u2029z",
+    "x² + √2 ≤ π", "∫ f(x) dx", "日本語のテキスト", "😀 emoji", "</script>", ""]) {
+    const out = esc(s);
+    assert.ok(!/[\n\r]/.test(out), `one line for ${JSON.stringify(s)}`);
+    assert.strictEqual(JSON.parse(out), s);
+  }
 });
 
 test("the helper ends cleanly as command text", () => {
