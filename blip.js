@@ -62,6 +62,7 @@
     let live = false;
     let last = 0;
     let buf = null, cellPx = 0;
+    let on = null;            // which cells the figure touches, this frame (kept, not made anew each frame)
     let anchor = [0, 0];
     let tip = null;
 
@@ -184,7 +185,9 @@
       c.strokeStyle = pale; c.lineWidth = Math.max(1, .011 * H); stalks();
       // The ball: amber while the microphone is open.
       const br = .03 * H;
-      if (live) { c.fillStyle = o.live; c.globalAlpha = .25; c.beginPath(); c.arc(kx, ky, br * 2.1, 0, TAU); c.fill(); c.globalAlpha = 1; }
+      // (At a quarter of whatever the caller draws it at: Blip fades with the
+      // card when the card folds away.)
+      if (live) { const a0 = c.globalAlpha; c.fillStyle = o.live; c.globalAlpha = a0 * .25; c.beginPath(); c.arc(kx, ky, br * 2.1, 0, TAU); c.fill(); c.globalAlpha = a0; }
       c.fillStyle = ink; c.beginPath(); c.arc(kx, ky, br + .012 * H, 0, TAU); c.fill();
       c.fillStyle = live ? o.live : pale; c.beginPath(); c.arc(kx, ky, br, 0, TAU); c.fill();
       c.fillStyle = ink; c.beginPath(); c.arc(ex, ey, er + .016 * H, 0, TAU); c.fill();
@@ -217,12 +220,17 @@
       c.restore();
     }
 
-    /** One frame. `ax, ay`: the middle of its stretch of the card's top edge. */
-    function draw(ctx, ax, ay, t, dpr) {
+    /** The face moves toward its pose by the time since the last frame. */
+    function step(t) {
       const dt = Math.min(.1, Math.max(0, t - last)); last = t;
       const goal = POSES[poseName];
       const rate = 1 - Math.pow(.0009, dt);   // ~120 ms to most of the way
-      for (const k of Object.keys(cur)) cur[k] += (goal[k] - cur[k]) * rate;
+      for (const k in cur) cur[k] += (goal[k] - cur[k]) * rate;
+    }
+
+    /** One frame. `ax, ay`: the middle of its stretch of the card's top edge. */
+    function draw(ctx, ax, ay, t, dpr) {
+      step(t);
       anchor = [ax, ay];
       if (cur.rise < .02) { tip = null; return; }
 
@@ -243,7 +251,7 @@
 
       const ox = ax - W / 2, oy = ay - EDGE * H;
       // The sticker: every cell the figure touches, grown by one, in ink.
-      const on = new Uint8Array(bw * bh);
+      if (!on || on.length !== bw * bh) on = new Uint8Array(bw * bh);
       for (let i = 0; i < bw * bh; i++) on[i] = src[i * 4 + 3] > 60 ? 1 : 0;
       ctx.save();
       ctx.beginPath(); ctx.rect(ox - cell * 2, oy - cell * 2, W + cell * 4, EDGE * H + cell * 2); ctx.clip();
@@ -282,6 +290,10 @@
 
     return {
       pose, size, draw,
+      // Not drawn this frame (the card it stands on has gone): it still
+      // ducks, so it is not left half up for the next card, and shown()
+      // can say when it is down.
+      step,
       lookAt(p) { look = p ? [p[0], p[1]] : null; },
       pointAt(p) { target = p ? [p[0], p[1]] : null; },
       speaking(on) { speaking = !!on; },

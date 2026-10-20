@@ -191,6 +191,31 @@ look, and the same step is asked again with the picture. On a Mac the
 pixels need the **Screen Recording** permission; without it Ask still works
 from the accessibility text alone.
 
+**Out of the pill.** Ask now comes out of the pill, the way dictation does
+but upward: the pill's halves part a little, a thread rises out of the gap,
+and the card blooms at its end. The card stays tied to the pill on that
+thread while it is up: amber and plucked by the voice while it listens,
+dots with a light running up them while it thinks, still dots once it
+answers. Blip still points across the screen from the card, so it reads
+as one line: pill, card, the thing. When it is over, the card folds back
+into the thread, the thread is pulled down into the pill and the halves
+click shut. A ring near the pill slides the card aside along the bottom.
+With the pill switched off, the thread rises from a small dot in the same
+place. `desktop.guide.dock` off puts the card back by the cursor.
+
+**It draws.** While it explains, Ask can mark up the screen like a
+teacher's pen: a circle round the right angle, an arrow to the long side
+with "c, what we want" in handwriting, the formula underlined, the places
+to click numbered 1, 2, 3 to match the card's steps. Marks are drawn
+stroke by stroke, amber with an ink edge, with labels in Caveat on small
+ink chips that keep off the card. On a picture they land on what the model
+saw (it gives places in the picture; the device maps them through the
+crop); otherwise on the buttons and lines it read. They go before Ask acts
+on the screen, and with the card. The server checks every mark (ids it
+was shown, picture places only with a picture, at most 12 a step);
+`desktop.agent.draw` turns them off. Nothing new leaves the machine for
+them.
+
 ### 0.3.13 — said with text selected, it rewrites the selection
 
 Select a paragraph, say "make this bullet points" (or "shorter", "more

@@ -17,7 +17,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  ocrElements, pictureRegion, readEvents, makePost, SCREEN_CHARS, TEXT,
+  ocrElements, pictureRegion, resolveMark, readEvents, makePost, SCREEN_CHARS, TEXT,
 } = require("./agent.js");
 
 // ---- fixtures ---------------------------------------------------------------
@@ -2243,4 +2243,390 @@ test("makePost: a 401 with a picture sends the picture again", async () => {
   await collect(post(REQ, null, undefined, { mime: "image/jpeg", data: Buffer.from("j") }));
   assert.strictEqual(fetch.calls.length, 2);
   assert.ok(fetch.calls[1].init.body.get("image"));
+});
+
+// ---- marks: the answer draws on the screen ------------------------------------------
+
+/** A guide that can draw: the v3 one. The plain fakeGuide is an older guide,
+ *  with neither draw nor clear. */
+function inkGuide(confirm) {
+  const g = fakeGuide(confirm);
+  for (const m of ["draw", "clear"]) g[m] = (...args) => { g.calls.push([m, ...args]); };
+  return g;
+}
+/** The picture's region in the picture tests: CHART, under the pointer. */
+const REGION = [250, 150, 400, 300];
+const FRAMES = new Map([["e1", [700, 20, 80, 30]], ["o1", [300, 200, 200, 20]]]);
+
+test("resolveMark: an id is its element's frame, a line read off the window's included; an id not on this screen drops the mark", () => {
+  assert.deepStrictEqual(resolveMark({ t: "draw", kind: "box", target: { id: "e1" }, text: "Export" }, FRAMES, null), { kind: "box", frame: [700, 20, 80, 30], text: "Export" });
+  assert.deepStrictEqual(resolveMark({ kind: "underline", target: { id: "o1" } }, FRAMES, null), { kind: "underline", frame: [300, 200, 200, 20] });
+  assert.strictEqual(resolveMark({ kind: "circle", target: { id: "e9" } }, FRAMES, REGION), null);
+  // A copy: whatever the guide's side does with it, the run's map is untouched.
+  resolveMark({ kind: "box", target: { id: "e1" } }, FRAMES, null).frame[0] = 0;
+  assert.deepStrictEqual(FRAMES.get("e1"), [700, 20, 80, 30]);
+});
+
+test("resolveMark: a place in the picture goes through the region it was cropped from, and stays inside it", () => {
+  // X = fx + x/1000·fw, Y = fy + y/1000·fh.
+  assert.deepStrictEqual(resolveMark({ kind: "label", target: { pt: [500, 500] }, text: "here" }, FRAMES, REGION), { kind: "label", at: [450, 300], text: "here" });
+  assert.deepStrictEqual(resolveMark({ kind: "circle", target: { box: [100, 200, 300, 400] } }, FRAMES, REGION), { kind: "circle", frame: [290, 210, 120, 120] });
+  assert.deepStrictEqual(resolveMark({ kind: "number", target: { pt: [0, 1000] }, n: 2 }, FRAMES, REGION), { kind: "number", at: [250, 450], n: 2 });
+  assert.deepStrictEqual(resolveMark({ kind: "label", target: { pt: [-50, 2000] }, text: "x" }, FRAMES, REGION), { kind: "label", at: [250, 450], text: "x" });
+  assert.deepStrictEqual(resolveMark({ kind: "box", target: { box: [900, 900, 500, 500] } }, FRAMES, REGION), { kind: "box", frame: [610, 420, 40, 30] });
+  assert.strictEqual(resolveMark({ kind: "box", target: { box: [1000, 0, 50, 50] } }, FRAMES, REGION), null, "nothing of it inside");
+  // No picture sent on the run: a place in one means nothing.
+  for (const target of [{ pt: [500, 500] }, { box: [1, 2, 30, 40] }]) {
+    assert.strictEqual(resolveMark({ kind: "circle", target }, FRAMES, null), null);
+    assert.strictEqual(resolveMark({ kind: "circle", target }, FRAMES, [0, 0, 0, 0]), null);
+  }
+});
+
+test("resolveMark: a box, circle, underline or highlight at a place goes around a small square on it", () => {
+  // 4% of the region's shorter side (300 → 12), centred on (450, 300).
+  for (const kind of ["box", "circle", "underline", "highlight"]) {
+    assert.deepStrictEqual(resolveMark({ kind, target: { pt: [500, 500] } }, FRAMES, REGION), { kind, frame: [444, 294, 12, 12] });
+  }
+  // Never smaller than 8, however small the picture.
+  assert.deepStrictEqual(resolveMark({ kind: "circle", target: { pt: [500, 500] } }, FRAMES, [0, 0, 100, 50]), { kind: "circle", frame: [46, 21, 8, 8] });
+});
+
+test("resolveMark: an arrow's two ends, a path's points, a number's numeral, a label's words", () => {
+  assert.deepStrictEqual(resolveMark({ kind: "arrow", from: { id: "o1" }, to: { pt: [500, 0] }, text: "this one" }, FRAMES, REGION),
+    { kind: "arrow", from: [300, 200, 200, 20], to: [450, 150], text: "this one" });
+  assert.strictEqual(resolveMark({ kind: "arrow", from: { id: "o1" }, to: { id: "e9" } }, FRAMES, REGION), null);
+  assert.strictEqual(resolveMark({ kind: "arrow", from: { id: "o1" } }, FRAMES, REGION), null);
+  assert.deepStrictEqual(resolveMark({ kind: "path", points: [[0, 0], [1000, 0], [500, 1000]], closed: true }, FRAMES, REGION),
+    { kind: "path", points: [[250, 150], [650, 150], [450, 450]], closed: true });
+  assert.deepStrictEqual(resolveMark({ kind: "path", points: [[0, 0], [1000, 1000]], closed: "yes" }, FRAMES, REGION), { kind: "path", points: [[250, 150], [650, 450]] });
+  assert.strictEqual(resolveMark({ kind: "path", points: [[0, 0]] }, FRAMES, REGION), null);
+  assert.strictEqual(resolveMark({ kind: "path", points: [[0, 0], [1, 1]] }, FRAMES, null), null, "a path is only ever in a picture");
+  assert.strictEqual(resolveMark({ kind: "path", points: Array.from({ length: 33 }, (_, i) => [i, i]) }, FRAMES, REGION), null);
+  assert.strictEqual(resolveMark({ kind: "path", points: [[0, 0], [1, "x"]] }, FRAMES, REGION), null);
+  assert.deepStrictEqual(resolveMark({ kind: "number", target: { id: "e1" }, n: 3 }, FRAMES, null), { kind: "number", frame: [700, 20, 80, 30], n: 3 });
+  for (const n of [0, 10, 2.5, "2", undefined]) assert.strictEqual(resolveMark({ kind: "number", target: { id: "e1" }, n }, FRAMES, null), null, String(n));
+  assert.strictEqual(resolveMark({ kind: "label", target: { id: "e1" } }, FRAMES, null), null, "a label is its words");
+  assert.strictEqual(resolveMark({ kind: "label", target: { id: "e1" }, text: " \u0007 " }, FRAMES, null), null);
+  const long = resolveMark({ kind: "circle", target: { id: "e1" }, text: "two\nlines and " + "x".repeat(60) }, FRAMES, null);
+  assert.ok(!/\n/.test(long.text) && long.text.length === 48 && long.text.endsWith("…"), long.text);
+  for (const kind of ["blob", "clear", undefined]) assert.strictEqual(resolveMark({ kind, target: { id: "e1" } }, FRAMES, REGION), null);
+  assert.strictEqual(resolveMark(null, FRAMES, REGION), null);
+});
+
+test("begin takes the last answer's marks away first, before it shows, and even when it refuses", () => {
+  const r = rig({ guide: inkGuide() });
+  r.agent.begin({ app: "Slack" });
+  assert.deepStrictEqual(r.guide.calls.slice(0, 2).map((c) => c[0]), ["clear", "show"]);
+  r.agent.cancel("test");
+  const refused = rig({ guide: inkGuide() });
+  refused.agent.begin({ app: "Slack", privateField: true });
+  assert.deepStrictEqual(refused.guide.calls.map((c) => c[0]), ["clear", "error"]);
+});
+
+test("a show run's marks reach the guide as they come, among its sentences, on this screen's frames; what cannot be placed is dropped", async () => {
+  const r = rig({
+    guide: inkGuide(),
+    look: LOOK,
+    scripts: [[
+      heardShow("how do I export the revenue?"),
+      { t: "say", text: "Select the revenue, then press Export." },
+      { t: "draw", kind: "number", target: { id: "o1" }, n: 1 },
+      { t: "draw", kind: "number", target: { id: "e1" }, n: 2, text: "Export" },
+      { t: "draw", kind: "circle", target: { id: "e42" } },
+      { t: "draw", kind: "circle", target: { pt: [500, 500] } },
+      { t: "say", text: "It saves a copy.", append: true },
+      { t: "draw", kind: "arrow", from: { id: "o1" }, to: { id: "e1" } },
+      { t: "done" },
+    ]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  const seq = r.guide.calls.filter((c) => ["say", "draw", "clear"].includes(c[0])).map((c) => (c[0] === "say" ? ["say", c[1]] : c));
+  assert.deepStrictEqual(seq, [
+    ["clear"],
+    ["say", "Select the revenue, then press Export."],
+    ["draw", { kind: "number", frame: [300, 200, 200, 20], n: 1 }],
+    ["draw", { kind: "number", frame: [700, 20, 80, 30], n: 2, text: "Export" }],
+    ["say", "It saves a copy."],
+    ["draw", { kind: "arrow", from: [300, 200, 200, 20], to: [700, 20, 80, 30] }],
+  ], "an id not on the screen, and a place in a picture never sent, are not drawn");
+  assert.strictEqual(r.logs.filter((l) => /a circle dropped: not on this screen/.test(l)).length, 2);
+  // Done: the marks stay up with the card, until it hides.
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+  await sleep(15);
+  assert.deepStrictEqual(r.guide.calls.at(-1), ["hide"]);
+  assert.strictEqual(r.guide.of("clear").length, 1);
+});
+
+test("before an action the marks go, after its yes and before it runs; the next step draws on the screen it finds", async () => {
+  const guide = inkGuide(true);
+  const DIALOG = snap([EXPORT, COMPOSER, SEND, HEADING, { id: "e5", role: "button", label: "Export as PDF", frame: [300, 250, 120, 30] }], { focused: "e5" });
+  const r = rig({
+    guide,
+    snaps: [SLACK, DIALOG],
+    results: { press: () => { guide.calls.push(["pressed"]); return { ok: true }; } },
+    scripts: [
+      [heardDo("export this"), { t: "say", text: "Export is here." }, { t: "draw", kind: "number", target: { id: "e1" }, n: 1 },
+        press("e1", { risk: "confirm", confirm: "Export it?" })],
+      [{ t: "draw", kind: "circle", target: { id: "e5" } }, { t: "done" }],
+    ],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  const seq = guide.calls.map((c) => c[0]).filter((m) => ["draw", "clear", "point", "confirm", "pressed"].includes(m));
+  assert.deepStrictEqual(seq, ["clear", "draw", "point", "confirm", "clear", "pressed", "draw"]);
+  assert.deepStrictEqual(guide.of("draw").map((c) => c[1]), [
+    { kind: "number", frame: [700, 20, 80, 30], n: 1 },
+    { kind: "circle", frame: [300, 250, 120, 30] },
+  ]);
+});
+
+test("an action declined changes nothing, so its marks stay; an action with no marks up sends no clear", async () => {
+  const no = rig({ guide: inkGuide(false), scripts: [[heardDo("send it"), { t: "draw", kind: "circle", target: { id: "e3" } }, press("e3", { risk: "confirm" })]] });
+  no.agent.begin({ app: "Slack" });
+  await no.agent.heard(AUDIO);
+  assert.strictEqual(no.guide.of("draw").length, 1);
+  assert.deepStrictEqual(no.guide.of("clear"), [["clear"]], "only begin's");
+  assert.deepStrictEqual(no.guide.of("state").at(-1), ["state", "done", TEXT.declined]);
+
+  const bare = rig({ guide: inkGuide(), snaps: [SLACK, AFTER_SEND], scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]] });
+  bare.agent.begin({ app: "Slack" });
+  await bare.agent.heard(AUDIO);
+  assert.deepStrictEqual(bare.driver.acts(), [["press", "e1"]]);
+  assert.deepStrictEqual(bare.guide.of("clear"), [["clear"]], "only begin's");
+});
+
+test("every kind of action that changes the screen clears the marks first", async () => {
+  const actions = [
+    press("e1"),
+    { t: "action", kind: "set", id: "e2", text: "hello", risk: "free" },
+    { t: "action", kind: "type", text: "hello", risk: "free" },
+    { t: "action", kind: "key", keys: "down", risk: "free" },
+    { t: "action", kind: "scroll", dir: "down", risk: "free" },
+    { t: "action", kind: "focus", id: "e2", risk: "free" },
+    { t: "action", kind: "open", app: "Slack", risk: "free" },
+  ];
+  for (const a of actions) {
+    const guide = inkGuide();
+    const r = rig({
+      guide,
+      platform: "mac",
+      results: Object.fromEntries(["press", "setValue", "key", "scroll", "focus", "open"].map((m) => [m, () => { guide.calls.push(["acted"]); return { ok: true }; }])),
+      paste: async () => { guide.calls.push(["acted"]); },
+      snaps: [SLACK, AFTER_SEND],
+      scripts: [[heardDo("do it"), { t: "draw", kind: "box", target: { id: "e2" } }, a], [{ t: "done" }]],
+    });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    const seq = guide.calls.map((c) => c[0]).filter((m) => ["draw", "clear", "acted"].includes(m));
+    assert.deepStrictEqual(seq.slice(0, 4), ["clear", "draw", "clear", "acted"], a.kind);
+  }
+});
+
+test("the server's DRAW CLEAR takes the marks away; with none up it sends nothing", async () => {
+  const r = rig({
+    guide: inkGuide(),
+    scripts: [[heardShow("what's this?"), { t: "draw", kind: "clear" }, { t: "draw", kind: "box", target: { id: "e1" } }, { t: "draw", kind: "clear" }, { t: "draw", kind: "box", target: { id: "e3" } }, { t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.guide.calls.map((c) => c[0]).filter((m) => m === "draw" || m === "clear"), ["clear", "draw", "clear", "draw"]);
+});
+
+test("picture: the answer's marks in the picture land on the region it was cropped from", async () => {
+  const r = pictureRig({
+    guide: inkGuide(),
+    scripts: [[
+      heardShow("how long is the long side of this triangle?"),
+      { t: "say", text: "The long side is 5." },
+      { t: "draw", kind: "arrow", from: { pt: [640, 450] }, to: { pt: [450, 620] }, text: "c, what we want" },
+      { t: "draw", kind: "circle", target: { box: [150, 800, 50, 50] }, text: "90°" },
+      { t: "draw", kind: "path", points: [[180, 820], [180, 420], [720, 820]], closed: true },
+      { t: "draw", kind: "underline", target: { id: "o1" } },
+      { t: "done" },
+    ]],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO, { text: "how long is the long side of this triangle?", final: true });
+  assert.ok(r.post.requests[0].image, "the picture went");
+  assert.deepStrictEqual(r.guide.of("draw").map((c) => c[1]), [
+    { kind: "arrow", from: [506, 285], to: [430, 336], text: "c, what we want" },
+    { kind: "circle", frame: [310, 390, 20, 15], text: "90°" },
+    { kind: "path", points: [[322, 396], [322, 276], [538, 396]], closed: true },
+    { kind: "underline", frame: [300, 200, 200, 20] },
+  ]);
+  // Where the picture is never went: not in the request, not on the side.
+  assert.ok(!JSON.stringify(r.post.reqs()[0]).includes("250"));
+  assert.strictEqual(r.post.reqs()[0].pictureFrame, undefined);
+});
+
+test("picture: a crop that had to take the whole window says so, and the marks are places in what was sent", async () => {
+  // An icon too small to crop (on a 4K window captured at 1600 px, a 16 px
+  // icon is 7 picture pixels): ask.js's crop sends the window, and says it
+  // did. A circle in the middle of the picture is in the middle of the window.
+  const r = pictureRig({
+    guide: inkGuide(),
+    crop: (look, frame) => Object.assign({}, CROPPED, { frame: WIN.slice() }),
+    scripts: [[
+      heardShow("explain this equation"),
+      { t: "say", text: "That's the middle of it." },
+      { t: "draw", kind: "circle", target: { box: [400, 400, 200, 200] } },
+      { t: "draw", kind: "number", target: { pt: [250, 250] }, n: 1 },
+      { t: "done" },
+    ]],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.deepStrictEqual(r.guide.of("point")[0], ["point", WIN, "Looking", { tentative: true }], "the ring is round what was sent");
+  assert.deepStrictEqual(r.guide.of("draw").map((c) => c[1]), [
+    { kind: "circle", frame: [360, 240, 180, 120] },
+    { kind: "number", at: [225, 150], n: 1 },
+  ]);
+  // A crop that says nothing of it (or nonsense) is taken as the region it was asked for.
+  for (const said of [undefined, null, [0, 0, 0, 0], "everything", [1, 2, 3]]) {
+    const q = pictureRig({
+      guide: inkGuide(),
+      crop: () => Object.assign({}, CROPPED, { frame: said }),
+      scripts: [[heardShow("explain this equation"), { t: "draw", kind: "number", target: { pt: [250, 250] }, n: 1 }, { t: "done" }]],
+    });
+    q.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+    await q.agent.heard(AUDIO, { text: "explain this equation", final: true });
+    assert.deepStrictEqual(q.guide.of("draw")[0][1], { kind: "number", at: [350, 225], n: 1 }, JSON.stringify(said));
+    assert.deepStrictEqual(q.guide.of("point")[0][1], REGION);
+  }
+});
+
+test("look: the text answer's marks go before the same step comes again with the picture, whose marks are in it", async () => {
+  const r = pictureRig({
+    guide: inkGuide(),
+    scripts: [
+      [heardShow("what does this mean?"), { t: "say", text: "Let me look." }, { t: "draw", kind: "box", target: { id: "e5" } },
+        { t: "draw", kind: "circle", target: { pt: [500, 500] } }, { t: "look", why: "a drawing" }],
+      [heardShow("what does this mean?"), { t: "say", text: "A rising line." }, { t: "draw", kind: "circle", target: { pt: [500, 500] } }, { t: "done" }],
+    ],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 2);
+  assert.deepStrictEqual(r.guide.calls.map((c) => c[0]).filter((m) => ["draw", "clear", "badge"].includes(m)), ["clear", "draw", "clear", "badge", "draw"]);
+  assert.deepStrictEqual(r.guide.of("draw").map((c) => c[1]), [
+    { kind: "box", frame: [250, 150, 400, 300] },
+    { kind: "circle", frame: [444, 294, 12, 12] },
+  ], "the text step's place in a picture it had not sent is dropped");
+  assert.strictEqual(r.post.reqs()[1].pictureFrame, undefined);
+});
+
+test("the draw knob off: no marks at all", async () => {
+  const r = rig({
+    guide: inkGuide(),
+    knobs: { "desktop.agent.draw": false },
+    snaps: [SLACK, AFTER_SEND],
+    scripts: [[heardDo("export"), { t: "draw", kind: "circle", target: { id: "e1" } }, { t: "draw", kind: "clear" }, press("e1")], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.guide.of("draw"), []);
+  assert.deepStrictEqual(r.guide.of("clear"), [["clear"]], "only begin's, for a last answer drawn before the knob went off");
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]]);
+});
+
+test("a guide with no draw or clear (an older one) is not called for them, and the run goes as before", async () => {
+  const r = rig({
+    snaps: [SLACK, AFTER_SEND],
+    scripts: [[heardDo("export"), { t: "draw", kind: "circle", target: { id: "e1" } }, press("e1")], [{ t: "say", text: "Done." }, { t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]]);
+  assert.ok(!r.logs.some((l) => /guide\.(?:draw|clear)/.test(l)));
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+});
+
+test("marks never go back to the server: every request is what it would have been without them", async () => {
+  const play = async (marks) => {
+    const r = rig({
+      guide: inkGuide(),
+      look: LOOK,
+      snaps: [SLACK, AFTER_SEND],
+      scripts: [
+        [heardDo("export"), ...(marks ? [{ t: "draw", kind: "circle", target: { id: "e1" }, text: "here" }, { t: "draw", kind: "box", target: { id: "o1" } }] : []), press("e1")],
+        [...(marks ? [{ t: "draw", kind: "clear" }] : []), { t: "done" }],
+      ],
+    });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    return r.post.reqs().map((q) => Object.assign({}, q, { runId: "" }));
+  };
+  assert.deepStrictEqual(await play(true), await play(false));
+});
+
+test("resolveMark: an arrow with no length is dropped; a label that is not words is no label", () => {
+  // A button and the line of text read off it share a frame.
+  const same = new Map([["e1", [700, 20, 80, 30]], ["o2", [700, 20, 80, 30]]]);
+  assert.strictEqual(resolveMark({ kind: "arrow", from: { id: "e1" }, to: { id: "o2" } }, same, null), null);
+  // Two places the clamp makes one.
+  assert.strictEqual(resolveMark({ kind: "arrow", from: { pt: [1200, 0] }, to: { pt: [1000, -5] } }, FRAMES, REGION), null);
+  // A frame and a point at its corner are still two ends.
+  assert.deepStrictEqual(resolveMark({ kind: "arrow", from: { id: "e1" }, to: { pt: [0, 0] } }, FRAMES, REGION), { kind: "arrow", from: [700, 20, 80, 30], to: [250, 150] });
+  for (const text of [{ a: 1 }, ["x"], 5, true]) {
+    assert.deepStrictEqual(resolveMark({ kind: "circle", target: { id: "e1" }, text }, FRAMES, null), { kind: "circle", frame: [700, 20, 80, 30] }, JSON.stringify(text));
+    assert.strictEqual(resolveMark({ kind: "label", target: { id: "e1" }, text }, FRAMES, null), null, JSON.stringify(text));
+  }
+});
+
+test("the next step starts with the last answer's marks taken away: an ASK's numbered choices once they have picked, before the reply is sent", async () => {
+  const guide = inkGuide();
+  const r = rig({
+    guide,
+    listen: async () => REPLY,
+    scripts: [
+      [heardDo("send it to one of them"), { t: "say", text: "Which one?" }, { t: "draw", kind: "number", target: { id: "e1" }, n: 1 },
+        { t: "draw", kind: "number", target: { id: "e3" }, n: 2 }, { t: "ask", text: "The first or the second?" }],
+      () => { guide.calls.push(["posted"]); return [heardDo("the second"), { t: "draw", kind: "circle", target: { id: "e3" } }, { t: "done" }]; },
+    ],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  const seq = guide.calls.map((c) => (c[0] === "state" ? c[0] + ":" + c[1] : c[0])).filter((m) => ["draw", "clear", "posted", "state:listening", "state:thinking"].includes(m));
+  assert.deepStrictEqual(seq, ["clear", "state:thinking", "draw", "draw", "state:listening", "clear", "state:thinking", "posted", "draw"],
+    "up while they choose, gone once they have");
+});
+
+test("a step whose action never ran (the focus moved) leaves no marks for the next answer to draw over", async () => {
+  const guide = inkGuide();
+  const MOVED = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e1" });
+  const r = rig({
+    guide,
+    snaps: [SLACK, MOVED],
+    scripts: [
+      [heardDo("next line"), { t: "draw", kind: "underline", target: { id: "e2" } }, { t: "action", kind: "key", keys: "down", risk: "free" }],
+      () => { guide.calls.push(["posted"]); return [{ t: "draw", kind: "underline", target: { id: "e2" } }, { t: "done" }]; },
+    ],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [], "the key did not go");
+  assert.strictEqual(r.post.reqs()[1].history.at(-1).result, "failed");
+  assert.deepStrictEqual(guide.calls.map((c) => c[0]).filter((m) => ["draw", "clear", "posted"].includes(m)), ["clear", "draw", "clear", "posted", "draw"]);
+});
+
+test("the answer's first mark puts the tentative ring away: the picture's pulsing \"Looking\" goes once the pen is on it", async () => {
+  const r = pictureRig({
+    guide: inkGuide(),
+    scripts: [[
+      heardShow("how long is the long side of this triangle?"),
+      { t: "draw", kind: "circle", target: { id: "e42" } },
+      { t: "say", text: "It's a right angle." },
+      { t: "draw", kind: "circle", target: { box: [150, 800, 50, 50] }, text: "90°" },
+      { t: "draw", kind: "label", target: { pt: [300, 700] }, text: "90°" },
+      { t: "done" },
+    ]],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO, { text: "how long is the long side of this triangle?", final: true });
+  assert.ok(r.post.requests[0].image, "the picture went");
+  const seq = r.guide.calls.filter((c) => ["point", "unpoint", "draw"].includes(c[0])).map((c) => (c[0] === "point" ? ["point", c[2], c[3]] : [c[0]]));
+  // A mark that could not be placed is not the answer's pen: the ring stays
+  // until one is drawn, and goes once.
+  assert.deepStrictEqual(seq, [["point", TEXT.looking, { tentative: true }], ["unpoint"], ["draw"], ["draw"]]);
 });

@@ -40,6 +40,15 @@
 //               as the utterance when there are some, so the server has
 //               nothing to transcribe.
 //
+// The answer may draw while it explains, the way a teacher uses a pen: a
+// circle on part of a diagram, an arrow from a label to what it names, the
+// places to click numbered in order. A mark names what it is on the way a
+// point does, by an id of this screen, or, on a run that sent a picture, by
+// a place in that picture (0–1000 across and down it). Both are turned into
+// screen positions here, from frames and the picture's own region that never
+// left this computer, and nothing new goes back. Marks belong to the screen
+// they were drawn on, so they are cleared before anything changes it.
+//
 // Pure logic with every dependency injected (the driver, the guide window, the
 // network, the clipboard paste, the microphone, the clock, the picture's crop
 // and its permission), so a whole run can be played in a test without
@@ -74,6 +83,20 @@ const MAX_PICTURE_BYTES = 2000000;
 /** "The largest image" on screen has to be at least this big to be the
  *  picture: smaller is an icon or an avatar, and the window says more. */
 const MIN_PICTURE = [120, 80];
+/** A place in the picture is 0 to this, across it and down it. */
+const PICTURE_UNITS = 1000;
+/** A box, circle, underline or highlight at a place in the picture rather
+ *  than around something: it goes around this much of the picture's shorter
+ *  side (in thousandths), centred on the place. Big enough to see, small
+ *  enough to say which spot. */
+const POINT_MARK = 40;
+/** A mark's label, as the server cuts it. */
+const LABEL_MAX = 48;
+/** A path's points, as the server allows them. */
+const PATH_MAX = 32;
+const DRAW_KINDS = new Set(["box", "circle", "underline", "highlight", "arrow", "number", "label", "path"]);
+/** The kinds drawn around (or under) a frame. */
+const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
 const TERMINAL = new Set(["action", "ask", "done", "error", "look"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
@@ -445,6 +468,111 @@ function chromeBottom(screen, look) {
 
 const hasBytes = (d) => !!(d && (d.length > 0 || d.size > 0 || d.byteLength > 0));
 const byteSize = (d) => (d ? (typeof d.size === "number" ? d.size : typeof d.byteLength === "number" ? d.byteLength : d.length || 0) : 0);
+
+// ---- marks on the screen ------------------------------------------------------
+
+const isPair = (p) => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n));
+const round2 = (v) => Math.round(v * 100) / 100;
+const clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** A place in the picture (picture units) as a point on the screen (driver
+ *  units), through the frame of the region the picture was cropped from:
+ *  X = fx + x/1000·fw. Kept inside that region, whatever number came. */
+function picturePoint(p, region) {
+  const u = (v) => clampTo(v, 0, PICTURE_UNITS) / PICTURE_UNITS;
+  return [round2(region[0] + u(p[0]) * region[2]), round2(region[1] + u(p[1]) * region[3])];
+}
+
+/** A box in the picture as a frame on the screen, cut to the region; null
+ *  when nothing of it is left inside. */
+function pictureBox(b, region) {
+  const [x0, y0] = picturePoint([b[0], b[1]], region);
+  const [x1, y1] = picturePoint([b[0] + Math.max(0, b[2]), b[1] + Math.max(0, b[3])], region);
+  return x1 > x0 && y1 > y0 ? [x0, y0, round2(x1 - x0), round2(y1 - y0)] : null;
+}
+
+/** A small square frame centred on a point, for a mark that goes around a
+ *  frame but was given a place. */
+function aroundPoint(pt, region) {
+  const size = Math.max(8, (POINT_MARK / PICTURE_UNITS) * Math.min(region[2], region[3]));
+  return [round2(pt[0] - size / 2), round2(pt[1] - size / 2), round2(size), round2(size)];
+}
+
+/** One spot of a mark: `{ frame }` for an element of this screen or a box in
+ *  the picture, `{ point }` for a place in it, or null when it cannot be
+ *  placed: an id not on this screen, or a picture spot with no picture. */
+function spotOf(spot, frames, region) {
+  if (!spot || typeof spot !== "object") return null;
+  if (typeof spot.id === "string") {
+    const f = frames && typeof frames.get === "function" ? frames.get(spot.id) : null;
+    return isFrame(f) ? { frame: f.slice() } : null;
+  }
+  if (!region) return null;
+  if (isPair(spot.pt)) return { point: picturePoint(spot.pt, region) };
+  if (isFrame(spot.box)) {
+    const f = pictureBox(spot.box, region);
+    return f ? { frame: f } : null;
+  }
+  return null;
+}
+
+/** A mark's label as the guide draws it: one line, no control characters.
+ *  Only words: anything else in `text` would be drawn as "[object Object]". */
+const markLabel = (v) => (typeof v === "string" ? clip(squash(v.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")), LABEL_MAX) : "");
+const sameGeometry = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+/**
+ * The server's draw event as the guide's mark, in driver units (the guide's
+ * side turns them into its own): `{ kind, frame | from/to | at | points,
+ * closed?, n?, text? }`. Frames are [x, y, w, h], points [x, y].
+ *
+ *   an id       the element's frame, from this screen's map (lines read off
+ *               the window included); an id not on it drops the mark
+ *   a picture   `pt` and `box` are 0–1000 of `region`, the frame of the
+ *   spot        picture this run sent, and are kept inside it; with no
+ *               picture sent, the mark is dropped
+ *
+ * A box, circle, underline or highlight given a place rather than a thing
+ * goes around a small square there. A number or a label given a place is
+ * drawn `at` it. Null for a mark that cannot be drawn as it was meant: a
+ * circle somewhere near is worse than none.
+ */
+function resolveMark(ev, frames, region) {
+  if (!ev || typeof ev !== "object" || !DRAW_KINDS.has(ev.kind)) return null;
+  const pic = isFrame(region) && region[2] > 0 && region[3] > 0 ? region : null;
+  const kind = ev.kind;
+  const mark = { kind };
+  if (kind === "path") {
+    const pts = ev.points;
+    if (!pic || !Array.isArray(pts) || pts.length < 2 || pts.length > PATH_MAX || !pts.every(isPair)) return null;
+    mark.points = pts.map((p) => picturePoint(p, pic));
+    if (ev.closed === true) mark.closed = true;
+  } else if (kind === "arrow") {
+    const from = spotOf(ev.from, frames, pic);
+    const to = spotOf(ev.to, frames, pic);
+    if (!from || !to) return null;
+    mark.from = from.frame || from.point;
+    mark.to = to.frame || to.point;
+    // Two ids for the same place (a button and the line of text read off
+    // it), or two picture places the clamp has made one: an arrow with no
+    // length has no direction to draw its head in.
+    if (sameGeometry(mark.from, mark.to)) return null;
+  } else {
+    const at = spotOf(ev.target, frames, pic);
+    if (!at) return null;
+    if (at.frame) mark.frame = at.frame;
+    else if (FRAMED.has(kind)) mark.frame = aroundPoint(at.point, pic);
+    else mark.at = at.point;
+    if (kind === "number") {
+      if (!Number.isInteger(ev.n) || ev.n < 1 || ev.n > 9) return null;
+      mark.n = ev.n;
+    }
+  }
+  const text = markLabel(ev.text);
+  if (text) mark.text = text;
+  else if (kind === "label") return null;
+  return mark;
+}
 
 // ---- what changed after an action -------------------------------------------
 
@@ -909,8 +1037,10 @@ function pressMayHaveHappened(r) {
 /**
  * @param {object} deps
  * @param {object} deps.driver   the §1 driver API
- * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, hide, error, badge }:
- *        point(frame, caption?, { tentative: true }?) and say(text, { speak, rate, locale?, append? })
+ * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, hide, error, badge, draw?, clear? }:
+ *        point(frame, caption?, { tentative: true }?) and say(text, { speak, rate, locale?, append? });
+ *        draw(mark) with a mark from resolveMark (driver units), clear() to take the marks away.
+ *        draw and clear are called only when the guide has them: one without them draws nothing
  * @param {(req: object, audio: object|null, signal: AbortSignal, image?: {mime: string, data: Buffer}|null) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
  *        `image` only on the step that carries the picture
  * @param {(text: string) => Promise<void>} deps.paste
@@ -921,9 +1051,10 @@ function pressMayHaveHappened(r) {
  * @param {(line: string) => void} [deps.log]
  * @param {(appName: string) => boolean} [deps.sensitive]  defaults to frontApp.looksSensitive
  * @param {string|(() => string)} [deps.language]
- * @param {(look: object, frame: number[]) => {mime: string, data: Buffer}|Promise<{mime: string, data: Buffer}|null>|null} [deps.crop]
+ * @param {(look: object, frame: number[]) => {mime: string, data: Buffer, frame?: number[]}|Promise<{mime: string, data: Buffer, frame?: number[]}|null>|null} [deps.crop]
  *        the part of the look's picture under `frame` (driver units), as a
- *        file. Without it there is no picture path.
+ *        file, with the part of the window it really shows (`frame`) when that
+ *        is not quite what was asked for. Without it there is no picture path.
  * @param {(app: string) => "never"|"ask"|"always"|Promise<string>} [deps.pictures]
  *        whether pictures of this app may go. Without it there is no picture path.
  * @param {(app: string) => Promise<"once"|"always"|"no">} [deps.permit]
@@ -1268,6 +1399,32 @@ function createAgent(deps) {
     return o;
   };
 
+  /** The marks drawn on this screen go, when there are any: the screen is
+   *  about to change under them, or a new answer is about to draw its own. */
+  function clearMarks(run) {
+    if (!run.marks) return;
+    run.marks = 0;
+    tell(run, "clear");
+  }
+
+  /** The server's draw event, placed on this screen and handed to the guide,
+   *  or dropped when it cannot be placed. A clear takes them all away. */
+  function drawMark(run, ev) {
+    if (!bool("desktop.agent.draw", true)) return;
+    if (ev.kind === "clear") { clearMarks(run); return; }
+    const mark = resolveMark(ev, run.frames, run.pictureFrame);
+    if (!mark) {
+      log(`agent ${run.tag}: a ${clip(squash(ev.kind), 12) || "mark"} dropped: not on this screen`);
+      return;
+    }
+    // The answer is showing where it means with its own pen: the guess at
+    // it (preview's, or the picture's pulsing "Looking" ring round the very
+    // thing being drawn on) goes, as it does for the answer's own ring.
+    dropTentative(run);
+    run.marks += 1;
+    tell(run, "draw", mark);
+  }
+
   /** A tentative ring from preview() or the picture path, put away once the
    *  answer it stood in for has come without one of its own. */
   function dropTentative(run) {
@@ -1304,6 +1461,9 @@ function createAgent(deps) {
         if (caption) tell(run, "point", frame, clip(caption, 120)); else tell(run, "point", frame);
         break;
       }
+      case "draw":
+        drawMark(run, ev);
+        break;
       case "steps": {
         const items = (Array.isArray(ev.items) ? ev.items : []).map((s) => clip(squash(s), 120)).filter(Boolean).slice(0, 6);
         if (!items.length) break;
@@ -1547,6 +1707,10 @@ function createAgent(deps) {
       }
     }
 
+    // The marks were drawn on the screen this is about to change, and would
+    // be left pointing at whatever moves there next. The ring on the target
+    // stays; the next step's answer draws on the screen it finds.
+    clearMarks(run);
     run.seen.set(print, (run.seen.get(print) || 0) + 1);
     tell(run, "state", "acting", acting(a, target));
     // From here the screen may change, and the picture taken at Alt twice
@@ -1604,13 +1768,22 @@ function createAgent(deps) {
 
   /** One request and its stream. The next input, or null when the run ended. */
   async function step(run, input) {
+    // Each answer draws on the screen it finds. What the last one drew and
+    // nothing has cleared (an ASK's numbered choices, once they have picked
+    // one; the marks of a step whose action never ran) goes before the next
+    // is asked for: left up, the same mark is drawn again on top of itself.
+    clearMarks(run);
     if (run.step > 0) tell(run, "state", "thinking");
     const audio = input.audio || null;
     const image = input.image || null;
     run.fresh = !!audio || !!input.utterance;
     run.said = input.utterance ? clip(squash(input.utterance), 1000) : "";
     const req = buildRequest(run, input);
-    if (image) run.pictureSent = true;
+    if (image) {
+      run.pictureSent = true;
+      // Where the picture is, for the answer's marks in it. Never sent.
+      run.pictureFrame = isFrame(input.pictureFrame) ? input.pictureFrame.slice() : null;
+    }
     log(`agent ${run.tag}: step ${run.step} (${audio ? "audio" : "text"}${image ? " + picture" : ""}, ${req.screen.elements.length} elements)`);
 
     let source;
@@ -1733,7 +1906,11 @@ function createAgent(deps) {
       log(`agent ${run.tag}: the picture is too big to send (${byteSize(file.data)} bytes)`);
       return null;
     }
-    return { image: { mime: str(file.mime).toLowerCase(), data: file.data }, picture: { region }, frame };
+    // Where the picture really is: the crop may have had to take more than
+    // the region (one too small to crop is the whole window), and the
+    // answer's places in the picture are places in what was sent.
+    const shows = isFrame(file.frame) && file.frame[2] > 0 && file.frame[3] > 0 ? file.frame.slice() : frame;
+    return { image: { mime: str(file.mime).toLowerCase(), data: file.data }, picture: { region }, frame: shows };
   }
 
   /** The picture for this step, if the person's policy and answer allow it:
@@ -1755,7 +1932,7 @@ function createAgent(deps) {
     run.tentative = true;
     tell(run, "point", pic.frame, TEXT.looking, { tentative: true });
     tell(run, "badge", TEXT.pictureSent);
-    return Object.assign({}, input, { image: pic.image, picture: pic.picture });
+    return Object.assign({}, input, { image: pic.image, picture: pic.picture, pictureFrame: pic.frame });
   }
 
   /**
@@ -1773,6 +1950,9 @@ function createAgent(deps) {
       finish(run, "done");
       return null;
     }
+    // The answer comes again, from the picture, with marks of its own; what
+    // the text answer drew goes first.
+    clearMarks(run);
     // The words of this step (the server heard them already), so they are
     // not transcribed twice; the recording again only when there are none.
     const words = run.said || run.goal;
@@ -1888,6 +2068,9 @@ function createAgent(deps) {
     if (current) cancel("restart");
     clearTimeout(hideTimer);
     hideTimer = null;
+    // The last answer's marks may still be up beside its card: this question
+    // starts on a clean screen, refused or not.
+    callGuide("clear");
     if (o.privateField || o.sensitive) {
       log(`agent: refused (${o.privateField ? "private window" : "sensitive app"})`);
       callGuide("error", [o.privateField ? TEXT.private : TEXT.sensitive]);
@@ -1907,7 +2090,7 @@ function createAgent(deps) {
       mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
       plan: null, planDone: 0, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
       pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
-      acted: false, pictureSent: false, permit: "",
+      acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0,
     };
     current = run;
     callGuide("show", ["listening", { app: run.app }]);
@@ -2197,6 +2380,6 @@ function makePost(opts) {
 
 module.exports = {
   createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  ocrElements, pictureRegion, readEvents, makePost,
+  ocrElements, pictureRegion, resolveMark, readEvents, makePost,
   MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, MAX_PICTURE_BYTES, SCREEN_CHARS, TEXT,
 };

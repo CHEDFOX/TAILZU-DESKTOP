@@ -9,7 +9,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
-const { createAsk } = require("./ask.js");
+const { createAsk, pillAskMove, capsuleRect } = require("./ask.js");
 const agentCore = require("./agent.js");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -118,6 +118,8 @@ function harness(opts = {}) {
     knobs: { num: pick, bool: pick, str: pick, txt: (k, f, v) => (v ? f.replace(/\{(\w+)\}/g, (m, n) => v[n] ?? m) : f) },
     webPrefs: (x) => Object.assign({}, x),
     hardenWindow() {}, raisePill() {}, setBoundsExactly(w, b) { w.bounds = b; },
+    // main.js's pillAsk, when a test plays the pill (fakePill).
+    pillAsk: opts.pill ? opts.pill.pillAsk : undefined,
     driver,
     sendToRecorder: (ch, p) => { recorder.push([ch, p]); log.push("recorder:" + ch); },
     createRecorderWindow() {},
@@ -961,6 +963,23 @@ test("crop: a frame off the window, or a sliver of one, is the whole window; not
   assert.strictEqual(harness().deps().crop(LOOK, [400, 240, 300, 200]), null, "no nativeImage, no picture");
 });
 
+test("crop: says which part of the window the picture shows, for the answer's marks in it", () => {
+  const h = harness({ nativeImage: fakeImages().nativeImage });
+  // What was asked for.
+  assert.deepStrictEqual(h.deps().crop(LOOK, [400, 240, 300, 200]).frame, [400, 240, 300, 200]);
+  // Cut to the window.
+  assert.deepStrictEqual(h.deps().crop(LOOK, [1200, 700, 400, 400]).frame, [1200, 700, 100, 140]);
+  // Too thin to crop, off the window, or no frame at all: the whole window
+  // went, and its marks are places in the whole window.
+  for (const f of [[400, 240, 2, 300], [3000, 3000, 50, 50], null]) {
+    assert.deepStrictEqual(h.deps().crop(LOOK, f).frame, [100, 40, 1200, 800], JSON.stringify(f));
+  }
+  // The window's own frame is never handed out to be changed.
+  const out = h.deps().crop(LOOK, null);
+  out.frame[0] = -1;
+  assert.deepStrictEqual(LOOK.window.frame, [100, 40, 1200, 800]);
+});
+
 // ---- the guide's new messages ------------------------------------------------------
 
 test("a tentative ring, an answer that grows, and the badge reach the guide as such", async () => {
@@ -1392,4 +1411,506 @@ test("recorder: a batch dictation is as it was", async () => {
   assert.deepStrictEqual(r.fetches, ["https://api.test/v1/transcribe-clean"]);
   assert.ok(!r.kinds().some((k) => k === "askAudio" || k === "askText"));
   r.end();
+});
+
+// ---- v3: the card grows out of the pill ---------------------------------------------
+
+// main.js's pillAsk, played by main's own rules (ask.js pillAskMove and
+// capsuleRect) over a pill window at the foot of the work area: every phase
+// the question asked of it, and what the pill is doing now.
+const PILL_KNOBS = { num: (k, f) => f, bool: (k, f) => f };
+function fakePill(o = {}) {
+  const p = {
+    state: "rest", phase: null, recording: false, calls: [], moved: 0, on: o.on !== false,
+    bounds: o.bounds || { x: WORK.x, y: WORK.y + WORK.height - 132 - 4, width: WORK.width, height: 132 },
+  };
+  p.pillAsk = (phase) => {
+    p.calls.push(phase);
+    if (!p.on) return null;
+    const move = pillAskMove(phase, { state: p.state, recording: p.recording });
+    if (!move) return null;
+    if (move === "rest") { p.state = "rest"; p.phase = null; return null; }
+    if (move === "take") p.moved++;
+    p.state = "ask"; p.phase = phase;
+    return capsuleRect(p.bounds, PILL_KNOBS);
+  };
+  // What toggleDictation does to the pill when a dictation starts.
+  p.dictate = () => { p.recording = true; p.state = "listening"; p.phase = null; };
+  return p;
+}
+// The capsule of that pill (40 x 16, 14 above the window's foot), in the
+// guide window's own coordinates (the window over WORK).
+const DOCK = { x: 780 - WORK.x, y: 866 - WORK.y, w: 40, h: 16 };
+const docks = (h) => h.sent.filter((m) => m.type === "dock").map((m) => Object.assign({}, m, { type: undefined }));
+const FAST = { "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 30 };
+
+test("pillAskMove: dictation always wins the pill; closing and giving it back touch only a pill still the question's", () => {
+  for (const phase of ["listening", "thinking", "showing", "closing", null]) {
+    assert.strictEqual(pillAskMove(phase, { state: "rest", recording: true }), null, `recording, ${phase}`);
+    assert.strictEqual(pillAskMove(phase, { state: "listening" }), null, `dictation listening, ${phase}`);
+    assert.strictEqual(pillAskMove(phase, { state: "writing" }), null, `dictation writing, ${phase}`);
+  }
+  // The first phase takes the pill (and main puts it on the cursor's display first).
+  assert.strictEqual(pillAskMove("listening", { state: "rest" }), "take");
+  assert.strictEqual(pillAskMove("showing", { state: "error" }), "take");
+  assert.strictEqual(pillAskMove("thinking", { state: "done" }), "take");
+  // The next ones only move it on.
+  assert.strictEqual(pillAskMove("thinking", { state: "ask" }), "ask");
+  assert.strictEqual(pillAskMove("closing", { state: "ask" }), "ask");
+  assert.strictEqual(pillAskMove(null, { state: "ask" }), "rest");
+  // Not the question's: closing and letting go leave it as it is.
+  assert.strictEqual(pillAskMove("closing", { state: "rest" }), null);
+  assert.strictEqual(pillAskMove(null, { state: "rest" }), null);
+  assert.strictEqual(pillAskMove(null, { state: "done" }), null);
+  assert.strictEqual(pillAskMove("dancing", { state: "ask" }), null);
+});
+
+test("capsuleRect: the capsule centred across the pill window, bottomPad above its foot, from pill.js's knobs", () => {
+  const b = { x: 100, y: 764, width: 1400, height: 132 };
+  assert.deepStrictEqual(capsuleRect(b, PILL_KNOBS), { x: 780, y: 866, w: 40, h: 16 });
+  const k = (flags) => ({ num: (n, f) => (n in flags ? flags[n] : f), bool: (n, f) => (n in flags ? flags[n] : f) });
+  // The small pill's size without the capsule look (or without the split, which it needs).
+  assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.capsule": false })), { x: 777, y: 868, w: 46, h: 14 });
+  assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.split": false })), { x: 777, y: 868, w: 46, h: 14 });
+  assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.capsuleWidth": 50, "desktop.pill.capsuleHeight": 20, "desktop.pill.bottomPad": 10 })), { x: 775, y: 866, w: 50, h: 20 });
+  assert.strictEqual(capsuleRect(null, PILL_KNOBS), null);
+  assert.strictEqual(capsuleRect({ x: 0, y: 0, width: NaN, height: 10 }, PILL_KNOBS), null);
+});
+
+test("the card grows out of the pill: the pill parts first, the guide opens on its display and is told where it is before it shows", async () => {
+  // The pointer has wandered onto a second display (B) since the pill was
+  // put under it on the first (A): the card goes where the pill is.
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const pill = fakePill();
+  const h = harness({ pill, screen: {
+    getCursorScreenPoint: () => ({ x: 2000, y: 300 }),
+    getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B),
+    screenToDipRect: (_w, r) => r,
+  } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  assert.deepStrictEqual(pill.calls, ["listening"]);
+  assert.strictEqual(pill.moved, 1, "the first phase puts the pill under the cursor");
+  const o = h.windows[0].o;
+  assert.deepStrictEqual([o.x, o.y, o.width, o.height], [WORK.x, WORK.y, WORK.width, WORK.height], "on the pill's display");
+  const t = h.types();
+  assert.ok(t.indexOf("dock") !== -1 && t.indexOf("dock") < t.indexOf("show"), t.join(","));
+  assert.deepStrictEqual(h.sent.find((m) => m.type === "dock").pill, DOCK);
+  assert.strictEqual(h.types().filter((x) => x === "dock").length, 1, "told once");
+});
+
+test("the pill's phase follows the card: listening, thinking, showing; closing the moment it hides; given back once the fold is over", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 120, "desktop.agent.doneMs": 30 } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => pill.calls.includes("closing"));
+  assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "closing"]);
+  assert.strictEqual(pill.state, "ask");
+  // The fold is still on screen: the window waits foldMs + 80 for it.
+  await sleep(100);
+  assert.strictEqual(h.windows[0].visible, true, "the card is still folding back into the pill");
+  await until(() => pill.calls.length === 5, 1000);
+  assert.strictEqual(h.windows[0].visible, false);
+  assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "closing", null]);
+  assert.strictEqual(pill.state, "rest");
+});
+
+test("an ASK's reply opens the microphone again: the bead goes back to listening", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: FAST, steps: [
+    [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
+    [{ t: "done", text: "Okay." }],
+  ] });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.starts() === 2);
+  assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "listening"]);
+  h.clip();
+  await until(() => pill.calls.includes(null), 2000);
+  assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "listening", "thinking", "showing", "closing", null]);
+});
+
+test("a guess rung while they still talk leaves the bead listening; the answer's ring is showing", async () => {
+  const pill = fakePill();
+  const h = harness({ pill });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  const g = h.deps().guide;
+  g.point([1100, 60, 80, 30], "", { tentative: true });
+  assert.deepStrictEqual(pill.calls, ["listening"]);
+  g.point([1100, 60, 80, 30], "Export");
+  assert.deepStrictEqual(pill.calls, ["listening", "showing"]);
+  h.ask.cancel("test");
+});
+
+test("a new question while the card folds turns it round: the same window, the pill never given back between", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => pill.calls.includes("closing"));
+  await h.ask.tap();
+  await until(() => pill.calls.length === 5);
+  assert.deepStrictEqual(pill.calls, ["listening", "thinking", "showing", "closing", "listening"]);
+  assert.strictEqual(pill.moved, 1, "still the question's pill: it is not moved again");
+  await sleep(450);
+  assert.ok(!pill.calls.includes(null), pill.calls.join(","));
+  assert.strictEqual(h.windows.length, 1);
+  assert.strictEqual(h.windows[0].visible, true);
+  assert.strictEqual(pill.state, "ask");
+  h.ask.cancel("test");
+});
+
+test("Esc folds the card into the pill and then gives it back; a crashed guide gives it back at once", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: FAST });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  assert.ok(h.ask.escape());
+  assert.deepStrictEqual(pill.calls, ["listening", "closing"]);
+  await until(() => pill.calls.length === 3);
+  assert.deepStrictEqual(pill.calls, ["listening", "closing", null]);
+  assert.strictEqual(pill.state, "rest");
+
+  const pill2 = fakePill();
+  const h2 = harness({ pill: pill2, steps: RISKY });
+  await h2.ask.tap();
+  h2.clip();
+  await until(() => h2.types().includes("confirm"));
+  h2.windows[0].wc["render-process-gone"]();
+  assert.deepStrictEqual(pill2.calls, ["listening", "thinking", "showing", null], "nothing left to fold: given back there and then");
+  assert.strictEqual(pill2.state, "rest");
+});
+
+test("a dictation that starts mid-run ends with the pill the dictation's: never ask, never rest", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, steps: RISKY, knobs: FAST });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.types().includes("confirm"));
+  const before = pill.calls.length;
+  // toggleDictation, in main's order: the question is cancelled while the
+  // pill is still its, then the dictation opens the microphone and takes it.
+  assert.ok(h.ask.active());
+  h.ask.cancel("dictation");
+  pill.dictate();
+  await sleep(250);
+  assert.deepStrictEqual(pill.calls.slice(before), ["closing", null], "closed, then let go, and nothing else");
+  assert.strictEqual(pill.state, "listening");
+  assert.strictEqual(pill.recording, true);
+  assert.deepStrictEqual(h.actions, []);
+});
+
+test("a dictation started under a finished card keeps the pill when the card goes, and a card put up meanwhile grows from a seed", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 200 } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  assert.ok(!h.ask.active(), "over: main does not cancel it for the dictation");
+  pill.dictate();
+  await until(() => pill.calls.includes(null), 2000);
+  assert.strictEqual(pill.state, "listening", "the card's closing and letting go were refused");
+  // A question's error said while the dictation has the pill: the card comes
+  // up on its own, from a seed, and the pill is left alone.
+  const before = docks(h).length;
+  h.deps().guide.error("Something went wrong.");
+  assert.strictEqual(pill.state, "listening");
+  assert.deepStrictEqual(docks(h).slice(before).map((d) => d.pill), [null]);
+  assert.ok(!("seed" in docks(h).slice(before)[0]), "a seed is fine here: the card is on the pill's display");
+});
+
+test("a ring on another display takes the guide there: the pill stays, no tether or seed there; back, it is tied again", async () => {
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const snap = Object.assign({}, SNAP, { elements: [
+    { id: "e1", role: "button", label: "Export", frame: [1100, 60, 80, 30] },
+    { id: "e2", role: "button", label: "Share", frame: [2400, 300, 80, 30] },
+  ] });
+  const pill = fakePill();
+  const h = harness({ pill, snap, platform: "darwin", knobs: { "desktop.agent.doneMs": 5000 }, steps: [[
+    { t: "heard", text: "where's share, and export", mode: "show" },
+    { t: "say", text: "Share is on the other screen." }, { t: "point", id: "e2", caption: "Share" },
+    { t: "say", text: "Export is here.", append: true }, { t: "point", id: "e1", caption: "Export" }, { t: "done" },
+  ]], screen: {
+    getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+    getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B),
+  } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.filter((m) => m.type === "point").length === 2);
+  assert.deepStrictEqual(docks(h).map((d) => d.pill), [DOCK, null, DOCK]);
+  assert.strictEqual(docks(h)[1].seed, false, "off the pill's display: no seed either");
+  assert.strictEqual(pill.moved, 1, "the pill never follows the guide");
+  // Each move is said before the ring that caused it.
+  const t = h.types();
+  assert.ok(t.indexOf("dock", t.indexOf("dock") + 1) < t.indexOf("point"));
+  h.ask.cancel("test");
+});
+
+test("desktop.guide.dock off: the pill is left alone and the card is what it was", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: Object.assign({ "desktop.guide.dock": false }, FAST) });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  await until(() => !h.windows[0].visible, 2000);
+  assert.deepStrictEqual(pill.calls, []);
+});
+
+test("no pill to grow from (switched off): the card opens on the cursor's display, from a seed", async () => {
+  const pill = fakePill({ on: false });
+  const h = harness({ pill });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  assert.deepStrictEqual(pill.calls, ["listening"]);
+  assert.deepStrictEqual(docks(h), [{ type: undefined, pill: null }]);
+  h.ask.cancel("test");
+});
+
+// ---- v3: the marks --------------------------------------------------------------------
+
+test("a mark goes to the guide in its window's own coordinates, with a fresh id each", async () => {
+  const h = harness({ platform: "darwin", screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: () => ({ workArea: WORK, bounds: WORK }) } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  const g = h.deps().guide;
+  g.draw({ kind: "circle", frame: [1100, 60, 80, 30], text: "90°" });
+  g.draw({ kind: "arrow", from: [500, 400], to: [1100, 60, 80, 30], text: "c, what we want" });
+  g.draw({ kind: "number", at: [300, 200], n: 2 });
+  g.draw({ kind: "number", frame: [300, 200, 40, 20], n: 3.2 });
+  g.draw({ kind: "path", points: [[200, 500], [400, 500], [400, 300]], closed: true, text: "the triangle" });
+  g.draw({ kind: "label", at: [700, 140], text: "  a² + b²\n= c² \u0007 " });
+  g.draw({ kind: "underline", frame: [600, 300, 120, 18] });
+  g.clear();
+  // From the card on: a new question's own clear, before it, is the agent's.
+  const marks = h.sent.slice(h.sent.findIndex((m) => m.type === "show")).filter((m) => m.type === "draw" || m.type === "clear");
+  const L = (x, y) => [x - WORK.x, y - WORK.y];
+  assert.deepStrictEqual(marks, [
+    { type: "draw", id: "d1", kind: "circle", frame: [1000, 20, 80, 30], text: "90°" },
+    { type: "draw", id: "d2", kind: "arrow", from: L(500, 400), to: [1000, 20, 80, 30], text: "c, what we want" },
+    { type: "draw", id: "d3", kind: "number", at: L(300, 200), n: 2 },
+    { type: "draw", id: "d4", kind: "number", frame: [200, 160, 40, 20], n: 3 },
+    { type: "draw", id: "d5", kind: "path", points: [L(200, 500), L(400, 500), L(400, 300)], closed: true, text: "the triangle" },
+    { type: "draw", id: "d6", kind: "label", at: L(700, 140), text: "a² + b² = c²" },
+    { type: "draw", id: "d7", kind: "underline", frame: [500, 260, 120, 18] },
+    { type: "clear" },
+  ]);
+  h.ask.cancel("test");
+});
+
+test("a mark off the guide's window is dropped, and the window never moves for one", async () => {
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const h = harness({ platform: "darwin", screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B) } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  const g = h.deps().guide;
+  g.draw({ kind: "box", frame: [2400, 300, 80, 30] });                       // on the other display
+  g.draw({ kind: "arrow", from: [500, 400], to: [2400, 300] });              // one end off
+  g.draw({ kind: "path", points: [[200, 500], [400, 500], [400, 9999]] });   // one point off
+  g.draw({ kind: "label", at: [50, 20], text: "left of the window" });       // before its left edge
+  g.draw({ kind: "scribble", frame: [300, 200, 10, 10] });                   // no such kind
+  g.draw({ kind: "box" });                                                   // nowhere
+  g.draw({ kind: "path", points: [[300, 200]] });                            // one point is no path
+  g.draw({ kind: "box", frame: [1450, 800, 200, 200] });                     // partly on it: drawn
+  const marks = h.sent.filter((m) => m.type === "draw");
+  assert.deepStrictEqual(marks.map((m) => [m.id, m.kind]), [["d1", "box"]]);
+  assert.strictEqual(h.windows.length, 1);
+  assert.strictEqual(h.windows[0].bounds, undefined, "never moved");
+  h.ask.cancel("test");
+});
+
+test("the guide taken to another display by a ring: the marks drawn on the last one go before it gets there", async () => {
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const snap = Object.assign({}, SNAP, { elements: [
+    { id: "e1", role: "button", label: "File", frame: [300, 60, 40, 20] },
+    { id: "e2", role: "button", label: "Share", frame: [2400, 300, 80, 30] },
+  ] });
+  const h = harness({ snap, platform: "darwin", knobs: { "desktop.agent.doneMs": 5000 }, steps: [[
+    { t: "heard", text: "where's share", mode: "show" },
+    { t: "say", text: "Under File, then Share." },
+    { t: "draw", kind: "number", target: { id: "e1" }, n: 1 },
+    { t: "point", id: "e2", caption: "Share" },
+    { t: "draw", kind: "number", target: { id: "e2" }, n: 2 },
+    { t: "done" },
+  ]], screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B) } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.filter((m) => m.type === "draw").length === 2);
+  const t = h.sent.slice(h.sent.findIndex((m) => m.type === "show")).map((m) => m.type);
+  // The number on A, then the move to B (the marks there go first), the
+  // ring, and the number on B in B's coordinates.
+  assert.deepStrictEqual(t.filter((x) => ["draw", "clear", "area", "point"].includes(x)), ["draw", "clear", "area", "point", "draw"]);
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "draw").map((m) => m.frame), [[200, 20, 40, 20], [900, 300, 80, 30]]);
+  h.ask.cancel("test");
+});
+
+test("Windows, a display at 150%: frames and points in physical pixels are drawn in DIP", async () => {
+  const D = { workArea: { x: 0, y: 0, width: 1280, height: 680 }, bounds: { x: 0, y: 0, width: 1280, height: 720 } };
+  const h = harness({ platform: "win32", screen: {
+    getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+    getDisplayNearestPoint: () => D,
+    screenToDipRect: (_w, r) => ({ x: r.x / 1.5, y: r.y / 1.5, width: r.width / 1.5, height: r.height / 1.5 }),
+    screenToDipPoint: (p) => ({ x: p.x / 1.5, y: p.y / 1.5 }),
+  } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.deps().guide.draw({ kind: "arrow", from: [300, 150], to: [900, 600, 150, 75] });
+  assert.deepStrictEqual(h.sent.find((m) => m.type === "draw"), { type: "draw", id: "d1", kind: "arrow", from: [200, 100], to: [600, 400, 100, 50] });
+  h.ask.cancel("test");
+});
+
+test("no card up, no marks: one drawn after the card has gone is dropped", async () => {
+  const h = harness({ knobs: FAST });
+  h.deps().guide.draw({ kind: "box", frame: [300, 200, 40, 20] });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.ask.cancel("test");
+  h.deps().guide.draw({ kind: "box", frame: [300, 200, 40, 20] });
+  assert.ok(!h.types().includes("draw"));
+});
+
+// ---- v3: dictation always wins the pill, whenever it starts ----------------------------
+
+// Every moment of a question a dictation can start in. main.js's
+// toggleDictation, in its order: a question still going is cancelled first
+// (ask.active()), while the pill is still its; then the dictation opens the
+// microphone and the pill is its. From then on nothing the question does (its
+// late stream, its timers, its fold, a tap) may put the pill in "ask" or at
+// "rest" under it, and once the dictation has written and given the pill
+// back, nothing of the question takes it again.
+const DICTATION_MOMENTS = [
+  ["while the question is said", { knobs: FAST }, async (h) => { await h.ask.tap(); await until(() => h.types().includes("show")); }],
+  ["while the app in front is being named", { knobs: FAST, slowFront: true }, async (h, o) => { void h.ask.tap(); await until(() => h.starts() === 1); o.later = () => o.release({ label: "Keynote" }); }],
+  ["while it thinks, its answer on its way", { knobs: FAST }, async (h) => { await h.ask.tap(); h.clip(); }],
+  ["on the Do it card", { knobs: FAST, steps: RISKY }, async (h) => { await h.ask.tap(); h.clip(); await until(() => h.types().includes("confirm")); }],
+  ["while an ASK's reply records", { knobs: FAST, steps: [
+    [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
+    [{ t: "done", text: "Okay." }],
+  ] }, async (h, o) => { await h.ask.tap(); h.clip(); await until(() => h.starts() === 2); o.later = () => h.clip(); }],
+  ["while the card folds back into the pill", { knobs: { "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } }, async (h, o) => {
+    await h.ask.tap(); h.clip(); await until(() => o.pill.calls.includes("closing"));
+  }],
+  ["under a card left up when its run is over", { knobs: { "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 200 } }, async (h) => {
+    await h.ask.tap(); h.clip(); await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
+  }],
+];
+for (const [moment, cfg, reach] of DICTATION_MOMENTS) {
+  test(`a dictation that starts ${moment} keeps the pill: never ask, never rest under it`, async () => {
+    const pill = fakePill();
+    const answers = [];
+    const ask = pill.pillAsk;
+    pill.pillAsk = (phase) => { const r = ask(phase); answers.push([phase, pill.state, r]); return r; };
+    const o = { pill, later: null, release: null };
+    const opts = { pill, knobs: cfg.knobs, steps: cfg.steps, get dictating() { return pill.recording; } };
+    if (cfg.slowFront) opts.frontInfo = () => new Promise((r) => { o.release = r; });
+    const h = harness(opts);
+    await reach(h, o);
+    // toggleDictation: the question let go of while it still has the pill
+    // (its closing is the only thing asked of it then), and the dictation in.
+    const took = answers.length;
+    if (h.ask.active()) h.ask.cancel("dictation");
+    assert.ok(answers.slice(took).every(([phase]) => phase === "closing"), JSON.stringify(answers.slice(took)));
+    const from = answers.length;
+    pill.dictate();
+    // Whatever the question had still coming comes now: the app named, a
+    // reply's clip, a tap on the way in (refused: one microphone), and every
+    // timer of the card's (the fold, doneMs) runs out.
+    if (o.later) o.later();
+    await h.ask.tap();
+    await sleep(500);
+    const during = answers.slice(from);
+    assert.ok(during.every(([, state, r]) => state === "listening" && r === null), JSON.stringify(during));
+    assert.strictEqual(pill.state, "listening");
+    // Written, and the pill back at rest by the dictation's own hand: the
+    // question that was cancelled for it never takes it again.
+    pill.recording = false; pill.state = "writing";
+    await sleep(60);
+    pill.state = "rest";
+    await sleep(400);
+    assert.ok(answers.slice(from).every(([, , r]) => r === null), JSON.stringify(answers.slice(from)));
+    assert.strictEqual(pill.state, "rest");
+    assert.strictEqual(pill.moved, took > 0 ? 1 : 0, "taken once, by the question, before the dictation");
+    assert.deepStrictEqual(h.actions, [], "the question did nothing");
+    h.ask.cancel("test");
+  });
+}
+
+test("the pill taken back mid-card, somewhere else: the card is told where it is now", async () => {
+  // An error of dictation's said on the pill mid-question (out of words, at
+  // a press of its key) leaves main's pill out of "ask"; the question's next
+  // phase takes it back, under the cursor again, which is on another display
+  // by now.
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const pill = fakePill();
+  const h = harness({ pill, steps: RISKY, knobs: FAST, platform: "darwin", screen: {
+    getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+    getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B),
+  } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  assert.deepStrictEqual(docks(h).map((d) => d.pill), [DOCK]);
+  pill.state = "error";
+  pill.bounds = { x: 1500, y: 1040 - 136, width: 1920, height: 132 };
+  h.clip();
+  await until(() => h.types().includes("confirm"));
+  assert.deepStrictEqual(pill.calls.slice(0, 3), ["listening", "thinking", "showing"]);
+  assert.strictEqual(pill.moved, 2);
+  // Off the guide's display now: no tether, no seed. Told once, not at
+  // every phase after.
+  assert.deepStrictEqual(docks(h).map((d) => [d.pill, d.seed]), [[DOCK, undefined], [null, false]]);
+  h.ask.cancel("test");
+});
+
+test("marks: each kind needs its own geometry, a number its numeral and a label its words; broken ones are dropped, never sent half-made", async () => {
+  const h = harness({ platform: "darwin", screen: { getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: () => ({ workArea: WORK, bounds: WORK }) } });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  const g = h.deps().guide;
+  const bad = [
+    null, undefined, 7, "box", {}, { kind: {} }, { kind: "box", frame: null },
+    { kind: "box", at: [300, 200] },                       // a box round a point: nothing to go round
+    { kind: "circle", from: [300, 200], to: [400, 300] },
+    { kind: "underline", points: [[300, 200], [400, 200]] },
+    { kind: "highlight", frame: [300, 200, NaN, 20] },
+    { kind: "box", frame: [300, 200, 40] },
+    { kind: "box", frame: [300, "x", 40, 20] },
+    { kind: "box", frame: [300, 200, Infinity, 20] },
+    { kind: "arrow", from: [300, 200] },
+    { kind: "arrow", to: [300, 200, 40, 20] },
+    { kind: "arrow", from: { x: 300, y: 200 }, to: [400, 300] },
+    { kind: "arrow", frame: [300, 200, 40, 20] },
+    { kind: "path", points: "300,200 400,300" },
+    { kind: "path", points: [[300, 200], [NaN, 300]] },
+    { kind: "path", points: [[300, 200], null] },
+    { kind: "path", frame: [300, 200, 40, 20] },
+    { kind: "number", at: [300, 200] },                    // no numeral
+    { kind: "number", at: [300, 200], n: 0 },
+    { kind: "number", at: [300, 200], n: 12 },
+    { kind: "number", at: [300, 200], n: "two" },
+    { kind: "number", n: 2 },
+    { kind: "label", at: [300, 200] },                     // no words
+    { kind: "label", at: [300, 200], text: " \n\u0007 " },
+    { kind: "label", at: [300, 200], text: { toString: () => "boo" } },
+    { kind: "label", at: [NaN, 200], text: "x" },
+  ];
+  for (const m of bad) assert.doesNotThrow(() => g.draw(m), JSON.stringify(m));
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "draw"), []);
+  // The good ones, each in its own form.
+  g.draw({ kind: "highlight", frame: [600, 300, 120, 18] });
+  g.draw({ kind: "number", frame: [300, 200, 40, 20], n: "2" });
+  g.draw({ kind: "label", frame: [300, 200, 40, 20], text: "here" });
+  g.draw({ kind: "arrow", from: [300, 200, 40, 20], to: [700, 500] });
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "draw").map((m) => [m.id, m.kind, m.frame || m.at || m.from]), [
+    ["d1", "highlight", [500, 260, 120, 18]],
+    ["d2", "number", [200, 160, 40, 20]],
+    ["d3", "label", [200, 160, 40, 20]],
+    ["d4", "arrow", [200, 160, 40, 20]],
+  ]);
+  h.ask.cancel("test");
 });

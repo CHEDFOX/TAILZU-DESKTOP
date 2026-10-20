@@ -4,6 +4,20 @@
   that says what Tailzu heard and what it found, a ring on the thing itself,
   and Blip peeking over the card's top edge, pointing at it.
 
+  It grows out of the pill. The pill's halves part (pill.js "ask") and a
+  thread rises from the gap between them; the card blooms at the thread's end
+  and stays tied to it while it is up: pill, card, thing, one line. When the
+  run ends the card folds back into the thread's end, the thread is pulled
+  down into the pill, and the halves click shut. The tether's look follows the
+  card: an amber line the voice plucks while it listens, dots with a light
+  running up them while it thinks, still dots after.
+
+  It draws. While it explains it can mark up the screen, as a teacher uses a
+  pen: circle part of a diagram, an arrow from a label to what it names,
+  underline or highlight the words it means, number the places to click.
+  Each mark is drawn in order as a hand draws it, amber over an ink edge,
+  its labels in Caveat on an ink chip, never over the card.
+
     listening   the card, a row of amber dots your voice moves, Blip's
                 antenna lit (the one amber the brand allows: something live);
                 a light, dotted, breathing ring on what the words so far seem
@@ -38,7 +52,20 @@
                              a path with nowhere to break); and the picture
                              layer: tentative (a guess ringed while they talk),
                              permission (the picture card), growing (an answer
-                             about a picture, a sentence at a time)
+                             about a picture, a sentence at a time); and the
+                             pill and the pen: dock (the birth, then listening,
+                             thinking, an answer), slide (a ring by the pill:
+                             the card goes aside, the tether bends), fold (an
+                             answer, then away, over and over), draw (a right
+                             triangle explained with marks on it)
+    …&capture                the same on a virtual clock: window.__step(ms)
+                             moves it on, for frame-exact screenshots
+    …&dark                   over a dark app instead of a light one
+    …&pill=seed | off        no pill on this display (the guide's own seed), or
+                             not tied to one at all (as before it had a pill)
+
+  Every scene has a mock pill at the bottom centre, drawn over this window as
+  main keeps the real one, with the dock message pointing at it.
 -->
 <html>
 <head>
@@ -54,6 +81,8 @@
   @font-face { font-family:"Instrument Sans"; font-weight:500; src:url(assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
   @font-face { font-family:"Instrument Sans"; font-weight:600; src:url(assets/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
   @font-face { font-family:"Noto Sans Devanagari"; font-weight:100 900; src:url(assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
+  /* The marks' labels: the handwriting face, as app.html declares it. */
+  @font-face { font-family:"Caveat"; font-weight:600; font-display:swap; src:url(assets/fonts/caveat-latin-600-normal.woff2) format("woff2"); }
 
   :root {
     --ink:#151210; --ink-2:#1D1916; --pale:#F3E2C6; --pale-2:rgba(243,226,198,.68); --pale-3:rgba(243,226,198,.42);
@@ -61,24 +90,26 @@
     --sans:"Instrument Sans","Noto Sans Devanagari",-apple-system,"Segoe UI",system-ui,sans-serif;
     --serif:"Newsreader","Noto Sans Devanagari",Georgia,serif;
     --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
-    --w:348px; --r:18px; --glide:.42s cubic-bezier(.2,.9,.24,1);
+    --w:348px; --r:18px;
   }
   html, body { margin:0; background:transparent; overflow:hidden; user-select:none; -webkit-user-select:none; cursor:default; }
   #fx { position:fixed; left:0; top:0; pointer-events:none; }
 
-  /* THE CARD ------------------------------------------------------------- */
+  /* THE CARD -------------------------------------------------------------
+     Where it is, how tall, and its bloom out of the thread and its fold
+     back into it are all set by guide.js on every frame (transform, height,
+     opacity, the corners while it blooms), so the tether can stay on its
+     edge and a review can stop on any frame: nothing here transitions. */
   #card {
     position:fixed; left:0; top:0; width:var(--w); box-sizing:border-box;
     border-radius:var(--r); background:var(--ink); color:var(--pale);
     box-shadow: inset 0 0 0 1px var(--rule), 0 1px 0 rgba(255,255,255,.04) inset,
       0 24px 56px -14px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.28);
     font:400 15px/1.45 var(--sans); -webkit-font-smoothing:antialiased;
-    transform:translate3d(var(--x,0px), var(--y,0px), 0);
-    transition: transform var(--glide), opacity .26s ease, height .28s cubic-bezier(.2,.8,.2,1);
-    opacity:0; overflow:hidden;
+    transform:translate3d(-9999px, 0, 0);
+    visibility:hidden; overflow:hidden;
   }
-  #card.on { opacity:1; }
-  #card.still { transition: opacity .26s ease, height .28s cubic-bezier(.2,.8,.2,1); }
+  #card.on { visibility:visible; }
   /* The dots under everything: the same dither the films are drawn in, too
      faint to read as anything but paper. */
   #card::before {
@@ -206,13 +237,14 @@
   #chip::before { content:""; display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--live); margin-right:8px; vertical-align:1px; }
 
   @media (prefers-reduced-motion: reduce) {
-    #card, #chip { transition:opacity .2s ease; }
+    #chip { transition:opacity .2s ease; }
     #say .w { animation:none; opacity:1; transform:none; }
     #steps li[data-s="doing"] i::after, #card[data-state="listening"] #lamp { animation:none; }
   }
 
-  /* THE REVIEW PAGE ONLY: an app to point at. */
+  /* THE REVIEW PAGE ONLY: an app to point at, and the pill under it all. */
   body.demo { background:#E9E5DE; }
+  body.demo #mockpill { position:fixed; left:0; top:0; pointer-events:none; }
   body.demo .mock { position:fixed; left:50%; top:46px; transform:translateX(-50%); width:880px; height:560px; background:#fff; border-radius:12px; overflow:hidden;
     box-shadow:0 1px 0 rgba(0,0,0,.05), 0 18px 40px rgba(0,0,0,.14); font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; }
   body.demo .mock .bar { height:38px; border-bottom:1px solid #ECE7DF; background:#FAF8F4; display:flex; align-items:center; gap:7px; padding:0 14px; }
@@ -236,6 +268,35 @@
   body.demo .mock .fig { margin-top:20px; width:330px; height:128px; border-radius:8px; background:#FBFAF7; box-shadow:inset 0 0 0 1px #ECE7DF;
     display:grid; place-items:center; font:italic 400 30px/1 Georgia,"Times New Roman",serif; color:#1B1712; letter-spacing:.01em; }
   body.demo .mock .fig sup, body.demo .mock .fig sub { font-size:.5em; line-height:0; }
+  /* A picture to explain: a right triangle, as a worksheet has it. */
+  body.demo .mock .tri { margin-top:10px; width:480px; height:250px; color:#1B1712; }
+  body.demo .mock .tri svg { display:block; }
+  body.demo .mock .tri text { font:italic 400 24px/1 Georgia,"Times New Roman",serif; fill:currentColor; }
+  /* Something by the pill: a slideshow's controls at the bottom of the screen. */
+  body.demo .dockbar { position:fixed; left:50%; bottom:132px; transform:translateX(-50%); display:flex; align-items:center; gap:4px; padding:5px;
+    border-radius:12px; background:rgba(255,255,255,.94); box-shadow:0 1px 0 rgba(0,0,0,.05), 0 10px 28px rgba(0,0,0,.16);
+    font:500 13px/1 -apple-system,"Segoe UI",system-ui,sans-serif; color:#3A332C; }
+  body.demo .dockbar span { padding:8px 11px; border-radius:8px; }
+  body.demo .dockbar span.n { color:#8A8076; font-variant-numeric:tabular-nums; }
+  body.demo .dockbar span.primary { background:#2F6BFF; color:#fff; font-weight:600; }
+  /* …and over a dark app: a code editor's colours. */
+  body.demo.dark { background:#141619; }
+  body.demo.dark .mock { background:#1E2125; color:#DCD7CE; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 18px 40px rgba(0,0,0,.5); }
+  body.demo.dark .mock .bar { background:#23272C; border-bottom-color:#2F3339; }
+  body.demo.dark .mock .bar i { background:#3A3F46; }
+  body.demo.dark .mock .bar b { color:#9AA0A8; }
+  body.demo.dark .mock .tools span { background:#2A2F35; color:#D3CEC5; }
+  body.demo.dark .mock .tools span.primary { background:#2F6BFF; color:#fff; }
+  body.demo.dark .mock .side { background:#1A1D21; border-right-color:#2B2F35; }
+  body.demo.dark .mock .side p { color:#A9A49B; }
+  body.demo.dark .mock .side p.on { background:#2B3036; color:#F1ECE3; }
+  body.demo.dark .mock .page .ln { background:#2A2E34; }
+  body.demo.dark .mock .composer { border-color:#363B42; color:#7D8288; }
+  body.demo.dark .mock .composer em { background:#F1ECE3; color:#15171A; }
+  body.demo.dark .mock .fig { background:#23272C; box-shadow:inset 0 0 0 1px #30353B; color:#E6E1D8; }
+  body.demo.dark .mock .tri { color:#E6E1D8; }
+  body.demo.dark .dockbar { background:rgba(40,44,50,.96); color:#D3CEC5; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 10px 28px rgba(0,0,0,.5); }
+  body.demo.dark .menubar { background:rgba(30,33,37,.92); color:#E6E1D8; }
 </style>
 </head>
 <body>
