@@ -537,6 +537,7 @@ function toneLabel(id) {
 // which only ever makes this fresher.
 let authSession = loadSession();   // { access_token, refresh_token, expires_at }
 let accountTone = null;            // last value read from the account
+let accountNickname = "";          // their own name for the assistant ("Jarvis"), "" when none
 let refreshing = null;             // in-flight refresh, so N callers make 1 POST
 
 /** True when the stored access token is spent (or about to be). An expiry we
@@ -614,7 +615,7 @@ async function refreshSession() {
         // Signed out for real: fall back to the device tone rather than keep
         // showing an account this process can no longer reach.
         adoptSession(null);
-        accountTone = null;
+        signedOut();
         refreshTray();
       }
     } catch { /* unreachable, not refused: keep the session and try again */ }
@@ -653,7 +654,22 @@ async function refreshAccountTone() {
     const t = (p && (p.personality ? p.personality.activeTone : p.activeTone)) || null;
     if (t && t !== accountTone) { accountTone = t; refreshTray(); }
     else if (t) accountTone = t;
+    // Their own name for it, from the same read. Ask takes it off the front
+    // of a question as the server does (setupAsk's names): "Jarvis, where's
+    // export?" was matched here with "jarvis" in it, and found nothing.
+    const me = p && (p.personality || p);
+    const nick = me && typeof me.assistantName === "string" ? me.assistantName.replace(/\s+/g, " ").trim().slice(0, 24) : "";
+    accountNickname = nick.toLowerCase() === "tailzu" ? "" : nick;
   } catch { /* leave the last known value */ }
+}
+
+/** What this process knew of the account that has gone. Ask's "Always for
+ *  <app>" goes with it: the next person to sign in on this computer is
+ *  asked for themselves before a picture of their screen is sent. */
+function signedOut() {
+  accountTone = null;
+  accountNickname = "";
+  if (picturesAllowed().length) forgetPictures();
 }
 
 async function setAccountTone(tone) {
@@ -1282,13 +1298,14 @@ function pill(state, data) {
  * pill.
  *
  * Dictation always wins it (ask.js pillAskMove): while one records or writes,
- * nothing here changes. On a question's first phase the pill is put on the
- * display under the cursor first, as dictation puts it, so the card and the
- * pill are on the one display.
+ * nothing here changes. On a question's first phase (`first`, its card's
+ * show) the pill is put on the display under the cursor first, as dictation
+ * puts it, so the card and the pill are on the one display: also when the
+ * last question's card still has it, up or folding on another display.
  */
-function pillAsk(phase) {
+function pillAsk(phase, first) {
   if (!pillOn()) return null;
-  const move = pillAskMove(phase, { state: pillState, recording });
+  const move = pillAskMove(phase, { state: pillState, recording, first: !!first });
   if (!move) return null;
   if (move === "rest") { pill("rest"); return null; }
   const w = createPillWindow();
@@ -1726,6 +1743,19 @@ function buildMenu() {
       enabled: signedIn() && !recording,
       click: () => { if (!recording) void ask.tap({ menu: true }); },
     }] : []),
+    // "Always for <app>" on the picture card, taken back: one click on it
+    // sent pictures of that app for good, with nowhere to undo it. Listed
+    // while there is one, each to be asked about again, or all of them.
+    ...(picturesAllowed().length ? [{
+      label: txt("desktop.tray.picturesAllowed", "Pictures sent without asking"),
+      submenu: picturesAllowed().map((a) => ({
+        label: txt("desktop.tray.picturesForget", "Ask again for {app}", { app: a }),
+        click: () => forgetPictures(a),
+      })).concat([
+        { type: "separator" },
+        { label: txt("desktop.tray.picturesForgetAll", "Ask again for all of them"), click: () => forgetPictures() },
+      ]),
+    }] : []),
     {
       label: !notes ? txt("desktop.tray.notesStart", "Take notes") + "  " + prettyKey(cfg.notesHotkey)
         : notes.state === "recording" ? fmt("tray.notesStop", { time: elapsedLabel(notesElapsed()) })
@@ -1897,7 +1927,7 @@ ipcMain.handle("app:setSession", (e, v) => {
   // here — and signing out drops the tone too, or the tray would go on
   // showing (and dictating with) the tone of an account nobody is in.
   adoptSession(v && typeof v === "object" ? v : null);
-  if (!signedIn()) accountTone = null;
+  if (!signedIn()) signedOut();
   refreshTray();
   void refreshAccountTone();
   return forWindow(authSession);
@@ -2075,8 +2105,10 @@ function toggleDictation() {
   if (!recording && !requireAccount()) return;
   if (!recording && !requireWords()) return;
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
-  // One microphone: a dictation starting ends a question still open.
-  if (!recording && ask && ask.active()) ask.cancel("dictation");
+  // One microphone: a dictation starting ends a question still open, and
+  // puts away a finished answer's card, which may still be saying it: the
+  // microphone would write its voice into what they are about to say.
+  if (!recording && ask && (ask.active() || ask.shown())) ask.cancel("dictation");
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
@@ -2375,6 +2407,30 @@ async function authorizedFetch(p, init) {
   return res;
 }
 
+/** The apps said "Always" to on the picture card (ask.js permit). */
+function picturesAllowed() {
+  return Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : [];
+}
+/** Asked again before a picture of `app` is sent, or of any app. */
+function forgetPictures(app) {
+  localState.askPicturesAlways = app == null ? [] : picturesAllowed().filter((a) => a.toLowerCase() !== String(app).toLowerCase());
+  saveLocalState();
+  refreshTray();
+}
+
+// The Mac's Screen Recording page in System Settings, for Ask's card when a
+// look was refused for want of it (agent.js TEXT.needScreen). A fixed
+// address: the card's button opens this and nothing else.
+const SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+function openScreenRecordingSettings() {
+  // macOS lists in that page only the apps that have asked to record the
+  // screen, and the helper never asks (tzax.swift): asking for the window
+  // list once puts Tailzu there (the first time with the system's own
+  // prompt), so there is a switch to turn on.
+  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* the page still opens */ }
+  shell.openExternal(SCREEN_RECORDING_SETTINGS).catch(() => {});
+}
+
 function setupAsk() {
   if (ask) return;
   ask = createAsk({
@@ -2398,6 +2454,11 @@ function setupAsk() {
     frontInfo: () => frontApp.frontInfo(),
     // A dictation recording keeps the microphone; a question waits its turn.
     dictating: () => recording,
+    // The names it answers to: its own, Blip, and theirs for it.
+    names: () => ["Tailzu", "Blip", accountNickname].filter(Boolean),
+    // The card's button when the Mac has not let Tailzu see the screen; none
+    // elsewhere (a look on Windows needs no permission).
+    screenSettings: process.platform === "darwin" ? openScreenRecordingSettings : null,
     // The language dictation uses, so a question is heard in it too.
     language: () => cfg.language,
     requireAccount,
@@ -2415,15 +2476,17 @@ function setupAsk() {
     nativeImage,
     // The apps whose pictures may go without the card asking each time:
     // "Always for <app>" on it. This computer's own choice, kept with the
-    // rest of what it remembers about itself, never sent anywhere.
-    picturesAlways: () => (Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : []),
+    // rest of what it remembers about itself, never sent anywhere, and taken
+    // back from the tray (forgetPictures).
+    picturesAlways: picturesAllowed,
     allowPicturesAlways: (name) => {
-      const list = Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : [];
+      const list = picturesAllowed();
       const key = String(name || "").trim().slice(0, 60);
       if (!key || list.some((a) => a.toLowerCase() === key.toLowerCase())) return;
       // Kept short: past a hundred apps, the ones said yes to longest ago go.
       localState.askPicturesAlways = list.concat(key).slice(-100);
       saveLocalState();
+      refreshTray();
     },
   });
   if (askOn()) driver.start();

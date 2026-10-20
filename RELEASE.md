@@ -170,26 +170,41 @@ arrive while it is still being said. The device matches them against what
 is on screen itself (`resolver.js`, the server's matcher ported), and a
 confident "where's export?" rings the button as the word is said, a thinner
 dotted ring that firms up when the question ends. A question that is only
-"where is X" never reaches the server at all. A question streamed this way
-is metered as Ask, never against the month's dictation words.
+"where is X" makes no Ask request at all; its words still come from the
+server's live transcription, which is how they arrive while it is said. A
+question streamed this way is metered as Ask, never against the month's
+dictation words.
 
 **Pictures.** The screen is also read from its pixels on the device: the
-helper takes one capture of the front window (ScreenCaptureKit on macOS 14+,
-`CGWindowListCreateImage` before; a screen copy on Windows) and reads its
-text with the system's own OCR (Vision; Windows.Media.Ocr). Those lines join
-the list as plain text (`o1`, `o2`, …), so a button drawn in a canvas or a
-word in a screenshot can be found too; the capture itself stays on the
-device. Only a question about something drawn ("what's this graph
-saying?", "solve this", a photo, a diagram, an equation) sends a picture:
-one JPEG of that part of the screen (the image under the pointer, else the
-biggest image, else the window), at most 1024 px, after a card asks
-**Allow once / Always for <app> / Not now** (`desktop.agent.pictures`:
-ask, always or never). The card says "1 picture sent" when one went. The
-answer streams back sentence by sentence and is spoken as it grows; maths
-comes in plain symbols (x², √, π). The text path can also say it needs to
-look, and the same step is asked again with the picture. On a Mac the
-pixels need the **Screen Recording** permission; without it Ask still works
-from the accessibility text alone.
+helper takes one capture of the front window (ScreenCaptureKit on macOS
+14+, `CGWindowListCreateImage` before; a screen copy on Windows) and reads
+its text with the system's own OCR (Vision; Windows.Media.Ocr). Those lines
+join the list as plain text (`o1`, `o2`, …), so a button drawn in a canvas
+or a word in a screenshot can be found too; the capture itself stays on the
+device. Only a question about something drawn ("what's this graph saying?",
+"solve this", a photo, a diagram, an equation) sends a picture: one JPEG of
+that part of the screen (the image under the pointer, else the biggest
+image, else the window), at most 1024 px, after a card asks **Allow once /
+Always for <app> / Not now**. The part that would go is ringed while the
+card asks, and the card says "this window" when it is the whole window. The
+picture goes to Tailzu and on to the AI providers that answer it, and the
+card says so. Always is offered for an app, never for a browser tab (its
+name is the page's own title), and only the person's own Always skips the
+card: `desktop.agent.pictures` can turn pictures off (never), not on. The
+tray lists the apps said Always to, to ask again for any of them, and
+signing out forgets them. A part too small to crop sends no picture, never
+the whole window. The card says "1 picture sent" when one went. The answer
+streams back sentence by sentence and is spoken as it grows, and the card
+stays up until the last sentence has been said (Esc puts it away, and a
+dictation started meanwhile does too); maths comes in plain symbols (x², √,
+π). The text path can also say it needs to look, and the same step is asked
+again with the picture. On a Mac the pixels need the **Screen Recording**
+permission; without it Ask still works from the accessibility text alone,
+and when an answer needs the picture the card says so, with a button that
+opens System Settings at Screen Recording (Tailzu never asks for it on its
+own). The picture is cut below the window's title bar and a browser's
+address bar, which both helpers now point out even when the OCR did not
+read them.
 
 **Out of the pill.** Ask now comes out of the pill, the way dictation does
 but upward: the pill's halves part a little, a thread rises out of the gap,
@@ -210,7 +225,9 @@ to click numbered 1, 2, 3 to match the card's steps. Marks are drawn
 stroke by stroke, amber with an ink edge, with labels in Caveat on small
 ink chips that keep off the card. On a picture they land on what the model
 saw (it gives places in the picture; the device maps them through the
-crop); otherwise on the buttons and lines it read. They go before Ask acts
+crop); otherwise on the buttons and lines it read. The first mark on
+another display than the card's takes the guide there, as a ring does
+(the pointer on one screen, the app on the other). They go before Ask acts
 on the screen, and with the card. The server checks every mark (ids it
 was shown, picture places only with a picture, at most 12 a step);
 `desktop.agent.draw` turns them off. Nothing new leaves the machine for

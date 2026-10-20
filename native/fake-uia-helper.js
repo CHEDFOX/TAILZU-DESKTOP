@@ -8,8 +8,10 @@
 //
 // Every mode answers `ping` at once, so the driver's warm-up resolves fast.
 // The look modes: "slowlook" (a look answered late, everything else at once),
-// "hanglook" (a look never answered), "biglook" (a 2 MB picture), "badlook"
-// (a look that keeps to none of the contract), "nowindow" and "noframe".
+// "walk" (lines read one at a time, a snapshot holding the reader as the real
+// walk does), "hanglook" (a look never answered), "biglook" (a 2 MB picture),
+// "badlook" (a look that keeps to none of the contract), "nowindow" and
+// "noframe".
 const fs = require("fs");
 const readline = require("readline");
 
@@ -53,10 +55,12 @@ function lookAnswer(msg) {
       { text: "Export as PDF", frame: [-1800, 70, 94, 18] },
       { text: "x\u00b2 + 1 = 0", frame: [-1700, 350, 120, 30] },
     ],
+    titleFrames: [[-1820, 50, 800, 31]],
     image: { mime: "image/jpeg", data, width: 800, height: 600 },
     ocr: "ok", ms: 4,
     // Echoed so a test can see the options arrive as the driver sent them.
     echo: { budgetMs: msg.budgetMs, maxSide: msg.maxSide, quality: msg.quality, ocr: msg.ocr, image: msg.image },
+    echoDeadline: msg.deadline, readAt: Date.now(),
   };
 }
 
@@ -71,6 +75,8 @@ function badLookAnswer(msg) {
     window: { frame: [0, 0, 800, 600], title: 42 },
     scale: "points",
     lines,
+    // Frames that are none, and more than the eight the helper sends.
+    titleFrames: [null, [1, 2, 3], [0, 0, 0, 10], [0, 0, 800, "31"], ...Array.from({ length: 12 }, (_, i) => [0, i, 800, 31])],
     image: { mime: "image/jpeg", data: "", width: 800, height: 600 },
     ms: "soon",
   };
@@ -89,6 +95,28 @@ function answer(msg) {
 }
 
 const reorderBuf = [];
+
+// "walk": as uia-agent.ps1 reads its lines, one at a time on one thread. A
+// snapshot holds that thread for its walk (500 ms); a look is begun when its
+// line is read and answered by a thread of its own 300 ms later.
+const walkQueue = [];
+let walking = false;
+function walkNext() {
+  if (walking || !walkQueue.length) return;
+  const msg = walkQueue.shift();
+  if (msg.cmd === "snapshot") {
+    walking = true;
+    setTimeout(() => { write(answer(msg)); walking = false; walkNext(); }, 500);
+    return;
+  }
+  if (msg.cmd === "look") {
+    const a = answer(msg);
+    setTimeout(() => write(a), 300);
+  } else {
+    write(answer(msg));
+  }
+  walkNext();
+}
 
 // "deaf" dies the slow way: it answers the warm-up ping, then stops reading
 // (closes fd 0, so nothing reads the pipe any more) and exits only a little
@@ -157,6 +185,11 @@ if (rl) rl.on("line", (line) => {
       // once, ahead of it.
       if (msg.cmd === "look") setTimeout(() => write(answer(msg)), 400);
       else write(answer(msg));
+      break;
+
+    case "walk":
+      walkQueue.push(msg);
+      walkNext();
       break;
 
     case "hanglook":

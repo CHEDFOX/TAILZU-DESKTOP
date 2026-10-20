@@ -111,19 +111,26 @@ window rather than recording into a history no account owns.
     now** (or tap Alt twice). Esc or the card's ✕ stops it.
   - **Instant**: the question streams as it is said, and a plain "where's
     X" is matched on the device (`resolver.js`) and ringed before the
-    question ends, with no server call.
+    question ends, with no Ask request. Its words still come from the
+    server's live transcription, as every question's do.
   - **Pictures**: "what's this graph saying?", "solve this". The window is
     also read from its pixels on the device (the system's own OCR), and a
-    question about something drawn sends one cropped picture, after a card
-    asks **Allow once / Always for this app / Not now**.
+    question about something drawn sends one cropped picture, to Tailzu and
+    the AI providers it answers with, after a card asks **Allow once /
+    Always for this app / Not now**. Always is offered for an app, never for
+    a browser tab, whose name is the page's own title; the tray lists the
+    apps said Always to and asks again for any of them, and signing out
+    forgets them. `desktop.agent.pictures: never` turns pictures off; no
+    server value skips the card.
   - **Out of the pill**: the card grows out of the pill on a thread, stays
     tied to it while it is up, and folds back into it at the end.
   - **Drawing**: while it explains, it circles, underlines, numbers and
     draws arrows on the screen or on the picture, labelled in handwriting.
   - **Mostly text**: what leaves the machine is a text list of the screen's
     buttons, fields and OCR'd lines (roles, labels, short values, a rough
-    position), plus that one picture when allowed. No frames or window
-    titles, and nothing from a private window or a sensitive app.
+    position), the question's audio on the live stream, plus that one
+    picture when allowed. No frames or window titles, and nothing from a
+    private window or a sensitive app.
   - **Knobs**: `desktop.agent.*` and `desktop.guide.*`; off with
     `desktop.agent.enabled`. While Ask is on, Alt twice asks instead of
     dictating. Ctrl twice dictates.
@@ -189,7 +196,8 @@ SmartScreen, and run.
   Security → Accessibility** (without it, text is still on the clipboard).
   **Ask** needs the same permission to read and press the app's buttons,
   and **Screen Recording** to read text drawn as pixels and to send a
-  picture (it works without it, from the accessibility text alone).
+  picture (it works without it, from the accessibility text alone; a
+  question that needs the picture says so, with a button to that page).
 - **macOS hold-to-talk** — the key hook also needs **Input Monitoring**.
 - **Linux (X11)** — auto-paste needs `xdotool`.
 

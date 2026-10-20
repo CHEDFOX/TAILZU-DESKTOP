@@ -58,9 +58,15 @@
   // The bloom: out quickly, a touch past its size, and back. The fold is the
   // same reversed, without the overshoot: an ease-in, so it is pulled home.
   const BLOOM = cubicBezier(.2, 1.25, .35, 1);
-  function rgba(hex, a) {
-    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
-    if (!m) return hex;
+  // A knob colour at an alpha. The knob may be any CSS colour (knobs.js
+  // color), not only #RRGGBB: a canvas says it back, and says an opaque one
+  // as #rrggbb. Taken as it came, an ink of "rgb(232,162,60)" kept no alpha
+  // at all, and its glow was solid.
+  const probe = document.createElement("canvas").getContext("2d");
+  function rgba(color, a) {
+    probe.fillStyle = "#000"; probe.fillStyle = String(color);
+    const m = /^#([0-9a-f]{6})$/i.exec(probe.fillStyle);
+    if (!m) return color;
     const n = parseInt(m[1], 16);
     return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
   }
@@ -217,18 +223,21 @@
     // tentative ring, and the card, back over the pill, sat on the very
     // triangle it was drawing on, Blip's head over two of its marks.
     const keep = [];
+    let ringBox = null;
     if (ring) {
       const pad = K.num("desktop.guide.ringPad", 6) + 12;    // the ring's marching dots, and a breath
       const [rx, ry, rw, rh] = ring.frame;
-      keep.push([rx - pad, ry - pad, rx + rw + pad, ry + rh + pad]);
+      ringBox = [rx - pad, ry - pad, rx + rw + pad, ry + rh + pad];
+      keep.push(ringBox);
     }
-    for (const m of marks) if (!m.fadeAt && m.area) keep.push([m.area[0] - 10, m.area[1] - 10, m.area[0] + m.area[2] + 10, m.area[1] + m.area[3] + 10]);
+    for (const m of marks) if (!m.fadeAt) for (const [ax, ay, aw, ah] of m.areas) keep.push([ax - 10, ay - 10, ax + aw + 10, ay + ah + 10]);
     // Gone aside, it stays aside when what it made room for goes: it moves
     // to make room, and coming back as an answer ends was movement for
     // nothing. The next card starts over the pill.
     if (!keep.length) return [S.slid && S.box ? clampX(S.box.x, cw) : x, y, "dock"];
     const blipRoom = K.num("desktop.guide.blipRoom", 66);
-    const over = (cx) => keep.some(([l, t, r, b]) => cx < r && cx + cw > l && y - blipRoom < b && y + ch > t);
+    const hits = ([l, t, r, b], cx) => cx < r && cx + cw > l && y - blipRoom < b && y + ch > t;
+    const over = (cx) => keep.some((k) => hits(k, cx));
     if (!over(x)) return [x, y, "dock"];
     // Far enough off that the thread to the ring still shows between them;
     // nearer, down to a small gap, where the screen's edge leaves less room
@@ -243,10 +252,17 @@
       }
     }
     if (best !== null) return [best, y, "dock"];
-    if (!ring) return [x, y, "dock"];
+    // Only the ring itself under the card sends it to the ring's side: a
+    // ring at the top of the screen, with a mark under the card it could not
+    // get clear of, sent it flying up there on a tether across the screen,
+    // where it covered the work and was no clearer of the mark.
+    if (!ringBox || !hits(ringBox, x)) return [x, y, "dock"];
     // Still tied: never lower than the tether lets it be, or the thread
-    // between it and the pill would be all but gone.
+    // between it and the pill would be all but gone. Where beside() has no
+    // side for it either (a ring the whole screen wide), it is over the
+    // ring wherever it goes, so it stays over the pill.
     const v1 = beside(ring, cw, ch);
+    if (v1[2] === "default") return [x, y, "dock"];
     return [v1[0], Math.min(v1[1], y), v1[2]];
   }
   function place(instant) {
@@ -964,7 +980,7 @@
     const amp = K.num("desktop.guide.inkWobble", 1.2);
     // Around a thing: its frame (`at` as a frame is taken as one too).
     const frame = asFrame(m.frame) || asFrame(m.at);
-    const out = { id, kind, strokes: [], len: 0, fill: null, sweep: null, disc: null, label: null, spots: null, bounds: null, area: null, path: null, start: 0, dur: 0, fadeAt: 0 };
+    const out = { id, kind, strokes: [], len: 0, fill: null, sweep: null, disc: null, label: null, spots: null, bounds: null, areas: [], path: null, start: 0, dur: 0, fadeAt: 0 };
     const raw = [];
     switch (kind) {
       case "box": {
@@ -1110,15 +1126,30 @@
       for (const st of out.strokes) for (let i = 0; i < st.pts.length; i += 2) { x0 = Math.min(x0, st.pts[i]); x1 = Math.max(x1, st.pts[i]); y0 = Math.min(y0, st.pts[i + 1]); y1 = Math.max(y1, st.pts[i + 1]); }
       out.bounds = [x0 - 3, y0 - 3, x1 - x0 + 6, y1 - y0 + 6];
     } else if (out.sweep) out.bounds = [out.sweep[0], out.sweep[2], out.sweep[1] - out.sweep[0], out.sweep[3] - out.sweep[2]];
-    // All of it, arrows and paths too: what a card tied to the pill keeps
-    // off (docked). Drawn under the card, a mark it covers is not seen.
+    // What a card tied to the pill keeps off (docked): drawn under the card,
+    // a mark it covers is not seen. All of a box, a circle or a closed path,
+    // what is inside it too; but an arrow or an open path only along its
+    // line, in short runs of it (eight points, about 48 px): its box is
+    // mostly empty, and kept off, a line nowhere near the card sent the card
+    // across the screen.
     {
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      const runs = kind === "arrow" || (kind === "path" && m.closed !== true);
+      let x0, y0, x1, y1;
+      const reset = () => { x0 = y0 = Infinity; x1 = y1 = -Infinity; };
       const add = (x, y) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); };
-      for (const st of out.strokes) for (let i = 0; i < st.pts.length; i += 2) add(st.pts[i], st.pts[i + 1]);
+      const flush = () => { if (x1 >= x0) out.areas.push([x0, y0, x1 - x0, y1 - y0]); reset(); };
+      reset();
+      for (const st of out.strokes) {
+        for (let i = 0; i < st.pts.length; i += 2) {
+          add(st.pts[i], st.pts[i + 1]);
+          // The next run starts where this one ends, so no piece of the line falls between them.
+          if (runs && i / 2 % 8 === 7 && i + 2 < st.pts.length) { flush(); add(st.pts[i], st.pts[i + 1]); }
+        }
+        if (runs) flush();
+      }
       if (out.disc) { add(out.disc.x - 12, out.disc.y - 12); add(out.disc.x + 12, out.disc.y + 12); }
       if (out.sweep) { add(out.sweep[0], out.sweep[2]); add(out.sweep[1], out.sweep[3]); }
-      out.area = x1 >= x0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+      flush();
     }
     const text = typeof m.text === "string" ? m.text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim().slice(0, 48) : "";
     if (text) {
@@ -1134,16 +1165,23 @@
   const labelFont = (size) => `600 ${size}px Caveat, "Segoe Print", cursive`;
   /** The label where it is clear: off the card (and Blip's head over it),
    *  the ring and its label, the pill, and the other labels; the first of
-   *  its spots that is, else the first on screen. */
+   *  its spots that is, else of the same spots stepped further out. Where
+   *  none is, it may cross the ring or the tether, but never the card, the
+   *  ring's label or another label: with nowhere for it, it is not drawn
+   *  (placed false) until the card moves (relabel). */
   function placeLabel(m) {
     const L = m.label;
     if (!L) return;
-    const free = (x, y) => {
+    // `loose`: only what a label would hide or be hidden by.
+    const free = (x, y, loose) => {
       if (x < 8 || y < 8 || x + L.w > W - 8 || y + L.h > H - 8) return false;
       const hit = (r, g) => r && x < r.x + r.w + g && x + L.w > r.x - g && y < r.y + r.h + g && y + L.h > r.y - g;
       const b = S.box;
       if (b && x < b.x + b.w + 6 && x + L.w > b.x - 6 && y < b.y + b.h + 6 && y + L.h > b.y - 62) return false;
       if (hit(S.chipBox, 6)) return false;
+      if (S.P && hit(S.P, 10)) return false;
+      for (const o of marks) if (o !== m && o.label && !o.fadeAt && o.label.placed && hit(o.label, 4)) return false;
+      if (loose) return true;
       if (S.ring) {
         const [rx, ry, rw, rh] = S.ring.frame;
         // Off what is ringed; and off the line of a ring round a whole
@@ -1156,13 +1194,11 @@
           if (!inside && hit({ x: rx, y: ry, w: rw, h: rh }, g + 4)) return false;
         }
       }
-      if (S.P && hit(S.P, 10)) return false;
       // Nor on the tether between the pill and the card.
       if (S.P && b) {
         const px = S.P.x + S.P.w / 2, ax = clamp(px, b.x + 40, b.x + b.w - 40), top = b.y + b.h;
         if (hit({ x: Math.min(px, ax), y: top, w: Math.abs(px - ax), h: Math.max(0, S.P.y - top) }, 8)) return false;
       }
-      for (const o of marks) if (o !== m && o.label && !o.fadeAt && o.label.placed && hit(o.label, 4)) return false;
       return true;
     };
     // And, if it can, off the other marks: their numbers, and what their
@@ -1183,21 +1219,33 @@
       const l = rx - g, t = ry - g, r = rx + rw + g - L.w, b = ry + rh + g - L.h;
       if (r > l && b > t) for (const p of spots.slice()) if (p[0] < r + L.w && p[0] + L.w > l && p[1] < b + L.h && p[1] + L.h > t) spots.push([clamp(p[0], l, r), clamp(p[1], t, b)]);
     }
-    const inWin = (s) => s[0] >= 8 && s[1] >= 8 && s[0] + L.w <= W - 8 && s[1] + L.h <= H - 8;
-    const s = spots.find((p) => free(p[0], p[1]) && clear(p[0], p[1])) || spots.find((p) => free(p[0], p[1])) || spots.find(inWin) || spots[0] || [8, 8];
-    L.x = clamp(s[0], 8, Math.max(8, W - 8 - L.w)); L.y = clamp(s[1], 8, Math.max(8, H - 8 - L.h));
-    L.placed = true;
+    // Crowded (two labels on one point, a label inside a labelled box by
+    // the card), every spot can be taken: the same spots a label's height
+    // up and down and half its width aside, then twice and three times
+    // that, nearest first. The first on screen, taken anyway, put one
+    // label on top of another, and both were unreadable.
+    const more = [];
+    for (let k = 1; k <= 3; k++) {
+      const dy = k * (L.h + 6), dx = k * L.w / 2;
+      for (const [x, y] of spots) more.push([x, y - dy], [x, y + dy], [x - dx, y], [x + dx, y]);
+    }
+    const fits = (p) => free(p[0], p[1]) && clear(p[0], p[1]);
+    const s = spots.find(fits) || spots.find((p) => free(p[0], p[1])) || more.find(fits) || more.find((p) => free(p[0], p[1]))
+      || spots.concat(more).find((p) => free(p[0], p[1], true));
+    L.placed = !!s;
+    if (s) { L.x = s[0]; L.y = s[1]; }
   }
   /** The card moved (a ring sent it aside), or a new ring's label came: a
-   *  label either now covers finds another spot. */
+   *  label either now covers finds another spot, and one that had nowhere
+   *  to go looks again. */
   function relabel() {
     const b = S.box, c = S.chipBox;
     for (const m of marks) {
       const L = m.label;
-      if (!L || m.fadeAt || !L.placed) continue;
+      if (!L || m.fadeAt) continue;
       const onCard = b && L.x < b.x + b.w + 6 && L.x + L.w > b.x - 6 && L.y < b.y + b.h + 6 && L.y + L.h > b.y - 62;
       const onChip = c && L.x < c.x + c.w + 6 && L.x + L.w > c.x - 6 && L.y < c.y + c.h + 6 && L.y + L.h > c.y - 6;
-      if (onCard || onChip) placeLabel(m);
+      if (!L.placed || onCard || onChip) placeLabel(m);
     }
   }
   function addMark(m) {
@@ -1211,10 +1259,15 @@
     let prev = null;
     for (let i = marks.length - 1; i >= 0; i--) if (!marks[i].fadeAt) { prev = marks[i]; break; }
     mk.start = prev && !reduced ? Math.max(ms, prev.start + .7 * prev.dur) : ms;
-    if (mk.label) { mk.label.at = mk.start + (mk.kind === "label" ? 0 : mk.kind === "number" ? mk.dur * .6 : mk.dur * .55); placeLabel(mk); }
+    if (mk.label) mk.label.at = mk.start + (mk.kind === "label" ? 0 : mk.kind === "number" ? mk.dur * .6 : mk.dur * .55);
     marks.push(mk);
-    // Tied to the pill, the card may be over it: it makes room (docked).
+    // Tied to the pill, the card may be over it: it makes room (docked),
+    // and the new label is placed by that (relabel) where the card has
+    // gone, not where it was: placed first, every spot of a label by the
+    // card was under it, and it went a long way off for room that was
+    // about to be there.
     if (S.docked) place(false);
+    else if (mk.label) placeLabel(mk);
     // A number that lands on the ring's corner moves the ring's label past
     // it (placeChip), and a label of a mark's that the ring's label now
     // covers moves off it.
@@ -1261,7 +1314,11 @@
         const [x0, x1, y0, y1] = m.sweep;
         ctx.save();
         ctx.beginPath(); ctx.rect(x0 - 2, y0, (x1 - x0 + 4) * penEase(p), y1 - y0); ctx.clip();
-        ctx.fillStyle = rgba(ink, K.num("desktop.guide.highlightAlpha", 0.26)); ctx.fill(m.fill);
+        // See-through by the alpha, whatever colour the ink is: as an rgba()
+        // of a knob it could not read, the band was solid over the words it
+        // marked.
+        ctx.globalAlpha = a * K.num("desktop.guide.highlightAlpha", 0.26);
+        ctx.fillStyle = ink; ctx.fill(m.fill);
         ctx.restore();
         continue;
       }
@@ -1320,7 +1377,7 @@
     }
     for (const m of marks) {
       const L = m.label;
-      if (!L || ms < L.at) continue;
+      if (!L || !L.placed || ms < L.at) continue;
       const a = alphaOf(m, ms) * (reduced ? 1 : clamp((ms - L.at) / 160));
       if (a <= 0) continue;
       ctx.save();
@@ -1485,12 +1542,17 @@
     const fresh = first && lifeAt(now()).over;
     S.shown = true; S.hideAt = 0;
     S.ring = null; S.anchor = m.anchor ? [m.anchor.x, m.anchor.y] : null;
-    if (fresh) S.slid = false;
+    // Every show is a new question (agent.js begin), and a new card starts
+    // over the pill, from wherever the last one is: one asked while the last
+    // answer's card was still up, or folding, opened where that answer's
+    // ring had sent it.
+    S.slid = false;
     $("app").textContent = m.app || "";
     $("heard").textContent = "";
     $("say").textContent = "";
     $("badge").textContent = "";
     setSteps([]);
+    setOffer(null);
     chip.classList.remove("on"); S.chipBox = null;
     S.risk = "confirm";
     // A new card's marks are its own: the last one's fade.
@@ -1505,6 +1567,15 @@
       startLife(true);
     }
     wake();
+  }
+  /** The finished card's one button (ask.js offer): { kind, text }, or none. */
+  function setOffer(m) {
+    const b = $("offerBtn");
+    const text = m && m.kind ? String(m.text || "").trim().slice(0, 60) : "";
+    b.textContent = text;
+    b.title = text;
+    b.dataset.kind = text ? String(m.kind) : "";
+    $("offer").hidden = !text;
   }
   function hide() {
     if (!S.shown) return;
@@ -1585,13 +1656,20 @@
       wake();
     },
     badge: (m) => { $("badge").textContent = m.text ? String(m.text).slice(0, 32) : ""; },
-    // May a picture go: once, always for this app, or not now.
+    // A button on the finished card, for what stopped the answer: the Mac's
+    // Screen Recording settings, after the card says why it could not look.
+    offer: (m) => { setOffer(m); fit(); },
+    // May a picture go: once, always for this app, or not now. No Always
+    // (`always: false`) for an app with no name of its own to remember it by
+    // (a browser, whose label is the page's; a Store app seen only as its
+    // frame): ask.js would take a click on it as once.
     permission: (m) => {
       const app = String(m.app || "").trim();
       $("permitText").textContent = String(m.text || "");
       $("once").textContent = K.txt("desktop.guide.permitOnce", "Allow once");
       $("always").textContent = app ? K.txt("desktop.guide.permitAlways", "Always for {app}", { app }) : K.txt("desktop.guide.permitAlwaysHere", "Always here");
       $("always").title = $("always").textContent;
+      $("always").hidden = m.always === false;
       $("notnow").textContent = K.txt("desktop.guide.permitNo", "Not now");
       setState("permission");
       fit();
@@ -1623,6 +1701,10 @@
     $(id).addEventListener("click", () => { if (S.state !== "permission") return; bridge.permit(choice); setState("thinking"); fit(); });
   }
   $("close").addEventListener("click", () => bridge.dismiss());
+  $("offerBtn").addEventListener("click", () => {
+    const kind = $("offerBtn").dataset.kind;
+    if (kind && bridge.offer) bridge.offer(kind);
+  });
   card.addEventListener("mouseenter", () => bridge.mouse(true));
   card.addEventListener("mouseleave", () => bridge.mouse(false));
 
@@ -1639,6 +1721,7 @@
     return {
       onGuide: (f) => { cb = f; }, send: (m) => cb(m),
       confirm: (y) => console.log("confirm", y), permit: (c) => console.log("permit", c), mouse: () => {}, spoken: () => {}, dismiss: () => console.log("dismiss"),
+      offer: (k) => console.log("offer", k),
     };
   }
   if (DEMO) faces.then(() => runDemo(params.get("demo")));
@@ -1705,7 +1788,8 @@
       pg.shadowColor = "transparent";
       pg.strokeStyle = "rgba(243,226,198,.16)"; pg.lineWidth = 1; pg.beginPath(); pg.roundRect(cx - 19.5 - gap / 2, P.y + .5, 19, 15, [7.5, sr, sr, 7.5]); pg.stroke();
       pg.strokeStyle = "rgba(15,13,11,.3)"; pg.beginPath(); pg.roundRect(cx + gap / 2 + .5, P.y + .5, 19, 15, [sr, 7.5, 7.5, sr]); pg.stroke();
-      const breath = .5 + .5 * Math.sin(t * TAU / 1.25), pulse = .5 - .5 * Math.cos(t * TAU / 1.8);
+      // Under reduced motion it holds still, glow and all, as pill.js's does.
+      const breath = reduced ? 1 : .5 + .5 * Math.sin(t * TAU / 1.25), pulse = .5 - .5 * Math.cos(t * TAU / 1.8);
       const r = Math.min((gap - 2) / 2, 3.5 * mp.bead * (reduced ? 1 : 1 - .22 * mp.hot * (1 - breath) - .1 * mp.slow * (1 - pulse)));
       if (r > .3) {
         pg.shadowColor = `rgba(232,162,60,${(.3 + .45 * breath) * mp.hot})`; pg.shadowBlur = (4 + 5 * breath) * mp.hot;
@@ -1760,6 +1844,20 @@
         send({ type: "confirm", text: "Delete slide 4: “Roadmap (old)”", risk: "always" });
       },
       done: () => { scenes.steps(); send({ type: "steps", items: [{ text: "Open #design", state: "done" }, { text: "Write the message", state: "done" }, { text: "Send it", state: "done" }] }); send({ type: "unpoint" }); send({ type: "say", text: "Sent. Priya's already typing." }); send({ type: "state", state: "done" }); },
+      // A Mac that has not let Tailzu see the screen: the words, and the way there.
+      screen: () => {
+        send({ type: "show", state: "thinking", app: "Preview" });
+        send({ type: "heard", text: "what does this graph show?" });
+        send({ type: "say", text: "I'd have to see the picture to answer that, and this Mac hasn't let Tailzu see the screen. Turn on Tailzu in System Settings, Privacy & Security, Screen Recording." });
+        send({ type: "offer", kind: "screenSettings", text: "Open Screen Recording settings" });
+        send({ type: "state", state: "done" });
+      },
+      // A browser's picture card: no Always, there is no app to remember it by.
+      permitOnce: () => {
+        send({ type: "show", state: "thinking", app: "Chrome: Gmail" });
+        send({ type: "heard", text: "what's in this photo?" });
+        send({ type: "permission", app: "Chrome: Gmail", always: false, text: "To answer that I need to see it: one picture of this window, sent to Tailzu and the AI providers it uses to answer." });
+      },
       error: () => { send({ type: "show", state: "thinking", app: "Keynote" }); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "error" }); send({ type: "say", text: "I can't read this window yet. Turn on Tailzu under Accessibility in System Settings." }); },
       // Everything at the longest agent.js lets it be: the card must still
       // fit, its buttons on screen.
@@ -1803,7 +1901,7 @@
         const f = box("m-fig");
         send({ type: "show", state: "thinking", app: "Keynote", anchor: { x: f[0] + f[2] - 60, y: f[1] + f[3] - 24 } });
         send({ type: "heard", text: "explain this equation" });
-        send({ type: "permission", app: "Keynote", text: "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu." });
+        send({ type: "permission", app: "Keynote", always: true, text: "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu and the AI providers it uses to answer." });
       },
       // …and the answer to it, a sentence at a time as the model writes,
       // beside the picture it is about.

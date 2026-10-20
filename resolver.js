@@ -281,6 +281,13 @@ const JUST_THIS = /^(?:(?:what(?:'s| is| are)|whats) (?:this|that|these|those|it
 const FIND_OR_ACT = /^(?:where|wheres|find|locate|look for|point|click|press|tap|hit|select|choose|open|close|go to|scroll|show me (?!what|how|why)|help me find|i can'?t find|i cannot find|i don'?t see|turn|switch|enable|disable|delete|remove|send|share|save|download|upload|copy|paste|insert|add|crop|resize|rotate|move|drag)\b/;
 const FIND_THE_ANSWER = /^find (?:x|y|z|the (?:value|derivative|integral|area|slope|roots?|answer|solution))\b/;
 
+// An order, in a clause of its own, to put something somewhere: "calculate the
+// total and type it in the reply box", "solve this then paste it". Only as
+// the clause's first word: "the type of graph", "the chart in this post" are
+// nouns. Not "add", which is "add up these numbers", nor "write out", which
+// is "show me the steps".
+const PUT_IT = /(?:^|\b(?:and|then) )(?:then )?(?:type|write(?! out\b)|put|paste|fill(?: in)?|enter|send|reply|insert|post|submit)\b/;
+
 // How to do something TO a picture in this app ("how do I insert an image",
 // "can I crop this photo?", "is there a way to resize the chart"): a question
 // about the app's controls, which the tree answers, not about what the
@@ -301,6 +308,11 @@ function isVisualQuestion(text, names = NAMES) {
   const clean = commandText(said, names);
   if (!clean) return false;
   if (FIND_OR_ACT.test(clean) && !FIND_THE_ANSWER.test(clean)) return false;
+  // An order to work something out and put the answer somewhere needs a run
+  // that can act, and the picture's never does: it would explain the sum and
+  // type nothing. The text way can read the numbers off the tree, or still
+  // ask to look.
+  if (PUT_IT.test(clean) && modeOf(said, names) === "do") return false;
   if (JUST_THIS.test(clean) || SOLVE.test(clean)) return true;
   if (HOW_TO_DO.test(clean)) return false;
   if (!VISUAL_NOUN.test(clean)) return false;

@@ -76,7 +76,7 @@ function fakeDriver(snaps, results, look) {
 function fakeGuide(confirm) {
   const calls = [];
   const g = { calls };
-  for (const m of ["show", "state", "heard", "say", "point", "unpoint", "steps", "hide", "error", "badge"]) {
+  for (const m of ["show", "state", "heard", "say", "point", "unpoint", "steps", "hide", "error", "badge", "offer"]) {
     g[m] = (...args) => { calls.push([m, ...args]); };
   }
   g.confirm = (text, risk) => {
@@ -129,7 +129,7 @@ function rig(o = {}) {
     now: () => clock,
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
-    crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names,
+    crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -165,6 +165,76 @@ test("a show run says, points at the element's own frame, and finishes", async (
 
   await sleep(15);
   assert.deepStrictEqual(r.guide.calls.at(-1), ["hide"], "hidden after doneMs");
+});
+
+test("a finished answer stays up while it is still being said, and doneMs after; a new question or a cancel does not wait", async () => {
+  let said = null;
+  const speaking = () => new Promise((res) => { said = res; });
+  const knobs = { "desktop.agent.doneMs": 5 };
+  const long = [heardShow("explain this"), { t: "say", text: "First." }, { t: "say", text: "Second.", append: true }, { t: "done" }];
+  const r = rig({ afterSpeech: speaking, knobs, scripts: [long] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  await sleep(30);
+  assert.deepStrictEqual(r.guide.of("hide"), [], "not while the voice is still saying it");
+  said();
+  await sleep(1);
+  assert.deepStrictEqual(r.guide.of("hide"), [], "doneMs after the voice, not at once");
+  await sleep(30);
+  assert.strictEqual(r.guide.of("hide").length, 1);
+
+  // A new question while the last answer is still being said: its card is
+  // not put away when that voice ends.
+  const again = rig({ afterSpeech: speaking, knobs, scripts: [long] });
+  again.agent.begin({ app: "Slack" });
+  await again.agent.heard(AUDIO);
+  again.agent.begin({ app: "Slack" });
+  said();
+  await sleep(30);
+  assert.deepStrictEqual(again.guide.of("hide"), []);
+  again.agent.cancel("test");
+
+  // Esc while it is still being said: put away at once, and only once.
+  const esc = rig({ afterSpeech: speaking, knobs, scripts: [long] });
+  esc.agent.begin({ app: "Slack" });
+  await esc.agent.heard(AUDIO);
+  esc.agent.cancel("esc");
+  assert.strictEqual(esc.guide.of("hide").length, 1);
+  said();
+  await sleep(30);
+  assert.strictEqual(esc.guide.of("hide").length, 1);
+
+  // A voice that fails to say when it is done holds nothing up.
+  const broken = rig({ afterSpeech: () => { throw new Error("no voice"); }, knobs, scripts: [long] });
+  broken.agent.begin({ app: "Slack" });
+  await broken.agent.heard(AUDIO);
+  await sleep(30);
+  assert.strictEqual(broken.guide.of("hide").length, 1);
+});
+
+test("DONE's words come after an answer said a sentence at a time, not in its place; a DONE with no words says nothing", async () => {
+  const answer = [heardShow("explain this"), { t: "say", text: "It's the area under the curve." }, { t: "say", text: "That's a third.", append: true }];
+  const dot = rig({ scripts: [answer.concat([{ t: "done", text: "." }])] });
+  dot.agent.begin({ app: "Slack" });
+  await dot.agent.heard(AUDIO);
+  assert.deepStrictEqual(dot.guide.of("say").map((c) => c[1]), ["It's the area under the curve.", "That's a third."]);
+  assert.deepStrictEqual(dot.guide.of("state").at(-1), ["state", "done"]);
+
+  const more = rig({ scripts: [answer.concat([{ t: "done", text: "The answer is a third." }])] });
+  more.agent.begin({ app: "Slack" });
+  await more.agent.heard(AUDIO);
+  assert.deepStrictEqual(more.guide.of("say").at(-1), ["say", "The answer is a third.", { speak: true, rate: 1.04, append: true }]);
+  assert.deepStrictEqual(more.guide.of("state").at(-1), ["state", "done"]);
+
+  // A step that said nothing: DONE's words are the answer, as ever; "." alone is none.
+  const only = rig({ scripts: [[heardDo("turn on captions"), { t: "done", text: "Captions are on." }]] });
+  only.agent.begin({ app: "Slack" });
+  await only.agent.heard(AUDIO);
+  assert.deepStrictEqual(only.guide.of("state").at(-1), ["state", "done", "Captions are on."]);
+  const bare = rig({ scripts: [[heardDo("turn on captions"), { t: "done", text: " . " }]] });
+  bare.agent.begin({ app: "Slack" });
+  await bare.agent.heard(AUDIO);
+  assert.deepStrictEqual(bare.guide.of("state").at(-1), ["state", "done"]);
 });
 
 test("the request carries roles, labels and regions — never a frame", async () => {
@@ -1587,6 +1657,30 @@ test("ocrElements: nothing over a password field or an address bar, and never th
     { text: "Revenue", frame: [10, 80, 60, 16] },
   ], { window: { frame: WIN, title: "Q3 budget.xlsx - Excel" } });
   assert.deepStrictEqual(ocrElements(titled, bar).map((e) => e.label), ["Excel", "Revenue"]);
+
+  // The title as OCR reads its dash: a hyphen for an em dash is still the title.
+  const dashed = snap([], { window: { frame: WIN, title: "Q3 layoffs — draft.docx - Word" } });
+  const read = lookOf([
+    { text: "Q3 layoffs - draft.docx - Word", frame: [300, 4, 300, 20] },
+    { text: "Revenue", frame: [10, 80, 60, 16] },
+  ], { window: { frame: WIN, title: "Q3 layoffs — draft.docx - Word" } });
+  assert.deepStrictEqual(ocrElements(dashed, read).map((e) => e.label), ["Revenue"]);
+});
+
+test("ocrElements: a control's label read nearly as it is (a letter misread, its ellipsis as dots, a mark beside it) is that label read again", () => {
+  const { match } = require("./resolver.js");
+  for (const [label, text] of [["Export", "Exp0rt"], ["Export…", "Export..."], ["Export", "Export ▾"], ["Name", "Name:"], ["Share", "↑ Share"]]) {
+    const s = snap([{ id: "e1", role: "button", label, frame: [700, 20, 80, 30] }]);
+    const lines = ocrElements(s, lookOf([{ text, frame: [705, 25, 70, 20] }]));
+    assert.deepStrictEqual(lines, [], text);
+    // …so a question that names it names one thing, not two that tie.
+    const m = match(`where's the ${label.replace(/[…:]/g, "")}?`, s.elements.concat(lines));
+    assert.strictEqual(m && m.id, "e1", text);
+  }
+  // Other words over it, or the same word somewhere else, are still lines.
+  const s = snap([{ id: "e1", role: "button", label: "Export", frame: [700, 20, 80, 30] }]);
+  const lines = ocrElements(s, lookOf([{ text: "Export to PDF and send", frame: [705, 25, 70, 20] }, { text: "Exp0rt", frame: [100, 300, 60, 20] }]));
+  assert.deepStrictEqual(lines.map((e) => e.label), ["Export to PDF and send", "Exp0rt"]);
 });
 
 test("toRequestElements: a line goes as text with its words and region only, and its URL loses its query", () => {
@@ -1728,7 +1822,7 @@ test("instant: a clear “where's X?” in the caption is answered here — ring
 test("instant: a line read off the window is pointed at the same way", async () => {
   const r = rig({ look: LOOK });
   r.agent.begin({ app: "Slack" });
-  await r.agent.heard(AUDIO, { text: "where is quarterly revenue", final: false });
+  await r.agent.heard(AUDIO, { text: "where is quarterly revenue", final: true });
   assert.strictEqual(r.post.requests.length, 0);
   assert.deepStrictEqual(r.guide.of("say"), [["say", "Here's Quarterly revenue.", { speak: true, rate: 1.04 }]]);
   assert.deepStrictEqual(r.guide.of("point"), [["point", [300, 200, 200, 20], "Quarterly revenue"]]);
@@ -1923,9 +2017,10 @@ test("picture: a question about a drawing sends ONE crop of the image under the 
   await sleep(1);
   const lookOpts = r.driver.calls.find((c) => c[0] === "look")[1];
   assert.strictEqual(lookOpts.image, true, "the picture is taken at Alt twice, when there is a way to send it");
+  assert.strictEqual(lookOpts.maxSide, 4096, "at the screen's own size, for the crop to cut from");
   await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
 
-  assert.deepStrictEqual(r.policies, ["Slack"]);
+  assert.deepStrictEqual(r.policies, ["Slack", "Slack"], "at Alt twice, for the look; and again before the picture goes");
   assert.deepStrictEqual(r.permits, ["Slack"]);
   assert.strictEqual(r.crops.length, 1);
   assert.strictEqual(r.crops[0][0].image.data, LOOK.image.data, "the look itself, picture and window");
@@ -1949,6 +2044,33 @@ test("picture: a question about a drawing sends ONE crop of the image under the 
   assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
 });
 
+test("picture: the card asks with what would go already ringed, and is told which part it is; a no takes the ring away before the words go", async () => {
+  let r = null;
+  let atCard = null;
+  let unpointsAtPost = -1;
+  r = pictureRig({
+    permit: async (app, o) => { atCard = [r.guide.of("point").at(-1), o]; return "no"; },
+    scripts: [() => { unpointsAtPost = r.guide.of("unpoint").length; return [heardShow("explain this equation"), { t: "done" }]; }],
+  });
+  r.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await r.agent.heard(AUDIO, { text: "explain this equation", final: true });
+  assert.deepStrictEqual(atCard, [["point", [250, 150, 400, 300], "Looking", { tentative: true }], { region: "element" }]);
+  assert.strictEqual(unpointsAtPost, 1, "nothing stays ringed as if it were going");
+  assert.strictEqual(r.post.requests[0].image, null);
+
+  // A yes: the ring that was up is the picture's, drawn once; the whole
+  // window, when that is what goes, is said to be.
+  let yes = null;
+  let told = null;
+  yes = pictureRig({ snaps: [SLACK], permit: async (app, o) => { told = o; return "once"; } });
+  yes.agent.begin({ app: "Slack", pointer: { x: 5, y: 5 } });
+  await yes.agent.heard(AUDIO, { text: "what's this?", final: true });
+  assert.deepStrictEqual(told, { region: "window" });
+  assert.deepStrictEqual(yes.guide.of("point"), [["point", WIN, "Looking", { tentative: true }]]);
+  assert.deepStrictEqual(yes.guide.of("badge"), [["badge", "1 picture sent"]]);
+  assert.ok(yes.post.requests[0].image);
+});
+
 test("picture: permission refused goes the text way; never asks nobody and crops nothing; always asks nobody", async () => {
   const no = pictureRig({ permit: async () => "no" });
   no.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
@@ -1964,6 +2086,7 @@ test("picture: permission refused goes the text way; never asks nobody and crops
   assert.deepStrictEqual(never_.permits, []);
   assert.deepStrictEqual(never_.crops, []);
   assert.strictEqual(never_.post.requests[0].image, null);
+  assert.strictEqual(never_.driver.calls.find((c) => c[0] === "look")[1].image, false, "nor is one taken");
 
   const always = pictureRig({ pictures: async () => "always" });
   always.agent.begin({ app: "Slack" });
@@ -1994,6 +2117,30 @@ test("picture: without crop or pictures there is no picture path, and the look t
   assert.strictEqual(noCard.post.requests[0].image, null);
 });
 
+test("the look takes a picture only when one could go, at the screen's own size: not of an app whose pictures never go", async () => {
+  for (const [pictures, want] of [
+    [() => "never", false],
+    [() => "ask", true],
+    [() => "always", true],
+    [async () => "never", true],                                  // not known yet: it may be allowed
+    [async () => { throw new Error("no policy"); }, true],
+    [() => { throw new Error("no policy"); }, false],             // a failing policy is never, as it is later
+  ]) {
+    const r = pictureRig({ pictures });
+    r.agent.begin({ app: "Slack" });
+    await sleep(1);
+    const opts = r.driver.calls.find((c) => c[0] === "look")[1];
+    assert.strictEqual(opts.image, want, String(pictures));
+    assert.strictEqual(opts.maxSide, want ? 4096 : undefined, String(pictures));
+    r.agent.cancel("test");
+  }
+  const smaller = pictureRig({ knobs: { "desktop.agent.lookMaxSide": 2048 } });
+  smaller.agent.begin({ app: "Slack" });
+  await sleep(1);
+  assert.strictEqual(smaller.driver.calls.find((c) => c[0] === "look")[1].maxSide, 2048);
+  smaller.agent.cancel("test");
+});
+
 test("picture: no words, a question that is not about a picture, or no picture in the look: no picture", async () => {
   const noWords = pictureRig();
   noWords.agent.begin({ app: "Slack" });
@@ -2010,7 +2157,7 @@ test("picture: no words, a question that is not about a picture, or no picture i
   noImage.agent.begin({ app: "Slack" });
   await noImage.agent.heard(AUDIO, { text: "explain this equation", final: true });
   assert.strictEqual(noImage.post.requests[0].image, null);
-  assert.deepStrictEqual(noImage.policies, []);
+  assert.deepStrictEqual(noImage.policies, ["Slack"], "asked at Alt twice only, for the look");
 });
 
 test("picture: a crop that throws, comes back empty or is too big to send sends no picture", async () => {
@@ -2060,6 +2207,33 @@ test("pictureRegion: the image under the pointer, else the largest big one, else
   assert.strictEqual(pictureRegion(sliver, look, { x: 11, y: 50 }).region, "window");
 });
 
+test("pictureRegion: an element too small to see in the look's picture is grown about its middle, inside the window", () => {
+  // A 4K window looked at 1600 wide: 2.4 window pixels to each of the
+  // picture's. A 16 px icon was 7 of them, too few to crop, and the whole
+  // window went in its place; it is grown to 32 of them (77 px), about its middle.
+  const W4K = [0, 0, 3840, 2100];
+  const look = lookOf([], { window: { frame: W4K, title: "" }, image: { mime: "image/jpeg", data: "eA==", width: 1600, height: 875 } });
+  const icon = snap([{ id: "e1", role: "image", label: "", frame: [1001, 501, 16, 16] }], { window: { frame: W4K, title: "" } });
+  const r = pictureRegion(icon, look, { x: 1008, y: 508 });
+  assert.deepStrictEqual(r, { frame: [971, 471, 77, 77], region: "element" });
+  assert.ok(r.frame[2] * 1600 / 3840 >= 32 && r.frame[3] * 875 / 2100 >= 32, "32 picture pixels each way");
+  // In a corner: grown into the window, not off it.
+  const corner = snap([{ id: "e1", role: "image", label: "", frame: [3820, 2080, 16, 16] }], { window: { frame: W4K, title: "" } });
+  assert.deepStrictEqual(pictureRegion(corner, look, { x: 3825, y: 2085 }).frame, [3763, 2023, 77, 77]);
+  // Below the chrome too: an icon just under the title bar grows down, not up into it.
+  const titled = lookOf([], { window: { frame: W4K, title: "Paint" }, titleFrames: [[0, 0, 3840, 60]], image: look.image });
+  const high = snap([{ id: "e1", role: "image", label: "", frame: [1000, 62, 16, 16] }], { window: { frame: W4K, title: "Paint" } });
+  assert.deepStrictEqual(pictureRegion(high, titled, { x: 1005, y: 66 }).frame, [970, 60, 77, 77]);
+  // At the screen's own size (the look at 4096 and the window under it) a
+  // 16 px icon is cropped as it is, grown only to the 32 pixels.
+  const full = lookOf([], { window: { frame: W4K, title: "" }, image: { mime: "image/jpeg", data: "eA==", width: 3840, height: 2100 } });
+  assert.deepStrictEqual(pictureRegion(icon, full, { x: 1008, y: 508 }).frame, [993, 493, 32, 32]);
+  // What is big enough already is left as it is; no image size, nothing to grow by.
+  const big = snap([{ id: "e1", role: "image", label: "", frame: [200, 200, 300, 200] }], { window: { frame: W4K, title: "" } });
+  assert.deepStrictEqual(pictureRegion(big, look, { x: 250, y: 250 }).frame, [200, 200, 300, 200]);
+  assert.deepStrictEqual(pictureRegion(icon, Object.assign({}, look, { image: null }), { x: 1008, y: 508 }).frame, [1001, 501, 16, 16]);
+});
+
 test("pictureRegion: never the window's own chrome — its title bar, its tabs, its address bar", () => {
   // A browser: tabs, then the address bar, then the page.
   const browser = snap([
@@ -2085,6 +2259,35 @@ test("pictureRegion: never the window's own chrome — its title bar, its tabs, 
   // A window that is all chrome goes as it is.
   const strip = lookOf([{ text: "Q3 budget.xlsx - Excel", frame: [0, 0, 900, 140] }], { window: { frame: [0, 0, 900, 200], title: "Q3 budget.xlsx - Excel" } });
   assert.deepStrictEqual(pictureRegion(doc, strip, null).frame, [0, 0, 900, 200]);
+});
+
+test("pictureRegion: the title the helper kept to itself, an address with no address bar to go by, a title read with another dash", () => {
+  // Windows: the helper drops the title's lines before they get here, and
+  // says where they were instead. One far down the window is not chrome.
+  const title = "Q3 layoffs - Confidential.docx - Word";
+  const word = snap([{ id: "e1", role: "button", label: "File", frame: [10, 40, 40, 20] }], { window: { frame: [0, 0, 1920, 1040], title } });
+  const kept = lookOf([{ text: "File Home Insert", frame: [10, 40, 300, 20] }], { window: { frame: [0, 0, 1920, 1040], title }, titleFrames: [[700, 6, 520, 20], [0, 900, 100, 20]] });
+  assert.deepStrictEqual(pictureRegion(word, kept, null), { frame: [0, 26, 1920, 1014], region: "window" });
+  assert.deepStrictEqual(pictureRegion(word, Object.assign({}, kept, { titleFrames: "not frames" }), null).frame, [0, 0, 1920, 1040]);
+
+  // No tree (a screen read off the picture alone): the line that reads as an
+  // address is the address bar, query and all, and the edge of the chrome.
+  const tab = "Statement - Google Chrome";
+  const lines = lookOf([
+    { text: "Statement", frame: [30, 8, 120, 16] },
+    { text: "bank.test/statement?token=s3cr3t", frame: [120, 44, 500, 20] },
+    { text: "Your balance", frame: [100, 200, 200, 20] },
+  ], { window: { frame: WIN, title: tab } });
+  assert.deepStrictEqual(pictureRegion({ ok: false, elements: [] }, lines, null), { frame: [0, 64, 900, 536], region: "window" });
+  // With an address bar in the tree, an address on the page under it is the page's.
+  const browser = snap([{ id: "e2", role: "field", label: "Address and search bar", frame: [80, 40, 700, 30] }], { window: { frame: WIN, title: tab } });
+  const page = lookOf([{ text: "Start at docs.example.com/start", frame: [100, 100, 400, 20] }], { window: { frame: WIN, title: tab } });
+  assert.deepStrictEqual(pictureRegion(browser, page, null).frame, [0, 70, 900, 530]);
+
+  // The title with its em dash read as a hyphen is still the title.
+  const dashed = snap([], { window: { frame: WIN, title: "Q3 layoffs — draft.docx - Word" } });
+  const read = lookOf([{ text: "Q3 layoffs - draft.docx - Word", frame: [300, 4, 300, 20] }], { window: { frame: WIN, title: "Q3 layoffs — draft.docx - Word" } });
+  assert.deepStrictEqual(pictureRegion(dashed, read, null).frame, [0, 24, 900, 576]);
 });
 
 test("picture: with no image on screen the window goes, as a window", async () => {
@@ -2164,6 +2367,37 @@ test("look: once a run; with no picture, no permission or an out-of-date one, it
   assert.deepStrictEqual(acted.guide.of("say").at(-1), ["say", TEXT.needLook, { speak: true, rate: 1.04 }]);
 });
 
+test("look: a Mac that has not let Tailzu see the screen says so, with the way to Screen Recording", async () => {
+  const noScreen = { ok: false, error: "no_screen_permission" };
+  const r = pictureRig({ look: noScreen, scripts: [[heardShow("what does this graph show"), { t: "look", why: "a chart" }], [{ t: "done" }]] });
+  r.agent.begin({ app: "Preview" });
+  await r.agent.heard(AUDIO, { text: "what does this graph show", final: true });
+  assert.strictEqual(r.post.requests.length, 1, "the words alone went; no picture to send");
+  assert.strictEqual(r.post.requests[0].image, null);
+  assert.deepStrictEqual(r.permits, [], "nobody is asked to send a picture there is not");
+  assert.deepStrictEqual(r.guide.of("say").at(-1), ["say", TEXT.needScreen, { speak: true, rate: 1.04 }]);
+  assert.match(TEXT.needScreen, /System Settings, Privacy & Security, Screen Recording/);
+  assert.deepStrictEqual(r.guide.of("offer"), [["offer", "screenSettings"]]);
+  assert.ok(r.guide.calls.findIndex((c) => c[0] === "offer") > r.guide.calls.findIndex((c) => c[0] === "say" && c[1] === TEXT.needScreen), "after the words");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+  assert.ok(r.logs.some((l) => /no Screen Recording permission/.test(l)));
+
+  // Any other look that failed, and an app whose pictures never go: the plain "can't", no button.
+  for (const o of [{ look: { ok: false, error: "timeout" } }, { look: noScreen, pictures: () => "never" }]) {
+    const q = pictureRig(Object.assign({ scripts: [[heardShow("what is that"), { t: "look", why: "" }], [{ t: "done" }]] }, o));
+    q.agent.begin({ app: "Preview" });
+    await q.agent.heard(AUDIO);
+    assert.deepStrictEqual(q.guide.of("say").at(-1), ["say", TEXT.needLook, { speak: true, rate: 1.04 }]);
+    assert.deepStrictEqual(q.guide.of("offer"), []);
+  }
+  // A look that worked: no "can't" at all, the picture goes.
+  const ok = pictureRig({ pictures: () => "always", scripts: [[heardShow("what is that"), { t: "look", why: "" }], [{ t: "done" }]] });
+  ok.agent.begin({ app: "Preview" });
+  await ok.agent.heard(AUDIO);
+  assert.strictEqual(ok.post.requests.length, 2);
+  assert.deepStrictEqual(ok.guide.of("offer"), []);
+});
+
 test("cancel while the permission card is up: nothing is sent", async () => {
   const r = pictureRig({ permit: () => never() });
   r.agent.begin({ app: "Slack" });
@@ -2173,6 +2407,38 @@ test("cancel while the permission card is up: nothing is sent", async () => {
   await run;
   assert.strictEqual(r.post.requests.length, 0);
   assert.deepStrictEqual(r.guide.of("badge"), []);
+});
+
+// ---- a caption that is not the stream's final one ------------------------------------
+
+test("a partial caption is no question to answer here or send a picture for: the recording goes, and says it whole", async () => {
+  const menu = snap([
+    { id: "e1", role: "menuitem", label: "Save", frame: [10, 30, 100, 20] },
+    { id: "e2", role: "menuitem", label: "Save As…", frame: [10, 50, 100, 20] },
+  ]);
+  // "where is the save" of "where is the save as".
+  const r = rig({ snaps: [menu], scripts: [[heardShow("where is the save as"), { t: "point", id: "e2" }, { t: "done" }]] });
+  r.agent.begin({ app: "TextEdit" });
+  await r.agent.heard(AUDIO, { text: "where is the save", final: false });
+  assert.strictEqual(r.post.requests.length, 1, "not answered here on part of a question");
+  assert.strictEqual(r.post.requests[0].audio, AUDIO);
+  assert.strictEqual(r.post.reqs()[0].utterance, undefined);
+  assert.deepStrictEqual(r.guide.of("point"), [["point", [10, 50, 100, 20]]]);
+
+  // "what's this" of "what's this error message mean": no card, no picture.
+  const pic = pictureRig();
+  pic.agent.begin({ app: "Slack", pointer: { x: 400, y: 310 } });
+  await pic.agent.heard(AUDIO, { text: "what's this", final: false });
+  assert.deepStrictEqual(pic.permits, []);
+  assert.strictEqual(pic.post.requests[0].image, null);
+  assert.strictEqual(pic.post.requests[0].audio, AUDIO);
+
+  // No recording: the words there are, are all there is.
+  const words = rig({ scripts: [[heardDo("open settings"), { t: "done" }]] });
+  words.agent.begin({ app: "Slack" });
+  await words.agent.heard(null, { text: "open settings", final: false });
+  assert.strictEqual(words.post.requests[0].audio, null);
+  assert.strictEqual(words.post.reqs()[0].utterance, "open settings");
 });
 
 // ---- the rest of the run, with lines in it ----------------------------------------

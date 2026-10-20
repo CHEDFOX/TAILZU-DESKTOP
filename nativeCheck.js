@@ -6,8 +6,9 @@
 //   node nativeCheck.js mac   the field's AppleScript compiles (running it
 //                             needs Accessibility, which a CI Mac lacks); the
 //                             OCR and Ask helpers build and answer
-//   node nativeCheck.js winagent  Ask's Windows UIA helper answers a ping and
-//                             a snapshot (shapes only; a runner has no app)
+//   node nativeCheck.js winagent  Ask's Windows UIA helper answers a ping (its
+//                             look, OCR and pool all ready), a snapshot and a
+//                             look at the window in front (shapes only)
 const { execFileSync, spawn } = require("child_process");
 const os = require("os");
 const path = require("path");
@@ -60,13 +61,17 @@ if (which === "mac") {
   // the shape axDriver.js reads. Never a timeout: that is a capture that hung
   // (the look was given most of its six seconds, room for a cold runner's
   // first ScreenCaptureKit call; the runner is trusted, so it may get that far).
-  const LOOK_REFUSALS = ["no_screen_permission", "no_app", "no_window", "capture_failed"];
+  // Nor capture_failed: past those two, that is the capture itself broken
+  // (ScreenCaptureKit, or the window-list call macOS 13 makes).
+  const LOOK_REFUSALS = ["no_screen_permission", "no_app", "no_window"];
   const isFrame = (f) => Array.isArray(f) && f.length === 4 && f.every(Number.isFinite);
   if (!look || typeof look.ok !== "boolean"
     || (!look.ok && !LOOK_REFUSALS.includes(look.error))
     || (look.ok && (!look.window || !isFrame(look.window.frame) || typeof look.window.title !== "string" || look.scale !== "points"
       || !Array.isArray(look.lines) || look.lines.length > 300
       || look.lines.some((l) => typeof l.text !== "string" || !isFrame(l.frame) || typeof l.conf !== "number")
+      // Where the title bar is, frames only (agent.js cuts the picture below them).
+      || !Array.isArray(look.titleFrames) || look.titleFrames.length > 8 || !look.titleFrames.every(isFrame)
       || !(look.image === null || (look.image.mime === "image/jpeg" && typeof look.image.data === "string"
         && Buffer.from(look.image.data, "base64").subarray(0, 2).equals(Buffer.from([0xff, 0xd8]))
         && Math.max(look.image.width, look.image.height) <= 640))))) {
@@ -100,31 +105,82 @@ if (which === "mac") {
   ps.stdin.end();
 } else if (which === "winagent") {
   // Ask's Windows accessibility/action helper (native/uia-agent.ps1,
-  // uiaDriver.js), run for real on the Windows runner: it must answer a ping
-  // and a snapshot, one JSON line each, and exit when its stdin closes. A CI
-  // runner has a desktop with some window in front, so the snapshot may come
-  // back ok with elements or ok:false with a reason — only the shapes are
-  // required here, never specific elements.
+  // uiaDriver.js), run for real on the Windows runner: it must answer a ping,
+  // a snapshot and a look, one JSON line each, and exit when its stdin
+  // closes. The ping must say the look's C#, the OCR and its thread pool all
+  // loaded: each fails quietly otherwise, and every PC would answer looks
+  // with no picture or no lines. A CI runner has a desktop with some window
+  // in front, so the snapshot may come back ok with elements or ok:false with
+  // a reason, and the look ok with that window's picture and lines, or
+  // no_window when nothing is in front; only the shapes are required, never
+  // specific elements or text. The look is answered by a worker of its own,
+  // after the snapshot as often as not, and the helper ends when its stdin
+  // closes without waiting for one, so stdin is closed only once all three
+  // have answered.
   const ud = require("./uiaDriver.js");
   const cmd = ud.defaultCommand();
-  const agent = require("child_process").spawnSync(cmd.cmd, cmd.args, {
-    input: ['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"snapshot","max":20}'].join("\n") + "\n",
-    encoding: "utf8", timeout: 90000, windowsHide: true,
+  const agent = spawn(cmd.cmd, cmd.args, { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
+  agent.on("error", (e) => { console.error("uia-agent did not start:", e.message); process.exit(1); });
+  agent.stdin.on("error", () => { /* it died; "close" says so */ });
+  const said = [];
+  const byId = new Map();
+  let notJson = false;
+  let ended = false;
+  let buf = "";
+  agent.stdout.setEncoding("utf8");
+  agent.stdout.on("data", (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      said.push(line);
+      try { const a = JSON.parse(line); byId.set(a && a.id, a); } catch { notJson = true; }
+    }
+    if (!ended && byId.has(1) && byId.has(2) && byId.has(3)) { ended = true; agent.stdin.end(); }
   });
-  const said = String(agent.stdout || "").trim().split(/\r?\n/).filter(Boolean);
-  console.log("uia-agent said:", said.join(" | ").slice(0, 600));
-  if (agent.error || agent.status !== 0) { console.error("uia-agent did not exit cleanly:", agent.error || agent.status, agent.signal || ""); process.exit(1); }
-  let answers;
-  try { answers = said.map((l) => JSON.parse(l)); } catch { console.error("uia-agent wrote a line that is not JSON"); process.exit(1); }
-  const [ping, snap] = answers;
-  if (answers.length !== 2
-    || !ping || ping.id !== 1 || ping.ok !== true || ping.pong !== true
-    || !snap || snap.id !== 2 || typeof snap.ok !== "boolean"
-    || (snap.ok ? (snap.scale !== "pixels" || !Array.isArray(snap.elements)) : typeof snap.error !== "string")) {
-    console.error("uia-agent's answers are not the shapes uiaDriver.js reads");
-    process.exit(1);
-  }
-  console.log(`the UIA agent answers (snapshot: ${snap.ok ? snap.elements.length + " elements, app " + JSON.stringify(snap.app && snap.app.name) : snap.error})`);
+  const timer = setTimeout(() => { console.error("no answers in 90 s:", said.join(" | ").slice(0, 600)); agent.kill(); process.exit(1); }, 90000);
+  // "close", not "exit": by then everything it wrote has been read.
+  agent.on("close", (code, signal) => {
+    clearTimeout(timer);
+    console.log("uia-agent said:", said.map((l) => l.replace(/"data":"[^"]{40}[^"]*"/, '"data":"…"')).join(" | ").slice(0, 900));
+    if (code !== 0) { console.error("uia-agent did not exit cleanly:", code, signal || ""); process.exit(1); }
+    if (notJson) { console.error("uia-agent wrote a line that is not JSON"); process.exit(1); }
+    const [ping, snap, look] = [1, 2, 3].map((id) => byId.get(id));
+    if (said.length !== 3
+      || !ping || ping.ok !== true || ping.pong !== true
+      || !snap || typeof snap.ok !== "boolean"
+      || (snap.ok ? (snap.scale !== "pixels" || !Array.isArray(snap.elements)) : typeof snap.error !== "string")) {
+      console.error("uia-agent's answers are not the shapes uiaDriver.js reads");
+      process.exit(1);
+    }
+    if (ping.look !== true || ping.ocr !== true || ping.pool !== true) {
+      console.error("uia-agent cannot look: its ping says", JSON.stringify({ look: ping.look, ocr: ping.ocr, pool: ping.pool }));
+      process.exit(1);
+    }
+    const isFrame = (f) => Array.isArray(f) && f.length === 4 && f.every(Number.isFinite);
+    if (!look || typeof look.ok !== "boolean"
+      || (!look.ok && look.error !== "no_window")
+      || (look.ok && (!look.window || !isFrame(look.window.frame) || !(look.window.frame[2] > 0 && look.window.frame[3] > 0)
+        || typeof look.window.title !== "string" || look.scale !== "pixels"
+        || !Array.isArray(look.lines) || look.lines.length > 300
+        || look.lines.some((l) => typeof l.text !== "string" || !l.text || l.text.length > 120 || !isFrame(l.frame))
+        // Where the title is drawn, frames only: the TzShot.Reply field the
+        // device cuts the picture by, from the real C# and worker.
+        || !Array.isArray(look.titleFrames) || look.titleFrames.length > 8 || !look.titleFrames.every(isFrame)
+        || !(look.ocr === "ok" || look.ocr === "partial") || typeof look.ms !== "number"
+        || !look.image || look.image.mime !== "image/jpeg" || typeof look.image.data !== "string"
+        || !Buffer.from(look.image.data, "base64").subarray(0, 2).equals(Buffer.from([0xff, 0xd8]))
+        || !(Math.max(look.image.width, look.image.height) <= 640)))) {
+      console.error("uia-agent's look is not the shape uiaDriver.js reads:", JSON.stringify(look && { ...look, image: look.image && "…" }).slice(0, 400));
+      process.exit(1);
+    }
+    console.log(`the UIA agent answers (snapshot: ${snap.ok ? snap.elements.length + " elements, app " + JSON.stringify(snap.app && snap.app.name) : snap.error}; `
+      + `look: ${look.ok ? look.lines.length + " lines, a " + look.image.width + "x" + look.image.height + " picture in " + look.ms + " ms" : look.error})`);
+  });
+  agent.stdin.write(['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"snapshot","max":20}',
+    '{"id":3,"cmd":"look","maxSide":640,"budgetMs":4000}'].join("\n") + "\n");
 } else {
   console.error("usage: node nativeCheck.js win|mac|winagent");
   process.exit(2);

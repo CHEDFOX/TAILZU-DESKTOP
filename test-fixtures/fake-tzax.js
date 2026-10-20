@@ -59,6 +59,7 @@ function look(req, base) {
   const good = {
     ...base, ok: true, app: { name: "Fake", pid: 4242 }, window, scale: "points",
     lines: req.ocr === false ? [] : LINES,
+    titleFrames: [[100, 50, 800, 28]],
     image: req.image === false ? null : { mime: "image/jpeg", data: JPEG, width: 1600, height: 1200 },
     ms: 12,
   };
@@ -79,6 +80,7 @@ function look(req, base) {
       return send({
         ...base, ok: true, window: { frame: [100, 50, 800, 600] }, scale: "weird",
         lines: [...junk, ...many], image: { mime: "text/html", data: "PGgxPg==", width: 1, height: 1 },
+        titleFrames: [null, [1, 2, 3], [0, 0, 0, 5], ["1", 2, 3, 4], ...Array.from({ length: 10 }, (_, i) => [100, 50 + i, 800, 28])],
       });
     }
     case 995: return send({ ...base, ok: true, lines: LINES, image: null });

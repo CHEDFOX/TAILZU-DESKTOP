@@ -55,6 +55,11 @@ function shapeLook(r) {
     if (typeof l.conf === "number" && Number.isFinite(l.conf)) line.conf = l.conf;
     lines.push(line);
   }
+  // Where the window's title is drawn (its title bar, the lines the helper
+  // dropped for being the title): frames only, for the device to cut the
+  // picture below them (agent.js chromeBottom).
+  const titleFrames = (Array.isArray(rest.titleFrames) ? rest.titleFrames : [])
+    .filter((f) => isFrame(f) && f[2] > 0 && f[3] > 0).slice(0, 8).map((f) => f.slice());
   const im = rest.image;
   const image = im && typeof im === "object" && typeof im.data === "string" && im.data &&
     typeof im.mime === "string" && /^image\//.test(im.mime) && im.width > 0 && im.height > 0
@@ -66,6 +71,7 @@ function shapeLook(r) {
     window: { frame: w.frame, title: typeof w.title === "string" ? w.title.slice(0, 200) : "" },
     scale: "pixels",
     lines,
+    titleFrames,
     image,
     ms: typeof rest.ms === "number" && Number.isFinite(rest.ms) ? rest.ms : 0,
   };
@@ -200,7 +206,7 @@ function createUiaDriver(opts = {}) {
     ready = rawSend("ping", {}, cfg.warmupMs);
   }
 
-  function rawSend(cmd, extra, timeoutMs) {
+  function rawSend(cmd, extra, timeoutMs, how = {}) {
     return new Promise((resolve) => {
       if (!child) { resolve({ ok: false, error: "dead" }); return; }
       const id = ++seq;
@@ -208,19 +214,25 @@ function createUiaDriver(opts = {}) {
         if (pending.has(id)) { pending.delete(id); resolve({ ok: false, error: "timeout" }); }
       }, timeoutMs);
       pending.set(id, { resolve, timer });
+      // When this call gives up, by the clock the helper reads too, for a
+      // command that can sit in the helper's queue behind another: it then
+      // knows how much of its time is left (a look cuts its budget to fit).
+      const line = how.deadline ? { id, cmd, ...extra, deadline: Date.now() + timeoutMs } : { id, cmd, ...extra };
       try {
-        child.stdin.write(JSON.stringify({ id, cmd, ...extra }) + "\n");
+        child.stdin.write(JSON.stringify(line) + "\n");
       } catch {
         if (pending.has(id)) { pending.delete(id); clearTimeout(timer); resolve({ ok: false, error: "dead" }); }
       }
     });
   }
 
-  async function send(cmd, extra, timeoutMs) {
+  async function send(cmd, extra, timeoutMs, how = {}) {
     start();
     if (!child) return { ok: false, error: "unavailable" };
     try { await ready; } catch { /* warm-up never rejects, but be safe */ }
-    const r = await rawSend(cmd, extra, timeoutMs);
+    // Written after whatever else was asked in this same turn (see snapshot).
+    if (how.last) await new Promise((r) => setImmediate(r));
+    const r = await rawSend(cmd, extra, timeoutMs, how);
     // The request id is the driver's bookkeeping; the contract's objects do not
     // carry it, so strip it before handing the answer up.
     if (r && typeof r === "object" && "id" in r) { const { id, ...rest } = r; return rest; }
@@ -259,7 +271,12 @@ function createUiaDriver(opts = {}) {
       // what was found instead of timing out with nothing, and the helper,
       // which does one thing at a time, is free again for the next call.
       const budgetMs = Math.max(80, Math.min(t - 300, Math.round(t * 0.6)));
-      return send("snapshot", { max, budgetMs }, t);
+      // The helper walks on the thread that reads its lines, and reads none
+      // until the walk is done. Alt twice asks for a snapshot and then a look
+      // in the same turn, so the snapshot's line goes after the look's: the
+      // look's worker starts at once, beside the walk, instead of waiting out
+      // the walk with its own timeout already running.
+      return send("snapshot", { max, budgetMs }, t, { last: true });
     },
     press(id) { return send("press", { target: id }, cfg.actionTimeout); },
     click(id) { return send("click", { target: id }, cfg.actionTimeout); },
@@ -278,7 +295,9 @@ function createUiaDriver(opts = {}) {
     // of lookTimeout and the budget asked for plus what a look spends outside
     // it, so a longer budget is honoured; an explicit timeoutMs wins, and the
     // budget is then cut to fit inside it. The helper makes the look on a
-    // thread of its own, so a snapshot asked at the same moment is not held.
+    // thread of its own, so a snapshot asked at the same moment is not held;
+    // the line carries its deadline, so a look that still waited behind
+    // another command is cut to the time left, or not made once it is gone.
     look(o) {
       try {
         const opt = o && typeof o === "object" ? o : {};
@@ -293,7 +312,7 @@ function createUiaDriver(opts = {}) {
         if (opt.quality == null || !(quality > 0)) quality = 0.82;
         else if (quality > 1) quality /= 100;
         quality = Math.max(0.1, Math.min(1, quality));
-        return send("look", { budgetMs, maxSide, quality, ocr: opt.ocr !== false, image: opt.image !== false }, t)
+        return send("look", { budgetMs, maxSide, quality, ocr: opt.ocr !== false, image: opt.image !== false }, t, { deadline: true })
           .then(shapeLook, () => ({ ok: false, error: "failed" }));
       } catch {
         return Promise.resolve({ ok: false, error: "failed" });

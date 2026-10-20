@@ -38,6 +38,9 @@ let mediaRecorder = null;   // the one recording now (each keeps its own audio: 
 
 // ---- live state ----
 let ws = null;
+// The caption stream's start, while it waits for a token: the audio said
+// meanwhile (held), and a stop that came before it (stop).
+let wsStart = null;         // { sock, sent, held, stop }
 let audioCtx = null;
 let srcNode = null;
 let proc = null;
@@ -956,17 +959,34 @@ async function startLive(sid) {
       liveRec.ondataavailable = (e) => { if (e.data && e.data.size) mine.push(e.data); };
       liveRec.start();
     } catch { liveRec = null; }   // no recorder: the stream's text is the fallback
-    ws = new WebSocket(wsUrl());
+    const sock = ws = new WebSocket(wsUrl());
+    const start = wsStart = { sock, sent: false, held: [], stop: false };
     ws.binaryType = "arraybuffer";
     // Browser WebSocket can't set an Authorization header; the protocol
     // carries the token in the start message (the server accepts both).
-    ws.onopen = () => { if (sid === session && ws) ws.send(JSON.stringify({
-      type: "start", token: cfg.token, targetApp: targetFor(sid),
-      language: cfg.language || "auto",
-      sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
-      // A question is metered as Ask is, not as words written.
-      ...(asks.has(sid) ? { purpose: "ask" } : {}),
-    })); };
+    //
+    // THE TOKEN IS ASKED FOR AGAIN AS IT OPENS. A question starts with the
+    // one in hand, with no time to renew it first, and one spent while the
+    // laptop slept was refused here without a word: the question lost its
+    // live words, its instant answer and its stream text. Renewed only when
+    // it is spent. The audio said meanwhile is held, since the server takes
+    // none before the start, and goes right after it.
+    ws.onopen = async () => {
+      const token = await freshToken(false);
+      if (sid !== session || ws !== sock) return;
+      try {
+        sock.send(JSON.stringify({
+          type: "start", token, targetApp: targetFor(sid),
+          language: cfg.language || "auto",
+          sampleRate: 16000, encoding: "pcm_s16le", channels: 1,
+          // A question is metered as Ask is, not as words written.
+          ...(asks.has(sid) ? { purpose: "ask" } : {}),
+        }));
+        start.sent = true;
+        for (const frame of start.held.splice(0)) sock.send(frame);
+        if (start.stop) sock.send(JSON.stringify({ type: "stop" }));
+      } catch { /* closed meanwhile: onclose finishes it */ }
+    };
     ws.onmessage = (ev) => {
       if (sid !== session) return; // message for a dead session
       let m; try { m = JSON.parse(ev.data); } catch { return; }
@@ -1011,7 +1031,11 @@ async function startLive(sid) {
     const inRate = audioCtx.sampleRate;
     proc.onaudioprocess = (e) => {
       if (sid !== session || !ws || ws.readyState !== 1) return;
-      ws.send(downsampleTo16k(e.inputBuffer.getChannelData(0), inRate));
+      const frame = downsampleTo16k(e.inputBuffer.getChannelData(0), inRate);
+      if (start.sent) ws.send(frame);
+      // Held for the start, a few seconds at most: a token that takes longer
+      // than that is a stream that will not start.
+      else if (start.held.length < 64) start.held.push(frame);
     };
   } catch (err) {
     emitError(sid, micMessage(err), { detail: errText(err) });
@@ -1082,7 +1106,13 @@ function stopLive(sid) {
   // will hear no more: its final text is what it had, now, rather than
   // after the watchdog.
   if (ask && !ws) { finishLive(sid); return; }
-  try { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" })); } catch {}
+  // A stream still waiting for its token is stopped right after it starts:
+  // a stop before the start ended nothing, and the start after it began a
+  // stream that waited for the watchdog.
+  try {
+    if (ws && wsStart && wsStart.sock === ws && !wsStart.sent) wsStart.stop = true;
+    else if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" }));
+  } catch {}
   // If "done" never arrives (server hiccup), finish with what we have —
   // but only for THIS session (checked inside finishLive).
   wsWatchdog = setTimeout(() => { if (sid === session && live) finishLive(sid); },
