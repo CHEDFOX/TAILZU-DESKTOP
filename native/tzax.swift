@@ -1070,11 +1070,12 @@ func layoutKeys() -> [String: (CGKeyCode, Bool)] {
       for (shifted, mods) in [(false, UInt32(0)), (true, UInt32(2))] {
         for code in 0..<128 where !keypadCodes.contains(code) {
           var dead: UInt32 = 0
-          var len = UniCharCount(0)
+          // UniCharCount is not imported into Swift: UCKeyTranslate takes Int.
+          var len = 0
           var chars = [UniChar](repeating: 0, count: 4)
           let st = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), mods, kbd,
                                   OptionBits(kUCKeyTranslateNoDeadKeysMask), &dead,
-                                  UniCharCount(chars.count), &len, &chars)
+                                  chars.count, &len, &chars)
           if st != 0 || len == 0 { continue }
           let s = String(utf16CodeUnits: chars, count: Int(len)).lowercased()
           if keys[s] == nil { keys[s] = (CGKeyCode(code), shifted) }
