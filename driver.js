@@ -8,6 +8,9 @@ const none = {
   snapshot: async () => UNSUPPORTED, press: async () => UNSUPPORTED, click: async () => UNSUPPORTED,
   setValue: async () => UNSUPPORTED, focus: async () => UNSUPPORTED, scroll: async () => UNSUPPORTED,
   key: async () => UNSUPPORTED, open: async () => UNSUPPORTED, look: async () => UNSUPPORTED,
+  // The peek asks for the caret only of a running helper, and both drivers
+  // answer "unavailable" when theirs is not; no helper ever runs here.
+  caret: async () => ({ ok: false, error: "unavailable" }),
 };
 
 function pick(platform) {

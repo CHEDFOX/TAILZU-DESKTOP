@@ -23,6 +23,15 @@
  * While it explains, the answer may mark up the screen (draw), in the guide
  * window's own coordinates.
  *
+ * The same window also carries Blip while a dictation records (peek): small,
+ * over the text box at the cursor, reading over their shoulder, and gone when
+ * the words have landed. createPeekWatch below is what asks where the cursor
+ * is while the dictation runs (main.js wires it to dictation's moments); the
+ * peek itself only ever shows when no question has the guide.
+ *
+ * And the main process's side of Ask's one-time setup card in the app window
+ * (createAskSetup): what is allowed on this computer, and the card's buttons.
+ *
  * Kept apart from main.js, with everything it needs handed in, so the order
  * of what happens can be read in one place and tested without Electron.
  */
@@ -83,6 +92,23 @@ const MARKS = new Set(["box", "circle", "underline", "highlight", "arrow", "numb
 // The ones drawn round (or under, or over) a frame.
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
+// What a peek can be doing (guide.js peek): watching the words go in while
+// the microphone is open, watching the last of them be written, and the
+// little hop when they have landed.
+const PEEK_STATES = new Set(["listening", "writing", "done"]);
+// How long the guide takes to duck Blip back below the edge (guide.js
+// PEEK_DUCK, 300 ms, and a frame or two for its loop to finish): the window
+// is hidden once it has, not while Blip is still going down in it.
+const PEEK_GONE_MS = 340;
+/** A caret or field frame as the driver gave it, [x, y, w, h], or null when
+ *  it is not one: numbers that are not finite, or far past any screen (a
+ *  helper's garbage), a negative width, no height. */
+function peekFrame(f) {
+  if (!Array.isArray(f) || f.length !== 4) return null;
+  if (!f.every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 1e6)) return null;
+  return f[2] >= 0 && f[3] > 0 ? f.slice() : null;
+}
+
 function createAsk(ctx) {
   const { BrowserWindow, screen, ipcMain, knobs: K } = ctx;
   const num = K.num, bool = K.bool, str = K.str, txt = K.txt;
@@ -130,6 +156,14 @@ function createAsk(ctx) {
   let pillAt = null;
   let drawSeq = 0;         // the marks' ids, d1, d2, ...: never reused, so one fading out is never taken for a new one
   let marksHere = 0;       // marks drawn on the guide's display since it was put there, or last cleared
+  // THE PEEK, while a dictation records: Blip is up (or ducking) over a text
+  // box in the guide's window, and the window's going once it has ducked.
+  let peeking = false;
+  let peekGone = null;
+  // The last look said the Mac has not let Tailzu see the screen
+  // (no_screen_permission), until a look says otherwise: the setup card's
+  // "Restart Tailzu to finish" when the system says it has.
+  let screenDenied = false;
   // None of this file's timers keeps a process alive by itself: in the app
   // Electron does that, and the tests end when their run does.
   const soft = (t) => { if (t && typeof t.unref === "function") t.unref(); return t; };
@@ -208,6 +242,8 @@ function createAsk(ctx) {
       console.warn("[ask] the guide's page went away; a new one is made for the next question");
       win = null; ready = false; bounds = null; shown = false; queue.length = 0;
       clearTimeout(goneTimer); goneTimer = null;
+      // A peek in it went with it; the next caret builds a new one.
+      peeking = false; clearTimeout(peekGone); peekGone = null;
       try { w.destroy(); } catch { /* already gone */ }
       // Nothing is left to fold back into the pill: it is given back at once.
       cancel("guide gone");
@@ -400,6 +436,9 @@ function createAsk(ctx) {
       if (confirmWait) confirmWait(false);
       if (permitWait) permitWait("no");
       offered = null;
+      // A question has the guide now: the guide ends any peek itself on show,
+      // and the window stays for the card.
+      peeking = false; clearTimeout(peekGone); peekGone = null;
       // A new card: whatever the last one was still saying stops.
       quiet();
       // THE CARD GROWS OUT OF THE PILL. The pill first: main parts it on the
@@ -565,6 +604,11 @@ function createAsk(ctx) {
     goneTimer = soft(setTimeout(() => {
       goneTimer = null;
       if (shown || agent.active()) return;
+      // A peek that took the window meanwhile keeps it (peek clears this
+      // timer itself; this is the second lock). The pill is still let go:
+      // the dictation has it, so nothing of it changes, and the question no
+      // longer holds a phase it would otherwise keep until the next one.
+      if (peeking) { letPill(); return; }
       if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(true, { forward: true }); win.hide(); }
       letPill();
     }, Math.max(0, num("desktop.guide.foldMs", 620)) + 80));
@@ -664,11 +708,16 @@ function createAsk(ctx) {
     return p && p.key && appKey(p.label) === appKey(app) ? p.key : null;
   }
   /** "never", "always" or "ask", for pictures of this app. "always" only
-   *  ever from this computer's own list: the server may turn pictures off
+   *  ever from this computer's own say-so: the server may turn pictures off
    *  everywhere, but a server value that skipped the card would send a
-   *  picture of whatever is in front with nobody asked. */
+   *  picture of whatever is in front with nobody asked. That say-so is
+   *  "Always for <app>" on the card, or the setup card's "Look at the screen
+   *  when it's needed" in the app window, which is yes once for every app:
+   *  browser pages and unnamed Store apps too, which have no Always of their
+   *  own, since that is what they said yes to. */
   function pictures(app) {
     if (str("desktop.agent.pictures", "ask") === "never") return "never";
+    if (typeof ctx.picturesAlwaysAll === "function" && ctx.picturesAlwaysAll() === true) return "always";
     const key = appKey(pictureKey(app));
     const always = typeof ctx.picturesAlways === "function" ? ctx.picturesAlways() : [];
     if (key && Array.isArray(always) && always.some((a) => appKey(a) === key)) return "always";
@@ -688,11 +737,15 @@ function createAsk(ctx) {
     // button sends this once and remembers nothing.
     const key = String(pictureKey(app) || "").replace(/\s+/g, " ").trim().slice(0, 60);
     const whole = !!about && about.region === "window";
+    // ONE LINE. The card asks to see, and nothing more: what is sent, and to
+    // whom, is the privacy policy's to say (its Ask section), where it can
+    // be said whole. Two knobs still, the part of the screen and the whole
+    // window, so either can be worded on its own from the server.
     send({
       type: "permission", app: name, always: !!key,
       text: whole
-        ? txt("desktop.agent.permitWindowText", "To answer that I need to see it: one picture of this window, sent to Tailzu and the AI providers it uses to answer.")
-        : txt("desktop.agent.permitText", "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu and the AI providers it uses to answer."),
+        ? txt("desktop.agent.permitWindowText", "To answer that I need to see it.")
+        : txt("desktop.agent.permitText", "To answer that I need to see it."),
     });
     return new Promise((resolve) => {
       let timer = null;
@@ -888,7 +941,7 @@ function createAsk(ctx) {
   // agent's too: without this, "close this dialog and open settings" was
   // stopped by its own first step.
   let selfEscUntil = 0;
-  const driver = Object.create(ctx.driver, {
+  const hands = {
     key: {
       value: async (chord) => {
         const esc = /\besc(ape)?\b/i.test(String(chord));
@@ -898,7 +951,29 @@ function createAsk(ctx) {
         }
       },
     },
-  });
+  };
+  // And its look, watched for what it says about the Mac's Screen Recording
+  // permission. macOS can say it is granted while the helper, started
+  // before it was, is still refused until Tailzu restarts: the setup card
+  // offers the restart only then (main.js "ask-setup"). Only an answer that
+  // says something counts: a look that timed out says nothing either way.
+  // A driver with no look keeps none, as agent.js expects.
+  if (ctx.driver && typeof ctx.driver.look === "function") {
+    hands.look = {
+      value: async (o) => {
+        const r = await ctx.driver.look(o);
+        const denied = !!r && r.ok === false && r.error === "no_screen_permission";
+        if (r && (r.ok === true || denied) && denied !== screenDenied) {
+          screenDenied = denied;
+          if (typeof ctx.lookPermission === "function") {
+            try { ctx.lookPermission(denied); } catch (e) { console.warn("[ask] the setup card could not be told:", (e && e.message) || e); }
+          }
+        }
+        return r;
+      },
+    };
+  }
+  const driver = Object.create(ctx.driver, hands);
   // Handed in by the tests, which watch what the run is told; agent.js's own
   // otherwise.
   const agent = (ctx.createAgent || agentCore.createAgent)({
@@ -1035,6 +1110,68 @@ function createAsk(ctx) {
     hide();
   }
 
+  // ---- the peek, while a dictation records ----------------------------------------
+  // Blip over the text box at the cursor (guide.js peek), in the guide's own
+  // window: put on the field's display, its frames turned to DIP and then to
+  // the window's own coordinates, as a ring is. Decoration on top of
+  // dictation: anything wrong with it is dropped without a word, and it never
+  // takes the guide from a question.
+  /** A question has the guide, or is on its way to it. */
+  const questionUp = () => shown || listening || !!onAudio || !!naming || !!finalWait || !!confirmWait || !!permitWait || agent.active();
+  /**
+   * Blip at the caret (`caretFrame`) over its text box (`fieldFrame`), both
+   * [x, y, w, h] in the driver's units or null, doing `state` (listening,
+   * writing, done). True when it was sent; false, and nothing shown, while a
+   * question has the guide or when neither frame says where the cursor is
+   * (a peek already up then ducks: it never stays where it can no longer
+   * know the cursor is).
+   */
+  function peek(caretFrame, fieldFrame, state) {
+    if (questionUp()) return false;
+    const c = dip(peekFrame(caretFrame)), f = dip(peekFrame(fieldFrame));
+    if (!c && !f) { unpeek(); return false; }
+    // The field's display, which is where the box is. Except for a tall one
+    // (past desktop.guide.peekTallField: a document, where the guide peeks
+    // over the caret's line rather than the box's top): its text view can be
+    // scrolled far past the screen's edges, its middle on no display at all,
+    // and the caret's display is the one Blip stands on.
+    const by = !f || (c && f.h > num("desktop.guide.peekTallField", 120)) ? c : f;
+    ensureWindow(displayFor({ x: by.x + by.w / 2, y: by.y + by.h / 2 }));
+    if (!win || win.isDestroyed()) return false;
+    clearTimeout(peekGone); peekGone = null;
+    // A card still folding back into the pill (a dictation started as an
+    // answer went): the guide puts it away for the peek, and the pill is
+    // given back now rather than after the fold. A dictation has it, so
+    // nothing of the pill changes (main.js pillAsk).
+    if (goneTimer) { clearTimeout(goneTimer); goneTimer = null; letPill(); }
+    showWindow();
+    peeking = true;
+    send({ type: "peek", caret: local(c), field: local(f), state: PEEK_STATES.has(state) ? state : "listening" });
+    return true;
+  }
+  /** The voice's level (0..1) for Blip's antenna, while it peeks. */
+  function peekLevel(v) {
+    // Not before the page is there: the voice comes thirty times a second,
+    // and a page that never loaded would have queued every one of them for
+    // the whole dictation. A level is gone by the next one anyway.
+    if (!peeking || !ready || questionUp()) return;
+    const n = Number(v);
+    send({ type: "peekLevel", v: Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0 });
+  }
+  /** Blip ducks below the edge at once, and the window goes once it is
+   *  down: unless a peek or a question has it again by then. */
+  function unpeek() {
+    if (!peeking) return;
+    peeking = false;
+    send({ type: "unpeek" });
+    clearTimeout(peekGone);
+    peekGone = soft(setTimeout(() => {
+      peekGone = null;
+      if (peeking || goneTimer || questionUp()) return;
+      if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(true, { forward: true }); win.hide(); }
+    }, PEEK_GONE_MS));
+  }
+
   // ---- from the guide window ---------------------------------------------------------
   const fromGuide = (e) => !!win && !win.isDestroyed() && e.sender === win.webContents;
   ipcMain.on("guide:mouse", (e, inside) => {
@@ -1089,6 +1226,15 @@ function createAsk(ctx) {
     /** A card is up: a run's, or a finished answer's, which may still be
      *  saying it. A dictation starting puts it away (main.js toggleDictation). */
     shown: () => shown,
+    // Blip over the text box while a dictation records (createPeekWatch).
+    // Never a card: none of these makes the question active or shown.
+    peek,
+    peekLevel,
+    unpeek,
+    peeking: () => peeking,
+    /** The last look was refused for want of Screen Recording (and none
+     *  since has been let through). */
+    screenDenied: () => screenDenied,
     escape() {
       // The agent's own Escape, heard by the same hook: for a moment after
       // it sends one, an Esc is its, not theirs.
@@ -1101,4 +1247,299 @@ function createAsk(ctx) {
   };
 }
 
-module.exports = { createAsk, pillAskMove, capsuleRect };
+// ---- the peek's watch (main.js, while a dictation records) -------------------------------
+/**
+ * WHERE THE CURSOR IS WHILE THEY DICTATE, for Blip to peek over the text box
+ * (ask.peek). main.js tells it a dictation's moments: it started (with the
+ * app it is going into, once that is named), a chunk was pasted, it stopped,
+ * its words were pasted, it ended any other way. This asks the driver where
+ * the caret is at the start, after each pasted chunk and every
+ * desktop.dictation.peekEveryMs while the microphone is open, one request at
+ * a time, and tells the peek.
+ *
+ * DECORATION, AND NOTHING ELSE. It reads only rectangles and the app's name,
+ * from a helper that is already running (Ask's); it never starts one, never
+ * sends anything anywhere, and never touches what the dictation records,
+ * sends or pastes. Every failure in it is silent: a helper that is not up, a
+ * caret it cannot find, an answer that never comes, a peek that throws. The
+ * dictation goes on as if it were not here.
+ *
+ * And it never peeks where it should not look: into a private window or a
+ * sensitive app (frontApp.js's own checks, as Ask's), or at an app the
+ * dictation is not going into (the front app moved).
+ *
+ *   o.driver      driver.js: caret({ budgetMs }) → { ok, caret, field, app: { name, pid } }
+ *   o.ask         createAsk's peek, peekLevel, unpeek
+ *   o.knobs       { num }
+ *   o.on()        the peek is on: desktop.dictation.peek, and Ask is
+ *   o.labelOf     frontApp.label(appName, windowTitle): how the dictation's app was named
+ *   o.sensitive   frontApp.looksSensitive(name)
+ */
+function createPeekWatch(o) {
+  const num = o.knobs.num;
+  const soft = (t) => { if (t && typeof t.unref === "function") t.unref(); return t; };
+  const quietly = (f) => { try { return f(); } catch { return undefined; } };
+  // The end of each of its promise chains: what goes wrong inside one is
+  // said in the log and goes no further. Left unhandled, it was a rejection
+  // in the main process, in the middle of a dictation.
+  const shrug = (e) => { console.warn("[peek]", (e && e.message) || e); };
+  // And its timers' callbacks, for the same reason: a throw in one is an
+  // uncaught exception in the main process.
+  const safely = (f) => () => { try { f(); } catch (e) { shrug(e); } };
+  let cur = null;   // the dictation being watched
+
+  /** A dictation started: `sid`, and `named`, the app it is going into
+   *  (frontApp.frontInfo's { label, title, private, sensitive }, or a
+   *  promise of it; { pid } for Tailzu's own window). Any watch before it
+   *  ends. */
+  function start(sid, named) {
+    end();
+    if (!sid || quietly(() => o.on()) !== true) return;
+    const w = cur = {
+      sid, state: "listening", target: null, pid: 0, up: false, last: null,
+      busy: false, again: false, gone: false, timer: null, doneTimer: null,
+    };
+    Promise.resolve(named).then((info) => {
+      if (cur !== w) return;
+      // Not named, a private window, a bank: no peek, and nothing is read.
+      if (!info || typeof info !== "object" || info.private || info.sensitive) { end(sid); return; }
+      w.target = info;
+      read(w, true);
+      // Only while the microphone is open: a stop that came before the app
+      // was named is already writing. A tick while a read is out is skipped:
+      // the next one asks.
+      // Kept between 100 ms and a minute: a value past Node's timer (24
+      // days) is run every millisecond instead, a poll that never rests.
+      if (w.state === "listening") {
+        w.timer = soft(setInterval(safely(() => { if (cur === w && w.state === "listening") read(w, false); }), Math.min(60000, Math.max(100, num("desktop.dictation.peekEveryMs", 700)))));
+      }
+    }, () => { if (cur === w) end(sid); }).catch(shrug);
+  }
+
+  /** The caret, asked once: never two at a time. Asked while one is out,
+   *  with `queue` it is asked again as soon as that one is back (a chunk was
+   *  pasted, so the caret has moved since that one was asked). */
+  function read(w, queue) {
+    if (cur !== w || !w.target || w.gone) return;
+    if (w.busy) { if (queue) w.again = true; return; }
+    if (!o.driver || typeof o.driver.caret !== "function") { w.gone = true; return; }
+    w.busy = true; w.again = false;
+    // No more than the drivers allow (2 s): a larger one only made the cap
+    // below overflow Node's timer and fire at once, so every read was lost.
+    const budgetMs = Math.min(2000, Math.max(50, num("desktop.dictation.peekBudgetMs", 250)));
+    let asked;
+    try { asked = Promise.resolve(o.driver.caret({ budgetMs })); } catch { asked = Promise.resolve(null); }
+    // The drivers always answer within the budget; this only makes sure one
+    // that did not can never hold every later read behind it.
+    let cap = null;
+    const capped = new Promise((r) => { cap = soft(setTimeout(() => r(null), budgetMs + 500)); });
+    Promise.race([asked, capped]).then((r) => r, () => null).then((r) => { clearTimeout(cap); landed(w, r); }).catch(shrug);
+  }
+
+  /** Whether an answer's app is the dictation's: by the pid, once one
+   *  answer has matched; until then by how frontApp names an app (its name,
+   *  and for a browser the site, from the window's title at the start). */
+  function mine(w, app) {
+    const pid = Number(app.pid) || 0;
+    if (w.pid) return pid === w.pid;
+    const t = w.target;
+    const same = t.pid ? pid === t.pid
+      : typeof t.label === "string" && !!t.label && quietly(() => o.labelOf(String(app.name || ""), String(t.title || ""))) === t.label;
+    if (same && pid) w.pid = pid;
+    return same;
+  }
+
+  /** What an answer says: { caret, field } to peek at; null, no peek here
+   *  (another app, a sensitive one, a password field, nothing found); or
+   *  undefined, no news (a failure: what is up stays). */
+  function placeOf(w, r) {
+    if (!r || typeof r !== "object" || r.ok !== true) return undefined;
+    const app = r.app && typeof r.app === "object" ? r.app : {};
+    if (!mine(w, app)) return null;
+    if (quietly(() => o.sensitive(String(app.name || ""))) !== false) return null;
+    const caret = peekFrame(r.caret), field = peekFrame(r.field);
+    return caret || field ? { caret, field } : null;
+  }
+
+  function landed(w, r) {
+    w.busy = false;
+    if (cur !== w) return;
+    // No helper running (Ask is off, or it has not started): nothing more is
+    // asked of it for this dictation. A dictation never starts one.
+    if (r && r.ok === false && (r.error === "unavailable" || r.error === "unsupported")) w.gone = true;
+    const place = placeOf(w, r);
+    // Done, and asked again meanwhile: this answer is from before the last
+    // words landed, and the next one says where they are.
+    if (w.state === "done" && w.again && !w.gone) { read(w, true); return; }
+    if (place === null) down(w);
+    else if (place) { w.last = place; show(w, place); }
+    if (w.state === "done") { finish(w, place); return; }
+    if (w.again && !w.gone) read(w, true);
+  }
+
+  /** Up, or moved. Only while the microphone is open does it come up:
+   *  writing and done move one that is already up, and a dictation that
+   *  never showed it does not pop it up to hop at its end. */
+  function show(w, place) {
+    if (!w.up && w.state !== "listening") return;
+    w.up = quietly(() => o.ask.peek(place.caret, place.field, w.state)) === true;
+  }
+  function down(w) {
+    if (!w.up) return;
+    w.up = false;
+    quietly(() => o.ask.unpeek());
+  }
+  /** The last words are in: the hop where the caret is now (or where it
+   *  was, when it could not be read again), then away. */
+  function finish(w, place) {
+    if (w.doneTimer) return;
+    if (place === undefined && w.up && w.last) show(w, w.last);
+    if (!w.up) { end(w.sid); return; }
+    w.doneTimer = soft(setTimeout(safely(() => { if (cur === w) end(w.sid); }), Math.max(0, num("desktop.dictation.peekDoneMs", 900))));
+  }
+
+  /** A chunk was pasted while it records (the pill's flash): the caret moved. */
+  function pasted(sid) {
+    const w = cur;
+    if (!w || w.sid !== sid || w.state === "done") return;
+    read(w, true);
+  }
+  /** The microphone closed: it watches the words being written. */
+  function stop(sid) {
+    const w = cur;
+    if (!w || w.sid !== sid || w.state !== "listening") return;
+    w.state = "writing";
+    clearInterval(w.timer); w.timer = null;
+    if (w.up && w.last) show(w, w.last);
+  }
+  /** The words were pasted: where the caret is now, the hop, and away
+   *  after desktop.dictation.peekDoneMs. */
+  function done(sid) {
+    const w = cur;
+    if (!w || w.sid !== sid || w.state === "done") return;
+    w.state = "done";
+    clearInterval(w.timer); w.timer = null;
+    if (!w.up || !w.target) { end(sid); return; }
+    read(w, true);
+    // A read already out lands first and asks again (landed); one that
+    // could not be asked at all (the helper went) hops where it was.
+    if (!w.busy && cur === w) finish(w, undefined);
+  }
+  /** The dictation ended any other way (cancelled, failed, nothing written,
+   *  given up on): away at once. `sid` omitted: whatever is watched. */
+  function end(sid) {
+    const w = cur;
+    if (!w || (sid != null && w.sid !== sid)) return;
+    cur = null;
+    clearInterval(w.timer); clearTimeout(w.doneTimer);
+    down(w);
+  }
+  /** The voice's bands (the pill's level stream), their mean for the antenna. */
+  function level(sid, bands) {
+    const w = cur;
+    if (!w || w.sid !== sid || !w.up || w.state !== "listening" || !Array.isArray(bands) || !bands.length) return;
+    const v = bands.reduce((a, b) => a + (Number(b) || 0), 0) / bands.length;
+    quietly(() => o.ask.peekLevel(v));
+  }
+
+  // Nothing here may throw into main.js's dictation paths.
+  const guarded = (f) => (...a) => { try { f(...a); } catch (e) { console.warn("[peek]", (e && e.message) || e); } };
+  return {
+    start: guarded(start), pasted: guarded(pasted), stop: guarded(stop), done: guarded(done), end: guarded(end), level: guarded(level),
+    /** The dictation it is watching, or 0. */
+    watching: () => (cur ? cur.sid : 0),
+  };
+}
+
+// ---- the setup card in the app window (main.js) ---------------------------------------
+// The "ask" actions the card may ask for. Anything else is ignored.
+const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "picturesAll", "relaunch"]);
+
+/**
+ * ASK'S ONE-TIME SETUP, the main process's side of it: "Let Ask see what you
+ * see." in the app window (sdui.js DeskAskSetup), three rows, each with its
+ * state and one button.
+ *
+ *   read      Accessibility on a Mac (the screen's buttons, fields and text);
+ *             nothing to allow elsewhere ("na")
+ *   see       Screen Recording on a Mac; "restart" when the Mac says it is
+ *             granted but the helper's last look was still refused, which
+ *             takes a restart of Tailzu
+ *   pictures  look without asking each time, for every app (local state
+ *             askPicturesAlwaysAll); "never" when the server has turned
+ *             pictures off, which wins over everything
+ *
+ * The states are read here, on this computer, and nothing of them leaves it.
+ * The window asks for them (app:askSetup) and is told again whenever they
+ * may have changed ("ask-setup": its focus, each action, a look's answer).
+ * Only the app window may ask or act (fromApp), and a button opens only its
+ * own fixed page.
+ *
+ *   o.ipcMain, o.fromApp(e)
+ *   o.platform             process.platform
+ *   o.systemPreferences    Electron's (Mac: isTrustedAccessibilityClient, getMediaAccessStatus)
+ *   o.knobs                { str }
+ *   o.localState, o.saveLocalState
+ *   o.screenDenied()       the last look was refused for want of Screen Recording
+ *   o.openAccessibility()  the Mac's Accessibility page
+ *   o.openScreenRecording()  the guide's Screen Recording path (main.js)
+ *   o.relaunch()
+ *   o.send(state)          to the app window, as "ask-setup"
+ */
+function createAskSetup(o) {
+  const mac = o.platform === "darwin";
+  const call = (f, fallback) => { try { return f(); } catch { return fallback; } };
+
+  function state() {
+    let read = "na", see = "na";
+    if (mac) {
+      const sp = o.systemPreferences || {};
+      read = call(() => sp.isTrustedAccessibilityClient(false), false) === true ? "on" : "off";
+      if (call(() => sp.getMediaAccessStatus("screen"), "") === "granted") {
+        see = call(() => o.screenDenied(), false) === true ? "restart" : "on";
+      } else see = "off";
+    }
+    const never = o.knobs.str("desktop.agent.pictures", "ask") === "never";
+    return {
+      platform: mac ? "mac" : o.platform === "win32" ? "windows" : "linux",
+      read, see,
+      pictures: never ? "never" : o.localState.askPicturesAlwaysAll === true ? "on" : "off",
+    };
+  }
+  /** The state, to the app window. */
+  function push() {
+    try { o.send(state()); } catch (e) { console.warn("[ask] the setup card could not be told:", (e && e.message) || e); }
+  }
+
+  /** One of the card's buttons. True when it was one it may ask for. */
+  function act(p) {
+    if (!p || typeof p !== "object" || !SETUP_KINDS.has(p.kind)) return false;
+    if (p.kind === "openAccessibility" || p.kind === "openScreenRecording") {
+      // A Mac's own settings pages; there is nothing to open elsewhere.
+      if (!mac) return false;
+      call(() => (p.kind === "openAccessibility" ? o.openAccessibility() : o.openScreenRecording()));
+      return true;
+    }
+    if (p.kind === "picturesAll") {
+      if (typeof p.on !== "boolean") return false;
+      o.localState.askPicturesAlwaysAll = p.on;
+      call(() => o.saveLocalState());
+      return true;
+    }
+    // relaunch: only when the card offers it ("Restart Tailzu to finish"). A
+    // restart takes a dictation, a note and a question down with it, so a
+    // window cannot ask for one at any other time.
+    if (state().see !== "restart") return false;
+    call(() => o.relaunch());
+    return true;
+  }
+
+  o.ipcMain.handle("app:askSetup", (e) => (o.fromApp(e) ? state() : null));
+  o.ipcMain.on("app:askSetupAction", (e, p) => {
+    if (!o.fromApp(e)) return;
+    if (act(p)) push();
+  });
+  return { state, push, act };
+}
+
+module.exports = { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup };

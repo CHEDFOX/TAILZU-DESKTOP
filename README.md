@@ -126,6 +126,11 @@ window rather than recording into a history no account owns.
     tied to it while it is up, and folds back into it at the end.
   - **Drawing**: while it explains, it circles, underlines, numbers and
     draws arrows on the screen or on the picture, labelled in handwriting.
+  - **Peek**: while you dictate, a small Blip peeks over the text box at the
+    cursor (`desktop.dictation.peek`).
+  - **One-time setup**: a card in the app ("Let Ask see what you see.")
+    allows reading the screen, seeing it and looking when needed, so the
+    working screens never stop to ask.
   - **Mostly text**: what leaves the machine is a text list of the screen's
     buttons, fields and OCR'd lines (roles, labels, short values, a rough
     position), the question's audio on the live stream, plus that one

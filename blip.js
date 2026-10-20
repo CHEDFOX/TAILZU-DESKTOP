@@ -19,6 +19,10 @@
  * Coordinates: `draw(ctx, ax, ay, t)` puts the middle of Blip's stretch of the
  * card's top edge at (ax, ay), in CSS pixels of a context already scaled for
  * the display. `fingertip()` is where a pointing hand ends, for the thread.
+ *
+ * It also peeks over the text box you are dictating into, small, at the
+ * cursor (guide.js peek): `peekSpot()` below says where it stands for a
+ * caret and a field, and the same figure is drawn there on that edge.
  */
 (function (root, factory) {
   const api = factory();
@@ -60,6 +64,9 @@
     let target = null;        // where the pointing hand points, canvas CSS px
     let speaking = false;
     let live = false;
+    let level = 0;            // the voice, 0..1: the lit antenna's glow breathes with it
+    let still = false;        // reduced motion: no bob, no sway, no hop, no nod
+    let nodNext = false, nodAt = -1e9;
     let last = 0;
     let buf = null, cellPx = 0;
     let on = null;            // which cells the figure touches, this frame (kept, not made anew each frame)
@@ -74,9 +81,13 @@
     function figure(g, W, p, t) {
       const EDGE = .5;
       const cx = W / 2;
-      const bob = Math.sin(t * TAU * .9) * .008 * H - p.hop * Math.abs(Math.sin(t * TAU * 1.6)) * .05 * H;
+      const bob = still ? 0 : Math.sin(t * TAU * .9) * .008 * H - p.hop * Math.abs(Math.sin(t * TAU * 1.6)) * .05 * H;
       const lift = (1 - clamp(p.rise, 0, 1.2)) * .52 * H;  // how far below its peek it sits
-      const dy = lift + bob;
+      // A nod: the head dips and comes back up, its lid with it. Over a text
+      // box it says "got that" as each chunk of words lands.
+      const nk = (t - nodAt) / .34, nod = still || nk < 0 || nk >= 1 ? 0 : Math.sin(Math.PI * nk);
+      const dy = lift + bob + nod * .07 * H;
+      const sway = still ? 0 : Math.sin(t * TAU * .45) * .02;
       // Where things are aimed from: the eye, and the near shoulder.
       const hx = cx, hy = .3 * H + dy, R = .16 * H;
       const side = target && target[0] < anchor[0] ? -1 : 1;
@@ -129,10 +140,10 @@
       g.beginPath(); g.moveTo(cx, .53 * H + dy); g.quadraticCurveTo(cx + .035 * H, .49 * H + dy, cx, .44 * H + dy); g.stroke();
 
       // THE HEAD, tilted from the base of the neck.
-      g.save(); g.translate(hx, hy + R); g.rotate(p.tilt + Math.sin(t * TAU * .45) * .02); g.translate(-hx, -(hy + R));
+      g.save(); g.translate(hx, hy + R); g.rotate(p.tilt + sway + nod * .08); g.translate(-hx, -(hy + R));
       // The antennae (one curled with a ball, one bent at a knee) are thin
       // lines, too fine for dots: drawn solid with the face (see drawFace).
-      const wob = Math.sin(t * TAU * (live ? 2.6 : 1.6)) * .025 * H;
+      const wob = still ? 0 : Math.sin(t * TAU * (live ? 2.6 : 1.6)) * .025 * H;
       // The skull, lit from the top left.
       const sg = g.createRadialGradient(hx - .06 * H, hy - .06 * H, 0, hx, hy, R * 1.3);
       sg.addColorStop(0, grey(.82)); sg.addColorStop(.55, grey(.6)); sg.addColorStop(1, grey(.36));
@@ -144,8 +155,10 @@
       // the one great eye is what you see first at any size. Here only its
       // place is kept clear, and where it looks is worked out.
       const ex = hx - .005 * H, ey = hy - .012 * H, er = .09 * H;
-      const blink = ((t * 1000 + 300) % 3700) < 120;
-      const lid = blink ? 1 : clamp(p.lid);
+      // Held still (reduced motion), it does not blink either: a flicker
+      // every few seconds at the cursor is still a movement there.
+      const blink = !still && ((t * 1000 + 300) % 3700) < 120;
+      const lid = blink ? 1 : clamp(p.lid + nod * .3);
       g.save(); g.globalCompositeOperation = "destination-out"; g.beginPath(); g.arc(ex, ey, er + .012 * H, 0, TAU); g.fill(); g.restore();
       let lx, ly;
       if (look) {
@@ -158,7 +171,7 @@
         ly = .008 * H * Math.cos(t * 1.3);
       }
       // The face's frame (the head's tilt), for the solid pass.
-      const face = { hx, hy, R, angle: p.tilt + Math.sin(t * TAU * .45) * .02, ex, ey, er, lx, ly, lid, blink, brows: p.brows, wob };
+      const face = { hx, hy, R, angle: p.tilt + sway + nod * .08, ex, ey, er, lx, ly, lid, blink, brows: p.brows, wob };
       g.restore();
 
       // The near arm last, over the face if it crosses it.
@@ -186,8 +199,13 @@
       // The ball: amber while the microphone is open.
       const br = .03 * H;
       // (At a quarter of whatever the caller draws it at: Blip fades with the
-      // card when the card folds away.)
-      if (live) { const a0 = c.globalAlpha; c.fillStyle = o.live; c.globalAlpha = a0 * .25; c.beginPath(); c.arc(kx, ky, br * 2.1, 0, TAU); c.fill(); c.globalAlpha = a0; }
+      // card when the card folds away.) With a voice (`level`) the glow
+      // swells and brightens with it, the way the pill's thread is plucked.
+      if (live) {
+        const a0 = c.globalAlpha, lv = clamp(level);
+        c.fillStyle = o.live; c.globalAlpha = a0 * (.25 + .45 * lv);
+        c.beginPath(); c.arc(kx, ky, br * (2.1 + 2.2 * lv), 0, TAU); c.fill(); c.globalAlpha = a0;
+      }
       c.fillStyle = ink; c.beginPath(); c.arc(kx, ky, br + .012 * H, 0, TAU); c.fill();
       c.fillStyle = live ? o.live : pale; c.beginPath(); c.arc(kx, ky, br, 0, TAU); c.fill();
       c.fillStyle = ink; c.beginPath(); c.arc(ex, ey, er + .016 * H, 0, TAU); c.fill();
@@ -223,6 +241,7 @@
     /** The face moves toward its pose by the time since the last frame. */
     function step(t) {
       const dt = Math.min(.1, Math.max(0, t - last)); last = t;
+      if (nodNext) { nodNext = false; nodAt = t; }
       const goal = POSES[poseName];
       const rate = 1 - Math.pow(.0009, dt);   // ~120 ms to most of the way
       for (const k in cur) cur[k] += (goal[k] - cur[k]) * rate;
@@ -254,7 +273,11 @@
       if (!on || on.length !== bw * bh) on = new Uint8Array(bw * bh);
       for (let i = 0; i < bw * bh; i++) on[i] = src[i * 4 + 3] > 60 ? 1 : 0;
       ctx.save();
-      ctx.beginPath(); ctx.rect(ox - cell * 2, oy - cell * 2, W + cell * 4, EDGE * H + cell * 2); ctx.clip();
+      // Cut at the edge it stands on, and only there: two cells over the top
+      // of its box cut the antenna's ball off at the top of a hop, and its
+      // glow off while it listened.
+      const over = cell * 2 + .14 * H;
+      ctx.beginPath(); ctx.rect(ox - cell * 2, oy - over, W + cell * 4, EDGE * H + over); ctx.clip();
       ctx.fillStyle = o.ink;
       ctx.beginPath();
       for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
@@ -298,11 +321,111 @@
       pointAt(p) { target = p ? [p[0], p[1]] : null; },
       speaking(on) { speaking = !!on; },
       live(on) { live = !!on; },
+      /** The voice, 0..1, for the lit antenna's glow. */
+      level(v) { level = typeof v === "number" && Number.isFinite(v) ? clamp(v) : 0; },
+      /** A nod, once, from the next frame. */
+      nod() { if (!still) nodNext = true; },
+      /** Reduced motion: it holds still, faces and all (see snap). */
+      still(on) { still = !!on; },
+      /** The pose's face at once, not eased toward: it appears and goes, and
+       *  changes its face, without moving to get there. */
+      snap() { Object.assign(cur, POSES[poseName]); },
       fingertip() { return tip; },
       shown() { return cur.rise > .05; },
       state() { return Object.assign({ pose: poseName }, cur); },
     };
   }
 
-  return { createBlip, POSES };
+  // ---- where it peeks over a text box --------------------------------------------
+  const isNum = (v) => typeof v === "number" && Number.isFinite(v);
+  /** [x, y, w, h] of plain finite numbers, none negative in size; else null.
+   *  Only numbers: Number(null) is 0, and a frame with a missing y would be
+   *  one at the top of the screen. */
+  function frameOf(r) {
+    if (!Array.isArray(r) || r.length !== 4 || !r.every(isNum)) return null;
+    return r[2] >= 0 && r[3] >= 0 ? r.slice() : null;
+  }
+  /**
+   * WHERE BLIP PEEKS FROM while you dictate: over the top edge of the text
+   * box, at the cursor, as if reading over your shoulder. Pure, so it can be
+   * tested away from a page.
+   *
+   *   caret, field   [x, y, w, h] or null, in the guide window's coordinates
+   *   view           { w, h, top }: the window, and where its usable top is
+   *                  (below a Mac's menu bar)
+   *   o              { height: Blip's height, tall: a field taller than this
+   *                  is a document }
+   *
+   * → null (no peek: it never shows where it cannot know where the cursor
+   * is), or { x, y, side, look, tall }: (x, y) is the middle of its stretch
+   * of the edge it stands on; side is where its head points, "top" (up, over
+   * a top edge), or "right" / "left" (out from beside the field, when there
+   * is no room above it); look is where its eye looks.
+   *
+   *  - A short field: it stands on the field's top edge, at the caret's x
+   *    (+10, just past it), kept 24 px in from the field's ends.
+   *  - A tall one (a document, a long message box): on the caret's own line
+   *    top instead, a little to its right (+18), so it never covers the
+   *    cursor or the words just written.
+   *  - No caret, only a field: the field's top-right corner.
+   *  - No room above (the field at the top of the screen): from beside its
+   *    right edge at the caret's height, else its left; never off screen,
+   *    and nowhere at all when neither side has room.
+   *  - A field larger than the window is cut to it. A caret far outside its
+   *    field is not believed (the field is), one just outside is brought in.
+   */
+  function peekSpot(caret, field, view, o) {
+    const W = view && isNum(view.w) ? view.w : 0, VH = view && isNum(view.h) ? view.h : 0;
+    const top = view && isNum(view.top) ? Math.max(0, view.top) : 0;
+    const h = o && isNum(o.height) && o.height > 0 ? o.height : 54;
+    const tallAt = o && isNum(o.tall) ? o.tall : 120;
+    if (W < 40 || VH < 40) return null;
+    // Room the head needs past the edge, and half of what shows of it along
+    // the edge (its head and its hands, about a third of its height either
+    // side; its box is wider, but that is empty while it only peeks).
+    const need = .62 * h + 4, half = .3 * h + 2;
+    let f = frameOf(field), c = frameOf(caret);
+    let tall = false;
+    if (f) {
+      tall = f[3] > tallAt;
+      // What of it is on this window: a scrolled document's text view is
+      // taller than the screen, and its own top may be far above it.
+      const x0 = Math.max(0, f[0]), y0 = Math.max(0, f[1]), x1 = Math.min(W, f[0] + f[2]), y1 = Math.min(VH, f[1] + f[3]);
+      f = x1 - x0 >= 16 && y1 - y0 >= 8 ? [x0, y0, x1 - x0, y1 - y0] : null;
+    }
+    if (c) {
+      // A caret is a line high. No height (an empty rect) or one far taller
+      // than a line (a whole paragraph's bounds) is not a caret.
+      if (!(c[3] > 0) || c[3] > 160) c = null;
+      else if (c[0] + c[2] / 2 < 0 || c[0] + c[2] / 2 > W || c[1] + c[3] / 2 < 0 || c[1] + c[3] / 2 > VH) c = null;
+    }
+    if (c && f) {
+      const mx = c[0] + c[2] / 2, my = c[1] + c[3] / 2, g = 40;
+      if (mx < f[0] - g || mx > f[0] + f[2] + g || my < f[1] - g || my > f[1] + f[3] + g) c = null;
+      else {
+        c[0] = Math.max(f[0], Math.min(f[0] + f[2], c[0]));
+        c[1] = Math.max(f[1], Math.min(f[1] + Math.max(0, f[3] - c[3]), c[1]));
+      }
+    }
+    if (!f && !c) return null;
+    // Only a caret: a box of its own around it, just over its line.
+    if (!f) f = [c[0] - 40, c[1] - 4, 80, c[3] + 8];
+    const right = f[0] + f[2];
+    const look = c ? [c[0] + c[2] / 2, c[1] + c[3] / 2] : [f[0] + f[2] / 2, f[1] + Math.min(f[3] / 2, 40)];
+    let edge = f[1], x = right - 30;
+    if (c) { edge = tall ? c[1] - 2 : f[1]; x = c[0] + (tall ? 18 : 10); }
+    x = f[2] >= 48 ? Math.max(f[0] + 24, Math.min(right - 24, x)) : f[0] + f[2] / 2;
+    x = Math.max(half, Math.min(W - half, x));
+    if (edge - need >= top && edge <= VH) return { x, y: edge, side: "top", look, tall };
+    // No room above: out from beside the field, at the caret's height (or
+    // by its top-right corner), its hands on the field's side edge.
+    let y = c ? c[1] + c[3] / 2 : f[1] + 18;
+    y = f[3] >= 32 ? Math.max(f[1] + 16, Math.min(f[1] + f[3] - 16, y)) : f[1] + f[3] / 2;
+    y = Math.max(top + half, Math.min(VH - half, y));
+    if (W - right >= need) return { x: right, y, side: "right", look, tall };
+    if (f[0] >= need) return { x: f[0], y, side: "left", look, tall };
+    return null;
+  }
+
+  return { createBlip, POSES, peekSpot };
 });

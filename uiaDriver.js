@@ -11,12 +11,22 @@
 // next call. The first line after a spawn waits on Add-Type and the UI
 // Automation assemblies loading, which is slow, so warm-up gets its own, longer
 // budget and the snapshot that follows is timed from an already-ready helper.
+//
+// One call is different: caret (where the text cursor is, for Blip to peek
+// over the text box while the user dictates) is asked only of a helper that is
+// already up, never starting one, and keeps to its small budget whole, a
+// warm-up still under way included.
 
 const { spawn: nodeSpawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
 const DEFAULTS = { snapshotTimeout: 1500, actionTimeout: 1200, openTimeout: 6000, lookTimeout: 2500, warmupMs: 8000 };
+
+/** A caret read's whole time (peek-spec §A, desktop.dictation.peekBudgetMs):
+ *  it is asked every few hundred milliseconds while the user dictates, and a
+ *  peek that comes late is worth nothing. */
+const CARET_MS = 250;
 
 /** What a look spends outside the helper's own budget: the capture and the
  *  JPEG, which the budget does not cut short, and an answer a few hundred KB
@@ -74,6 +84,30 @@ function shapeLook(r) {
     titleFrames,
     image,
     ms: typeof rest.ms === "number" && Number.isFinite(rest.ms) ? rest.ms : 0,
+  };
+}
+
+/** A caret answer's rectangle: [x, y, w, h] of finite numbers within a
+ *  million either way, a size that is not negative and a height that is not
+ *  zero; anything else is null. */
+function caretBox(f) {
+  return isFrame(f) && f[2] >= 0 && f[3] > 0 && f.every((n) => Math.abs(n) <= 1e6) ? f.slice() : null;
+}
+
+/** A caret answer as callers get it (peek-spec §A): exactly these fields,
+ *  built afresh, so nothing else the helper wrote (least of all any text)
+ *  reaches the caller. Physical pixels, like everything from this helper. A
+ *  failure is its error alone, and only an error that is one of its words. */
+function shapeCaret(r) {
+  if (!r || typeof r !== "object" || typeof r.ok !== "boolean") return { ok: false, error: "bad_answer" };
+  if (!r.ok) return { ok: false, error: typeof r.error === "string" && /^[a-z_]{1,40}$/.test(r.error) ? r.error : "failed" };
+  const a = r.app && typeof r.app === "object" && !Array.isArray(r.app) ? r.app : {};
+  return {
+    ok: true,
+    caret: caretBox(r.caret),
+    field: caretBox(r.field),
+    app: { name: typeof a.name === "string" ? a.name.slice(0, 200) : "", pid: Number.isInteger(a.pid) && a.pid > 0 ? a.pid : 0 },
+    scale: "pixels",
   };
 }
 
@@ -226,6 +260,26 @@ function createUiaDriver(opts = {}) {
     });
   }
 
+  /** The caret, asked only of a helper that is already up: a dictation never
+   *  starts one (the peek shows only while Ask's helper runs). The whole call
+   *  keeps to `t`, a warm-up still under way included: it waits for that no
+   *  longer than it has, and the line carries its deadline, so the helper,
+   *  which reads one line at a time, does not read a caret that waited past
+   *  it behind a walk. */
+  async function sendCaret(t) {
+    if (!child) return { ok: false, error: "unavailable" };
+    const until = Date.now() + t;
+    let timer = null;
+    const warm = await Promise.race([
+      Promise.resolve(ready).then(() => true, () => true),
+      new Promise((r) => { timer = setTimeout(() => r(false), t); }),
+    ]);
+    clearTimeout(timer);
+    const left = until - Date.now();
+    if (!warm || left < 20) return { ok: false, error: "timeout" };
+    return rawSend("caret", { budgetMs: left }, left, { deadline: true });
+  }
+
   async function send(cmd, extra, timeoutMs, how = {}) {
     start();
     if (!child) return { ok: false, error: "unavailable" };
@@ -290,6 +344,18 @@ function createUiaDriver(opts = {}) {
     },
     key(chord) { return send("key", { chord }, cfg.actionTimeout); },
     open(appName) { return send("open", { app: appName }, cfg.openTimeout); },
+    // Where the caret and its text box are, for the peek (peek-spec §A):
+    // exactly { ok, caret, field, app, scale }, or { ok:false, error }, and
+    // "unavailable" at once when the helper is not running (see sendCaret).
+    caret(o) {
+      try {
+        const opt = o && typeof o === "object" ? o : {};
+        const t = clampInt(opt.budgetMs != null ? opt.budgetMs : opt.timeoutMs, 100, 2000, CARET_MS);
+        return sendCaret(t).then(shapeCaret, () => ({ ok: false, error: "failed" }));
+      } catch {
+        return Promise.resolve({ ok: false, error: "failed" });
+      }
+    },
     // The window in front as a picture and as the text in it (§A). Slower
     // than any other call, so it has its own timeout: by default the larger
     // of lookTimeout and the budget asked for plus what a look spends outside
@@ -323,7 +389,8 @@ function createUiaDriver(opts = {}) {
 
 // The default instance is the real Windows driver. Its methods are spread onto
 // the exports so the module itself is the §1 API (available, start, stop,
-// trusted, snapshot, press, click, setValue, focus, scroll, key, open, look).
+// trusted, snapshot, press, click, setValue, focus, scroll, key, open, look,
+// and caret for the peek).
 const instance = createUiaDriver();
 module.exports = {
   available: instance.available,
@@ -339,6 +406,7 @@ module.exports = {
   key: instance.key,
   open: instance.open,
   look: instance.look,
+  caret: instance.caret,
   createUiaDriver,
   scriptPath,
   defaultCommand,

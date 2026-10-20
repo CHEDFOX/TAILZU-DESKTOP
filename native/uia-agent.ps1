@@ -8,11 +8,12 @@
 #   in   {"id":n,"cmd":"snapshot","max":250}
 #   out  {"id":n,"ok":true,"app":{...},"elements":[...], ...}
 # Every line is answered, in the order asked, even when UI Automation throws;
-# a line that is not JSON is answered {"ok":false,"error":"malformed"}. The one
-# exception to the order is "look" (the window's pixels and the text in them),
-# which is answered by its own thread when it is done, so the snapshot asked at
-# the same moment is not kept waiting behind it; the driver matches answers by
-# id, so the order was never what it relied on. The
+# a line that is not JSON is answered {"ok":false,"error":"malformed"}. The
+# exceptions to the order are "look" (the window's pixels and the text in them)
+# and "caret" (where the text cursor is, for the peek while the user
+# dictates), each answered by its own threads when it is done, so the snapshot
+# asked at the same moment is not kept waiting behind them; the driver matches
+# answers by id, so the order was never what it relied on. The
 # conventions (an Add-Type C# block for Win32, $ErrorActionPreference, UTF-8
 # output, run as command text with -EncodedCommand and windowsHide by the Node
 # side) mirror frontApp.js's PowerShell, so the two read the same to anyone who
@@ -617,6 +618,441 @@ public static class TzShot {
   $script:lookReady = $true
 } catch {}
 
+# THE CARET FOR THE PEEK: where the text cursor and its box are, for Blip to
+# peek over the box while the user dictates (peek-spec §A), in the snapshot's
+# physical pixels. Two rectangles and nothing else: no text is read, not the
+# field's, not its selection's. Its own Add-Type, apart from TzAgent's and
+# TzShot's, so that if it will not compile every other command still works and
+# caret alone answers "no_caret". The C# 5 rules above hold here too.
+#
+# The caret comes from UI Automation's COM interface, because the managed one
+# this script uses elsewhere (System.Windows.Automation) predates TextPattern2
+# and has no GetCaretRange. Only the slots it calls are typed; the ones before
+# them are kept as placeholders so each method lands on its slot of the
+# vtable (UIAutomationClient.idl's order), and none of them is ever called.
+$script:caretReady = $false
+try {
+  Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+public static class TzCaret {
+  [ComImport, Guid("30cbe57d-d9d0-452a-ab13-7ac5ac4825ee"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IAutomation {
+    // CompareElements, CompareRuntimeIds, GetRootElement, ElementFromHandle, ElementFromPoint
+    void Gap1(); void Gap2(); void Gap3(); void Gap4(); void Gap5();
+    IElement GetFocusedElement();
+  }
+
+  [ComImport, Guid("d22108aa-8ac5-49a5-837b-37bbb3d7591e"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IElement {
+    // SetFocus, GetRuntimeId, FindFirst, FindAll, FindFirstBuildCache, FindAllBuildCache, BuildUpdatedCache
+    void Gap1(); void Gap2(); void Gap3(); void Gap4(); void Gap5(); void Gap6(); void Gap7();
+    [return: MarshalAs(UnmanagedType.Struct)] object GetCurrentPropertyValue(int propertyId);
+    // GetCurrentPropertyValueEx, GetCachedPropertyValue, GetCachedPropertyValueEx, GetCurrentPatternAs, GetCachedPatternAs
+    void Gap9(); void Gap10(); void Gap11(); void Gap12(); void Gap13();
+    [return: MarshalAs(UnmanagedType.IUnknown)] object GetCurrentPattern(int patternId);
+  }
+
+  [ComImport, Guid("32eba289-3583-42c9-9c59-3b6d9a1e9b6a"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface ITextPattern {
+    // RangeFromPoint, RangeFromChild
+    void Gap1(); void Gap2();
+    IRangeArray GetSelection();
+  }
+
+  [ComImport, Guid("506a921a-fcc9-409f-b23b-37eb74106872"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface ITextPattern2 {
+    // TextPattern's six (RangeFromPoint, RangeFromChild, GetSelection,
+    // GetVisibleRanges, DocumentRange, SupportedTextSelection), then RangeFromAnnotation
+    void Gap1(); void Gap2(); void Gap3(); void Gap4(); void Gap5(); void Gap6(); void Gap7();
+    IRange GetCaretRange(out int isActive);
+  }
+
+  [ComImport, Guid("ce4ae76a-e717-4c98-81ea-47371d028eb6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IRangeArray {
+    int Length { get; }
+    IRange GetElement(int index);
+  }
+
+  [ComImport, Guid("a543cc6a-f4ae-494b-8239-c814481187a8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  internal interface IRange {
+    IRange Clone();
+    // Compare
+    void Gap2();
+    int CompareEndpoints(int srcEndPoint, IRange range, int targetEndPoint);
+    void ExpandToEnclosingUnit(int unit);
+    // FindAttribute, FindText, GetAttributeValue
+    void Gap5(); void Gap6(); void Gap7();
+    [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_R8)] double[] GetBoundingRectangles();
+    // GetEnclosingElement, the range's words (never read here), Move, MoveEndpointByUnit
+    void Gap9(); void Gap10(); void Gap11(); void Gap12();
+    void MoveEndpointByRange(int srcEndPoint, IRange range, int targetEndPoint);
+  }
+
+  const int TextPatternId = 10014;
+  const int TextPattern2Id = 10024;
+  const int BoundingRectangleId = 30001;
+  const int IsPasswordId = 30019;
+  const int EndpointStart = 0;
+  const int EndpointEnd = 1;
+  const int UnitCharacter = 0;
+  const int ES_PASSWORD = 0x20;
+  const int GWL_STYLE = -16;
+
+  [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] struct GUITHREADINFO {
+    public int cbSize; public uint flags;
+    public IntPtr hwndActive; public IntPtr hwndFocus; public IntPtr hwndCapture; public IntPtr hwndMenuOwner; public IntPtr hwndMoveSize; public IntPtr hwndCaret;
+    public RECT rcCaret;
+  }
+  [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO info);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
+  [DllImport("user32.dll")] static extern IntPtr GetWindowDpiAwarenessContext(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr h, ref POINT p);
+
+  // One read at a time. A read whose app has stopped answering can sit in UI
+  // Automation for seconds (its own timeouts are long); until it comes back,
+  // a new one answers "busy" at once rather than pile up a thread a peek.
+  static int busy;
+  static IAutomation automation;
+  static readonly object automationGate = new object();
+
+  // The client, made once and kept: the read threads are all MTA, where it can
+  // be called from any of them. One that has gone bad is made again.
+  static IAutomation Automation() {
+    lock (automationGate) {
+      if (automation == null) automation = (IAutomation)Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("ff48dba4-60ef-4201-aa87-54103eef594e"), true));
+      return automation;
+    }
+  }
+  static void Forget() { lock (automationGate) { automation = null; } }
+
+  // Start a read, whose threads answer the line: null. Otherwise the error
+  // for the loop to answer it with, "busy" when a read is still out.
+  public static string Begin(string idJson, string appJson, int ms) {
+    if (Interlocked.CompareExchange(ref busy, 1, 0) != 0) return "busy";
+    try {
+      new Read(idJson, appJson).Start(Math.Max(1, ms));
+      return null;
+    } catch (Exception) {
+      // No watchdog could be made, so nothing will answer it but the loop.
+      Interlocked.Exchange(ref busy, 0);
+      return "exception";
+    }
+  }
+
+  // One read: the work on a thread of its own, and a watchdog that answers
+  // "timeout" when the time is up first. Whichever comes first answers; the
+  // other finds it answered and says nothing.
+  sealed class Read {
+    readonly string idJson;
+    readonly string appJson;
+    readonly object gate = new object();
+    // When it began, for the answer's ms; TickCount, as nothing here needs
+    // more than mscorlib (unchecked: the difference is right across its wrap).
+    readonly int began = Environment.TickCount;
+    bool answered;
+    Timer watchdog;
+
+    public Read(string idJson, string appJson) { this.idJson = idJson; this.appJson = appJson; }
+
+    public void Start(int ms) {
+      watchdog = new Timer(new TimerCallback(Late), null, ms, Timeout.Infinite);
+      bool started = false;
+      try {
+        Thread t = new Thread(new ThreadStart(Work));
+        t.IsBackground = true;
+        // MTA, which a new thread is anyway, said so: the client is shared
+        // between the reads' threads. Best effort, as where there are no
+        // apartments the call itself throws.
+        try { t.SetApartmentState(ApartmentState.MTA); } catch (Exception) { }
+        t.Start();
+        started = true;
+      } catch (Exception) {
+        started = false;
+      }
+      if (!started) {
+        Interlocked.Exchange(ref busy, 0);
+        Answer(Fail(idJson, "exception"));
+      }
+    }
+
+    void Late(object state) { Answer(Fail(idJson, "timeout")); }
+
+    void Answer(string line) {
+      lock (gate) {
+        if (answered) return;
+        answered = true;
+      }
+      try { watchdog.Dispose(); } catch (Exception) { }
+      Send(line);
+    }
+
+    void Work() {
+      string line;
+      Held held = new Held();
+      try {
+        int[] caret = null;
+        int[] field = null;
+        string how = "none";
+        bool secure = false;
+        bool uia = false;
+        bool text = false;
+        IElement el = null;
+        try { el = held.Keep(Automation().GetFocusedElement()); } catch (InvalidComObjectException) { Forget(); el = null; } catch (Exception) { el = null; }
+        if (el != null) {
+          uia = true;
+          object pw = Property(el, IsPasswordId);
+          if (pw is bool && (bool)pw) {
+            secure = true;
+          } else {
+            field = Box(Property(el, BoundingRectangleId), false);
+            caret = FromText(el, field, held, ref how, ref text);
+          }
+        }
+        if (!secure && caret == null) {
+          // No text pattern, or none that knew: the system caret, which
+          // classic Win32 controls still draw.
+          try {
+            GUITHREADINFO g = new GUITHREADINFO();
+            g.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+            if (GetGUIThreadInfo(0, ref g) && g.hwndCaret != IntPtr.Zero && g.rcCaret.Bottom > g.rcCaret.Top) {
+              if (!uia && IsPasswordEdit(g.hwndCaret)) {
+                secure = true;
+              } else {
+                POINT a = new POINT(); a.X = g.rcCaret.Left; a.Y = g.rcCaret.Top;
+                POINT b = new POINT(); b.X = g.rcCaret.Right; b.Y = g.rcCaret.Bottom;
+                if (ToScreen(g.hwndCaret, ref a) && ToScreen(g.hwndCaret, ref b) && b.Y > a.Y) {
+                  int[] bar = new int[] { a.X, a.Y, 2, b.Y - a.Y };
+                  if (Near(bar, field)) {
+                    caret = bar;
+                    how = "system";
+                    RECT wr;
+                    if (field == null && GetWindowRect(g.hwndCaret, out wr) && wr.Right > wr.Left && wr.Bottom > wr.Top) {
+                      field = new int[] { wr.Left, wr.Top, wr.Right - wr.Left, wr.Bottom - wr.Top };
+                    }
+                  }
+                }
+              }
+            }
+          } catch (Exception) { }
+        }
+        // Only a text box has a box: one with no text pattern and no caret
+        // is a window, a list or a button, and Blip at its corner would be
+        // Blip where nobody is typing.
+        if (!secure && caret == null && !text) field = null;
+        long ms = unchecked(Environment.TickCount - began);
+        line = secure ? Reply(idJson, null, null, appJson, "secure", ms)
+                      : Reply(idJson, caret, field, appJson, how, ms);
+      } catch (Exception) {
+        line = Fail(idJson, "exception");
+      } finally {
+        held.Release();
+        Interlocked.Exchange(ref busy, 0);
+      }
+      Answer(line);
+    }
+  }
+
+  // The COM objects a read made, each released once when it is done: a peek
+  // every few hundred milliseconds would otherwise keep the app's own objects
+  // behind them alive until the collector happened by.
+  sealed class Held {
+    readonly System.Collections.Generic.List<object> all = new System.Collections.Generic.List<object>();
+    public T Keep<T>(T o) where T : class {
+      if (o != null && !all.Contains(o)) all.Add(o);
+      return o;
+    }
+    public void Release() {
+      foreach (object o in all) {
+        try { if (Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); } catch (Exception) { }
+      }
+      all.Clear();
+    }
+  }
+
+  static object Property(IElement el, int id) {
+    try { return el.GetCurrentPropertyValue(id); } catch (Exception) { return null; }
+  }
+
+  // [left, top, width, height] as whole pixels, from four doubles at `at`:
+  // finite, inside a million either way, a size not negative and a height not
+  // zero (a box needs a width too). Null for anything else.
+  static int[] Box(object v, bool bar) {
+    double[] d = v as double[];
+    if (d == null) return null;
+    return BoxAt(d, 0, bar);
+  }
+  static int[] BoxAt(double[] d, int at, bool bar) {
+    if (d.Length < at + 4) return null;
+    for (int i = at; i < at + 4; i++) {
+      if (double.IsNaN(d[i]) || double.IsInfinity(d[i]) || Math.Abs(d[i]) > 1000000) return null;
+    }
+    if (d[at + 3] <= 0 || d[at + 2] < 0 || (!bar && d[at + 2] <= 0)) return null;
+    return new int[] { (int)Math.Round(d[at]), (int)Math.Round(d[at + 1]), (int)Math.Round(d[at + 2]), Math.Max(1, (int)Math.Round(d[at + 3])) };
+  }
+
+  // A range's first rectangle with a height (a range gives one per line).
+  static int[] First(IRange r) {
+    double[] d = null;
+    try { d = r.GetBoundingRectangles(); } catch (Exception) { d = null; }
+    if (d == null) return null;
+    for (int at = 0; at + 4 <= d.Length; at += 4) {
+      int[] b = BoxAt(d, at, true);
+      if (b != null) return b;
+    }
+    return null;
+  }
+
+  // A bar nowhere near the box it should be in is a placeholder, not the caret.
+  static bool Near(int[] bar, int[] field) {
+    if (bar == null) return false;
+    if (field == null) return true;
+    const int slack = 40;
+    return bar[0] + Math.Max(1, bar[2]) >= field[0] - slack && bar[0] <= field[0] + field[2] + slack
+      && bar[1] + bar[3] >= field[1] - slack && bar[1] <= field[1] + field[3] + slack;
+  }
+
+  // The caret as a bar 2 pixels wide: TextPattern2's caret range or, where
+  // there is no TextPattern2, where TextPattern's selection starts (the words
+  // replace a selection from there). A caret is zero characters wide and many
+  // apps give it no rectangle; then a copy is widened to the character there
+  // and its left edge taken, or its right edge when the character turned out
+  // to be the one before (the caret at the very end of the text).
+  // `text` is set when the element has either pattern: it takes text, so its
+  // box is a text box even where neither could say where the caret is.
+  static int[] FromText(IElement el, int[] field, Held held, ref string how, ref bool text) {
+    IRange range = null;
+    object p = null;
+    try { p = held.Keep(el.GetCurrentPattern(TextPattern2Id)); } catch (Exception) { p = null; }
+    ITextPattern2 tp2 = p as ITextPattern2;
+    if (tp2 != null) {
+      text = true;
+      try {
+        int active;
+        range = held.Keep(tp2.GetCaretRange(out active));
+      } catch (Exception) { range = null; }
+      if (range != null) how = "caret";
+    }
+    if (range == null) {
+      p = null;
+      try { p = held.Keep(el.GetCurrentPattern(TextPatternId)); } catch (Exception) { p = null; }
+      ITextPattern tp = p as ITextPattern;
+      if (tp != null) {
+        text = true;
+        try {
+          IRangeArray sel = held.Keep(tp.GetSelection());
+          if (sel != null && sel.Length > 0) {
+            range = held.Keep(sel.GetElement(0));
+            if (range != null) {
+              IRange start = held.Keep(range.Clone());
+              range.MoveEndpointByRange(EndpointEnd, start, EndpointStart);
+            }
+          }
+        } catch (Exception) { range = null; }
+        if (range != null) how = "selection";
+      }
+    }
+    if (range == null) return null;
+    int[] bar = First(range);
+    if (bar != null && Near(bar, field)) return new int[] { bar[0], bar[1], 2, bar[3] };
+    try {
+      IRange ch = held.Keep(range.Clone());
+      ch.ExpandToEnclosingUnit(UnitCharacter);
+      int[] c = First(ch);
+      if (c == null) return null;
+      bool before = false;
+      try { before = ch.CompareEndpoints(EndpointStart, range, EndpointStart) < 0; } catch (Exception) { before = false; }
+      int[] edge = new int[] { before ? c[0] + c[2] : c[0], c[1], 2, c[3] };
+      if (!Near(edge, field)) return null;
+      how = how + (before ? "+before" : "+char");
+      return edge;
+    } catch (Exception) {
+      return null;
+    }
+  }
+
+  // A classic password box, for when UI Automation could not say: an Edit or
+  // a RichEdit with ES_PASSWORD.
+  static bool IsPasswordEdit(IntPtr h) {
+    try {
+      StringBuilder sb = new StringBuilder(64);
+      GetClassName(h, sb, sb.Capacity);
+      string cls = sb.ToString();
+      bool edit = string.Equals(cls, "Edit", StringComparison.OrdinalIgnoreCase) || cls.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase);
+      return edit && (GetWindowLong(h, GWL_STYLE) & ES_PASSWORD) != 0;
+    } catch (Exception) {
+      return false;
+    }
+  }
+
+  // The system caret's rectangle is in its window's client coordinates, in
+  // that window's own units. An app Windows scales for the screen (one not
+  // made for this DPI, which is just the kind of app that still draws a
+  // system caret) keeps it in its own smaller ones, and turned to the screen
+  // in this helper's physical pixels it would land short of the caret. So it
+  // is turned to the screen in the window's units, then to physical pixels.
+  // Where Windows has neither call (before 10 1607), the plain conversion.
+  static bool ToScreen(IntPtr h, ref POINT p) {
+    IntPtr old = IntPtr.Zero;
+    try { old = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(h)); } catch (Exception) { old = IntPtr.Zero; }
+    try {
+      if (!ClientToScreen(h, ref p)) return false;
+      if (old != IntPtr.Zero) {
+        try { LogicalToPhysicalPointForPerMonitorDPI(h, ref p); } catch (Exception) { }
+      }
+      return true;
+    } finally {
+      if (old != IntPtr.Zero) {
+        try { SetThreadDpiAwarenessContext(old); } catch (Exception) { }
+      }
+    }
+  }
+
+  static string N(long v) { return v.ToString(CultureInfo.InvariantCulture); }
+
+  static void Frame(StringBuilder sb, int[] f) {
+    if (f == null) { sb.Append("null"); return; }
+    sb.Append('[').Append(N(f[0])).Append(',').Append(N(f[1])).Append(',').Append(N(f[2])).Append(',').Append(N(f[3])).Append(']');
+  }
+
+  // The answer, one line. idJson and appJson are JSON already (the loop makes
+  // them); how is one of this class's own words. Nothing else goes in.
+  static string Reply(string idJson, int[] caret, int[] field, string appJson, string how, long ms) {
+    StringBuilder sb = new StringBuilder(192);
+    sb.Append("{\"id\":").Append(string.IsNullOrEmpty(idJson) ? "null" : idJson);
+    sb.Append(",\"ok\":true,\"caret\":");
+    Frame(sb, caret);
+    sb.Append(",\"field\":");
+    Frame(sb, field);
+    sb.Append(",\"app\":").Append(string.IsNullOrEmpty(appJson) ? "null" : appJson);
+    sb.Append(",\"scale\":\"pixels\",\"how\":\"").Append(how).Append("\",\"ms\":").Append(N(ms)).Append('}');
+    return sb.ToString();
+  }
+
+  static string Fail(string idJson, string error) {
+    return "{\"id\":" + (string.IsNullOrEmpty(idJson) ? "null" : idJson) + ",\"ok\":false,\"error\":\"" + error + "\"}";
+  }
+
+  // One whole line under the console writer's own lock, as TzShot.Send: the
+  // loop answers other lines on its thread meanwhile.
+  static void Send(string line) {
+    System.IO.TextWriter o = Console.Out;
+    lock (o) { o.WriteLine(line); o.Flush(); }
+  }
+}
+'@
+  $script:caretReady = $true
+} catch {}
+
 # Windows.Media.Ocr (Windows 10 and later), loaded the way frontApp.js's
 # PowerShell loads it and awaited the same way, through
 # WindowsRuntimeSystemExtensions.AsTask. The types are kept and handed to the
@@ -1034,22 +1470,7 @@ function TzSnapshot([int]$max, [int]$budget) {
     }
   } catch {}
 
-  $appName = ''
-  try {
-    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    # A Store app (Calculator, Settings, Mail) is drawn in a frame that
-    # ApplicationFrameHost owns, so every one of them was named "Application
-    # Frame Host": the sensitive-app check saw that, not the app. The app is
-    # the CoreWindow inside the frame, named by its own process, as
-    # frontApp.js names it. pid stays the frame's, which is the window here.
-    if ($p -and $p.ProcessName -eq 'ApplicationFrameHost') {
-      $core = [TzAgent]::FindWindowEx($h, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', [IntPtr]::Zero)
-      [uint32]$coreId = 0
-      if ($core -ne [IntPtr]::Zero) { [void][TzAgent]::GetWindowThreadProcessId($core, [ref]$coreId) }
-      if ($coreId -ne 0 -and $coreId -ne $procId) { $hosted = Get-Process -Id $coreId -ErrorAction SilentlyContinue; if ($hosted) { $p = $hosted } }
-    }
-    if ($p) { $appName = $p.ProcessName; try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $appName = $d } } catch {} }
-  } catch {}
+  $appName = TzAppName $h $procId
 
   # The title rides in the window object for the device's own checks only
   # (see above), capped with its end kept; "" when it could not be read.
@@ -1071,6 +1492,28 @@ function TzSnapshot([int]$max, [int]$budget) {
   $o.truncated = $truncated
   $o.ms = [int]$sw.ElapsedMilliseconds
   return $o
+}
+
+# The app a window belongs to, by the name people know it by: its file
+# description, else its process name. A Store app (Calculator, Settings, Mail)
+# is drawn in a frame that ApplicationFrameHost owns, so every one of them was
+# named "Application Frame Host": the sensitive-app check saw that, not the
+# app. The app is the CoreWindow inside the frame, named by its own process,
+# as frontApp.js names it. The caller's pid stays the frame's, which is the
+# window here. "" when it cannot be told.
+function TzAppName([IntPtr]$h, [uint32]$procId) {
+  $appName = ''
+  try {
+    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    if ($p -and $p.ProcessName -eq 'ApplicationFrameHost') {
+      $core = [TzAgent]::FindWindowEx($h, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', [IntPtr]::Zero)
+      [uint32]$coreId = 0
+      if ($core -ne [IntPtr]::Zero) { [void][TzAgent]::GetWindowThreadProcessId($core, [ref]$coreId) }
+      if ($coreId -ne 0 -and $coreId -ne $procId) { $hosted = Get-Process -Id $coreId -ErrorAction SilentlyContinue; if ($hosted) { $p = $hosted } }
+    }
+    if ($p) { $appName = $p.ProcessName; try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $appName = $d } } catch {} }
+  } catch {}
+  return $appName
 }
 
 # ---- Element actions ------------------------------------------------------------
@@ -1644,6 +2087,58 @@ function TzLookBegin($id, $msg) {
   return $null
 }
 
+# ---- Caret ----------------------------------------------------------------------
+# Where the caret and its text box are, for the peek (peek-spec §A): asked
+# every few hundred milliseconds while the user dictates, answered with two
+# rectangles and the app, never any text. Read and answered by TzCaret's own
+# threads, so this loop goes on reading lines meanwhile and a snapshot asked
+# beside it is not held up; a caret line that waited behind a walk past the
+# driver's time is answered "timeout" here, not read late.
+$CARET_MS = 250
+# What an answer spends outside the read: the line written, and read.
+$CARET_MARGIN_MS = 30
+# The app's name and pid as JSON, by window and process: Get-Process and a
+# file's version resource on every peek would be most of its time.
+$script:caretApps = @{}
+
+function TzCaretApp([IntPtr]$h, [uint32]$procId) {
+  $key = "$h/$procId"
+  if ($script:caretApps.ContainsKey($key)) { return $script:caretApps[$key] }
+  if ($script:caretApps.Count -ge 64) { $script:caretApps.Clear() }
+  $appJson = ConvertTo-Json -InputObject ([ordered]@{ name = (TzAppName $h $procId); pid = [int]$procId }) -Compress
+  $script:caretApps[$key] = $appJson
+  return $appJson
+}
+
+# Start a caret read; its threads answer the line. Answered here, at once,
+# only when it cannot be read: no C#, nothing in front, no time left, or a
+# read still out (an app that stopped answering).
+function TzCaretBegin($id, $msg) {
+  if (-not $script:caretReady) { return @{ id = $id; ok = $false; error = 'no_caret' } }
+  $h = [TzAgent]::GetForegroundWindow()
+  if ($h -eq [IntPtr]::Zero) { return @{ id = $id; ok = $false; error = 'no_window' } }
+  [uint32]$procId = 0
+  [void][TzAgent]::GetWindowThreadProcessId($h, [ref]$procId)
+  $appJson = TzCaretApp $h $procId
+  $budget = $CARET_MS
+  $b = 0
+  if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
+  if ($budget -lt 50) { $budget = 50 } elseif ($budget -gt 5000) { $budget = 5000 }
+  # Cut to what the driver has left by the clock both sides read, after the
+  # name was had; given up on already, it is not read at all.
+  $dl = 0.0
+  if ($msg.deadline -ne $null -and [double]::TryParse("$($msg.deadline)", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$dl) -and $dl -gt 0) {
+    $left = [long]$dl - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $CARET_MARGIN_MS
+    if ($left -lt 20) { return @{ id = $id; ok = $false; error = 'timeout' } }
+    if ($budget -gt $left) { $budget = [int]$left }
+  }
+  $idJson = 'null'
+  try { $idJson = ConvertTo-Json -InputObject $id -Compress } catch {}
+  $err = [TzCaret]::Begin($idJson, $appJson, $budget)
+  if ($null -ne $err) { return @{ id = $id; ok = $false; error = "$err" } }
+  return $null
+}
+
 # ---- The loop -------------------------------------------------------------------
 function TzReply($obj) {
   $json = ''
@@ -1692,7 +2187,7 @@ while ($true) {
   $cmd = "$($msg.cmd)"
   try {
     switch ($cmd) {
-      'ping' { TzReply @{ id = $id; ok = $true; pong = $true; dpi = $script:dpi; look = [bool]$script:lookReady; ocr = ($null -ne $script:winrt); pool = ($null -ne $script:lookPool) }; break }
+      'ping' { TzReply @{ id = $id; ok = $true; pong = $true; dpi = $script:dpi; look = [bool]$script:lookReady; ocr = ($null -ne $script:winrt); pool = ($null -ne $script:lookPool); caret = [bool]$script:caretReady }; break }
       'trusted' { TzReply @{ id = $id; ok = $true; trusted = $true }; break }
 
       'snapshot' {
@@ -1774,6 +2269,14 @@ while ($true) {
         # Answered by its worker when it is done (see TzLookBegin); here only
         # when there is nothing to look at.
         $r = TzLookBegin $id $msg
+        if ($null -ne $r) { TzReply $r }
+        break
+      }
+
+      'caret' {
+        # Answered by its own threads (see TzCaretBegin); here only when it
+        # cannot be read.
+        $r = TzCaretBegin $id $msg
         if ($null -ne $r) { TzReply $r }
         break
       }

@@ -5,10 +5,12 @@
 //                             field question, one JSON line each, in order
 //   node nativeCheck.js mac   the field's AppleScript compiles (running it
 //                             needs Accessibility, which a CI Mac lacks); the
-//                             OCR and Ask helpers build and answer
+//                             OCR and Ask helpers build and answer, the caret
+//                             question too
 //   node nativeCheck.js winagent  Ask's Windows UIA helper answers a ping (its
-//                             look, OCR and pool all ready), a snapshot and a
-//                             look at the window in front (shapes only)
+//                             look, OCR, pool and caret all ready), a snapshot,
+//                             a look at the window in front and where the
+//                             caret is (shapes only)
 const { execFileSync, spawn } = require("child_process");
 const os = require("os");
 const path = require("path");
@@ -32,12 +34,14 @@ if (which === "mac") {
   // same universal way, then spoken to in its line protocol: it must answer a
   // ping, say whether it is trusted (a CI Mac is not, so only the shape is
   // checked), answer a garbled line instead of dying, answer a snapshot one
-  // way or the other, answer a look, and exit when its stdin closes. A look
-  // runs beside the other commands, so answers are matched by id, not order.
+  // way or the other, answer a look, say where the caret is (or why it
+  // cannot), and exit when its stdin closes. A look and a caret run beside
+  // the other commands, so answers are matched by id, not order.
   execFileSync("npm", ["run", "tzax"], { stdio: "inherit", cwd: __dirname });
   const ax = require("child_process").spawnSync(path.join(__dirname, "build", "tzax"), [], {
     input: ['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"trusted"}', "not json", '{"id":3,"cmd":"snapshot","max":20}',
-      '{"id":4,"cmd":"look","maxSide":640,"budgetMs":4500,"timeoutMs":6000}', '{"id":5,"cmd":"ping"}'].join("\n") + "\n",
+      '{"id":4,"cmd":"look","maxSide":640,"budgetMs":4500,"timeoutMs":6000}', '{"id":6,"cmd":"caret","timeoutMs":1000}',
+      '{"id":5,"cmd":"ping"}'].join("\n") + "\n",
     encoding: "utf8", timeout: 30000, maxBuffer: 64 << 20,
   });
   const said = String(ax.stdout || "").trim().split("\n").filter(Boolean);
@@ -46,8 +50,8 @@ if (which === "mac") {
   let answers;
   try { answers = said.map((l) => JSON.parse(l)); } catch { console.error("tzax wrote a line that is not JSON"); process.exit(1); }
   const byId = new Map(answers.map((a) => [a && a.id, a]));
-  const [ping, trust, bad, snap, look, again] = [1, 2, null, 3, 4, 5].map((id) => byId.get(id));
-  if (answers.length !== 6
+  const [ping, trust, bad, snap, look, again, caret] = [1, 2, null, 3, 4, 5, 6].map((id) => byId.get(id));
+  if (answers.length !== 7
     || !ping || ping.ok !== true || ping.pong !== true
     || !trust || trust.ok !== true || typeof trust.trusted !== "boolean"
     || !bad || bad.ok !== false
@@ -78,8 +82,25 @@ if (which === "mac") {
     console.error("tzax's look is not the shape axDriver.js reads:", JSON.stringify(look && { ...look, image: look.image && "…" }).slice(0, 400));
     process.exit(1);
   }
+  // The caret (peek-spec §A): ok with two rectangles or nulls and the app,
+  // never any text; or, on a runner without Accessibility, not_trusted, and
+  // with it, nothing focused or an app too busy to say. Never a timeout: that
+  // is a read that hung, past the second it was given.
+  const CARET_REFUSALS = ["not_trusted", "no_focus", "app_busy"];
+  const isBox = (f) => f === null || (isFrame(f) && f[2] >= 0 && f[3] > 0);
+  const CARET_FIELDS = ["id", "ok", "caret", "field", "app", "scale", "how", "ms"];
+  if (!caret || typeof caret.ok !== "boolean"
+    || (!caret.ok && (!CARET_REFUSALS.includes(caret.error) || Object.keys(caret).some((k) => !["id", "ok", "error"].includes(k))))
+    || (caret.ok && (!isBox(caret.caret) || !isBox(caret.field) || caret.scale !== "points"
+      || !caret.app || typeof caret.app.name !== "string" || !Number.isInteger(caret.app.pid)
+      || Object.keys(caret).some((k) => !CARET_FIELDS.includes(k))
+      || !["range", "after", "before", "none", "secure"].includes(caret.how)))) {
+    console.error("tzax's caret is not the shape axDriver.js reads:", JSON.stringify(caret).slice(0, 300));
+    process.exit(1);
+  }
   console.log(`the accessibility helper answers (trusted: ${trust.trusted}; snapshot: ${snap.ok ? snap.elements.length + " elements" : snap.error}; `
-    + `look: ${look.ok ? look.lines.length + " lines, " + (look.image ? look.image.width + "x" + look.image.height + " picture" : "no picture") + " in " + look.ms + " ms" : look.error})`);
+    + `look: ${look.ok ? look.lines.length + " lines, " + (look.image ? look.image.width + "x" + look.image.height + " picture" : "no picture") + " in " + look.ms + " ms" : look.error}; `
+    + `caret: ${caret.ok ? JSON.stringify({ caret: caret.caret, field: caret.field, how: caret.how }) + " in " + caret.ms + " ms" : caret.error})`);
 } else if (which === "win") {
   const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-EncodedCommand", Buffer.from(fa.PS, "utf16le").toString("base64")], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
@@ -113,10 +134,12 @@ if (which === "mac") {
   // in front, so the snapshot may come back ok with elements or ok:false with
   // a reason, and the look ok with that window's picture and lines, or
   // no_window when nothing is in front; only the shapes are required, never
-  // specific elements or text. The look is answered by a worker of its own,
-  // after the snapshot as often as not, and the helper ends when its stdin
-  // closes without waiting for one, so stdin is closed only once all three
-  // have answered.
+  // specific elements or text. The caret likewise: ok with two rectangles or
+  // nulls and the app, or no_window, from the real C# (UI Automation's COM
+  // TextPattern2, the system caret) on threads of its own. The look and the
+  // caret are answered by workers of their own, after the snapshot as often
+  // as not, and the helper ends when its stdin closes without waiting for
+  // them, so stdin is closed only once all four have answered.
   const ud = require("./uiaDriver.js");
   const cmd = ud.defaultCommand();
   const agent = spawn(cmd.cmd, cmd.args, { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
@@ -138,7 +161,7 @@ if (which === "mac") {
       said.push(line);
       try { const a = JSON.parse(line); byId.set(a && a.id, a); } catch { notJson = true; }
     }
-    if (!ended && byId.has(1) && byId.has(2) && byId.has(3)) { ended = true; agent.stdin.end(); }
+    if (!ended && byId.has(1) && byId.has(2) && byId.has(3) && byId.has(4)) { ended = true; agent.stdin.end(); }
   });
   const timer = setTimeout(() => { console.error("no answers in 90 s:", said.join(" | ").slice(0, 600)); agent.kill(); process.exit(1); }, 90000);
   // "close", not "exit": by then everything it wrote has been read.
@@ -147,8 +170,8 @@ if (which === "mac") {
     console.log("uia-agent said:", said.map((l) => l.replace(/"data":"[^"]{40}[^"]*"/, '"data":"…"')).join(" | ").slice(0, 900));
     if (code !== 0) { console.error("uia-agent did not exit cleanly:", code, signal || ""); process.exit(1); }
     if (notJson) { console.error("uia-agent wrote a line that is not JSON"); process.exit(1); }
-    const [ping, snap, look] = [1, 2, 3].map((id) => byId.get(id));
-    if (said.length !== 3
+    const [ping, snap, look, caret] = [1, 2, 3, 4].map((id) => byId.get(id));
+    if (said.length !== 4
       || !ping || ping.ok !== true || ping.pong !== true
       || !snap || typeof snap.ok !== "boolean"
       || (snap.ok ? (snap.scale !== "pixels" || !Array.isArray(snap.elements)) : typeof snap.error !== "string")) {
@@ -159,6 +182,8 @@ if (which === "mac") {
       console.error("uia-agent cannot look: its ping says", JSON.stringify({ look: ping.look, ocr: ping.ocr, pool: ping.pool }));
       process.exit(1);
     }
+    // The caret's C# compiled, or every caret would answer no_caret.
+    if (ping.caret !== true) { console.error("uia-agent cannot read the caret: its ping says", JSON.stringify({ caret: ping.caret })); process.exit(1); }
     const isFrame = (f) => Array.isArray(f) && f.length === 4 && f.every(Number.isFinite);
     if (!look || typeof look.ok !== "boolean"
       || (!look.ok && look.error !== "no_window")
@@ -176,11 +201,25 @@ if (which === "mac") {
       console.error("uia-agent's look is not the shape uiaDriver.js reads:", JSON.stringify(look && { ...look, image: look.image && "…" }).slice(0, 400));
       process.exit(1);
     }
+    // The caret (peek-spec §A): its fields and no others, so no text can ride
+    // along; how it was found is one of the C#'s own words.
+    const isBox = (f) => f === null || (isFrame(f) && f[2] >= 0 && f[3] > 0);
+    const CARET_FIELDS = ["id", "ok", "caret", "field", "app", "scale", "how", "ms"];
+    if (!caret || typeof caret.ok !== "boolean"
+      || (!caret.ok && (caret.error !== "no_window" || Object.keys(caret).some((k) => !["id", "ok", "error"].includes(k))))
+      || (caret.ok && (!isBox(caret.caret) || !isBox(caret.field) || caret.scale !== "pixels"
+        || !caret.app || typeof caret.app.name !== "string" || !Number.isInteger(caret.app.pid)
+        || Object.keys(caret).some((k) => !CARET_FIELDS.includes(k))
+        || !/^(caret|selection|system|none|secure)(\+(char|before))?$/.test(caret.how) || typeof caret.ms !== "number"))) {
+      console.error("uia-agent's caret is not the shape uiaDriver.js reads:", JSON.stringify(caret).slice(0, 300));
+      process.exit(1);
+    }
     console.log(`the UIA agent answers (snapshot: ${snap.ok ? snap.elements.length + " elements, app " + JSON.stringify(snap.app && snap.app.name) : snap.error}; `
-      + `look: ${look.ok ? look.lines.length + " lines, a " + look.image.width + "x" + look.image.height + " picture in " + look.ms + " ms" : look.error})`);
+      + `look: ${look.ok ? look.lines.length + " lines, a " + look.image.width + "x" + look.image.height + " picture in " + look.ms + " ms" : look.error}; `
+      + `caret: ${caret.ok ? JSON.stringify({ caret: caret.caret, field: caret.field, how: caret.how }) + " in " + caret.ms + " ms" : caret.error})`);
   });
   agent.stdin.write(['{"id":1,"cmd":"ping"}', '{"id":2,"cmd":"snapshot","max":20}',
-    '{"id":3,"cmd":"look","maxSide":640,"budgetMs":4000}'].join("\n") + "\n");
+    '{"id":3,"cmd":"look","maxSide":640,"budgetMs":4000}', '{"id":4,"cmd":"caret","budgetMs":3000}'].join("\n") + "\n");
 } else {
   console.error("usage: node nativeCheck.js win|mac|winagent");
   process.exit(2);
