@@ -16,7 +16,7 @@ const axDriver = require("./axDriver.js");
 const { createAxDriver } = axDriver;
 
 const FAKE = path.join(__dirname, "test-fixtures", "fake-tzax.js");
-const API = ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look"];
+const API = ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"];
 
 /** A driver on the fake helper, as if on a Mac. */
 function fake(extra = {}) {
@@ -311,6 +311,252 @@ test("the Mac look says where the title bar is: the traffic lights' row, of the 
   assert.match(swift, /r\.append\(\("titleFrames", \.arr\(win\.titleBand\.map \{ \[frameJ\(\$0\)\] \} \?\? \[\]\)\)\)/);
 });
 
+// ---- caret (peek-spec §A) ------------------------------------------------------
+// Where the text cursor and its box are, for Blip to peek over the box while
+// the user dictates: asked every few hundred milliseconds, only of a helper
+// Ask already has running, and answered with two rectangles and the app.
+
+/** A driver on the fake helper that keeps every line it writes to the helper
+ *  and counts its spawns. */
+function spied(extra = {}) {
+  const lines = [];
+  let spawns = 0;
+  const d = fake({
+    spawn: (bin, args, o) => {
+      spawns++;
+      const c = require("node:child_process").spawn(bin, args, o);
+      const write = c.stdin.write.bind(c.stdin);
+      c.stdin.write = (line, ...rest) => { lines.push(JSON.parse(line)); return write(line, ...rest); };
+      return c;
+    },
+    ...extra,
+  });
+  return { d, lines, spawns: () => spawns };
+}
+
+const CARET_KEYS = ["app", "caret", "field", "ok", "scale"];
+
+test("caret is asked only of a helper that is already running, and never starts one", async (t) => {
+  const { d, lines, spawns } = spied();
+  t.after(() => d.stop());
+  assert.deepStrictEqual(await d.caret(), { ok: false, error: "unavailable" });
+  assert.deepStrictEqual(await d.caret({ budgetMs: 400 }), { ok: false, error: "unavailable" });
+  assert.strictEqual(spawns(), 0, "a dictation never starts the helper");
+  assert.strictEqual(lines.length, 0);
+  // Ask's helper up (main.js starts it with Ask): now it answers.
+  assert.strictEqual(d.start(), true);
+  assert.strictEqual((await d.caret()).ok, true);
+  assert.strictEqual(spawns(), 1);
+  // Off a Mac there is nothing to ask.
+  const linux = createAxDriver({ bin: process.execPath, args: [FAKE], platform: "linux" });
+  assert.deepStrictEqual(await linux.caret(), { ok: false, error: "unavailable" });
+});
+
+test("a caret comes back in the spec's shape and nothing else, asked with its own budget", async (t) => {
+  const { d, lines } = spied();
+  t.after(() => d.stop());
+  d.start();
+  const r = await d.caret();
+  assert.deepStrictEqual(r, { ok: true, caret: [352, 148, 2, 18], field: [120, 100, 300, 28], app: { name: "Fake", pid: 4242 }, scale: "points" });
+  assert.deepStrictEqual(Object.keys(r).sort(), CARET_KEYS, "no how, no ms, no bundleId, no id");
+  const sent = lines.filter((l) => l.cmd === "caret");
+  assert.deepStrictEqual(sent.map(({ id, ...rest }) => rest), [{ cmd: "caret", timeoutMs: 250 }], "the budget is the helper's time too");
+  // The budget can be set (main.js passes desktop.dictation.peekBudgetMs), and is kept sane.
+  for (const [o, want] of [[{ budgetMs: 400 }, 400], [{ timeoutMs: 600 }, 600], [{ budgetMs: 5 }, 100], [{ budgetMs: 99999 }, 2000],
+    [{ budgetMs: "soon" }, 250], ["whatever", 250], [null, 250]]) {
+    lines.length = 0;
+    assert.strictEqual((await d.caret(o)).ok, true);
+    assert.strictEqual(lines[0].timeoutMs, want, JSON.stringify(o));
+  }
+});
+
+test("a password field gives no caret and no field; a refusal is its error alone", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  d.start();
+  assert.deepStrictEqual(await d.caret({ budgetMs: 999 }), { ok: true, caret: null, field: null, app: { name: "Fake", pid: 4242 }, scale: "points" });
+  assert.deepStrictEqual(await d.caret({ budgetMs: 997 }), { ok: false, error: "not_trusted" });
+  // An error that is not one of the helper's words is not passed on.
+  assert.deepStrictEqual(await d.caret({ budgetMs: 994 }), { ok: false, error: "failed" });
+});
+
+test("a caret answer is cleaned, and no text the helper wrote ever gets through", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  d.start();
+  const r = await d.caret({ budgetMs: 996 });
+  assert.deepStrictEqual(r, { ok: true, caret: null, field: null, app: { name: "", pid: 0 }, scale: "points" });
+  const out = JSON.stringify(r);
+  for (const word of ["Priya", "hunter2", "offer", "Private", "Bank", "Dear"]) assert.ok(!out.includes(word), word);
+});
+
+test("a caret the helper never answers resolves timeout within its budget, and the helper carries on", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  const first = await d.focus("e1");
+  const t0 = Date.now();
+  assert.deepStrictEqual(await d.caret({ budgetMs: 998 }), { ok: false, error: "timeout" });
+  const took = Date.now() - t0;
+  assert.ok(took >= 990 && took < 1500, `took ${took} ms`);
+  const after = await d.focus("e1");
+  assert.strictEqual(after.pid, first.pid, "a slow caret is not a reason to restart the helper");
+});
+
+test("a slow caret holds up none of the calls made beside it", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  d.start();
+  const order = [];
+  const reading = d.caret({ budgetMs: 995 }).then((r) => { order.push("caret"); return r; });
+  const pressed = await d.press("e3");
+  order.push("press");
+  const r = await reading;
+  assert.deepStrictEqual(order, ["press", "caret"]);
+  assert.strictEqual(pressed.ok, true);
+  assert.deepStrictEqual(r.caret, [352, 148, 2, 18]);
+});
+
+test("a helper that died is not started again for a caret, only by Ask's next call", async (t) => {
+  const { d, spawns } = spied();
+  t.after(() => d.stop());
+  const before = await d.focus("e1");
+  assert.deepStrictEqual(await d.key("die"), { ok: false, error: "helper_exited" });
+  assert.deepStrictEqual(await d.caret(), { ok: false, error: "unavailable" });
+  assert.strictEqual(spawns(), 1);
+  const again = await d.focus("e1");
+  assert.notStrictEqual(again.pid, before.pid);
+  assert.strictEqual((await d.caret()).ok, true);
+  d.stop();
+  assert.deepStrictEqual(await d.caret(), { ok: false, error: "unavailable" }, "nor after stop()");
+});
+
+test("driver.js: each platform's caret is its driver's, and with no driver it is unavailable at once", async () => {
+  const { pick } = require("./driver.js");
+  assert.strictEqual(pick("darwin").caret, axDriver.caret);
+  assert.strictEqual(pick("win32").caret, require("./uiaDriver.js").caret);
+  // What the peek takes for "no helper here": it stops asking for this dictation.
+  const stub = pick("linux");
+  assert.deepStrictEqual(await stub.caret(), { ok: false, error: "unavailable" });
+  assert.deepStrictEqual(await stub.caret({ budgetMs: 250 }), { ok: false, error: "unavailable" });
+});
+
+/** tzax.swift's caret section: from its mark to the next. */
+function caretSection(swift) {
+  const at = swift.indexOf("// MARK: - Where the caret is");
+  assert.ok(at > 0, "the caret section");
+  return swift.slice(at, swift.indexOf("// MARK: - Commands", at));
+}
+
+test("the helper reads the caret on a queue of its own, with Accessibility, in its own small time", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const code = swiftCode(swift);
+  const recv = swiftFunc(swift, "func receive(_ line: String) {");
+  assert.match(recv, /case "caret":\s*caretQueue\.async \{ performCaret\(key, id, req, deadline\) \}/);
+  assert.match(recv, /cmd == "caret" \? 250/);
+  const perform = swiftFunc(swift, "func performCaret(");
+  assert.match(perform, /if out\.isAnswered\(key\) \|\| DispatchTime\.now\(\) >= deadline - \.milliseconds\(30\) \{ return \}/, "never read late");
+  assert.match(perform, /let reply = run\("caret", req, deadline\)/, "through run, behind its Accessibility check");
+  const run = swiftFunc(swift, "func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply {");
+  const trustAt = run.indexOf('guard AXIsProcessTrusted() else { return fail("not_trusted") }');
+  assert.match(run, /case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret":\s*break/);
+  assert.ok(trustAt > 0 && run.indexOf("return caret(deadline)") > trustAt);
+  // A stuck read is a stuck helper, and one asked as stdin closes is still answered.
+  assert.match(code, /busy\.stuck\(\) \|\| lookBusy\.stuck\(\) \|\| caretBusy\.stuck\(\)/);
+  assert.match(code, /caretQueue\.sync \{\}\n\s*lookQueue\.sync \{\}/);
+});
+
+test("the helper's caret: zero characters as asked, then the character after (left edge), then before (right edge)", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const at = swiftFunc(swift, "func caretAt(");
+  const zero = at.indexOf("boundsFor(el, location: location, length: 0,");
+  const after = at.indexOf("boundsFor(el, location: location, length: 1,");
+  const before = at.indexOf("boundsFor(el, location: location - 1, length: 1,");
+  assert.ok(zero > 0 && zero < after && after < before, "in that order");
+  assert.match(at, /return \.bar\(CGRect\(x: r\.minX, y: r\.minY, width: 2, height: r\.height\), "after"\)/);
+  assert.match(at, /return \.bar\(CGRect\(x: r\.maxX, y: r\.minY, width: 2, height: r\.height\), "before"\)/);
+  assert.match(at, /guard location > 0 else \{ return cut \? \.cut : \.nothing \}/);
+  // An app that did not answer in time is told apart from one with nothing
+  // to say: the time gone, or any ask answered busy, is cut, not nothing.
+  assert.equal((at.match(/guard msLeft\(stopAt\) > 0 else \{ return \.cut \}/g) || []).length, 2);
+  assert.match(at, /if got\.busy \{ cut = true \}/);
+  assert.match(at, /return cut \? \.cut : \.nothing\n\}/);
+  // No height, the screen's corner, or nowhere near the element: not the caret.
+  assert.match(at, /r\.height > 0/);
+  assert.match(at, /!\(r\.minX == 0 && r\.minY == 0\)/);
+  assert.match(at, /f\.insetBy\(dx: -40, dy: -40\)\.intersects\(bar\)/);
+  const bounds = swiftFunc(swift, "func boundsFor(");
+  assert.match(bounds, /AXValueCreate\(\.cfRange, &range\)/);
+  assert.match(bounds, /AXUIElementCopyParameterizedAttributeValue\(timed\(el, timeout\), "AXBoundsForRange" as CFString, param, &out\)/);
+  assert.match(bounds, /AXValueGetType\(v\) == \.cgRect/);
+  assert.match(bounds, /if err == \.cannotComplete \{ return \(nil, true\) \}/);
+});
+
+test("the helper's caret: the system-wide focus, a password field gives nulls, the box a scroll view shows", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const fn = swiftFunc(swift, "func caret(_ deadline: DispatchTime) -> Reply {");
+  assert.match(fn, /AXUIElementCopyAttributeValue\(AXUIElementCreateSystemWide\(\), "AXFocusedUIElement" as CFString, &ref\)/);
+  assert.match(fn, /if err == \.apiDisabled \{ return fail\("not_trusted"\) \}/);
+  assert.match(fn, /guard let el = element\(ref\) else \{ return fail\("no_focus"\) \}/);
+  const secure = fn.indexOf('if role == "AXSecureTextField" || sub == "AXSecureTextField" { return answer(nil, nil, "secure") }');
+  assert.ok(secure > 0, "a secure field, by role or subrole");
+  assert.ok(secure < fn.indexOf("caretAt("), "before anything is asked of its text's place");
+  assert.match(fn, /\(pv\[0\] as\? String\) == "AXScrollArea"/);
+  assert.match(fn, /let seen = f\.intersection\(pf\)/);
+  // The caret is where the selection starts.
+  assert.match(fn, /switch caretAt\(el, location: range\.location, near: own, until: stopAt\) \{/);
+  assert.match(fn, /r\.append\(\("scale", \.str\("points"\)\)\)/);
+  assert.match(swift, /let caretAttrNames = \["AXRole", "AXSubrole", "AXPosition", "AXSize", "AXSelectedTextRange", "AXParent"\]/);
+});
+
+// "Never shows where it cannot know where the cursor is": a window, a list or
+// a button with the keyboard (an Electron app whose tree is not built yet
+// answers its window) is no text box, and Blip at its corner would be Blip
+// where nobody types. And an app too busy to answer (as one is just after a
+// paste lands) is no news, never a field without its caret: that would move
+// Blip from the caret to the field's corner and back on the next read.
+test("the helper's caret: a box only for a text box, and an app too busy to say is no news", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const fn = swiftFunc(swift, "func caret(_ deadline: DispatchTime) -> Reply {");
+  assert.match(swift, /let caretTextRoles: Set<String> = \["AXTextField", "AXTextArea", "AXComboBox"\]/);
+  const texty = fn.indexOf('if textRange == nil && !caretTextRoles.contains(role) { return answer(nil, nil, "none") }');
+  assert.ok(texty > 0, "no range and no text role: neither rectangle");
+  assert.ok(texty > fn.indexOf('return answer(nil, nil, "secure")') && texty < fn.indexOf("fetch(parent,"), "after the password check, before anything more is asked");
+  assert.match(fn, /if let rv = axValue\(v\[4\]\), AXValueGetType\(rv\) == \.cfRange \{ textRange = rv \}/);
+  // Busy, anywhere: the parent, the bounds, or the time gone before they are asked.
+  assert.match(fn, /if got == \.cannotComplete \{ return fail\("app_busy"\) \}/);
+  assert.match(fn, /if got == \.invalidUIElement \{ return fail\("no_focus"\) \}/);
+  assert.match(fn, /if pe == \.cannotComplete \{ return fail\("app_busy"\) \}/);
+  assert.equal((fn.match(/guard msLeft\(stopAt\) > 0 else \{ return fail\("app_busy"\) \}/g) || []).length, 2);
+  assert.match(fn, /case \.bar\(let bar, let how\): found = \(bar, how\)\s*case \.cut: return fail\("app_busy"\)\s*case \.nothing: break/);
+  // Every failure it answers is one the drivers pass on and nativeCheck knows.
+  const errors = [...new Set([...fn.matchAll(/fail\("(\w+)"\)/g)].map((m) => m[1]))].sort();
+  assert.deepStrictEqual(errors, ["app_busy", "no_focus", "not_trusted"]);
+});
+
+test("the helper's caret reads no text, and every message it sends keeps to the caret's time", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
+  const code = swiftCode(caretSection(swift));
+  for (const attr of ["AXValue", "AXSelectedText", "AXStringForRange", "AXAttributedStringForRange", "AXTitle", "AXDescription",
+    "AXPlaceholderValue", "AXHelp", "AXNumberOfCharacters", "AXVisibleCharacterRange"]) {
+    assert.ok(!code.includes(`"${attr}"`), `the caret asks for ${attr}`);
+  }
+  assert.ok(!/selectionOf\(|copyAttr\(/.test(code), "nothing read by the snapshot's helpers, which would wait a quarter second each");
+  // The system-wide element keeps the default: a timeout set on it is everyone's.
+  assert.ok(!/timed\(AXUIElementCreateSystemWide\(\)/.test(code));
+  assert.match(code, /return max\(0\.02, min\(messageTimeout, Float\(msLeft\(stopAt\)\) \/ 1000\)\)/);
+  assert.equal((code.match(/caretTimeout\(stopAt\)/g) || []).length, 5, "the two reads and the three bounds, each in the time left");
+  assert.equal((code.match(/fetch\(/g) || []).length, 2);
+  assert.ok(!/usleep|sleep\(/.test(code), "no waiting");
+});
+
+test("nativeCheck asks the built Mac helper for the caret and takes only the spec's shape or a known refusal", () => {
+  const nc = fs.readFileSync(path.join(__dirname, "nativeCheck.js"), "utf8");
+  const mac = nc.slice(nc.indexOf('if (which === "mac")'), nc.indexOf('} else if (which === "win")'));
+  assert.match(mac, /\{"id":6,"cmd":"caret","timeoutMs":1000\}/);
+  assert.match(mac, /const CARET_REFUSALS = \["not_trusted", "no_focus", "app_busy"\]/);
+  assert.match(mac, /caret\.scale !== "points"/);
+});
+
 test("look on a machine without the helper resolves, never rejects", async () => {
   const linux = createAxDriver({ bin: process.execPath, platform: "linux" });
   assert.deepStrictEqual(await linux.look(), { ok: false, error: "unavailable" });
@@ -372,7 +618,7 @@ test("start is idempotent and stop answers what was waiting", async () => {
 // here.
 test("the Swift helper knows every command the driver sends", () => {
   const swift = fs.readFileSync(path.join(__dirname, "native", "tzax.swift"), "utf8");
-  for (const cmd of ["ping", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look"]) {
+  for (const cmd of ["ping", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"]) {
     assert.ok(swift.includes(`case "${cmd}"`), `tzax.swift has no case "${cmd}"`);
   }
   for (const field of ['"el"', '"text"', '"dir"', '"lines"', '"chord"', '"app"', '"max"', '"budgetMs"', '"timeoutMs"', '"prompt"',

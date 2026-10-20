@@ -233,6 +233,29 @@ was shown, picture places only with a picture, at most 12 a step);
 `desktop.agent.draw` turns them off. Nothing new leaves the machine for
 them.
 
+**Blip watches you write.** While you dictate, a small Blip peeks over the
+top edge of the text box at the cursor, its antenna amber while the
+microphone is open. It slides along as each chunk of words lands, watches
+while the rest is written, hops when it is done, and ducks away. In a tall
+field (a document) it peeks over the cursor's own line instead, never over
+the words. It needs Ask's helper (Mac and Windows, Ask on), shows nothing
+in a password field, a private window or a sensitive app, and reads only
+where the cursor is, never any text. `desktop.dictation.peek` turns it off.
+
+**Asked once, in the app.** The permission card on screen now says only "To
+answer that I need to see it." A one-time card at the top of the desk, "Let
+Ask see what you see.", allows the three things Ask needs: reading the
+screen (Accessibility), seeing it (the Mac's Screen Recording) and looking
+at it when a question needs it. Allowed there, no working screen stops to
+ask; each row turns to a tick when you come back from System Settings, and
+the same rows stay in Settings. The privacy policy has an Ask section that
+says what is read, what is sent and when.
+
+**Pictures answered faster.** The picture path now asks Gemini 2.5 Flash
+first, through OpenRouter's lowest-latency provider, with Claude Haiku 5.5
+behind it: measured on the server, the first sentence came in about 2.1 s
+(2.4 s at worst) against about 4 s for the others.
+
 ### 0.3.13 — said with text selected, it rewrites the selection
 
 Select a paragraph, say "make this bullet points" (or "shorter", "more

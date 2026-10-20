@@ -23,6 +23,16 @@
 //   look maxSide 994  has a picture of several megabytes, written in pieces
 //   look maxSide 993  is written in pieces with no newline in them, the
 //                     newline coming last, in a piece with a stray answer
+//   caret           the caret in a field, like the real helper's answer
+//                   (its "how" and "ms" ride along, as the real one's do)
+//   caret timeoutMs 999  a password field: no caret, no field
+//   caret timeoutMs 998  never answers
+//   caret timeoutMs 997  answers not_trusted
+//   caret timeoutMs 996  answers with junk to be cleaned: bad and huge
+//                        frames, an app that is not one, and text that must
+//                        never get through (a value, a selection, a title)
+//   caret timeoutMs 995  answers after 400 ms
+//   caret timeoutMs 994  answers an error that is not a word
 // Every answer carries `got` (the command as received) and `pid`, so a test
 // can see what was sent and whether the helper was started again.
 const readline = require("readline");
@@ -102,6 +112,25 @@ function look(req, base) {
   }
 }
 
+function caret(req, base) {
+  const good = {
+    ...base, ok: true, caret: [352, 148, 2, 18], field: [120, 100, 300, 28],
+    app: { name: "Fake", pid: 4242, bundleId: "space.tailzu.fake" }, scale: "points", how: "range", ms: 1,
+  };
+  switch (req.timeoutMs) {
+    case 999: return send({ ...good, caret: null, field: null, how: "secure" });
+    case 998: return;
+    case 997: return send({ ...base, ok: false, error: "not_trusted" });
+    case 996: return send({
+      ...base, ok: true, caret: [1, 2, 3], field: [10, 20, 1e9, 40], app: { name: 42, pid: "4242" }, scale: "pixels",
+      text: "Dear Priya, the offer is", value: "hunter2", selection: "the offer", title: "Bank — Private Browsing", before: "Dear",
+    });
+    case 995: return setTimeout(() => send(good), 400);
+    case 994: return send({ ...base, ok: false, error: "the field said: Dear Priya" });
+    default: return send(good);
+  }
+}
+
 function answer(req) {
   const base = { id: req.id, got: req, pid: process.pid };
   switch (req.cmd) {
@@ -142,6 +171,8 @@ function answer(req) {
       return send({ ...base, ok: true });
     case "look":
       return look(req, base);
+    case "caret":
+      return caret(req, base);
     case "click":
     case "setValue":
     case "focus":

@@ -9,7 +9,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
-const { createAsk, pillAskMove, capsuleRect } = require("./ask.js");
+const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
 const agentCore = require("./agent.js");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -113,13 +113,18 @@ function harness(opts = {}) {
     nativeImage: opts.nativeImage,
     picturesAlways: () => allowed.slice(),
     allowPicturesAlways: (a) => allowed.push(a),
+    // The setup card's yes for every app (main.js localState.askPicturesAlwaysAll),
+    // and what a look said about Screen Recording, when a test plays them.
+    picturesAlwaysAll: opts.alwaysAll != null ? () => opts.alwaysAll : undefined,
+    lookPermission: opts.lookPermission,
     screen: opts.screen || {
       getCursorScreenPoint: () => ({ x: 500, y: 400 }),
       getDisplayNearestPoint: () => ({ workArea: WORK }),
       screenToDipRect: (_w, r) => r,
     },
     ipcMain,
-    knobs: { num: pick, bool: pick, str: pick, txt: (k, f, v) => (v ? f.replace(/\{(\w+)\}/g, (m, n) => v[n] ?? m) : f) },
+    // Words from the server, when a test sends some (`labels`).
+    knobs: { num: pick, bool: pick, str: pick, txt: (k, f, v) => { const w = opts.labels && k in opts.labels ? opts.labels[k] : f; return v ? w.replace(/\{(\w+)\}/g, (m, n) => v[n] ?? m) : w; } },
     webPrefs: (x) => Object.assign({}, x),
     hardenWindow() {}, raisePill() {}, setBoundsExactly(w, b) { w.bounds = b; },
     // main.js's pillAsk, when a test plays the pill (fakePill).
@@ -985,8 +990,10 @@ test("the picture card asks, with the app's name; Always remembers the app, Allo
     const card = h.sent.find((m) => m.type === "permission");
     assert.strictEqual(card.app, "Keynote");
     assert.strictEqual(card.always, true);
-    assert.ok(/picture of this part of the screen/.test(card.text));
-    assert.ok(/AI providers/.test(card.text), "it says who else the picture goes to");
+    // One line, asking to see and nothing more: what goes where is the
+    // privacy policy's to say, and no permission says send or picture.
+    assert.strictEqual(card.text, "To answer that I need to see it.");
+    assert.ok(!/\b(send|sent|picture|photo|screenshot)/i.test(card.text), card.text);
     h.ipc.emit("guide:permit", { sender: {} }, "always");   // not the guide's own window
     h.ipc.emit("guide:permit", { sender: win.webContents }, "always");
     assert.strictEqual(await answer, "always");
@@ -994,11 +1001,21 @@ test("the picture card asks, with the app's name; Always remembers the app, Allo
     h.ask.cancel("test over");
   }
   {
-    // The whole window is said as such: there is no part of it to point at.
+    // The whole window has a knob of its own, worded the same by default.
     const { h, answer } = await permitCard(undefined, { region: "window" });
-    assert.ok(/picture of this window/.test(h.sent.find((m) => m.type === "permission").text));
+    assert.strictEqual(h.sent.find((m) => m.type === "permission").text, "To answer that I need to see it.");
     h.ask.cancel("test over");
     assert.strictEqual(await answer, "no");
+  }
+  {
+    // Each card reads its own knob, so either can be reworded from the server.
+    const labels = { "desktop.agent.permitText": "PART", "desktop.agent.permitWindowText": "WINDOW" };
+    for (const [about, want] of [[undefined, "PART"], [{ region: "window" }, "WINDOW"], [{ region: "element" }, "PART"]]) {
+      const { h, answer } = await permitCard({ labels }, about);
+      assert.strictEqual(h.sent.find((m) => m.type === "permission").text, want, JSON.stringify(about));
+      h.ask.cancel("test over");
+      assert.strictEqual(await answer, "no");
+    }
   }
   {
     // No key to remember it by (a browser's page): no Always on the card, and
@@ -1307,10 +1324,11 @@ test("picture: Allow once sends one crop of the equation with the words, and the
 });
 
 test("picture: with no image to send alone, the card says the whole window, ringed on screen before it asks", async () => {
-  const { h } = await pictureQuestion({ snap: Object.assign({}, PIC_SNAP, { elements: SNAP.elements }) });
+  const { h } = await pictureQuestion({ snap: Object.assign({}, PIC_SNAP, { elements: SNAP.elements }), labels: { "desktop.agent.permitWindowText": "WHOLE WINDOW" } });
   await until(() => h.types().includes("permission"));
   const card = h.sent.findIndex((m) => m.type === "permission");
-  assert.ok(/one picture of this window/.test(h.sent[card].text), h.sent[card].text);
+  // The whole window's own knob (desktop.agent.permitWindowText).
+  assert.strictEqual(h.sent[card].text, "WHOLE WINDOW");
   const ring = h.sent.findIndex((m) => m.type === "point" && m.tentative);
   assert.ok(ring !== -1 && ring < card, "what would go is on screen while the card asks");
   h.ipc.emit("guide:permit", { sender: h.windows[0].webContents }, "once");
@@ -2188,4 +2206,1119 @@ test("marks: each kind needs its own geometry, a number its numeral and a label 
     ["d4", "arrow", [200, 160, 40, 20]],
   ]);
   h.ask.cancel("test");
+});
+
+// ---- the peek: Blip over the text box while a dictation records -------------------------
+
+// The caret in the middle of a one-line message box, in screen points.
+const CARET = [600, 300, 2, 18];
+const FIELD = [400, 290, 500, 40];
+const peeks = (h) => h.sent.filter((m) => m.type === "peek").map((m) => Object.assign({}, m, { type: undefined }));
+const local = (f) => [f[0] - WORK.x, f[1] - WORK.y, f[2], f[3]];
+// A new guide window has its messages held until its page has loaded.
+const loaded = () => sleep(5);
+
+test("peek: Blip over the field, in the guide window's own coordinates, on the field's display, and never a card", async () => {
+  const h = harness();
+  assert.strictEqual(h.ask.peek(CARET, FIELD, "listening"), true);
+  await loaded();
+  const win = h.windows[0];
+  assert.ok(win && win.visible, "the guide's window is up for it");
+  assert.strictEqual(win.file, "guide.html");
+  assert.deepStrictEqual([win.o.x, win.o.y, win.o.width, win.o.height], [WORK.x, WORK.y, WORK.width, WORK.height]);
+  assert.deepStrictEqual(peeks(h), [{ type: undefined, caret: local(CARET), field: local(FIELD), state: "listening" }]);
+  // It never takes the pointer: the window stays click-through.
+  assert.ok(win.ignore.every(([v]) => v === true), JSON.stringify(win.ignore));
+  // Not a question: a dictation starting would not put it away, Esc is not its.
+  assert.strictEqual(h.ask.active(), false);
+  assert.strictEqual(h.ask.shown(), false);
+  assert.strictEqual(h.ask.escape(), false);
+  assert.strictEqual(h.ask.peeking(), true);
+  // Only the guide's three states; anything else is listening.
+  h.ask.peek(CARET, FIELD, "writing");
+  h.ask.peek(CARET, FIELD, "done");
+  h.ask.peek(CARET, FIELD, "dancing");
+  assert.deepStrictEqual(peeks(h).map((m) => m.state), ["listening", "writing", "done", "listening"]);
+  // Nothing of it went to the recorder, the server, or anywhere else.
+  assert.deepStrictEqual(h.recorder, []);
+  assert.deepStrictEqual(h.requests, []);
+  h.ask.unpeek();
+});
+
+test("peek: never while a question has the guide, and a question ends it", async () => {
+  {
+    const h = harness();
+    await h.ask.tap();
+    await until(() => h.types().includes("show"));
+    assert.strictEqual(h.ask.peek(CARET, FIELD, "listening"), false);
+    h.ask.peekLevel(0.5);
+    h.ask.unpeek();
+    assert.deepStrictEqual(h.types().filter((t) => /peek/i.test(t)), [], "nothing of a peek while it asks");
+    h.ask.cancel("test over");
+  }
+  {
+    const h = harness({ knobs: { "desktop.agent.doneMs": 5000 } });
+    h.ask.peek(CARET, FIELD, "done");
+    await h.ask.tap();
+    await until(() => h.types().includes("show"));
+    assert.strictEqual(h.ask.peeking(), false, "the guide ends the peek itself on show");
+    // The dictation's own "away" comes late: the card it does not touch.
+    h.ask.unpeek();
+    await sleep(400);
+    assert.ok(!h.types().includes("unpeek"));
+    assert.strictEqual(h.windows[0].visible, true, "the card keeps its window");
+    h.ask.cancel("test over");
+  }
+});
+
+test("peek: unpeek ducks at once and the window goes once Blip is down; a new peek meanwhile keeps it", async () => {
+  const h = harness();
+  h.ask.peek(CARET, FIELD, "listening");
+  await loaded();
+  const win = h.windows[0];
+  h.ask.unpeek();
+  assert.deepStrictEqual(h.types().slice(-1), ["unpeek"]);
+  assert.strictEqual(win.visible, true, "still up while Blip ducks");
+  await sleep(200);
+  assert.strictEqual(win.visible, true);
+  await sleep(250);
+  assert.strictEqual(win.visible, false, "gone once it is down (about 300 ms)");
+  h.ask.unpeek();
+  assert.strictEqual(h.types().filter((t) => t === "unpeek").length, 1, "once");
+  // Back up before the window went: it stays.
+  h.ask.peek(CARET, FIELD, "listening");
+  h.ask.unpeek();
+  await sleep(100);
+  h.ask.peek(CARET, FIELD, "listening");
+  await sleep(450);
+  assert.strictEqual(win.visible, true);
+  assert.strictEqual(h.windows.length, 1, "the same window throughout");
+  h.ask.unpeek();
+});
+
+test("peek: nothing to say where the cursor is, or numbers that make no sense, is no peek; one already up ducks", async () => {
+  const h = harness();
+  assert.strictEqual(h.ask.peek(null, null, "listening"), false);
+  for (const bad of [[NaN, 1, 2, 3], [1, 2, 3], [1e9, 0, 2, 18], [0, 0, -5, 18], [0, 0, 2, 0], "600,300,2,18", { x: 1 }]) {
+    assert.strictEqual(h.ask.peek(bad, bad, "listening"), false, JSON.stringify(bad));
+  }
+  assert.strictEqual(h.windows.length, 0, "no window for nothing");
+  // One frame is enough: the field alone (the caret unknown), or the caret alone.
+  assert.strictEqual(h.ask.peek(null, FIELD, "listening"), true);
+  await loaded();
+  assert.strictEqual(h.ask.peek([NaN, 0, 2, 18], FIELD, "listening"), true);
+  assert.strictEqual(h.ask.peek(CARET, null, "listening"), true);
+  assert.deepStrictEqual(peeks(h).map((m) => [m.caret, m.field]), [[null, local(FIELD)], [null, local(FIELD)], [local(CARET), null]]);
+  // A password field took the focus: nothing says where the cursor is now.
+  assert.strictEqual(h.ask.peek(null, null, "listening"), false);
+  assert.deepStrictEqual(h.types().slice(-1), ["unpeek"]);
+  assert.strictEqual(h.ask.peeking(), false);
+});
+
+test("peek: the antenna's level goes only while it peeks, kept to 0..1", async () => {
+  const h = harness();
+  h.ask.peekLevel(0.4);
+  h.ask.peek(CARET, FIELD, "listening");
+  await loaded();
+  h.ask.peekLevel(0.4);
+  h.ask.peekLevel(7);
+  h.ask.peekLevel("loud");
+  h.ask.unpeek();
+  h.ask.peekLevel(0.4);
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "peekLevel").map((m) => m.v), [0.4, 1, 0]);
+});
+
+test("peek: the voice's level is not queued for a page still loading (thirty a second, the whole dictation)", async () => {
+  const h = harness();
+  h.ask.peek(CARET, FIELD, "listening");
+  // The window was just made: its page has not loaded yet.
+  for (let i = 0; i < 30; i++) h.ask.peekLevel(0.3);
+  await loaded();
+  h.ask.peekLevel(0.6);
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "peekLevel").map((m) => m.v), [0.6]);
+  assert.deepStrictEqual(peeks(h).map((m) => m.state), ["listening"], "the peek itself waits for the page and goes");
+  h.ask.unpeek();
+});
+
+test("peek: Windows reports physical pixels, and the guide is sent DIP", async () => {
+  const h = harness({ platform: "win32", screen: {
+    getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+    getDisplayNearestPoint: () => ({ workArea: WORK }),
+    // A display at 150%.
+    screenToDipRect: (_w, r) => ({ x: r.x / 1.5, y: r.y / 1.5, width: r.width / 1.5, height: r.height / 1.5 }),
+  } });
+  h.ask.peek([900, 450, 3, 27], [600, 435, 750, 60], "listening");
+  await loaded();
+  assert.deepStrictEqual(peeks(h)[0], { type: undefined, caret: [600 - WORK.x, 300 - WORK.y, 2, 18], field: [400 - WORK.x, 290 - WORK.y, 500, 40], state: "listening" });
+  h.ask.unpeek();
+});
+
+test("peek: on the field's display; a document taller than the screen, on its caret's", async () => {
+  const A = { workArea: WORK, bounds: WORK };
+  const B = { workArea: { x: 1500, y: 0, width: 1920, height: 1040 }, bounds: { x: 1500, y: 0, width: 1920, height: 1080 } };
+  const screen = {
+    getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+    getDisplayNearestPoint: (p) => (p.x < 1500 ? A : B),
+    screenToDipRect: (_w, r) => r,
+  };
+  {
+    // A message box on the second display, the pointer still on the first.
+    const h = harness({ screen });
+    h.ask.peek([2000, 300, 2, 18], [1900, 290, 500, 40], "listening");
+    await loaded();
+    assert.deepStrictEqual([h.windows[0].o.x, h.windows[0].o.width], [1500, 1920]);
+    assert.deepStrictEqual(peeks(h)[0].caret, [500, 300, 2, 18]);
+    h.ask.unpeek();
+  }
+  {
+    // A scrolled document whose text view's middle is on the first display's
+    // side, its caret line on the second: Blip stands on the caret's line.
+    const h = harness({ screen });
+    h.ask.peek([1600, 500, 2, 18], [100, -4000, 1600, 9000], "listening");
+    assert.deepStrictEqual([h.windows[0].o.x, h.windows[0].o.width], [1500, 1920]);
+    h.ask.unpeek();
+  }
+});
+
+test("peek: a card still folding into the pill when a dictation starts: the peek takes the window, the pill is given back at once", async () => {
+  const pill = fakePill();
+  const h = harness({ pill, knobs: Object.assign({}, FAST, { "desktop.guide.foldMs": 300 }) });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.ask.cancel("esc");                 // folding now
+  pill.dictate();                      // a dictation has the pill
+  h.ask.peek(CARET, FIELD, "listening");
+  assert.strictEqual(pill.calls[pill.calls.length - 1], null, "the question lets go of the pill now");
+  assert.strictEqual(pill.state, "listening", "and the dictation keeps it");
+  await sleep(450);
+  assert.strictEqual(h.windows[0].visible, true, "the fold's end does not take the peek's window down");
+  assert.strictEqual(h.windows.length, 1);
+  h.ask.unpeek();
+});
+
+test("peek: a guide page that crashes mid-peek is thrown away; the next caret builds a new one", async () => {
+  const h = harness();
+  h.ask.peek(CARET, FIELD, "listening");
+  h.windows[0].wc["render-process-gone"]();
+  assert.strictEqual(h.ask.peeking(), false);
+  assert.strictEqual(h.ask.peek(CARET, FIELD, "listening"), true);
+  assert.strictEqual(h.windows.length, 2);
+  assert.strictEqual(h.windows[1].visible, true);
+  h.ask.unpeek();
+});
+
+// The peek's watch (createPeekWatch), with a helper that answers from a script
+// and an Ask that only records what it is told.
+const NOTES = { label: "Notes", title: "Shopping list", private: false, sensitive: false, pictureKey: "Notes" };
+const answer = (o = {}) => Object.assign({ ok: true, caret: CARET.slice(), field: FIELD.slice(), app: { name: "Notes", pid: 42 }, scale: "points" }, o);
+function watched(o = {}) {
+  const told = [];
+  const asked = [];
+  let inFlight = 0, most = 0;
+  const knobs = Object.assign({ "desktop.dictation.peekEveryMs": 40, "desktop.dictation.peekDoneMs": 40, "desktop.dictation.peekBudgetMs": 50 }, o.knobs);
+  const fakeAsk = o.ask || {
+    peek: (c, f, s) => { told.push(["peek", c, f, s]); return o.peekAnswer !== undefined ? o.peekAnswer : true; },
+    unpeek: () => { told.push(["unpeek"]); },
+    peekLevel: (v) => { told.push(["level", v]); },
+  };
+  const next = o.answers ? o.answers.slice() : null;
+  const driver = o.driver || {
+    caret: (opt) => {
+      asked.push(opt);
+      inFlight++; most = Math.max(most, inFlight);
+      const a = next ? (next.length > 1 ? next.shift() : next[0]) : answer();
+      const settle = (v) => { inFlight--; return v; };
+      if (typeof a === "function") return a().then(settle, (e) => { settle(); throw e; });
+      return (o.slowMs ? sleep(o.slowMs) : Promise.resolve()).then(() => settle(a));
+    },
+  };
+  const frontApp = require("./frontApp.js");
+  const w = createPeekWatch({
+    driver, ask: fakeAsk,
+    knobs: { num: (k, f) => (k in knobs ? knobs[k] : f) },
+    on: o.on || (() => true),
+    labelOf: o.labelOf || frontApp.label,
+    sensitive: frontApp.looksSensitive,
+  });
+  return { w, told, asked, most: () => most, kinds: () => told.map((t) => (t[0] === "peek" ? "peek:" + t[3] : t[0])) };
+}
+
+test("the watch: up while it listens, again after each pasted chunk and on the timer, writing on stop, done once pasted, then away", async () => {
+  const moved = answer({ caret: [700, 300, 2, 18] });
+  const p = watched({ answers: [answer(), moved], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+  p.w.start(7, Promise.resolve(NOTES));
+  await until(() => p.told.length === 1);
+  assert.deepStrictEqual(p.told[0], ["peek", CARET, FIELD, "listening"]);
+  assert.deepStrictEqual(p.asked[0], { budgetMs: 50 }, "the helper's budget is the peek's (peekBudgetMs)");
+  // A chunk was pasted: the caret has moved on, and Blip follows.
+  p.w.pasted(7);
+  await until(() => p.told.length === 2);
+  assert.deepStrictEqual(p.told[1], ["peek", moved.caret, FIELD, "listening"]);
+  // Not another dictation's chunk.
+  p.w.pasted(8);
+  await sleep(20);
+  assert.strictEqual(p.asked.length, 2);
+  p.w.level(7, [0.2, 0.6]);
+  p.w.level(8, [1, 1]);
+  assert.deepStrictEqual(p.told[2], ["level", 0.4]);
+  // They stop: it watches the words being written, where it was.
+  p.w.stop(7);
+  assert.deepStrictEqual(p.told[3], ["peek", moved.caret, FIELD, "writing"]);
+  p.w.level(7, [1]);
+  assert.strictEqual(p.told.length, 4, "no voice to show once the microphone is closed");
+  // Pasted: where the caret is now, the hop, and away after peekDoneMs.
+  p.w.done(7);
+  await until(() => p.told.length === 5);
+  assert.deepStrictEqual(p.told[4], ["peek", moved.caret, FIELD, "done"]);
+  assert.strictEqual(p.w.watching(), 7);
+  await sleep(20);
+  assert.strictEqual(p.told.length, 5, "not away before peekDoneMs");
+  await until(() => p.told.length === 6);
+  assert.deepStrictEqual(p.told[5], ["unpeek"]);
+  assert.strictEqual(p.w.watching(), 0);
+});
+
+test("the watch: asked on a timer while it records (desktop.dictation.peekEveryMs), and no more once it stops", async () => {
+  const p = watched({ knobs: { "desktop.dictation.peekEveryMs": 100 } });
+  p.w.start(3, NOTES);
+  await sleep(460);
+  const n = p.asked.length;
+  assert.ok(n >= 4 && n <= 6, `asked ${n} times in 460 ms: once at the start, then one every 100`);
+  p.w.stop(3);
+  await sleep(250);
+  assert.strictEqual(p.asked.length, n, "the timer stops with the microphone");
+  p.w.end(3);
+});
+
+test("the watch: a server value past Node's timers is not a poll every millisecond, and a huge budget still waits for the helper", async () => {
+  // 1e12 ms is past setInterval's limit, which Node runs every millisecond.
+  const p = watched({ knobs: { "desktop.dictation.peekEveryMs": 1e12, "desktop.dictation.peekBudgetMs": 1e12 }, slowMs: 30 });
+  p.w.start(5, NOTES);
+  await sleep(150);
+  assert.strictEqual(p.asked.length, 1, "asked at the start, and not again within 150 ms");
+  assert.deepStrictEqual(p.asked[0], { budgetMs: 2000 }, "no more budget than the drivers allow");
+  assert.deepStrictEqual(p.kinds(), ["peek:listening"], "the slow answer was waited for, not cut off at once");
+  p.w.end(5);
+});
+
+test("the watch: an Ask that throws, or a knob read that does, is never a throw out of a timer or a promise", async () => {
+  const seen = [];
+  const onRej = (e) => seen.push(["rejection", String(e)]);
+  const onExc = (e) => seen.push(["exception", String(e)]);
+  process.on("unhandledRejection", onRej);
+  process.on("uncaughtException", onExc);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    let reads = 0;
+    const w = createPeekWatch({
+      driver: { caret: async () => answer() },
+      ask: { peek: () => { throw new Error("guide gone"); }, unpeek: () => { throw new Error("no"); }, peekLevel: () => { throw new Error("no"); } },
+      // The timer's own read throws (a knob store that broke mid-dictation).
+      knobs: { num: (k, f) => { if (k === "desktop.dictation.peekBudgetMs" && ++reads > 1) throw new Error("knobs"); return k === "desktop.dictation.peekEveryMs" ? 20 : f; } },
+      on: () => true, labelOf: require("./frontApp.js").label, sensitive: require("./frontApp.js").looksSensitive,
+    });
+    w.start(9, NOTES);
+    await sleep(120);
+    w.level(9, [0.5]);
+    w.stop(9);
+    w.done(9);
+    w.end(9);
+    await sleep(40);
+  } finally {
+    console.warn = warn;
+    process.off("unhandledRejection", onRej);
+    process.off("uncaughtException", onExc);
+  }
+  assert.deepStrictEqual(seen, []);
+});
+
+test("the watch: one caret request at a time, however slow the helper; a chunk pasted meanwhile is asked right after", async () => {
+  const p = watched({ slowMs: 60, knobs: { "desktop.dictation.peekEveryMs": 10, "desktop.dictation.peekBudgetMs": 200 } });
+  p.w.start(5, NOTES);
+  await sleep(30);
+  p.w.pasted(5);
+  p.w.pasted(5);
+  await sleep(200);
+  assert.strictEqual(p.most(), 1, "never two at once");
+  assert.ok(p.asked.length >= 3 && p.asked.length <= 5, `asked ${p.asked.length} times in 230 ms at 60 ms each`);
+  p.w.end(5);
+});
+
+test("the watch: a private window or a sensitive app is never asked about at all", async () => {
+  for (const info of [Object.assign({}, NOTES, { private: true }), Object.assign({}, NOTES, { label: "Chase", sensitive: true }), null, "Notes"]) {
+    const p = watched();
+    p.w.start(9, Promise.resolve(info));
+    await sleep(80);
+    assert.deepStrictEqual([p.asked.length, p.told.length], [0, 0], JSON.stringify(info));
+    assert.strictEqual(p.w.watching(), 0);
+  }
+  // Named by a promise that fails: the same.
+  const p = watched();
+  p.w.start(9, Promise.reject(new Error("System Events")));
+  await sleep(40);
+  assert.deepStrictEqual([p.asked.length, p.told.length], [0, 0]);
+});
+
+test("the watch: only the dictation's own app; another in front is no peek, and back in it, it peeks again", async () => {
+  const safari = answer({ app: { name: "Safari", pid: 77 } });
+  const p = watched({ answers: [answer(), safari, answer()], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+  p.w.start(11, NOTES);
+  await until(() => p.told.length === 1);
+  p.w.pasted(11);
+  await until(() => p.told.length === 2);
+  assert.deepStrictEqual(p.told[1], ["unpeek"], "the front app moved: Blip goes");
+  p.w.pasted(11);
+  await until(() => p.told.length === 3);
+  assert.deepStrictEqual(p.told[2][0], "peek");
+  p.w.end(11);
+  {
+    // Known by its pid once it has answered: another process with the same
+    // name is another app.
+    const q = watched({ answers: [answer(), answer({ app: { name: "Notes", pid: 99 } })], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+    q.w.start(12, NOTES);
+    await until(() => q.told.length === 1);
+    q.w.pasted(12);
+    await until(() => q.told.length === 2);
+    assert.deepStrictEqual(q.told[1], ["unpeek"]);
+    q.w.end(12);
+  }
+  {
+    // The front app had already moved by the first answer: nothing.
+    const q = watched({ answers: [safari] });
+    q.w.start(13, NOTES);
+    await sleep(120);
+    assert.ok(q.asked.length >= 2);
+    assert.deepStrictEqual(q.told, []);
+    q.w.end(13);
+  }
+  {
+    // A browser is the browser on its site, as frontApp names it.
+    const gmail = { label: "Chrome: Gmail", title: "Inbox (3) - you@gmail.com - Gmail - Google Chrome", private: false, sensitive: false };
+    const q = watched({ answers: [answer({ app: { name: "Google Chrome", pid: 5 } })] });
+    q.w.start(14, gmail);
+    await until(() => q.told.length === 1);
+    assert.strictEqual(q.told[0][0], "peek");
+    q.w.end(14);
+  }
+  {
+    // Tailzu's own window: by this process's id.
+    const q = watched({ answers: [answer({ app: { name: "Electron", pid: process.pid } })] });
+    q.w.start(15, { pid: process.pid });
+    await until(() => q.told.length === 1);
+    assert.strictEqual(q.told[0][0], "peek");
+    q.w.end(15);
+  }
+});
+
+test("the watch: a sensitive app's caret, a password field, or no caret and no field is no peek", async () => {
+  {
+    // Its own window, as the dictation's target, but 1Password has the keyboard.
+    const p = watched({ answers: [answer({ app: { name: "1Password", pid: process.pid } })] });
+    p.w.start(1, { pid: process.pid });
+    await sleep(100);
+    assert.deepStrictEqual(p.told, []);
+    p.w.end(1);
+  }
+  {
+    // Up, then a password field: the helper says nothing of where its caret is.
+    const p = watched({ answers: [answer(), answer({ caret: null, field: null })], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+    p.w.start(2, NOTES);
+    await until(() => p.told.length === 1);
+    p.w.pasted(2);
+    await until(() => p.told.length === 2);
+    assert.deepStrictEqual(p.told[1], ["unpeek"]);
+    p.w.end(2);
+    assert.strictEqual(p.told.length, 2, "down once");
+  }
+});
+
+test("the watch: every failure is silent, and the dictation's calls into it never throw", async () => {
+  const errors = [];
+  const onUnhandled = (e) => errors.push(e);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const failures = [
+      () => { throw new Error("helper exploded"); },
+      () => Promise.reject(new Error("pipe")),
+      () => new Promise(() => {}),          // never answers
+      () => Promise.resolve(null),
+      () => Promise.resolve({}),
+      () => Promise.resolve({ ok: false, error: "timeout" }),
+      () => Promise.resolve({ ok: true, caret: "600,300", field: { x: 1 }, app: null }),
+      () => Promise.resolve({ ok: true, caret: [NaN, 1, 2, 3], field: [1e12, 0, 1, 1], app: { name: "Notes", pid: 42 } }),
+      () => Promise.resolve("garbage"),
+    ];
+    for (const fail of failures) {
+      const p = watched({ driver: { caret: () => fail() }, knobs: { "desktop.dictation.peekBudgetMs": 30, "desktop.dictation.peekEveryMs": 20 } });
+      assert.doesNotThrow(() => {
+        p.w.start(21, NOTES);
+        p.w.pasted(21); p.w.level(21, [0.5]); p.w.level(21, "x"); p.w.stop(21); p.w.done(21); p.w.end(21);
+        p.w.start(22, NOTES);
+      });
+      await sleep(120);
+      assert.deepStrictEqual(p.told, [], String(fail));
+      p.w.end();
+    }
+    // An Ask that throws, a namer that throws: still nothing escapes.
+    const boom = () => { throw new Error("guide gone"); };
+    const p = watched({ ask: { peek: boom, unpeek: boom, peekLevel: boom }, labelOf: boom });
+    assert.doesNotThrow(() => { p.w.start(31, NOTES); p.w.level(31, [1]); });
+    await sleep(60);
+    const q = watched({ ask: { peek: boom, unpeek: boom, peekLevel: boom } });
+    q.w.start(32, NOTES);
+    await sleep(60);
+    assert.doesNotThrow(() => { q.w.pasted(32); q.w.stop(32); q.w.done(32); q.w.end(32); });
+    // Called with nothing at all.
+    const r = watched();
+    assert.doesNotThrow(() => { r.w.start(); r.w.pasted(); r.w.stop(); r.w.done(); r.w.end(); r.w.level(); r.w.start(0, null); });
+    await sleep(60);
+    p.w.end(); q.w.end();
+  } finally { process.off("unhandledRejection", onUnhandled); }
+  assert.deepStrictEqual(errors, [], "no promise left rejected");
+});
+
+test("the watch: no helper running is asked once, then left alone for the rest of that dictation", async () => {
+  const p = watched({ answers: [{ ok: false, error: "unavailable" }], knobs: { "desktop.dictation.peekEveryMs": 15 } });
+  p.w.start(4, NOTES);
+  await sleep(100);
+  p.w.pasted(4);
+  await sleep(30);
+  assert.strictEqual(p.asked.length, 1);
+  assert.deepStrictEqual(p.told, []);
+  p.w.end(4);
+  // A driver with no caret at all (an older one): nothing asked, nothing shown.
+  const q = watched({ driver: {} });
+  q.w.start(5, NOTES);
+  await sleep(60);
+  assert.deepStrictEqual(q.told, []);
+});
+
+test("the watch: cancelled, failed, or nothing written takes Blip down at once; another dictation's ending does nothing", async () => {
+  const p = watched({ knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+  p.w.start(6, NOTES);
+  await until(() => p.told.length === 1);
+  p.w.end(5);
+  assert.strictEqual(p.told.length, 1);
+  p.w.end(6);
+  assert.deepStrictEqual(p.told[1], ["unpeek"]);
+  assert.strictEqual(p.w.watching(), 0);
+  p.w.done(6); p.w.stop(6); p.w.pasted(6);
+  await sleep(60);
+  assert.strictEqual(p.told.length, 2, "nothing after its end");
+  // A new dictation ends the last one's watch first.
+  const q = watched({ knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+  q.w.start(1, NOTES);
+  await until(() => q.told.length === 1);
+  q.w.start(2, NOTES);
+  assert.deepStrictEqual(q.told[1], ["unpeek"]);
+  await until(() => q.told.length === 3);
+  assert.strictEqual(q.w.watching(), 2);
+  q.w.end();
+});
+
+test("the watch: a dictation that never showed Blip does not pop it up at its end; one stopped before its app was named never shows it", async () => {
+  {
+    const p = watched({ answers: [{ ok: false, error: "timeout" }, answer()] });
+    p.w.start(1, NOTES);
+    await sleep(10);
+    p.w.stop(1);
+    p.w.done(1);
+    await sleep(80);
+    assert.deepStrictEqual(p.told, []);
+  }
+  {
+    let name;
+    const p = watched();
+    p.w.start(2, new Promise((r) => { name = r; }));
+    p.w.stop(2);
+    name(NOTES);
+    await sleep(60);
+    assert.deepStrictEqual(p.told, [], "writing moves a peek that is up; it never brings one up");
+    p.w.done(2);
+    await sleep(60);
+    assert.deepStrictEqual(p.told, []);
+  }
+});
+
+test("the watch: the last caret read failing at done hops where Blip was; the app gone by then is no hop", async () => {
+  {
+    const p = watched({ answers: [answer(), { ok: false, error: "timeout" }], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+    p.w.start(1, NOTES);
+    await until(() => p.told.length === 1);
+    p.w.stop(1);
+    p.w.done(1);
+    await until(() => p.told.length === 4);
+    assert.deepStrictEqual(p.kinds(), ["peek:listening", "peek:writing", "peek:done", "unpeek"]);
+    assert.deepStrictEqual(p.told[2][1], CARET);
+  }
+  {
+    const p = watched({ answers: [answer(), answer({ app: { name: "Mail", pid: 3 } })], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+    p.w.start(1, NOTES);
+    await until(() => p.told.length === 1);
+    p.w.done(1);
+    await until(() => p.told.length === 2);
+    await sleep(80);
+    assert.deepStrictEqual(p.kinds(), ["peek:listening", "unpeek"]);
+  }
+  {
+    // A read still out when the words land lands first, and is asked again:
+    // the hop is where the caret is after them.
+    const after = answer({ caret: [800, 300, 2, 18] });
+    const p = watched({ answers: [answer(), answer(), after], slowMs: 30, knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+    p.w.start(1, NOTES);
+    await until(() => p.told.length === 1);
+    p.w.pasted(1);
+    p.w.done(1);
+    await until(() => p.kinds().includes("unpeek"));
+    assert.deepStrictEqual(p.kinds(), ["peek:listening", "peek:done", "unpeek"]);
+    assert.deepStrictEqual(p.told[1][1], after.caret);
+  }
+});
+
+test("the watch: off (desktop.dictation.peek, or Ask off) asks nothing", async () => {
+  for (const on of [() => false, () => undefined, () => { throw new Error("knobs"); }]) {
+    const p = watched({ on });
+    p.w.start(1, NOTES);
+    await sleep(60);
+    assert.deepStrictEqual([p.asked.length, p.told.length, p.w.watching()], [0, 0, 0]);
+  }
+});
+
+test("the watch and the guide together: listening, writing, done and away, in the guide's window, with nothing for the recorder", async () => {
+  const h = harness();
+  const moved = answer({ caret: [700, 300, 2, 18] });
+  const p = watched({ ask: h.ask, answers: [answer(), moved], knobs: { "desktop.dictation.peekEveryMs": 1000 } });
+  p.w.start(17, NOTES);
+  await until(() => peeks(h).length === 1);
+  p.w.level(17, [0.5, 0.7]);
+  p.w.pasted(17);
+  await until(() => peeks(h).length === 2);
+  p.w.stop(17);
+  p.w.done(17);
+  await until(() => h.types().includes("unpeek"));
+  assert.deepStrictEqual(peeks(h).map((m) => [m.caret, m.state]), [
+    [local(CARET), "listening"], [local(moved.caret), "listening"], [local(moved.caret), "writing"], [local(moved.caret), "done"],
+  ]);
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "peekLevel").map((m) => m.v), [0.6]);
+  await sleep(400);
+  assert.strictEqual(h.windows[0].visible, false, "the window goes once Blip has ducked");
+  assert.deepStrictEqual(h.recorder, [], "nothing of the dictation is touched");
+  assert.deepStrictEqual(h.requests, []);
+});
+
+// ---- Ask's one-time setup card: the main process's side (createAskSetup) ---------------
+
+function setupCard(o = {}) {
+  const handles = new Map();
+  const ons = new Map();
+  const ipcMain = { handle: (ch, f) => handles.set(ch, f), on: (ch, f) => ons.set(ch, f) };
+  const APP = { id: "app window" }, OTHER = { id: "the guide, the pill, the recorder" };
+  const did = [];
+  const pushed = [];
+  const localState = Object.assign({}, o.localState);
+  const flags = Object.assign({}, o.flags);
+  const sp = {
+    isTrustedAccessibilityClient: (prompt) => { did.push(["trusted?", prompt]); return o.trusted !== undefined ? o.trusted : true; },
+    getMediaAccessStatus: (what) => { did.push(["media?", what]); return o.screen || "granted"; },
+  };
+  let denied = !!o.denied;
+  const card = createAskSetup({
+    ipcMain, fromApp: (e) => !!e && e.sender === APP,
+    platform: o.platform || "darwin", systemPreferences: o.systemPreferences || sp,
+    knobs: { str: (k, f) => (k in flags ? flags[k] : f) },
+    localState, saveLocalState: () => did.push(["saved", Object.assign({}, localState)]),
+    screenDenied: () => denied,
+    openAccessibility: () => did.push(["open", "accessibility"]),
+    openScreenRecording: () => did.push(["open", "screen recording"]),
+    relaunch: () => did.push(["relaunch"]),
+    send: (s) => pushed.push(s),
+  });
+  return {
+    card, did, pushed, localState, flags,
+    deny: (v) => { denied = v; },
+    ask: (sender = APP) => handles.get("app:askSetup")({ sender }),
+    act: (p, sender = APP) => ons.get("app:askSetupAction")({ sender }, p),
+    APP, OTHER, channels: () => [...handles.keys(), ...ons.keys()],
+  };
+}
+
+test("setup: the window's names, as fixed between the builders", () => {
+  const c = setupCard();
+  assert.deepStrictEqual(c.channels(), ["app:askSetup", "app:askSetupAction"]);
+});
+
+test("setup: a Mac's three rows from the system's own answers; Windows and Linux have nothing to allow but pictures", () => {
+  assert.deepStrictEqual(setupCard().ask(), { platform: "mac", read: "on", see: "on", pictures: "off" });
+  assert.deepStrictEqual(setupCard({ trusted: false, screen: "denied" }).ask(), { platform: "mac", read: "off", see: "off", pictures: "off" });
+  assert.deepStrictEqual(setupCard({ screen: "not-determined" }).ask().see, "off");
+  // Asked without a prompt: reading the state never puts up the system's dialog.
+  const c = setupCard();
+  c.ask();
+  assert.deepStrictEqual(c.did, [["trusted?", false], ["media?", "screen"]]);
+  // Granted, but the helper's last look was still refused: a restart finishes it.
+  assert.deepStrictEqual(setupCard({ denied: true }).ask().see, "restart");
+  assert.deepStrictEqual(setupCard({ denied: true, screen: "denied" }).ask().see, "off", "not granted is off, whatever the look said");
+  // The setup card's yes for every app, and the server's never, which wins.
+  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: true } }).ask().pictures, "on");
+  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: true }, flags: { "desktop.agent.pictures": "never" } }).ask().pictures, "never");
+  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: "yes" } }).ask().pictures, "off", "only a real true");
+  // No system permission to read or see on Windows and Linux.
+  assert.deepStrictEqual(setupCard({ platform: "win32" }).ask(), { platform: "windows", read: "na", see: "na", pictures: "off" });
+  assert.deepStrictEqual(setupCard({ platform: "linux", denied: true }).ask(), { platform: "linux", read: "na", see: "na", pictures: "off" });
+  const w = setupCard({ platform: "win32" });
+  w.ask();
+  assert.deepStrictEqual(w.did, [], "the Mac's checks are not asked elsewhere");
+  // A system call that throws is off, never a crash.
+  const boom = () => { throw new Error("no"); };
+  assert.deepStrictEqual(setupCard({ systemPreferences: { isTrustedAccessibilityClient: boom, getMediaAccessStatus: boom } }).ask(), { platform: "mac", read: "off", see: "off", pictures: "off" });
+});
+
+test("setup: only the app window may ask or act", () => {
+  const c = setupCard({ platform: "darwin", denied: true });
+  assert.strictEqual(c.ask(c.OTHER), null);
+  assert.strictEqual(c.ask(null), null);
+  for (const p of [{ kind: "openAccessibility" }, { kind: "openScreenRecording" }, { kind: "picturesAll", on: true }, { kind: "relaunch" }]) c.act(p, c.OTHER);
+  assert.deepStrictEqual(c.did, []);
+  assert.deepStrictEqual(c.pushed, []);
+  assert.deepStrictEqual(c.localState, {});
+});
+
+test("setup: each button does its one thing, and the window is told the state after it", () => {
+  const c = setupCard();
+  c.act({ kind: "openAccessibility" });
+  c.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "accessibility"], ["open", "screen recording"]]);
+  assert.strictEqual(c.pushed.length, 2);
+  // Look at the screen when it's needed: on, and off again. Saved each time.
+  c.act({ kind: "picturesAll", on: true });
+  assert.strictEqual(c.localState.askPicturesAlwaysAll, true);
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "saved").pop(), ["saved", { askPicturesAlwaysAll: true }]);
+  assert.strictEqual(c.pushed[c.pushed.length - 1].pictures, "on");
+  c.act({ kind: "picturesAll", on: false });
+  assert.strictEqual(c.localState.askPicturesAlwaysAll, false);
+  assert.strictEqual(c.pushed[c.pushed.length - 1].pictures, "off");
+  // Only a real yes or no.
+  const before = c.pushed.length;
+  for (const on of ["true", 1, null, undefined, {}]) c.act({ kind: "picturesAll", on });
+  assert.strictEqual(c.localState.askPicturesAlwaysAll, false);
+  // Anything else is ignored: other kinds, other shapes.
+  for (const p of [{ kind: "openSystemAudio" }, { kind: "openExternal", url: "https://x.test" }, { kind: "__proto__" }, "relaunch", null, 7, {}]) c.act(p);
+  assert.strictEqual(c.pushed.length, before, "nothing done, nothing said");
+  assert.ok(!c.did.some((d) => d[0] === "relaunch"));
+});
+
+test("setup: the Mac's pages are opened only on a Mac", () => {
+  const c = setupCard({ platform: "win32" });
+  c.act({ kind: "openAccessibility" });
+  c.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(c.did, []);
+  assert.deepStrictEqual(c.pushed, []);
+  c.act({ kind: "picturesAll", on: true });
+  assert.strictEqual(c.localState.askPicturesAlwaysAll, true, "the pictures row is the same everywhere");
+});
+
+test("setup: restart only when the card offers it (granted, and a look still refused)", () => {
+  const c = setupCard();
+  c.act({ kind: "relaunch" });
+  assert.ok(!c.did.some((d) => d[0] === "relaunch"), "nothing to finish: a window cannot restart Tailzu at will");
+  c.deny(true);
+  assert.strictEqual(c.ask().see, "restart");
+  c.act({ kind: "relaunch" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "relaunch"), [["relaunch"]]);
+  const w = setupCard({ platform: "win32", denied: true });
+  w.act({ kind: "relaunch" });
+  assert.ok(!w.did.some((d) => d[0] === "relaunch"));
+});
+
+test("pictures: the setup card's yes is always, for every app, browser pages and unnamed apps included; the server's never still wins", async () => {
+  {
+    const h = await begun({ alwaysAll: true, info: { label: "Chrome: Dashboard", pictureKey: null } });
+    assert.strictEqual(h.deps().pictures("Chrome: Dashboard"), "always");
+    assert.strictEqual(h.deps().pictures("anything at all"), "always");
+    h.ask.cancel("test over");
+  }
+  {
+    const h = await begun({ alwaysAll: true, knobs: { "desktop.agent.pictures": "never" } });
+    assert.strictEqual(h.deps().pictures("Keynote"), "never");
+    h.ask.cancel("test over");
+  }
+  {
+    const h = await begun({ alwaysAll: false });
+    assert.strictEqual(h.deps().pictures("Keynote"), "ask");
+    h.ask.cancel("test over");
+  }
+});
+
+test("picture: with the setup card's yes, a picture question asks nothing on screen and the crop goes", async () => {
+  const { h } = await pictureQuestion({ alwaysAll: true, info: { label: "Chrome: Notes", pictureKey: null } });
+  await until(() => h.requests.length === 1);
+  assert.ok(!h.types().includes("permission"), "the on-screen card is never shown");
+  assert.ok(h.requests[0].multipart && h.requests[0].parts.image, "the picture went with the question");
+  h.ask.cancel("test over");
+});
+
+test("a look's word on Screen Recording is kept, and the setup card told each time it changes", async () => {
+  const told = [];
+  let look = { ok: false, error: "no_screen_permission" };
+  const h = harness({ look: { ok: false, error: "timeout" }, lookPermission: (d) => told.push(d) });
+  // The harness's driver, with a look that says what this test says.
+  const d = h.deps().driver;
+  assert.strictEqual(typeof d.look, "function");
+  const base = Object.getPrototypeOf(d);
+  base.look = async () => look;
+  assert.strictEqual(h.ask.screenDenied(), false);
+  await d.look({});
+  assert.deepStrictEqual([h.ask.screenDenied(), told], [true, [true]]);
+  await d.look({});
+  assert.deepStrictEqual(told, [true], "told once per change");
+  // A look that says nothing about it (timed out, no window) changes nothing.
+  for (look of [{ ok: false, error: "timeout" }, { ok: false, error: "no_window" }, null]) await d.look({});
+  assert.deepStrictEqual([h.ask.screenDenied(), told], [true, [true]]);
+  look = { ok: true, window: { frame: [0, 0, 10, 10] }, lines: [] };
+  await d.look({});
+  assert.deepStrictEqual([h.ask.screenDenied(), told], [false, [true, false]]);
+});
+
+test("a driver with no look keeps none: the run sees no look, as before", () => {
+  const h = harness();
+  assert.strictEqual(typeof h.deps().driver.look, "undefined");
+});
+
+// ---- main.js, run whole with Electron faked ----------------------------------------------
+// The peek and the setup card are wired into main.js, which cannot run outside
+// Electron. Here it does: its own source, every Electron module it uses
+// played by a fake, the helper and the app in front scripted. What plain
+// dictation RECORDS, SENDS and PASTES is all in three places, and each is
+// written down in order: every message to the recorder's window (what to
+// record, the app, the field, the screen around it, stop, cancel), every
+// clipboard write, and every paste keystroke.
+const os = require("node:os");
+const { Module } = require("node:module");
+const MAIN_JS = path.join(__dirname, "main.js");
+
+function mainProcess(o = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tailzu-main-"));
+  // Signed in, and far from needing a new token.
+  fs.writeFileSync(path.join(dir, "session.json"), JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_at: 4102444800 }));
+  // Always a bootstrap of its own: knobs.js keeps the last one it was given.
+  fs.writeFileSync(path.join(dir, "bootstrap.json"), JSON.stringify({ labels: {}, flags: Object.assign({ "desktop.paste.delayMs": 1 }, o.flags) }));
+  const dictation = [];   // what plain dictation records, sends and pastes
+  const guide = [];       // what the guide's window was sent
+  const carets = [];      // what the helper was asked
+  const timers = new Set();
+  const ipc = new EventEmitter();
+  const handles = new Map();
+  const shortcuts = [];
+  const windows = [];
+  const trayMenus = [];   // the tray's menus, as built (Menu.buildFromTemplate's template)
+  const copy = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
+  class BW extends EventEmitter {
+    constructor(opts) {
+      super();
+      this.opts = opts || {}; this.visible = false; this.destroyed = false; this.file = null;
+      this.bounds = { x: this.opts.x || 0, y: this.opts.y || 0, width: this.opts.width || 100, height: this.opts.height || 100 };
+      const self = this;
+      this.webContents = Object.assign(new EventEmitter(), {
+        send: (ch, m) => {
+          if (self.file === "recorder.html") dictation.push(["recorder", ch, copy(m)]);
+          else if (self.file === "guide.html") guide.push(copy(m));
+          else if (self.file === "app.html") (self.appSent = self.appSent || []).push([ch, copy(m)]);
+        },
+        isLoading: () => false, isDestroyed: () => self.destroyed, getURL: () => "file://" + self.file,
+        setWindowOpenHandler() {},
+      });
+      windows.push(this);
+    }
+    static getFocusedWindow() { return null; }
+    loadFile(f) { this.file = f; setImmediate(() => this.webContents.emit("did-finish-load")); }
+    setVisibleOnAllWorkspaces() {} setIgnoreMouseEvents() {} setContentProtection() {} setAlwaysOnTop() {} moveTop() {}
+    isVisible() { return this.visible; } isDestroyed() { return this.destroyed; }
+    show() { this.visible = true; } showInactive() { this.visible = true; } hide() { this.visible = false; } focus() {}
+    destroy() { this.destroyed = true; } close() {}
+    getBounds() { return Object.assign({}, this.bounds); } setBounds(b) { this.bounds = Object.assign({}, b); }
+  }
+  const img = { resize: () => img, setTemplateImage() {}, isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) };
+  const app = Object.assign(new EventEmitter(), {
+    isPackaged: true, getPath: () => dir, setPath() {}, getVersion: () => "0.4.0",
+    requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(),
+    quit() {}, exit() {}, relaunch() {}, dock: { hide() {} }, setAppUserModelId() {},
+    getLoginItemSettings: () => ({ wasOpenedAtLogin: false }), setLoginItemSettings() {},
+  });
+  const electron = {
+    app, BrowserWindow: BW, ipcMain: { on: (ch, f) => ipc.on(ch, f), handle: (ch, f) => handles.set(ch, f) },
+    Tray: class { setImage() {} setToolTip() {} setContextMenu(m) { trayMenus.push(m); } setTitle() {} },
+    Menu: { buildFromTemplate: (t) => ({ t }), setApplicationMenu() {} },
+    globalShortcut: { register: (k, f) => { shortcuts.push(f); return true; }, unregisterAll() {} },
+    screen: {
+      getCursorScreenPoint: () => ({ x: 500, y: 400 }), getDisplayNearestPoint: () => ({ workArea: WORK, bounds: WORK }),
+      getDisplayMatching: () => ({ workArea: WORK, bounds: WORK }), on() {}, screenToDipRect: (_w, r) => r,
+    },
+    clipboard: { writeText: (t) => dictation.push(["clipboard", t]) },
+    Notification: class { show() {} on() {} },
+    nativeImage: { createFromPath: () => img, createEmpty: () => img, createFromBuffer: () => img },
+    session: { defaultSession: { setPermissionRequestHandler() {} } },
+    shell: { openExternal: async () => {}, openPath: async () => {} },
+    nativeTheme: { shouldUseDarkColors: false }, powerMonitor: { on() {} },
+    desktopCapturer: { getSources: async () => [] },
+    systemPreferences: { isTrustedAccessibilityClient: () => true, getMediaAccessStatus: () => "granted" },
+  };
+  const childProcess = {
+    execFile: (cmd, args, opts, cb) => { dictation.push(["keystroke", cmd, args]); setImmediate(() => cb && cb(null, "", "")); },
+    spawn: () => { throw new Error("nothing is spawned here"); },
+  };
+  const realFront = require("./frontApp.js");
+  const infos = (o.infos || [NOTES]).slice();
+  const frontApp = {
+    frontInfo: async () => (infos.length > 1 ? infos.shift() : infos[0]),
+    focusedField: async () => ({ kind: "message", label: "Message", before: "Dear Sam," }),
+    warmUp() {}, shutDown() {}, label: realFront.label, looksSensitive: realFront.looksSensitive,
+  };
+  const driver = {
+    available: () => true, start() {}, stop() {},
+    snapshot: async () => ({ ok: false, error: "unsupported" }),
+    // Which dictation it was asked during (how many had started by then).
+    caret: (opt) => {
+      carets.push(Object.assign({ during: dictation.filter(([w, ch]) => w === "recorder" && ch === "start-recording").length }, opt));
+      return o.caret ? o.caret() : Promise.resolve(answer());
+    },
+  };
+  const fakes = {
+    electron, child_process: childProcess, "./frontApp.js": frontApp, "./driver.js": driver,
+    "./screenRead.js": { readScreen: async () => "Sam: are we still on for Friday?" },
+    "./updater.js": { canSelfUpdate: () => false, update: async () => ({ ok: false }) },
+  };
+  const req = (id) => {
+    if (Object.prototype.hasOwnProperty.call(fakes, id)) return fakes[id];
+    if (id === "uiohook-napi") throw new Error("no key hook in tests");
+    return require(id.startsWith("./") ? path.join(__dirname, id) : id);
+  };
+  // Its timers never keep the tests alive, and all of them go with it.
+  const T = (set) => (f, ms, ...a) => { const t = set(f, ms, ...a); if (t && t.unref) t.unref(); timers.add(t); return t; };
+  const src = o.source || fs.readFileSync(MAIN_JS, "utf8");
+  const wrapped = vm.runInThisContext("(function (exports, require, module, __filename, __dirname, setTimeout, setInterval, fetch) {" + src + "\n})", { filename: MAIN_JS });
+  const mod = { exports: {} };
+  const quiet = { log: console.log, warn: console.warn };
+  console.warn = () => {}; console.log = () => {};
+  try {
+    wrapped(mod.exports, req, mod, MAIN_JS, __dirname, T(setTimeout), T(setInterval), async () => new Response("{}", { status: 503 }));
+  } finally { Object.assign(console, quiet); }
+  const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
+  const from = (file) => ({ sender: win(file).webContents });
+  return {
+    dictation, guide, carets, ipc, handles, windows, win, dir,
+    /** The tray's menu as it is now: its template's items. */
+    tray: () => (trayMenus.length ? trayMenus[trayMenus.length - 1].t : []),
+    ready: () => sleep(20),
+    // The hotkey (the first accelerator main registers is dictation's).
+    hotkey: () => shortcuts[0](),
+    fromRecorder: (ch, p) => ipc.emit(ch, from("recorder.html"), p),
+    fromPill: (ch, p) => ipc.emit(ch, from("pill.html"), p),
+    fromApp: (ch, ...a) => ipc.emit(ch, from("app.html"), ...a),
+    invoke: (ch, sender, ...a) => handles.get(ch)({ sender }, ...a),
+    sessions: () => dictation.filter(([w, ch]) => w === "recorder" && ch === "start-recording").map(([, , p]) => p.session),
+    close: () => {
+      for (const t of timers) clearTimeout(t);
+      app.emit("will-quit");
+      fs.rmSync(dir, { recursive: true, force: true });
+      require("./knobs.js").setKnobs({ labels: {}, flags: {} });
+    },
+  };
+}
+
+const PRIVATE = Object.assign({}, NOTES, { label: "Chrome: New Incognito Tab", private: true });
+
+/** The same four dictations, every time: one with a pause's chunk and its
+ *  end; one thrown away with the pill's ✕; one the recorder fails; one into
+ *  a private window. */
+async function dictateFour(m) {
+  await m.ready();
+  const steps = async (n) => { await until(() => m.dictation.filter(([w, ch]) => ch === "recording-around" || ch === "recording-field").length >= n, 3000); };
+  // 1: a chunk on a pause, then the end.
+  m.hotkey();
+  await steps(2);
+  const s1 = m.sessions()[0];
+  await sleep(40);
+  m.fromRecorder("dictation-level", { session: s1, bands: [0.2, 0.6, 0.4] });
+  m.fromRecorder("dictation-segment", { session: s1, text: "I'll be there at six.", join: true });
+  await until(() => m.dictation.filter(([k]) => k === "keystroke").length === 1);
+  await sleep(40);
+  m.hotkey();
+  m.fromRecorder("dictation-result", { session: s1, text: "See you Friday.", join: true });
+  await until(() => m.dictation.filter(([k]) => k === "keystroke").length === 2);
+  await sleep(80);
+  // 2: thrown away from the pill.
+  m.hotkey();
+  await steps(4);
+  await sleep(40);
+  m.fromPill("pill:action", "cancel");
+  await sleep(40);
+  // 3: the recorder fails.
+  m.hotkey();
+  await steps(6);
+  const s3 = m.sessions()[2];
+  await sleep(40);
+  m.fromRecorder("dictation-error", { session: s3, message: "no speech detected — check your microphone" });
+  await sleep(40);
+  // 4: a private window, written.
+  m.hotkey();
+  await until(() => m.dictation.filter(([w, ch]) => ch === "recording-target").length === 4, 3000);
+  const s4 = m.sessions()[3];
+  await sleep(40);
+  m.hotkey();
+  m.fromRecorder("dictation-result", { session: s4, text: "Private words.", join: false });
+  await until(() => m.dictation.filter(([k]) => k === "keystroke").length === 3);
+  await sleep(80);
+  return m.dictation;
+}
+
+const PEEK_FAST = { "desktop.dictation.peekEveryMs": 100, "desktop.dictation.peekDoneMs": 30, "desktop.dictation.peekBudgetMs": 50 };
+const FOUR = [NOTES, NOTES, NOTES, PRIVATE];
+
+test("main: plain dictation records, sends and pastes byte-for-byte the same with the peek off, on, and failing every way it can", async () => {
+  // The recorder is handed the server's knobs as they came (start-recording's
+  // `knobs`), so the switch each run was given rides along in them: that one
+  // input is set aside, and everything else must be identical.
+  const asSent = (what) => what.map((e) => {
+    const p = e[2] && e[2].knobs && e[2].knobs.flags;
+    if (p) delete p["desktop.dictation.peek"];
+    return e;
+  });
+  const run = async (o) => {
+    const m = mainProcess(Object.assign({ infos: FOUR }, o, { flags: Object.assign({}, PEEK_FAST, o.flags) }));
+    try { return { what: asSent(await dictateFour(m)), m }; } finally { m.close(); }
+  };
+  const off = await run({ flags: { "desktop.dictation.peek": false } });
+  // What plain dictation did, for the record: four starts, the app and the
+  // field and the screen around it for each, the chunk and the end pasted.
+  const kinds = off.what.map(([k, ch]) => (k === "recorder" ? ch : k));
+  assert.deepStrictEqual(kinds.filter((k) => k === "start-recording").length, 4);
+  assert.deepStrictEqual(off.what.filter(([k]) => k === "clipboard").map(([, t]) => t), [" I'll be there at six.", " See you Friday.", "Private words."]);
+  assert.deepStrictEqual(off.m.carets, [], "off: the helper is never asked");
+  assert.deepStrictEqual(off.m.guide, []);
+
+  const on = await run({ flags: { "desktop.dictation.peek": true } });
+  assert.deepStrictEqual(on.what, off.what, "the peek on: exactly the same, in the same order");
+  // And it really was on: Blip peeked, followed the chunk, wrote, hopped and
+  // went; went at once on the ✕ and on the failure; and never looked at the
+  // private window.
+  const states = on.m.guide.filter((g) => g.type === "peek" || g.type === "unpeek").map((g) => g.type === "peek" ? g.state : "away");
+  assert.ok(states.includes("listening") && states.includes("writing") && states.includes("done") && states.includes("away"), states.join(","));
+  assert.strictEqual(states.filter((s) => s === "away").length, 3, "away after the first, at the ✕ and at the failure: " + states.join(","));
+  assert.ok(on.m.guide.some((g) => g.type === "peekLevel" && Math.abs(g.v - 0.4) < 1e-9), "the voice's level, as the bands' mean");
+  const during = on.m.carets.map((c) => c.during);
+  assert.ok([1, 2, 3].every((n) => during.includes(n)), "asked during each of the first three: " + during);
+  assert.ok(!during.includes(4), "never during the private window's: " + during);
+  assert.ok(on.m.carets.every((c) => c.budgetMs === 50), "within its budget (desktop.dictation.peekBudgetMs)");
+
+  const failing = [
+    ["the helper throws", () => { throw new Error("exploded"); }],
+    ["the helper fails", () => Promise.reject(new Error("pipe"))],
+    ["the helper never answers", () => new Promise(() => {})],
+    ["the helper is not running", () => Promise.resolve({ ok: false, error: "unavailable" })],
+    ["the helper talks nonsense", () => Promise.resolve({ ok: true, caret: "x", field: [NaN], app: 7 })],
+    ["another app in front", () => Promise.resolve(answer({ app: { name: "Safari", pid: 9 } }))],
+  ];
+  for (const [why, caret] of failing) {
+    const r = await run({ caret });
+    assert.deepStrictEqual(r.what, off.what, why);
+    assert.ok(!r.m.guide.some((g) => g.type === "peek"), why + ": no peek");
+  }
+});
+
+test("main: the setup card's wiring: the env says so, only the app window asks or acts, and it is told on focus, after each action and at sign-out", async () => {
+  const m = mainProcess();
+  try {
+    await m.ready();
+    const appWin = m.win("app.html");
+    const appWc = appWin.webContents, other = m.win("pill.html").webContents;
+    assert.strictEqual(m.invoke("app:env", appWc).askSetup, true, "Ask is on: the window declares DeskAskSetup");
+    const platform = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux";
+    const want = (pictures) => (platform === "mac"
+      ? { platform, read: "on", see: "on", pictures }
+      : { platform, read: "na", see: "na", pictures });
+    assert.deepStrictEqual(m.invoke("app:askSetup", appWc), want("off"));
+    assert.strictEqual(m.invoke("app:askSetup", other), null);
+    const told = () => (appWin.appSent || []).filter(([ch]) => ch === "ask-setup").map(([, s]) => s);
+    // Another window's action: nothing.
+    m.ipc.emit("app:askSetupAction", { sender: other }, { kind: "picturesAll", on: true });
+    assert.deepStrictEqual(told(), []);
+    // The app window's: saved on this computer, and the window told.
+    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: true });
+    assert.deepStrictEqual(told(), [want("on")]);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll, true);
+    // Back from System Settings: the window is told again.
+    appWin.emit("focus");
+    assert.deepStrictEqual(told(), [want("on"), want("on")]);
+    // Signed out: the yes was theirs, and goes with them.
+    await m.invoke("app:setSession", appWc, null);
+    assert.deepStrictEqual(told().pop(), want("off"));
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll, false);
+  } finally { m.close(); }
+  const off = mainProcess({ flags: { "desktop.agent.enabled": false } });
+  try {
+    await off.ready();
+    assert.strictEqual(off.invoke("app:env", off.win("app.html").webContents).askSetup, false, "Ask off: no card");
+  } finally { off.close(); }
+});
+
+test("main: the tray's \"Ask again for all of them\" takes back the setup card's yes for every app too, and the card is told", async () => {
+  const m = mainProcess();
+  try {
+    await m.ready();
+    const appWin = m.win("app.html");
+    const appWc = appWin.webContents;
+    const told = () => (appWin.appSent || []).filter(([ch]) => ch === "ask-setup").map(([, s]) => s.pictures);
+    const pictures = () => m.tray().find((i) => i && i.label === "Pictures sent without asking");
+    const saved = () => JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll;
+    assert.strictEqual(pictures(), undefined, "nothing goes without asking: no list");
+    // Yes for every app, from the setup card: the tray lists it at once.
+    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: true });
+    const menu = pictures();
+    assert.ok(menu, "the tray says something goes without asking");
+    const all = menu.submenu.find((i) => i.label === "Ask again for all of them");
+    assert.ok(all);
+    // Taken back from the tray: the card asks again everywhere, and the
+    // setup card turns to off.
+    all.click();
+    assert.strictEqual(saved(), false);
+    assert.deepStrictEqual(told(), ["on", "off"]);
+    assert.strictEqual(pictures(), undefined);
+    assert.strictEqual(m.invoke("app:askSetup", appWc).pictures, "off");
+  } finally { m.close(); }
+});
+
+test("preload: the app window's bridge carries the setup card's three calls, by the names fixed between the builders", async () => {
+  const exposed = {}, sent = [], invoked = [], listeners = {};
+  const electron = {
+    contextBridge: { exposeInMainWorld: (k, v) => { exposed[k] = v; } },
+    ipcRenderer: {
+      send: (ch, p) => sent.push([ch, p]),
+      invoke: (ch, ...a) => { invoked.push([ch, ...a]); return Promise.resolve({ platform: "mac", read: "on", see: "off", pictures: "off" }); },
+      on: (ch, f) => { listeners[ch] = f; },
+    },
+  };
+  const src = fs.readFileSync(path.join(__dirname, "preload.js"), "utf8");
+  new Function("require", src)((id) => (id === "electron" ? electron : require(id)));
+  const t = exposed.tailzuApp;
+  assert.deepStrictEqual(await t.askSetup(), { platform: "mac", read: "on", see: "off", pictures: "off" });
+  assert.deepStrictEqual(invoked, [["app:askSetup"]]);
+  const got = [];
+  t.onAskSetup((s) => got.push(s));
+  listeners["ask-setup"]({}, { pictures: "on" });
+  assert.deepStrictEqual(got, [{ pictures: "on" }]);
+  t.askSetupAction("picturesAll", true);
+  t.askSetupAction("picturesAll", false);
+  t.askSetupAction("relaunch");
+  t.askSetupAction("openAccessibility", "yes");
+  t.askSetupAction();
+  assert.deepStrictEqual(sent, [
+    ["app:askSetupAction", { kind: "picturesAll", on: true }],
+    ["app:askSetupAction", { kind: "picturesAll", on: false }],
+    ["app:askSetupAction", { kind: "relaunch", on: null }],
+    ["app:askSetupAction", { kind: "openAccessibility", on: null }],
+    ["app:askSetupAction", { kind: "", on: null }],
+  ]);
+  // The other windows' bridges have none of it.
+  for (const k of ["tailzu", "tailzuGuide", "tailzuNotes"]) assert.ok(!("askSetup" in exposed[k]) && !("askSetupAction" in exposed[k]), k);
 });

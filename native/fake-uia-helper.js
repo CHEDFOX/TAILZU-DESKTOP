@@ -11,7 +11,11 @@
 // "walk" (lines read one at a time, a snapshot holding the reader as the real
 // walk does), "hanglook" (a look never answered), "biglook" (a 2 MB picture),
 // "badlook" (a look that keeps to none of the contract), "nowindow" and
-// "noframe".
+// "noframe". The caret modes (peek-spec §A): every mode answers a caret as the
+// real helper does (two rectangles, the app, how and ms); "securecaret" a
+// password field (nulls), "badcaret" junk with text in it that must never get
+// through, "hangcaret" never, and "slowwarm" answers everything, but its
+// warm-up ping only after 700 ms (a helper still loading its assemblies).
 const fs = require("fs");
 const readline = require("readline");
 
@@ -82,8 +86,25 @@ function badLookAnswer(msg) {
   };
 }
 
+// A caret in the contract's shape, or what the caret modes make of it.
+function caretAnswer(msg) {
+  const good = {
+    id: msg.id, ok: true, caret: [1352, 148, 2, 27], field: [1120, 100, 600, 42],
+    app: { name: "Fake", pid: 42 }, scale: "pixels", how: "caret+char", ms: 3,
+  };
+  if (mode === "securecaret") return { ...good, caret: null, field: null, how: "secure" };
+  if (mode === "badcaret") {
+    return {
+      id: msg.id, ok: true, caret: [1, 2, "3", 4], field: [0, 0, 10, 0], app: ["Fake"], scale: "points",
+      text: "Dear Priya, the offer is", value: "hunter2", selection: "the offer", title: "Bank - InPrivate",
+    };
+  }
+  return good;
+}
+
 function answer(msg) {
   if (msg.cmd === "ping") return { id: msg.id, ok: true, pong: true };
+  if (msg.cmd === "caret") return caretAnswer(msg);
   if (msg.cmd === "snapshot") return snapshotAnswer(msg);
   if (msg.cmd === "look") {
     if (mode === "badlook") return badLookAnswer(msg);
@@ -142,8 +163,12 @@ if (rl) rl.on("line", (line) => {
   let msg;
   try { msg = JSON.parse(line); } catch { write({ id: null, ok: false, error: "malformed" }); return; }
 
-  // ping always answers immediately, whatever the mode.
-  if (msg.cmd === "ping") { write(answer(msg)); return; }
+  // ping always answers immediately, whatever the mode, but "slowwarm"'s.
+  if (msg.cmd === "ping") {
+    if (mode === "slowwarm") setTimeout(() => write(answer(msg)), 700);
+    else write(answer(msg));
+    return;
+  }
 
   switch (mode) {
     case "reorder":
@@ -195,6 +220,11 @@ if (rl) rl.on("line", (line) => {
     case "hanglook":
       // A look that never comes back; everything else answers.
       if (msg.cmd !== "look") write(answer(msg));
+      break;
+
+    case "hangcaret":
+      // A caret that never comes back; everything else answers.
+      if (msg.cmd !== "caret") write(answer(msg));
       break;
 
     case "normal":

@@ -12,6 +12,12 @@
   card: an amber line the voice plucks while it listens, dots with a light
   running up them while it thinks, still dots after.
 
+  It peeks. While you dictate, a small Blip peeks over the top edge of the
+  text box at the cursor, as if reading over your shoulder: antenna lit while
+  the microphone is, a nod as each chunk of words lands, a hop when the last
+  of them have, and down below the edge again. Nothing else of the guide is
+  up meanwhile, and it never takes the pointer.
+
   It draws. While it explains it can mark up the screen, as a teacher uses a
   pen: circle part of a diagram, an arrow from a label to what it names,
   underline or highlight the words it means, number the places to click.
@@ -57,7 +63,10 @@
                              thinking, an answer), slide (a ring by the pill:
                              the card goes aside, the tether bends), fold (an
                              answer, then away, over and over), draw (a right
-                             triangle explained with marks on it)
+                             triangle explained with marks on it); and the
+                             peek while you dictate: peek (Blip over a chat's
+                             message box at the cursor as the words land),
+                             peekdoc (over the cursor's line in a document)
     …&capture                the same on a virtual clock: window.__step(ms)
                              moves it on, for frame-exact screenshots
     …&dark                   over a dark app instead of a light one
@@ -290,6 +299,24 @@
   body.demo .dockbar span { padding:8px 11px; border-radius:8px; }
   body.demo .dockbar span.n { color:#8A8076; font-variant-numeric:tabular-nums; }
   body.demo .dockbar span.primary { background:#2F6BFF; color:#fff; font-weight:600; }
+  /* Dictating (?demo=peek, peekdoc): a chat's message box that grows a line
+     at a time from the bottom up, as chat apps' do, and a document. */
+  body.demo .mock.chat .page { top:62px; }
+  body.demo .mock .msg { display:flex; gap:12px; margin:0 0 16px; }
+  body.demo .mock .msg i { flex:none; width:36px; height:36px; border-radius:8px; color:#fff; font:600 15px/36px -apple-system,"Segoe UI",system-ui,sans-serif; font-style:normal; text-align:center; }
+  body.demo .mock .msg b { font-size:14.5px; }
+  body.demo .mock .msg time { margin-left:8px; font-size:12px; color:#9A9083; }
+  body.demo .mock .msg p { margin:3px 0 0; font-size:14.5px; }
+  body.demo .mock.chat .composer { height:auto; min-height:46px; box-sizing:border-box; align-items:flex-end; padding:11px 8px 8px 14px; color:#1B1712; font-size:14.5px; line-height:22px; }
+  body.demo .mock.chat .composer .text { position:relative; flex:1; min-width:0; padding-bottom:2px; }
+  body.demo .mock.chat .composer .ph { position:absolute; left:3px; top:0; color:#9A9083; pointer-events:none; }
+  body.demo .mock.chat .composer em { flex:none; margin-left:12px; }
+  body.demo .mock .caret { display:inline-block; width:1.5px; height:19px; margin-left:1px; vertical-align:-4px; background:currentColor; animation:caret 1.06s steps(1) infinite; }
+  @keyframes caret { 50% { opacity:0; } }
+  body.demo .mock.doc .page { top:56px; bottom:22px; }
+  body.demo .mock .sheet { height:100%; box-sizing:border-box; padding:24px 34px; border-radius:8px; background:#fff; box-shadow:inset 0 0 0 1px #ECE7DF; font:15px/25px -apple-system,"Segoe UI",system-ui,sans-serif; color:#2A241E; overflow:hidden; }
+  body.demo .mock .sheet h2 { font-size:22px; margin:0 0 12px; color:#1B1712; }
+  body.demo .mock .sheet p { margin:0 0 14px; }
   /* …and over a dark app: a code editor's colours. */
   body.demo.dark { background:#141619; }
   body.demo.dark .mock { background:#1E2125; color:#DCD7CE; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 18px 40px rgba(0,0,0,.5); }
@@ -308,6 +335,11 @@
   body.demo.dark .mock .tri { color:#E6E1D8; }
   body.demo.dark .dockbar { background:rgba(40,44,50,.96); color:#D3CEC5; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 10px 28px rgba(0,0,0,.5); }
   body.demo.dark .menubar { background:rgba(30,33,37,.92); color:#E6E1D8; }
+  body.demo.dark .mock .msg time { color:#7D8288; }
+  body.demo.dark .mock.chat .composer { color:#E6E1D8; }
+  body.demo.dark .mock.chat .composer .ph { color:#7D8288; }
+  body.demo.dark .mock .sheet { background:#23272C; box-shadow:inset 0 0 0 1px #30353B; color:#C9C4BB; }
+  body.demo.dark .mock .sheet h2 { color:#F1ECE3; }
 </style>
 </head>
 <body>

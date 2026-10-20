@@ -32,6 +32,10 @@
     --d-ground:#FBF8F2; --d-sheet:#FFFFFF; --d-ink:#1B1712; --d-ink2:#6B6258; --d-ink3:#A69D91;
     --d-rule:rgba(27,23,18,.12); --d-press:rgba(27,23,18,.06); --d-typed:#E4587B;
     --d-violet:#1C1640; --d-violet-hi:#2A2266; --d-pale:#F3E2C6; --d-key:#2A241F;
+    /* The brand's amber (a step still to take), the green of one that is
+       done, and what is written on an ink control: pale on ink here, the
+       sheet on pale ink in the dark, where --d-pale on --d-ink vanished. */
+    --d-amber:#E8A23C; --d-ok:#3E7C6B; --d-on-ink:#F3E2C6;
     --f-written:"Newsreader","Iowan Old Style",Georgia,serif;
     --f-said:"Caveat","Segoe Print",cursive;
     --f-label:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
@@ -42,6 +46,7 @@
     :root {
       --d-ground:#0F0D0B; --d-sheet:#151210; --d-ink:#F3E2C6; --d-ink2:rgba(243,226,198,.66); --d-ink3:rgba(243,226,198,.42);
       --d-rule:rgba(243,226,198,.12); --d-press:rgba(243,226,198,.07);
+      --d-ok:#74B49F; --d-on-ink:#151210;
     }
   }
 
@@ -221,7 +226,61 @@
   .d-plan-lead { border-color:var(--d-ink); }
   .d-price { font:300 32px/1.1 var(--f-written); font-variant-numeric:tabular-nums; }
   .d-sticky { position:sticky; top:0; }
+  /* LET ASK SEE WHAT YOU SEE (sdui.js askSetupNode): the one-time setup card,
+     drawn as the owner approved it. Its own faces rather than the desk's
+     mono buttons: a sans headline row, a numbered disc that turns into a
+     green tick, and ink pills, because three permissions read as three steps
+     and the mono caps read as a form. */
+  .d-ask { color:var(--d-ink); font:400 15px/1.5 var(--f-ui); }
+  .d-ask-in { max-width:720px; }
+  .d-ask-eyebrow { display:flex; align-items:center; gap:8px; font:500 10px/1 var(--f-label); letter-spacing:.18em;
+                   text-transform:uppercase; color:var(--d-ink3); }
+  .d-ask-eyebrow i { width:6px; height:6px; border-radius:50%; background:var(--d-amber); flex:none; }
+  .d-ask-title { margin:12px 0 6px; font:400 30px/1.15 var(--f-written); letter-spacing:-.2px; color:var(--d-ink); text-wrap:balance; }
+  .d-ask-title em { font-style:italic; color:var(--d-ink2); }
+  .d-ask-lede { margin:0 0 22px; max-width:520px; color:var(--d-ink2); }
+  .d-ask[data-place="settings"] .d-ask-lede { margin-bottom:18px; font-size:14px; }
+  .d-ask-card { border:1px solid var(--d-rule); border-radius:16px; overflow:hidden; background:var(--d-sheet); }
+  .d-ask-row { display:grid; grid-template-columns:34px minmax(0, 1fr) auto; gap:14px; align-items:center; padding:16px 18px; }
+  .d-ask-row + .d-ask-row { border-top:1px solid var(--d-rule); }
+  .d-ask-n { width:30px; height:30px; border-radius:50%; display:grid; place-items:center; background:var(--d-ink); color:var(--d-on-ink);
+             font:600 13px/1 var(--f-ui); box-shadow:inset 0 0 0 2px var(--d-amber); font-variant-numeric:tabular-nums; }
+  .d-ask-n svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .d-ask-row[data-done="1"] .d-ask-n { background:var(--d-ok); box-shadow:none; }
+  /* Pictures the server has turned off for everyone: a step nobody can take,
+     so no amber and no ink, only its outline. */
+  .d-ask-row[data-mode="never"] .d-ask-n { background:none; color:var(--d-ink3); box-shadow:inset 0 0 0 1.5px var(--d-rule); }
+  .d-ask-t { font-weight:600; color:var(--d-ink); }
+  .d-ask-s { font-size:13.5px; color:var(--d-ink2); }
+  .d-ask-note { display:flex; align-items:center; gap:7px; margin-top:7px; font:500 10.5px/1.2 var(--f-label); letter-spacing:.12em;
+                text-transform:uppercase; color:var(--d-ink2); }
+  .d-ask-note i { width:6px; height:6px; border-radius:50%; background:var(--d-amber); flex:none; }
+  /* The state is drawn first and shown last: "✓ On" sits at the row's end,
+     in one column with the rows above, and it is what lands where Allow was,
+     so the second click of a double-click on Allow meets words and not the
+     Turn off beside them. */
+  .d-ask-act { display:flex; flex-direction:row-reverse; align-items:center; gap:14px; justify-self:end; }
+  .d-ask-btn { border:0; border-radius:999px; padding:10px 16px; cursor:pointer; font:600 14px/1 var(--f-ui); white-space:nowrap;
+               background:var(--d-ink); color:var(--d-on-ink); }
+  .d-ask-btn:hover { opacity:.88; }
+  .d-ask-quiet { padding:8px 13px; font-size:13px; font-weight:500; background:none; color:var(--d-ink2); box-shadow:inset 0 0 0 1px var(--d-rule); }
+  .d-ask-quiet:hover { opacity:1; color:var(--d-ink); background:var(--d-press); }
+  .d-ask-state { display:flex; align-items:center; gap:6px; font:500 11px/1 var(--f-label); letter-spacing:.12em; text-transform:uppercase;
+                 color:var(--d-ok); white-space:nowrap; }
+  .d-ask-state svg { width:11px; height:11px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  .d-ask-never { color:var(--d-ink3); }
+  .d-ask-foot { margin:14px 0 0; color:var(--d-ink3); font-size:13px; }
+  .d-ask-link { border:0; background:none; padding:0; cursor:pointer; font:inherit; color:var(--d-ink2); }
+  .d-ask-link:hover { color:var(--d-ink); text-decoration:underline; text-underline-offset:3px; }
+  /* A narrow window: the button goes under the words, and the disc stays by
+     the row's title rather than floating halfway down a tall row. */
+  @media (max-width: 560px) {
+    .d-ask-row { grid-template-columns:34px minmax(0, 1fr); align-items:start; }
+    .d-ask-n { margin-top:-4px; }
+    .d-ask-act { grid-column:2; justify-self:start; flex-direction:row; }
+  }
   .d-link:focus-visible, .d-btn:focus-visible, .d-seg-item:focus-visible, .d-world:focus-visible, .d-switch:focus-visible, .mtab:focus-visible,
+  .d-ask-btn:focus-visible, .d-ask-link:focus-visible,
   #gear:focus-visible, #quota:focus-visible { outline:2px solid var(--d-ink); outline-offset:2px; }
   @media (max-width: 860px) { .d-page, .d-room-inner { padding-left:22px; padding-right:22px; } .d-wrap-narrow { flex-direction:column !important; } }
   @media (prefers-reduced-motion: reduce) { .d-tools, .d-switch::after { transition:none; } }

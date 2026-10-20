@@ -9,6 +9,9 @@
 // kept warm: one child process, one JSON command per line on its stdin, one
 // JSON answer per line on its stdout, matched by the command's id.
 //
+// And, while a dictation records, where the text cursor is (caret), for Blip
+// to peek over the text box: two rectangles and the app, never any text.
+//
 // Every call here answers, and in time: a promise that always resolves (never
 // rejects), within the call's own timeout, `{ ok:false, error:"timeout" }`
 // when the helper was too slow. A helper that dies is started again by the
@@ -23,6 +26,10 @@ const path = require("path");
 const SNAPSHOT_MS = 1500;
 const ACTION_MS = 1200;
 const LOOK_MS = 2500;
+/** A caret read's whole time, the helper's watchdog included: it is asked
+ *  every few hundred milliseconds while the user dictates, and a peek that
+ *  comes late is worth nothing (peek-spec §A, desktop.dictation.peekBudgetMs). */
+const CARET_MS = 250;
 /** After a call timed out, how long the helper may stay silent before it is
  *  taken for hung and killed (its own watchdog answers before the caller
  *  gives up, so a silent helper is a stuck one). */
@@ -101,10 +108,36 @@ function lookShape(rest) {
   };
 }
 
+/** A caret answer's rectangle: [x, y, w, h] of finite numbers within the
+ *  helper's own bounds (frameJ's million points either way), a size that is
+ *  not negative and a height that is not zero; anything else is null. */
+function caretBox(f) {
+  const r = rect(f);
+  return r && r[3] > 0 && r.every((n) => Math.abs(n) <= 1e6) ? r : null;
+}
+
+/** A caret answer as callers see it (peek-spec §A): exactly these fields,
+ *  built afresh, so nothing else the helper wrote (least of all any text)
+ *  ever reaches the caller. A failure is its error alone. */
+function caretShape(rest) {
+  if (typeof rest.ok !== "boolean") return { ok: false, error: "bad_answer" };
+  // The helper's errors are words like no_focus; anything else is not passed on.
+  if (!rest.ok) return { ok: false, error: typeof rest.error === "string" && /^[a-z_]{1,40}$/.test(rest.error) ? rest.error : "failed" };
+  const a = rest.app && typeof rest.app === "object" && !Array.isArray(rest.app) ? rest.app : {};
+  return {
+    ok: true,
+    caret: caretBox(rest.caret),
+    field: caretBox(rest.field),
+    app: { name: typeof a.name === "string" ? a.name.slice(0, 200) : "", pid: Number.isInteger(a.pid) && a.pid > 0 ? a.pid : 0 },
+    scale: "points",
+  };
+}
+
 /** The answer as callers see it: the helper's fields without its id, and a
  *  failure for anything that is not a well-formed answer. */
 function shape(cmd, msg) {
   const { id: _id, ...rest } = msg;
+  if (cmd === "caret") return caretShape(rest);
   if (typeof rest.ok !== "boolean") return { ok: false, error: "bad_answer" };
   if (!rest.ok) return { ...rest, error: typeof rest.error === "string" && rest.error ? rest.error : "failed" };
   if (cmd === "trusted") return { ok: true, trusted: rest.trusted === true };
@@ -309,6 +342,16 @@ function createAxDriver(opts = {}) {
       const a = typeof appName === "string" ? appName.trim() : "";
       if (!a || a.length > 120) return refuse("bad_app");
       return call("open", { app: a }, actionMs);
+    }),
+    // Where the caret and its text box are, for the peek. Only of a helper
+    // that is already running: a dictation never starts one (the peek shows
+    // only while Ask's helper is up), so without one it answers unavailable
+    // at once. The whole call keeps to its budget, the helper's watchdog
+    // answering a moment before it.
+    caret: safe((o) => {
+      if (!child) return refuse("unavailable");
+      const opt = o && typeof o === "object" ? o : {};
+      return call("caret", {}, clampInt(opt.budgetMs != null ? opt.budgetMs : opt.timeoutMs, 100, 2000, CARET_MS));
     }),
     look: safe((o) => {
       const opt = o && typeof o === "object" ? o : {};

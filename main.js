@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer,
+  desktopCapturer, systemPreferences,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -29,7 +29,7 @@ const updater = require("./updater.js");
 const frontApp = require("./frontApp.js");
 const screenRead = require("./screenRead.js");
 const driver = require("./driver.js");
-const { createAsk, pillAskMove, capsuleRect } = require("./ask.js");
+const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -665,11 +665,12 @@ async function refreshAccountTone() {
 
 /** What this process knew of the account that has gone. Ask's "Always for
  *  <app>" goes with it: the next person to sign in on this computer is
- *  asked for themselves before a picture of their screen is sent. */
+ *  asked for themselves before a picture of their screen is sent. So does
+ *  the setup card's yes for every app, for the same reason: it was theirs. */
 function signedOut() {
   accountTone = null;
   accountNickname = "";
-  if (picturesAllowed().length) forgetPictures();
+  if (picturesAllowed().length || localState.askPicturesAlwaysAll === true) forgetPictures();
 }
 
 async function setAccountTone(tone) {
@@ -929,7 +930,7 @@ function createRecorderWindow() {
     // Listening or already writing: either way nothing will answer for the
     // session now. (Only a listening one was settled, so a crash during
     // the upload left the pill on "writing" until the next press.)
-    if (activeSession) { settleSession(activeSession); pill("error", { label: pillError("") }); }
+    if (activeSession) { if (peekWatch) peekWatch.end(activeSession); settleSession(activeSession); pill("error", { label: pillError("") }); }
     // A question it was recording will not come back either.
     if (ask) ask.recorderGone();
   });
@@ -995,6 +996,10 @@ function openAppWindow(screenId) {
   });
   appWin.once("ready-to-show", () => { if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); } });
   hardenWindow(appWin);
+  // Ask's setup card re-reads what is allowed whenever the window comes
+  // back to the front: the person is coming back from System Settings, and
+  // a row they just turned on turns to "On" without a restart.
+  appWin.on("focus", () => { if (askOn()) askSetup.push(); });
   // "hide" puts it away and keeps its boot (a tray app's close means that);
   // "close" really closes it, and the tray builds a fresh one next time.
   appWin.on("close", (e) => {
@@ -1386,6 +1391,7 @@ function cancelDictation() {
   const sid = activeSession;
   remember(cancelled, sid);
   sendToRecorder("cancel-recording", { session: sid });
+  if (peekWatch) peekWatch.end(sid);
   activeSession = 0;
   recording = false;
   hideOverlay();
@@ -1433,6 +1439,8 @@ ipcMain.on("dictation-level", (e, p) => {
   if (isFrom(e, recorderWin) && ask && ask.level(p)) return;
   if (!isFrom(e, recorderWin) || !p || p.session !== activeSession || !recording) return;
   if (pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
+  // And to Blip peeking over the text box, for its antenna.
+  if (peekWatch) peekWatch.level(p.session, p.bands);
 });
 function overlayText(t) {
   if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send("overlay-text", t);
@@ -1745,8 +1753,11 @@ function buildMenu() {
     }] : []),
     // "Always for <app>" on the picture card, taken back: one click on it
     // sent pictures of that app for good, with nowhere to undo it. Listed
-    // while there is one, each to be asked about again, or all of them.
-    ...(picturesAllowed().length ? [{
+    // while there is one, each to be asked about again, or all of them. And
+    // while the setup card's yes for every app is on: "Ask again for all of
+    // them" takes that back too (forgetPictures), or it promised the card
+    // again and every app still went without one.
+    ...(picturesAllowed().length || localState.askPicturesAlwaysAll === true ? [{
       label: txt("desktop.tray.picturesAllowed", "Pictures sent without asking"),
       submenu: picturesAllowed().map((a) => ({
         label: txt("desktop.tray.picturesForget", "Ask again for {app}", { app: a }),
@@ -1881,6 +1892,9 @@ ipcMain.handle("app:env", (e) => {
     notes: true,
     // A Mac can open the permission for the computer's sound from a note.
     systemAudioSettings: process.platform === "darwin",
+    // Ask is here, so the window declares its one-time setup card
+    // (DeskAskSetup) and reads its states with askSetup().
+    askSetup: askOn(),
     notesHotkey: prettyKey(cfg.notesHotkey),
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
@@ -2060,12 +2074,13 @@ async function startRecording(sid) {
     // Stopped before the recorder was ever told to start: nothing recorded,
     // and nothing will answer for it, so it is settled here. It used to sit
     // on "writing", waiting for an answer that could not come.
-    if (sid === activeSession) { settleSession(sid); pill("rest"); }
+    if (sid === activeSession) { if (peekWatch) peekWatch.end(sid); settleSession(sid); pill("rest"); }
     return;
   }
   // The refresh may have failed, which means the session is gone rather than
   // merely old. Stop instead of recording into a void.
   if (!signedIn()) {
+    if (peekWatch) peekWatch.end(sid);
     recording = false;
     hideOverlay();   // toggleDictation already raised it for a live session
     refreshTray();
@@ -2118,7 +2133,8 @@ function toggleDictation() {
     const sid = activeSession;
     const focused = BrowserWindow.getFocusedWindow();
     const ours = !!focused && focused === appWin;
-    (ours ? Promise.resolve({ label: "Tailzu" }) : frontApp.frontInfo())
+    const named = ours ? Promise.resolve({ label: "Tailzu" }) : frontApp.frontInfo();
+    named
       .then((info) => {
         if (!info || sid !== activeSession) return;
         // A private window (incognito) or a money/health app: the screen is
@@ -2180,6 +2196,12 @@ function toggleDictation() {
     listeningSince = Date.now();
     clearTimeout(writingTimer);
     pill("listening");
+    // BLIP PEEKS OVER THE TEXT BOX while this records (ask.js
+    // createPeekWatch), once the app is named: the same naming as above,
+    // never a second one, and nothing here waits for it or hears from it.
+    // Tailzu's own window is known by this process's id. Started before the
+    // recorder is, so a start that is refused (signed out) ends it too.
+    if (peekWatch) peekWatch.start(sid, named.then((info) => (ours ? { pid: process.pid } : info)));
     // Overlay BEFORE the start call: when the token is fresh startRecording
     // runs to completion synchronously, and a failure inside it hides an
     // overlay that this line had not raised yet. With the pill on, the live
@@ -2189,6 +2211,7 @@ function toggleDictation() {
   } else {
     sendToRecorder("stop-recording", { session: activeSession });
     pill("writing");
+    if (peekWatch) peekWatch.stop(activeSession);
     awaitWriting(activeSession, Date.now() - listeningSince);
   }
   refreshTray();
@@ -2210,6 +2233,7 @@ function awaitWriting(sid, listenedMs) {
   clearTimeout(writingTimer);
   writingTimer = setTimeout(() => {
     if (sid !== activeSession || recording) return;
+    if (peekWatch) peekWatch.end(sid);
     settleSession(sid);
     pill("error", { label: pillError("") });
   }, num("desktop.pill.writingMaxMs", 120000) + 2 * listenedMs);
@@ -2385,6 +2409,9 @@ function notifyAccessibility() {
 // that sends, deletes or pays. Off where there is no driver (Linux) or when
 // the server says so.
 let ask = null;
+// Blip over the text box while a dictation records (ask.js createPeekWatch),
+// made with Ask in setupAsk.
+let peekWatch = null;
 function askKey() { return str("desktop.agent.tapKey", "Alt"); }
 function askOn() { return !!ask && bool("desktop.agent.enabled", true) && driver.available(); }
 
@@ -2411,11 +2438,15 @@ async function authorizedFetch(p, init) {
 function picturesAllowed() {
   return Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : [];
 }
-/** Asked again before a picture of `app` is sent, or of any app. */
+/** Asked again before a picture of `app` is sent, or of any app: of any
+ *  app, the setup card's yes for every app goes too, and the card is told. */
 function forgetPictures(app) {
   localState.askPicturesAlways = app == null ? [] : picturesAllowed().filter((a) => a.toLowerCase() !== String(app).toLowerCase());
+  const every = app == null && localState.askPicturesAlwaysAll === true;
+  if (every) localState.askPicturesAlwaysAll = false;
   saveLocalState();
   refreshTray();
+  if (every) askSetup.push();
 }
 
 // The Mac's Screen Recording page in System Settings, for Ask's card when a
@@ -2430,6 +2461,30 @@ function openScreenRecordingSettings() {
   try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* the page still opens */ }
   shell.openExternal(SCREEN_RECORDING_SETTINGS).catch(() => {});
 }
+
+// ASK'S ONE-TIME SETUP CARD, in the app window ("Let Ask see what you see.",
+// ask.js createAskSetup): its three rows' states, read on this computer, and
+// its buttons. Each button opens one fixed page, the same way the note's and
+// the guide's do, and the window can open nothing else with them.
+const ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+const askSetup = createAskSetup({
+  ipcMain, fromApp, platform: process.platform, systemPreferences,
+  knobs: { str },
+  localState,
+  // The tray lists what goes without asking, the yes for every app among it.
+  saveLocalState: () => { saveLocalState(); refreshTray(); },
+  screenDenied: () => !!ask && ask.screenDenied(),
+  openAccessibility: () => { shell.openExternal(ACCESSIBILITY_SETTINGS).catch(() => {}); },
+  // The guide's own path: macOS is asked for the window list once, so
+  // Tailzu is in the page's list to be switched on, and the page opens.
+  openScreenRecording: openScreenRecordingSettings,
+  // Through quit, not exit: a note being taken is finished on the server
+  // (before-quit), and the helpers are stopped (will-quit), as on any quit.
+  relaunch: () => { app.relaunch(); app.quit(); },
+  send: (state) => {
+    if (appWin && !appWin.isDestroyed() && !appWin.webContents.isLoading()) appWin.webContents.send("ask-setup", state);
+  },
+});
 
 function setupAsk() {
   if (ask) return;
@@ -2479,6 +2534,13 @@ function setupAsk() {
     // rest of what it remembers about itself, never sent anywhere, and taken
     // back from the tray (forgetPictures).
     picturesAlways: picturesAllowed,
+    // "Look at the screen when it's needed" on the setup card: yes once, for
+    // every app, kept beside that list (askPicturesAlwaysAll). Turned off
+    // there, or forgotten at sign-out, like the list.
+    picturesAlwaysAll: () => localState.askPicturesAlwaysAll === true,
+    // A look's word on Screen Recording changed: the setup card is told, so
+    // it can offer the restart a granted permission still needs.
+    lookPermission: () => askSetup.push(),
     allowPicturesAlways: (name) => {
       const list = picturesAllowed();
       const key = String(name || "").trim().slice(0, 60);
@@ -2488,6 +2550,16 @@ function setupAsk() {
       saveLocalState();
       refreshTray();
     },
+  });
+  // Where the cursor is while a dictation records, for Blip to peek over the
+  // text box: asked of Ask's helper only while it is already running, of the
+  // dictation's own app, never of a private window or a sensitive app, and
+  // every failure silent (createPeekWatch).
+  peekWatch = createPeekWatch({
+    driver, ask, knobs: { num },
+    on: () => askOn() && bool("desktop.dictation.peek", true),
+    labelOf: frontApp.label,
+    sensitive: frontApp.looksSensitive,
   });
   if (askOn()) driver.start();
 }
@@ -2536,6 +2608,12 @@ ipcMain.on("dictation-result", (e, payload) => {
   if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
   if (t) paste(spaced(session, t, p.join));
   pastedIn.delete(session);
+  // Blip watched them land (peek), and hops once they have: after this paste,
+  // and any still before it. Nothing written at all: it just goes.
+  if (peekWatch && current) {
+    if (t || pillWords) pasting.then(() => peekWatch.done(session));
+    else peekWatch.end(session);
+  }
 });
 
 // A chunk of a session that is still running: paste it and leave the mic open.
@@ -2555,6 +2633,8 @@ ipcMain.on("dictation-segment", (e, payload) => {
     pillWords += countWords(t);
     pill("flash");
     if (cfg.live) { if (pillOn()) pill("caption", { text: "" }); else overlayText(""); }
+    // The caret has moved on: Blip follows once the words are in.
+    if (peekWatch) pasting.then(() => peekWatch.pasted(session));
   }
 });
 
@@ -2572,6 +2652,8 @@ ipcMain.on("dictation-error", (e, payload) => {
   if (ask && ask.error(p)) return;
   const { session, code } = p, message = String(p.message || ""), detail = String(p.detail || "");
   if (cancelled.has(session)) { cancelled.delete(session); return; }
+  // Blip goes at once: there is nothing to watch land.
+  if (peekWatch) peekWatch.end(session);
   // `message` is words for the person, and it is all the notification says.
   // What actually went wrong ("NotReadableError: …", "HTTP 500 …") used to be
   // pasted into it; it is logged here instead.

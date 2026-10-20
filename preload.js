@@ -79,6 +79,14 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   toggleNotes: () => ipcRenderer.send("app:notes"),
   // macOS: open the permission that lets notes hear the computer's sound.
   allowSystemAudio: () => ipcRenderer.send("app:allowSystemAudio"),
+  // Ask's one-time setup card: what is allowed on this computer, read by the
+  // main process ({ platform, read, see, pictures }), told again whenever it
+  // may have changed, and the card's buttons ("openAccessibility",
+  // "openScreenRecording", "picturesAll" with on true or false, "relaunch").
+  // The main process checks each one and opens only its own fixed pages.
+  askSetup: () => ipcRenderer.invoke("app:askSetup"),
+  onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
+  askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
   changed: () => ipcRenderer.send("app:changed"),

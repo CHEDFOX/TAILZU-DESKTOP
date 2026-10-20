@@ -25,6 +25,7 @@
   // screenshot is of exactly that moment of a bloom or a fold rather than of
   // whenever the browser got round to it.
   const CAPTURE = DEMO && params.has("capture");
+  let mouseCalls = 0;     // the review page: how often it asked for the pointer (a peek never does)
   const bridge = window.tailzuGuide || fakeBridge();
   const reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const TAU = Math.PI * 2;
@@ -850,6 +851,200 @@
     return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(",")})`;
   }
 
+  // ---- the peek: Blip over the text box while you dictate ---------------------------
+  // While a dictation records, a small Blip peeks over the top edge of the
+  // text box at the cursor, as if reading over your shoulder: it looks down
+  // at the cursor with its antenna lit (the microphone is live), nods as each
+  // chunk of words lands, watches the last of them arrive (thinking), gives
+  // a little hop when they have, and ducks back below the edge. Where it
+  // stands is blip.js peekSpot's: on a short field's top edge at the caret,
+  // on a document's caret line, out from beside the field when there is no
+  // room above, nowhere when nothing says where the cursor is.
+  //
+  // It is Blip and nothing else: no card, ring, tether, thread or marks
+  // while it peeks, and a question (show) ends it first. It never takes the
+  // pointer: the window stays click-through, and nothing here calls
+  // bridge.mouse. It is decoration on top of dictation, so a message it
+  // cannot use is dropped without a word.
+  const PEEK_RISE = 280;   // ms: up over the edge, as over the card
+  const PEEK_DUCK = 300;   // ms: back down; ask.js hides the window about then
+  const PEEK_HOP = 560;    // ms: done's hop, before the duck (about 900 in all)
+  // ms: a peek nothing has been heard about for this long goes by itself.
+  // While the microphone is open the caret and the voice come several times
+  // a second, and the words are written in seconds; a lost unpeek (a window
+  // reloaded, a path that forgot it) would otherwise leave Blip over the
+  // text box for good, its antenna saying the microphone is on, and this
+  // page drawing it sixty times a second.
+  const PEEK_STALE = 60000;
+  let peekH = K.num("desktop.guide.peekHeight", 54);
+  const peekBlip = window.TailzuBlip.createBlip({ height: peekH });
+  const PK = {
+    on: false,           // peeking: Blip-only, until it is down again
+    phase: "down",       // rising, up, ducking, down
+    at: 0,               // ms: when it began to rise, or to duck
+    state: "listening",  // listening, writing, done
+    doneAt: 0,           // ms: when it was told the words have landed
+    spot: null,          // where it is going: blip.js peekSpot
+    cur: null,           // where it is this frame, on its way there: { x, y, side, look }
+    next: null,          // where to come up again once it is down (a far jump)
+    level: 0, levelTo: 0,
+    heard: 0,            // ms: when the main process last said anything of it (PEEK_STALE)
+    drawn: { sink: 0, alpha: 0 },   // how far down, and how faded, it was last drawn
+    from: { sink: 0, alpha: 0 },    // …and as its duck began
+  };
+  /** The size it is asked to be, from its knob, which may have come since. */
+  function peekSize() {
+    const h = clamp(K.num("desktop.guide.peekHeight", 54), 24, 160);
+    if (h !== peekH) { peekH = h; peekBlip.size(h); }
+    return h;
+  }
+  /** A peek starts with nothing else of the guide up. A card still folding
+   *  (a dictation started as an answer went away) is put away at once. */
+  function clearForPeek() {
+    S.life = { open: false, at: -1e12, docked: false, from: { tether: 0, k: 0, ky: 0, alpha: 0, inner: 0 } };
+    S.hideAt = 0;
+    marks.length = 0;
+    gone();
+    blip.pose("hidden"); blip.snap();
+  }
+  function riseAt(spot, ms) {
+    PK.spot = spot;
+    PK.cur = { x: spot.x, y: spot.y, side: spot.side, look: spot.look.slice() };
+    PK.phase = "rising"; PK.at = ms;
+    PK.drawn.sink = .3 * peekH; PK.drawn.alpha = reduced ? 0 : 1;
+    // From down, wherever the last peek left its face; and its clock set
+    // now, or the first frame would ease a long gap's worth at once.
+    peekBlip.pose("hidden"); peekBlip.snap(); peekBlip.step(ms / 1000);
+  }
+  function duckNow(ms) {
+    if (PK.phase === "ducking") return;
+    // From where it is: a duck that began while it was still rising (a far
+    // jump, an unpeek, in its first 200 ms) bobbed up to its full height
+    // before it went down, and under reduced motion flashed to full before
+    // it faded.
+    PK.from = { sink: PK.drawn.sink, alpha: PK.drawn.alpha };
+    PK.phase = "ducking"; PK.at = ms;
+  }
+  function peek(m) {
+    // A question has the guide: Ask wins (ask.js never sends one then; this
+    // is the second lock).
+    if (S.shown) return;
+    const spot = window.TailzuBlip.peekSpot(m.caret, m.field, { w: W, h: H, top: S.inset.top },
+      { height: peekSize(), tall: K.num("desktop.guide.peekTallField", 120) });
+    // Nothing says where the cursor is now (a password field took focus,
+    // the numbers made no sense): it goes rather than stay where it was.
+    if (!spot) { unpeek(); return; }
+    const state = m.state === "writing" || m.state === "done" ? m.state : "listening";
+    const ms = now();
+    // Done and on its way down: a late caret for the same dictation does not
+    // bring it back up for a second hop.
+    if (PK.on && PK.state === "done" && state === "done" && PK.phase === "ducking") return;
+    PK.heard = ms;
+    if (!PK.on) {
+      clearForPeek();
+      PK.on = true; PK.next = null;
+      // A new dictation's voice, not the last one's: its antenna starts dark.
+      PK.level = 0; PK.levelTo = 0;
+      riseAt(spot, ms);
+    } else if (PK.phase === "ducking") {
+      // On its way down (an unpeek, done's own duck, or a far jump): it
+      // comes up again here once it is down.
+      PK.next = spot;
+    } else {
+      const s = PK.spot;
+      // Somewhere else altogether (the caret wrapped to the next line's
+      // start, the field moved, its side changed): down here and up there,
+      // rather than slide across the words. Under reduced motion it is just
+      // there.
+      const far = spot.side !== s.side || Math.abs(spot.x - s.x) > 300 || Math.abs(spot.y - s.y) > 160;
+      if (far && !reduced) { duckNow(ms); PK.next = spot; }
+      else {
+        // Words landed: the caret moved on along the same line. (Not as
+        // they all have: done's hop says that, and a nod on top of it shut
+        // its eye.)
+        if (state !== "done" && spot.side === s.side && Math.abs(spot.y - s.y) < 4 && spot.x > s.x + 4) peekBlip.nod();
+        PK.spot = spot;
+        if (reduced || far) PK.cur = { x: spot.x, y: spot.y, side: spot.side, look: spot.look.slice() };
+      }
+    }
+    if (state === "done" && PK.state !== "done") PK.doneAt = ms;
+    PK.state = state;
+    wake();
+  }
+  /** Down below the edge at once, and gone once it is down. */
+  function unpeek() {
+    if (!PK.on) return;
+    PK.next = null;
+    duckNow(now());
+    wake();
+  }
+  /** Gone, now: a question is coming up in its place. */
+  function endPeek() {
+    PK.on = false; PK.phase = "down"; PK.next = null;
+    peekBlip.pose("hidden"); peekBlip.snap();
+  }
+  /** One frame of the peek. False once it is over. */
+  function drawPeek(ms, t, dt) {
+    if (!PK.on) return false;
+    // Done: the hop, then down. And one nothing has been said of for a
+    // minute: down (PEEK_STALE).
+    if (PK.phase !== "ducking" && ((PK.state === "done" && ms - PK.doneAt >= PEEK_HOP) || ms - PK.heard >= PEEK_STALE)) { PK.next = null; duckNow(ms); }
+    if (PK.phase === "ducking" && ms - PK.at >= (reduced ? 200 : PEEK_DUCK)) {
+      if (!PK.next) { endPeek(); return false; }
+      const s = PK.next;
+      PK.next = null;
+      // Back up for another go. Done while it was on its way down (the last
+      // words wrapped the caret to the next line's start): its hop is up
+      // there, from now. (Turned back into listening, it came up with its
+      // antenna lit after the microphone had closed, and stayed so until
+      // the unpeek.)
+      if (PK.state === "done") PK.doneAt = ms;
+      riseAt(s, ms);
+    }
+    if (PK.phase === "rising" && ms - PK.at >= PEEK_RISE) PK.phase = "up";
+    const c = PK.cur, s = PK.spot, h = peekH;
+    // Along the edge to the new caret: glided, never jumped.
+    const k = reduced ? 1 : 1 - Math.exp(-dt * 10);
+    c.x += (s.x - c.x) * k; c.y += (s.y - c.y) * k;
+    c.look[0] += (s.look[0] - c.look[0]) * k; c.look[1] += (s.look[1] - c.look[1]) * k;
+    PK.level += (PK.levelTo - PK.level) * (1 - Math.exp(-dt * 14));
+    const ducking = PK.phase === "ducking";
+    // Under reduced motion it does not duck: it keeps its face and fades
+    // where it is. (Set to hidden at once, as its faces are, it was simply
+    // gone on the first frame, with no fade at all.)
+    peekBlip.pose(ducking && !reduced ? "hidden" : PK.state === "done" ? "done" : PK.state === "writing" ? "thinking" : "listening");
+    peekBlip.still(reduced);
+    if (reduced) peekBlip.snap();
+    peekBlip.live(PK.state === "listening" && !ducking);
+    // Under reduced motion the lit antenna holds still, as the pill's bead
+    // does: lit, not swelling with every syllable.
+    peekBlip.level(reduced ? 0 : PK.level);
+    // Up: its hands come up over the edge as its head rises. Down: the head
+    // drops and the hands let go a beat after, all of it below the edge in
+    // 300 ms. (Left to its face's easing alone, the hands stayed on the edge
+    // long after the head had gone, and the last of them was left there.)
+    // Under reduced motion it fades in and out where it is.
+    const e = ms - PK.at;
+    let sink = 0, alpha = 1;
+    if (reduced) alpha = ducking ? PK.from.alpha * (1 - clamp(e / 200)) : clamp(e / 200);
+    else if (ducking) sink = Math.max(PK.from.sink, inCubic((e - 60) / (PEEK_DUCK - 60)) * .75 * h);
+    else if (PK.phase === "rising") sink = (1 - outCubic(e / 200)) * .3 * h;
+    PK.drawn.sink = sink; PK.drawn.alpha = alpha;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(snap(c.x), snap(c.y));
+    if (c.side === "right") ctx.rotate(Math.PI / 2);
+    else if (c.side === "left") ctx.rotate(-Math.PI / 2);
+    // The edge it stands on hides the rest of it, as the card's does.
+    ctx.beginPath(); ctx.rect(-2 * h, -2 * h, 4 * h, 2 * h); ctx.clip();
+    // Its eye on the caret, in its own turned frame.
+    const dx = c.look[0] - c.x, dy = c.look[1] - c.y;
+    peekBlip.lookAt(c.side === "right" ? [dy, -dx] : c.side === "left" ? [-dy, dx] : [dx, dy]);
+    peekBlip.draw(ctx, 0, sink, t, dpr);
+    ctx.restore();
+    return true;
+  }
+
   // ---- the pen: marks on the screen ----------------------------------------------
   // The model marks up the screen while it explains, as a teacher uses a pen:
   // a circle round part of a diagram, an arrow from a label to what it names,
@@ -1444,12 +1639,13 @@
     paintCard(o);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    drawMarks(ms);
-    const rc = card.classList.contains("on") ? visible(o) : null;
-    drawTether(t, o);
+    // Peeking over a text box: Blip and nothing else.
+    const peeking = drawPeek(ms, t, dt);
+    if (!peeking) drawMarks(ms);
+    const rc = !peeking && card.classList.contains("on") ? visible(o) : null;
+    if (!peeking) drawTether(t, o);
     if (rc) drawRim(o, rc);
-    drawRing(t);
-    drawPins(ms);
+    if (!peeking) { drawRing(t); drawPins(ms); }
     blip.pose(poseFor());
     if (rc) {
       const right = S.ring && !S.ring.tentative && (S.ring.frame[0] + S.ring.frame[2] / 2) > rc.left + rc.width * .62;
@@ -1466,10 +1662,12 @@
       blip.draw(ctx, ax, rc.top, t, dpr);
       ctx.restore();
     } else blip.step(t);
-    drawThread(t, rc);
-    drawWave(t);
+    if (!peeking) drawThread(t, rc);
+    // The card's voice dots: there is no card while it peeks, and a peek
+    // can last minutes.
+    if (!peeking) drawWave(t);
     const demoMoving = demoFrame ? demoFrame(t, dt) : false;
-    const busy = S.shown || !o.over || marks.length > 0 || blip.shown() || (S.hideAt && t - S.hideAt < .6) || demoMoving;
+    const busy = S.shown || !o.over || marks.length > 0 || blip.shown() || (S.hideAt && t - S.hideAt < .6) || PK.on || demoMoving;
     if (busy) { if (!CAPTURE) raf = requestAnimationFrame(frame); }
     else ctx.clearRect(0, 0, W, H);
   }
@@ -1536,6 +1734,10 @@
 
   // ---- messages from the main process -------------------------------------------
   function show(m) {
+    // A question ends any peek first (Ask and dictation never overlap: this
+    // is only a guard). Blip is gone at once; the card's own Blip comes up
+    // with the card.
+    if (PK.on) endPeek();
     const first = !S.shown;
     // Put away completely (not just folding): it starts from nothing, where
     // it is to be. A fold still under way is turned round where it is.
@@ -1690,6 +1892,13 @@
     // coordinates, a fresh id each), and all of them away.
     draw: (m) => addMark(m),
     clear: () => fadeMarks(),
+    // While a dictation records: Blip over the text box at the cursor
+    // (`caret`, `field`: [x, y, w, h] or null, in this window's
+    // coordinates; `state`: listening, writing, done), the voice for its
+    // antenna, and away.
+    peek: (m) => peek(m),
+    peekLevel: (m) => { const v = Number(m && m.v); PK.levelTo = Number.isFinite(v) ? clamp(v) : 0; PK.heard = now(); },
+    unpeek: () => unpeek(),
   };
   bridge.onGuide((m) => { if (m && handlers[m.type]) { try { handlers[m.type](m); } catch (e) { console.error(e); } } });
 
@@ -1720,7 +1929,7 @@
     let cb = () => {};
     return {
       onGuide: (f) => { cb = f; }, send: (m) => cb(m),
-      confirm: (y) => console.log("confirm", y), permit: (c) => console.log("permit", c), mouse: () => {}, spoken: () => {}, dismiss: () => console.log("dismiss"),
+      confirm: (y) => console.log("confirm", y), permit: (c) => console.log("permit", c), mouse: () => { mouseCalls++; }, spoken: () => {}, dismiss: () => console.log("dismiss"),
       offer: (k) => console.log("offer", k),
     };
   }
@@ -1762,6 +1971,42 @@
     const mp = { x: 0, v: 0, bead: 0, hot: 1, slow: 0 };
     const pillMode = params.get("pill");    // "seed": no pill (the guide's seed); "off": not docked at all
     const pillAt = () => ({ x: Math.round(W / 2 - 20), y: H - S.inset.bottom - 34, w: 40, h: 16 });
+    // A dictation under way (?demo=peek, peekdoc): what pill.js shows while
+    // it listens, the halves out at the screen's edges and the amber thread
+    // the voice plucks between them, the words so far above it.
+    const DICT = { on: false, state: "idle", words: "" };
+    function dictationPill(t) {
+      const P = pillAt(), cy = P.y + P.h / 2, x1 = 30, x2 = W - 30;
+      pg.save();
+      pg.lineCap = "round"; pg.lineJoin = "round";
+      const trace = () => {
+        pg.beginPath();
+        for (let x = x1; x <= x2; x += 6) {
+          const u = (x - x1) / (x2 - x1), env = Math.sin(Math.PI * u);
+          const y = cy + PK.level * 9 * env * Math.sin(t * TAU * 5.5 + u * 9) + env * .5 * Math.sin(x * .7 + Math.floor(t * 12) * 3.1);
+          if (x === x1) pg.moveTo(x, y); else pg.lineTo(x, y);
+        }
+      };
+      trace(); pg.strokeStyle = "rgba(15,13,11,.12)"; pg.lineWidth = 3; pg.stroke();
+      trace(); pg.strokeStyle = "#E8A23C"; pg.lineWidth = 1.6; pg.stroke();
+      pg.shadowColor = "rgba(0,0,0,.3)"; pg.shadowBlur = 12; pg.shadowOffsetY = 3;
+      pg.fillStyle = "#0F0D0B"; pg.beginPath(); pg.roundRect(x1 - 20, P.y, 20, 16, [8, 2.5, 2.5, 8]); pg.fill();
+      pg.fillStyle = "#F3E2C6"; pg.beginPath(); pg.roundRect(x2, P.y, 20, 16, [2.5, 8, 8, 2.5]); pg.fill();
+      pg.shadowColor = "transparent";
+      // A cream hairline round the ink, so it holds over a dark app too.
+      pg.strokeStyle = "rgba(243,226,198,.16)"; pg.lineWidth = 1; pg.beginPath(); pg.roundRect(x1 - 19.5, P.y + .5, 19, 15, [7.5, 2, 2, 7.5]); pg.stroke();
+      if (DICT.words) {
+        pg.font = '500 13px "Instrument Sans", -apple-system, "Segoe UI", system-ui, sans-serif';
+        let w = DICT.words;
+        while (w.length > 1 && pg.measureText("…" + w).width > 340) w = w.slice(1);
+        if (w !== DICT.words) w = "…" + w.trimStart();
+        const tw = pg.measureText(w).width, bx = Math.round(W / 2 - tw / 2 - 14), by = P.y - 46;
+        pg.fillStyle = "rgba(21,18,16,.92)"; pg.beginPath(); pg.roundRect(bx, by, tw + 28, 28, 14); pg.fill();
+        pg.strokeStyle = "rgba(243,226,198,.14)"; pg.lineWidth = 1; pg.beginPath(); pg.roundRect(bx + .5, by + .5, tw + 27, 27, 13.5); pg.stroke();
+        pg.fillStyle = "#F3E2C6"; pg.textBaseline = "middle"; pg.fillText(w, bx + 14, by + 14.5);
+      }
+      pg.restore();
+    }
     demoFrame = (t, dt) => {
       if (pc.width !== Math.round(W * dpr) || pc.height !== Math.round(H * dpr)) {
         pc.width = Math.round(W * dpr); pc.height = Math.round(H * dpr); pc.style.width = W + "px"; pc.style.height = H + "px";
@@ -1769,6 +2014,7 @@
       pg.setTransform(dpr, 0, 0, dpr, 0, 0);
       pg.clearRect(0, 0, W, H);
       if (pillMode) return false;
+      if (DICT.on) { dictationPill(t); return true; }
       const P = pillAt(), L = S.life, e = now() - L.at;
       // Open while a question is up; closing, held open while the thread
       // comes home (askCloseDelayMs), then shut on the split's springs.
@@ -1815,7 +2061,48 @@
       const v = Math.sin(Math.floor(ms / 90) * 12.9898) * 43758.5453, rnd = v - Math.floor(v);
       return .25 + .55 * Math.abs(Math.sin(ms / 260)) * rnd;
     };
-    every(() => send({ type: "level", v: S.state === "listening" ? voice(now()) : 0 }), 90);
+    every(() => {
+      send({ type: "level", v: S.state === "listening" ? voice(now()) : 0 });
+      if (DICT.on) send({ type: "peekLevel", v: voice(now()) });
+    }, 90);
+    /**
+     * A dictation into a text box, as main.js runs one: the peek at its
+     * start, the words pasted a chunk at a time as they are said (typed out
+     * here), the caret asked again after each chunk and every 700 ms, then
+     * writing when it stops, done when the last words land, and the peek
+     * away 900 ms after. Over and over.
+     */
+    function dictate(box0) {
+      const typed = document.getElementById("m-typed"), caretEl = document.getElementById("m-caret");
+      const caret = () => { const r = caretEl.getBoundingClientRect(); return [r.left, r.top, Math.max(2, r.width), r.height]; };
+      const peekNow = (state) => send({ type: "peek", caret: caret(), field: box(box0.field), state });
+      const typeOut = (text, then) => {
+        const ws = text.split(" ");
+        ws.forEach((w, i) => later(() => {
+          typed.textContent += (typed.textContent ? " " : "") + w;
+          box0.changed();
+          if (i === ws.length - 1 && then) then();
+        }, i * 55));
+      };
+      every(() => { if (DICT.state === "listening" || DICT.state === "writing") peekNow(DICT.state); }, 700);
+      const cycle = () => {
+        typed.textContent = ""; box0.changed();
+        DICT.on = true; DICT.state = "listening"; DICT.words = "";
+        peekNow("listening");
+        box0.chunks.forEach((c, i) => {
+          later(() => { DICT.words = (DICT.words + " " + c.toLowerCase().replace(/[.,:]/g, "")).trim(); }, 500 + i * 1200);
+          later(() => typeOut(c, () => peekNow("listening")), 900 + i * 1200);
+        });
+        const stop = 900 + box0.chunks.length * 1200;
+        later(() => { DICT.on = false; DICT.state = "writing"; peekNow("writing"); }, stop);
+        later(() => typeOut(box0.last, () => {
+          DICT.state = "done"; peekNow("done");
+          later(() => { DICT.state = "idle"; send({ type: "unpeek" }); }, 900);
+        }), stop + 800);
+        later(cycle, stop + 800 + 2900);
+      };
+      cycle();
+    }
     const scenes = {
       listening: () => { send({ type: "show", state: "listening", app: "Keynote", anchor: { x: 520, y: 200 } }); },
       thinking: () => { scenes.listening(); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "thinking" }); },
@@ -1856,7 +2143,7 @@
       permitOnce: () => {
         send({ type: "show", state: "thinking", app: "Chrome: Gmail" });
         send({ type: "heard", text: "what's in this photo?" });
-        send({ type: "permission", app: "Chrome: Gmail", always: false, text: "To answer that I need to see it: one picture of this window, sent to Tailzu and the AI providers it uses to answer." });
+        send({ type: "permission", app: "Chrome: Gmail", always: false, text: "To answer that I need to see it." });
       },
       error: () => { send({ type: "show", state: "thinking", app: "Keynote" }); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "error" }); send({ type: "say", text: "I can't read this window yet. Turn on Tailzu under Accessibility in System Settings." }); },
       // Everything at the longest agent.js lets it be: the card must still
@@ -1896,12 +2183,14 @@
         scenes.listening();
         send({ type: "point", frame: box("m-export"), caption: "Export", tentative: true });
       },
-      // The picture layer: may a picture of this go, for an app not yet allowed.
+      // The picture layer: may it look at this, for an app not yet allowed.
+      // One line and the buttons; what is sent, and to whom, is the privacy
+      // policy's to say, not the card's.
       permission: () => {
         const f = box("m-fig");
         send({ type: "show", state: "thinking", app: "Keynote", anchor: { x: f[0] + f[2] - 60, y: f[1] + f[3] - 24 } });
         send({ type: "heard", text: "explain this equation" });
-        send({ type: "permission", app: "Keynote", always: true, text: "To answer that I need to see it: one picture of this part of the screen, sent to Tailzu and the AI providers it uses to answer." });
+        send({ type: "permission", app: "Keynote", always: true, text: "To answer that I need to see it." });
       },
       // …and the answer to it, a sentence at a time as the model writes,
       // beside the picture it is about.
@@ -1956,6 +2245,47 @@
         };
         cycle();
       },
+      // THE PEEK: dictating into a chat's message box. Blip on the box's top
+      // edge at the cursor, gliding along it as the words land, nodding at
+      // each chunk; down and up again at the next line's start when the box
+      // grows a line; thinking while the last words come, a hop, and away.
+      peek: () => {
+        mock.classList.add("chat");
+        mock.querySelector(".bar b").textContent = "#design — Chat";
+        mock.querySelector(".tools").style.display = "none";
+        mock.querySelector(".page").innerHTML = `<h2># design</h2>
+          <div class="msg"><i style="background:#C2527A">P</i><div><b>Priya</b><time>11:02 AM</time><p>Round two of the mockups is in the deck. Ready for a look?</p></div></div>
+          <div class="msg"><i style="background:#3F7F6B">A</i><div><b>Anthony</b><time>11:05 AM</time><p>Will check after the call.</p></div></div>`;
+        const comp = document.getElementById("m-composer");
+        comp.innerHTML = `<div class="text"><span id="m-typed"></span><span class="caret" id="m-caret"></span><span class="ph" id="m-ph">Message #design</span></div><em id="m-send">Send</em>`;
+        const ph = document.getElementById("m-ph");
+        dictate({
+          field: "m-composer",
+          chunks: ["So the plan is:", "we ship the mockups on Friday,", "then walk the whole design team", "through round two, page four onwards."],
+          last: "Sound good?",
+          changed: () => { ph.hidden = !!document.getElementById("m-typed").textContent; },
+        });
+      },
+      // …and into a document: a field far taller than a line, so Blip peeks
+      // over the line the cursor is on, a little to its right, off the words
+      // just written.
+      peekdoc: () => {
+        mock.classList.add("doc");
+        mock.querySelector(".bar b").textContent = "Launch notes — Docs";
+        mock.querySelector(".tools").style.display = "none";
+        mock.querySelector(".side").innerHTML = "<p class=\"on\">Launch notes</p><p>Mockups</p><p>Open questions</p><p>Review</p>";
+        mock.querySelector(".page").innerHTML = `<div class="sheet" id="m-doc"><h2>Launch notes</h2>
+          <p>Round two of the mockups is in the deck, pages four to nine. The new onboarding flow replaces the three welcome screens with one, and the empty states now say what to do next.</p>
+          <p>Open questions for Friday: who signs off the store listing copy, and whether the press embargo moves with the launch date.</p>
+          <p><span id="m-typed"></span><span class="caret" id="m-caret"></span></p></div>`;
+        document.getElementById("m-composer").style.display = "none";
+        dictate({
+          field: "m-doc",
+          chunks: ["For the review, start", "with the onboarding flow,", "then the empty states,", "and keep ten minutes at the end", "for the store listing."],
+          last: "Priya leads it.",
+          changed: () => {},
+        });
+      },
       // THE PEN: a picture of a right triangle, a question about it, and the
       // answer marked up on it as it is said.
       draw: () => {
@@ -2003,7 +2333,7 @@
       next();
     };
     // For the review's checks: what the page is doing, and a way to tell it more.
-    window.__guide = { S, marks, LIFE, now, send: (m) => bridge.send(m) };
+    window.__guide = { S, PK, marks, LIFE, now, send: (m) => bridge.send(m), peekBlip, mouse: () => mouseCalls };
     if (CAPTURE) {
       // Every animation the page runs in CSS (the words rising, the ring's
       // label) is held and set to the page's clock too.

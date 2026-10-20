@@ -24,6 +24,7 @@
 //   {"id":3,"cmd":"press","el":"e7"}             {"id":3,"ok":true,"how":"AXPress"}
 //   {"id":4,"cmd":"key","chord":"cmd+k"}         {"id":4,"ok":true}
 //   {"id":5,"cmd":"look","maxSide":1600}         {"id":5,"ok":true,"window":{…},"lines":[…],"image":{…},…}
+//   {"id":6,"cmd":"caret","timeoutMs":250}       {"id":6,"ok":true,"caret":[x,y,w,h]|null,"field":[x,y,w,h]|null,"app":{…},"scale":"points",…}
 //   anything that fails                          {"id":4,"ok":false,"error":"not_trusted"}
 //
 // It needs Accessibility, which macOS grants to the app that started it
@@ -40,6 +41,11 @@
 // send it. A look takes longer than anything else here, so it runs on a
 // queue of its own, beside the other commands: the snapshot asked for at the
 // same moment is not kept waiting behind it.
+//
+// "caret" is where the text cursor and its text box are, for Blip to peek
+// over the box while the user dictates: two rectangles and the app, never a
+// word of the text. It is asked every few hundred milliseconds for as long as
+// a dictation lasts, so it too has a queue of its own, and a small budget.
 import AppKit
 import ApplicationServices
 import Carbon
@@ -339,6 +345,10 @@ let busy = Busy()
 /// Looks run here, one at a time, beside the main thread's commands.
 let lookQueue = DispatchQueue(label: "space.tailzu.tzax.look", qos: .userInitiated)
 let lookBusy = Busy()
+/// Caret reads run here, one at a time, beside both: one asked while a walk
+/// or a look is under way is not kept waiting, and keeps neither waiting.
+let caretQueue = DispatchQueue(label: "space.tailzu.tzax.caret", qos: .userInitiated)
+let caretBusy = Busy()
 var received = 0
 var current = Snap(first: 0, last: -1)
 var previous = Snap(first: 0, last: -1)
@@ -478,9 +488,15 @@ func settable(_ el: AXUIElement, _ attr: String) -> Bool {
 
 /// Everything `attrNames` names, in one message. Missing attributes are nil.
 func fetch(_ el: AXUIElement) -> (AXError, [AnyObject?]) {
-  var got = [AnyObject?](repeating: nil, count: attrNames.count)
+  return fetch(el, attrList, count: attrNames.count, timeout: messageTimeout)
+}
+
+/// The `count` attributes `names` lists, in one message that gives up after
+/// `timeout`. Missing attributes are nil.
+func fetch(_ el: AXUIElement, _ names: CFArray, count: Int, timeout: Float) -> (AXError, [AnyObject?]) {
+  var got = [AnyObject?](repeating: nil, count: count)
   var values: CFArray?
-  let err = AXUIElementCopyMultipleAttributeValues(timed(el), attrList, AXCopyMultipleAttributeOptions(), &values)
+  let err = AXUIElementCopyMultipleAttributeValues(timed(el, timeout), names, AXCopyMultipleAttributeOptions(), &values)
   guard err == .success, let cf = values else { return (err == .success ? .failure : err, got) }
   let list = cf as NSArray
   for i in 0..<min(list.count, got.count) {
@@ -1668,6 +1684,174 @@ func look(_ req: [String: Any], _ deadline: DispatchTime) -> Reply {
   return r
 }
 
+// MARK: - Where the caret is
+//
+// For the peek (Blip over the text box while the user dictates): where the
+// text cursor is and where its box is, in the same global top-left points as
+// a snapshot's frames. Positions are all it reads. Not the field's value, not
+// its selection's text, not a window's title: the answer has no text in it but
+// the app's name. It runs on caretQueue, and every message it sends gives up
+// in the time the caret has left, so an app that has stopped answering costs
+// one peek, not the helper.
+
+/// What a caret read asks of the focused element, in one message.
+let caretAttrNames = ["AXRole", "AXSubrole", "AXPosition", "AXSize", "AXSelectedTextRange", "AXParent"]
+let caretAttrList = caretAttrNames as CFArray
+/// What it asks of that element's parent, to see whether a scroll view cuts it.
+let boxAttrNames = ["AXRole", "AXPosition", "AXSize"]
+let boxAttrList = boxAttrNames as CFArray
+
+/// How long one message of a caret read may take: the usual quarter second,
+/// or what is left before `stopAt` when that is less (never under 20 ms).
+/// Never given to the system-wide element: a timeout set on that one is set
+/// for every element this process messages.
+func caretTimeout(_ stopAt: DispatchTime) -> Float {
+  return max(0.02, min(messageTimeout, Float(msLeft(stopAt)) / 1000))
+}
+
+/// AXBoundsForRange for `length` characters at `location`: global top-left
+/// points, like AXPosition. No rect when the app cannot say; `busy` when it
+/// did not answer in time, which is not the same as having nothing to say.
+func boundsFor(_ el: AXUIElement, location: Int, length: Int, timeout: Float) -> (rect: CGRect?, busy: Bool) {
+  var range = CFRange(location: location, length: length)
+  guard let param = AXValueCreate(.cfRange, &range) else { return (nil, false) }
+  var out: CFTypeRef?
+  let err = AXUIElementCopyParameterizedAttributeValue(timed(el, timeout), "AXBoundsForRange" as CFString, param, &out)
+  if err == .cannotComplete { return (nil, true) }
+  guard err == .success, let v = axValue(out), AXValueGetType(v) == .cgRect else { return (nil, false) }
+  var r = CGRect.zero
+  guard AXValueGetValue(v, .cgRect, &r), r.minX.isFinite, r.minY.isFinite, r.width.isFinite, r.height.isFinite else { return (nil, false) }
+  return (r.standardized, false)
+}
+
+/// What a caret read found where the selection is: the bar and how it was
+/// found; nothing, the app having no place for it; or no answer in time.
+enum CaretFound {
+  case bar(CGRect, String)
+  case nothing
+  /// The app was busy (it is, just after a paste lands in it) or the time
+  /// ran out. Told apart from nothing: a field without its caret would move
+  /// Blip from the caret to the field's corner and back on the next read.
+  case cut
+}
+
+/// The caret at `location` as a bar 2 points wide. The range is asked as it
+/// is, zero characters long, which most apps answer with the caret's own bar.
+/// Where that has no height, or sits at the screen's corner (what some apps
+/// answer for a range with nothing in it), the character after the caret is
+/// asked for and its left edge taken; at the end of the text, where there is
+/// none, the character before it and its right edge. A rectangle nowhere near
+/// the element itself is a placeholder, not the caret.
+func caretAt(_ el: AXUIElement, location: Int, near frame: CGRect?, until stopAt: DispatchTime) -> CaretFound {
+  var cut = false
+  func usable(_ got: (rect: CGRect?, busy: Bool)) -> CGRect? {
+    if got.busy { cut = true }
+    guard let r = got.rect, r.height > 0, r.height <= 2000, r.width <= 4000, !(r.minX == 0 && r.minY == 0) else { return nil }
+    if let f = frame, f.width > 0, f.height > 0 {
+      let bar = CGRect(x: r.minX, y: r.minY, width: max(1, r.width), height: r.height)
+      if !f.insetBy(dx: -40, dy: -40).intersects(bar) { return nil }
+    }
+    return r
+  }
+  if let r = usable(boundsFor(el, location: location, length: 0, timeout: caretTimeout(stopAt))) {
+    return .bar(CGRect(x: r.minX, y: r.minY, width: 2, height: r.height), "range")
+  }
+  guard msLeft(stopAt) > 0 else { return .cut }
+  if let r = usable(boundsFor(el, location: location, length: 1, timeout: caretTimeout(stopAt))) {
+    return .bar(CGRect(x: r.minX, y: r.minY, width: 2, height: r.height), "after")
+  }
+  guard location > 0 else { return cut ? .cut : .nothing }
+  guard msLeft(stopAt) > 0 else { return .cut }
+  if let r = usable(boundsFor(el, location: location - 1, length: 1, timeout: caretTimeout(stopAt))) {
+    return .bar(CGRect(x: r.maxX, y: r.minY, width: 2, height: r.height), "before")
+  }
+  return cut ? .cut : .nothing
+}
+
+/// The roles that take text even where they keep no selection range to read.
+/// Anything else with no range is no text box: a window, a list, a button,
+/// or an Electron app whose tree is not built yet, which answers its window.
+let caretTextRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
+
+/// The caret and its text box in the element with the keyboard, anywhere on
+/// the screen (the system-wide focused element, not a snapshot's app). A
+/// password field gives neither: Blip does not peek over one.
+func caret(_ deadline: DispatchTime) -> Reply {
+  let started = DispatchTime.now()
+  let stopAt = deadline - .milliseconds(15)
+  var ref: CFTypeRef?
+  let err = AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), "AXFocusedUIElement" as CFString, &ref)
+  if err == .apiDisabled { return fail("not_trusted") }
+  if err == .cannotComplete { return fail("app_busy") }
+  guard let el = element(ref) else { return fail("no_focus") }
+  var pid: pid_t = 0
+  if AXUIElementGetPid(el, &pid) != .success { pid = 0 }
+  let running = pid > 0 ? NSRunningApplication(processIdentifier: pid) : nil
+  let appInfo: Reply = [("name", .str(running?.localizedName ?? "")), ("pid", .int(Int(pid)))]
+  func answer(_ bar: CGRect?, _ box: CGRect?, _ how: String) -> Reply {
+    var r = ok()
+    r.append(("caret", bar.map { frameJ($0) } ?? J.null))
+    r.append(("field", box.map { frameJ($0) } ?? J.null))
+    r.append(("app", .obj(appInfo)))
+    r.append(("scale", .str("points")))
+    // Which way the caret was found, for the logs: range, after, before,
+    // none or secure.
+    r.append(("how", .str(how)))
+    r.append(("ms", .int(Int((DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000))))
+    return r
+  }
+
+  let (got, v) = fetch(el, caretAttrList, count: caretAttrNames.count, timeout: caretTimeout(stopAt))
+  if got == .cannotComplete { return fail("app_busy") }
+  // The focus moved on between the two messages: no news, not "no field".
+  if got == .invalidUIElement { return fail("no_focus") }
+  if got != .success { return answer(nil, nil, "none") }
+  let role = (v[0] as? String) ?? "", sub = (v[1] as? String) ?? ""
+  if role == "AXSecureTextField" || sub == "AXSecureTextField" { return answer(nil, nil, "secure") }
+
+  // Only a text box has a box: Blip at the corner of a window or a button
+  // would be Blip where nobody is typing ("never shows where it cannot know
+  // where the cursor is").
+  var textRange: AXValue? = nil
+  if let rv = axValue(v[4]), AXValueGetType(rv) == .cfRange { textRange = rv }
+  if textRange == nil && !caretTextRoles.contains(role) { return answer(nil, nil, "none") }
+
+  // The box: the element's own frame (a field in a web page is its own, not
+  // the page's). A text view's frame is the whole of its text, however much
+  // is scrolled out of sight, so where its parent is a scroll view the box is
+  // the part that view shows: that is the box the user sees. A parent that
+  // did not answer in time is no news, not an unclipped box: that would move
+  // Blip to the top of the whole text and back.
+  let own = frameOf(v[2], v[3]).flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }
+  var box = own
+  if let f = own, let parent = element(v[5]) {
+    guard msLeft(stopAt) > 0 else { return fail("app_busy") }
+    let (pe, pv) = fetch(parent, boxAttrList, count: boxAttrNames.count, timeout: caretTimeout(stopAt))
+    if pe == .cannotComplete { return fail("app_busy") }
+    if pe == .success, (pv[0] as? String) == "AXScrollArea", let pf = frameOf(pv[1], pv[2]) {
+      let seen = f.intersection(pf)
+      if !seen.isNull && seen.width > 0 && seen.height > 0 { box = seen }
+    }
+  }
+
+  // The caret: where the selection starts, which is where the words land (a
+  // selection is replaced by them). No selection range, no caret. An app too
+  // busy to say where it is (it is, just after a paste) is no news either.
+  var found: (bar: CGRect, how: String)? = nil
+  if let rv = textRange {
+    var range = CFRange(location: 0, length: 0)
+    if AXValueGetValue(rv, .cfRange, &range), range.location >= 0, range.length >= 0 {
+      guard msLeft(stopAt) > 0 else { return fail("app_busy") }
+      switch caretAt(el, location: range.location, near: own, until: stopAt) {
+      case .bar(let bar, let how): found = (bar, how)
+      case .cut: return fail("app_busy")
+      case .nothing: break
+      }
+    }
+  }
+  return answer(found?.bar, box, found?.how ?? "none")
+}
+
 // MARK: - Commands
 
 func idOf(_ v: Any?) -> J {
@@ -1693,7 +1877,7 @@ func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply
     return ok([("trusted", .bool(AXIsProcessTrustedWithOptions(opts)))])
   case "open":
     return openApp((req["app"] as? String) ?? "", deadline)
-  case "snapshot", "press", "click", "setValue", "focus", "scroll", "key":
+  case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret":
     break
   default:
     return fail("unknown_command")
@@ -1707,6 +1891,8 @@ func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply
                     deadline: deadline)
   case "key":
     return key((req["chord"] as? String) ?? "", deadline)
+  case "caret":
+    return caret(deadline)
   case "scroll":
     var target: Entry? = nil
     if let el = req["el"] as? String {
@@ -1749,7 +1935,7 @@ func receive(_ line: String) {
     DispatchQueue.main.async { _ = out.answer(key, id, fail("bad_request")) }
     return
   }
-  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : (cmd == "look" ? 2500 : 1200))
+  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : (cmd == "look" ? 2500 : (cmd == "caret" ? 250 : 1200)))
   // A moment before the caller gives up, so it hears "timeout" from here.
   let deadline = got + .milliseconds(limit - 40)
   out.watch(key, id, at: deadline)
@@ -1758,6 +1944,10 @@ func receive(_ line: String) {
     // Its own queue: the agent asks for a snapshot and a look at the same
     // moment, and the snapshot must not wait out a picture.
     lookQueue.async { performLook(key, id, req, deadline) }
+  case "caret":
+    // Its own queue too: it is asked every few hundred milliseconds while the
+    // user dictates, and must neither wait behind a walk nor hold one up.
+    caretQueue.async { performCaret(key, id, req, deadline) }
   default:
     DispatchQueue.main.async { perform(key, id, cmd, req, deadline) }
   }
@@ -1784,6 +1974,16 @@ func performLook(_ key: Int, _ id: J, _ req: [String: Any], _ deadline: Dispatch
   out.answer(key, id, reply)
 }
 
+/// A caret read, on caretQueue, by run (it needs Accessibility like the
+/// rest); the same rule as perform's for one that waited out its time.
+func performCaret(_ key: Int, _ id: J, _ req: [String: Any], _ deadline: DispatchTime) {
+  if out.isAnswered(key) || DispatchTime.now() >= deadline - .milliseconds(30) { return }
+  caretBusy.begin()
+  let reply = run("caret", req, deadline)
+  caretBusy.end()
+  out.answer(key, id, reply)
+}
+
 // MARK: - Main
 
 // The default for every element this process messages; each is also given it
@@ -1801,7 +2001,9 @@ let reader = Thread {
     receive(line)
   }
   // stdin closed: the app is gone, or done with us. Finish what was asked
-  // (a look being taken, then the main queue, which runs in order), then go.
+  // (a caret being read, a look being taken, then the main queue, which runs
+  // in order), then go.
+  caretQueue.sync {}
   lookQueue.sync {}
   DispatchQueue.main.async { exit(0) }
 }
@@ -1812,7 +2014,7 @@ stuckCheck.schedule(deadline: .now() + 1, repeating: 1.0)
 stuckCheck.setEventHandler {
   // _exit, not exit: exit's cleanup waits on the very thread that is stuck.
   // Nothing is lost; every answer was written straight to the pipe.
-  if busy.stuck() || lookBusy.stuck() { _exit(3) }
+  if busy.stuck() || lookBusy.stuck() || caretBusy.stuck() { _exit(3) }
 }
 stuckCheck.resume()
 

@@ -359,7 +359,7 @@ test("a helper that cannot be spawned resolves unavailable, never throws", async
 });
 
 test("the module is the §1 API and start/stop are idempotent", () => {
-  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look"]) {
+  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"]) {
     assert.strictEqual(typeof defaultExport[name], "function", `exports.${name}`);
   }
   // Idempotent and non-throwing even on a platform with no helper.
@@ -483,10 +483,10 @@ test("the helper is per-monitor DPI aware before UI Automation loads", () => {
 
 test("the helper's C# stays C# 5, which Windows PowerShell 5.1 compiles", () => {
   const ps = PS_TEXT();
-  // Every block: TzAgent's, and the look's own (TzShot).
+  // Every block: TzAgent's, the look's own (TzShot), and the caret's (TzCaret).
   const blocks = [...ps.matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]);
-  assert.strictEqual(blocks.length, 2, "two C# blocks");
-  assert.ok(blocks.some((cs) => /class TzAgent\b/.test(cs)) && blocks.some((cs) => /class TzShot\b/.test(cs)));
+  assert.strictEqual(blocks.length, 3, "three C# blocks");
+  for (const cls of ["TzAgent", "TzShot", "TzCaret"]) assert.ok(blocks.some((cs) => new RegExp(`class ${cls}\\b`).test(cs)), cls);
   for (const cs of blocks) {
     assert.doesNotMatch(cs, /\$"/, "no interpolated strings");
     assert.doesNotMatch(cs, /=>/, "no expression-bodied members or lambdas");
@@ -808,14 +808,17 @@ test("look: the window's title is kept out of the lines, against the whole of it
 test("snapshot: a Store app in its frame is named by the app inside, as frontApp.js names it", () => {
   const ps = PS_TEXT();
   const snap = psFunction(ps, "TzSnapshot");
-  const at = snap.indexOf("$appName = ''");
-  assert.ok(at > 0);
-  const naming = snap.slice(at, snap.indexOf("$window = $null", at));
+  // One naming, the snapshot's and the caret's (TzCaretApp).
+  assert.match(snap, /\$appName = TzAppName \$h \$procId/);
+  assert.match(psFunction(ps, "TzCaretApp"), /name = \(TzAppName \$h \$procId\); pid = \[int\]\$procId/);
+  const naming = psFunction(ps, "TzAppName");
+  assert.match(naming, /function TzAppName\(\[IntPtr\]\$h, \[uint32\]\$procId\)/);
   assert.match(naming, /if \(\$p -and \$p\.ProcessName -eq 'ApplicationFrameHost'\)/);
   assert.match(naming, /\[TzAgent\]::FindWindowEx\(\$h, \[IntPtr\]::Zero, 'Windows\.UI\.Core\.CoreWindow', \[IntPtr\]::Zero\)/);
   assert.match(naming, /GetWindowThreadProcessId\(\$core, \[ref\]\$coreId\)/);
   assert.match(naming, /if \(\$coreId -ne 0 -and \$coreId -ne \$procId\)/);
   assert.ok(naming.indexOf("ApplicationFrameHost") < naming.indexOf("$appName = $p.ProcessName"), "before the name is read");
+  assert.match(naming, /return \$appName/);
   // The pid stays the window's own.
   assert.match(snap, /\$o\.app = @\{ name = \$appName; pid = \[int\]\$procId \}/);
   assert.match(ps, /public static extern IntPtr FindWindowEx\(IntPtr parent, IntPtr after, string cls, IntPtr title\);/);
@@ -905,6 +908,279 @@ test("look: TzShot's JSON escaper, as written, round-trips through a real parser
     assert.ok(!/[\n\r]/.test(out), `one line for ${JSON.stringify(s)}`);
     assert.strictEqual(JSON.parse(out), s);
   }
+});
+
+// ---- caret (peek-spec §A) ------------------------------------------------------
+// Where the text cursor and its box are, for Blip to peek over the box while
+// the user dictates: asked every few hundred milliseconds, only of a helper
+// Ask already has running, and answered with two rectangles and the app.
+
+/** A fake-wired driver that keeps every line it writes and counts its spawns. */
+function spiedDriver(mode, extra = {}) {
+  const lines = [];
+  let spawns = 0;
+  const d = fakeDriver(mode, null, {
+    spawn: (cmd, args, o) => {
+      spawns++;
+      const c = spawn(cmd, args, o);
+      const write = c.stdin.write.bind(c.stdin);
+      c.stdin.write = (line, ...rest) => { lines.push(JSON.parse(line)); return write(line, ...rest); };
+      return c;
+    },
+    ...extra,
+  });
+  return { d, lines, spawns: () => spawns };
+}
+
+const CARET = { ok: true, caret: [1352, 148, 2, 27], field: [1120, 100, 600, 42], app: { name: "Fake", pid: 42 }, scale: "pixels" };
+
+test("caret is asked only of a helper that is already running, and never starts one", async () => {
+  const { d, lines, spawns } = spiedDriver("normal");
+  try {
+    assert.deepStrictEqual(await d.caret(), { ok: false, error: "unavailable" });
+    assert.deepStrictEqual(await d.caret({ budgetMs: 400 }), { ok: false, error: "unavailable" });
+    assert.strictEqual(spawns(), 0, "a dictation never starts the helper");
+    assert.strictEqual(lines.length, 0);
+    d.start();
+    assert.deepStrictEqual(await d.caret(), CARET);
+    assert.strictEqual(spawns(), 1);
+    d.stop();
+    assert.deepStrictEqual(await d.caret(), { ok: false, error: "unavailable" }, "nor after stop()");
+    assert.strictEqual(spawns(), 1);
+  } finally { d.stop(); }
+  // The real default instance off Windows: nothing running, nothing started.
+  assert.deepStrictEqual(await defaultExport.caret(), { ok: false, error: "unavailable" });
+});
+
+test("a caret comes back in the spec's shape and nothing else, asked with its budget and deadline", async () => {
+  const { d, lines } = spiedDriver("normal");
+  try {
+    d.start();
+    await d.trusted();
+    const before = Date.now();
+    const r = await d.caret();
+    assert.deepStrictEqual(r, CARET);
+    assert.deepStrictEqual(Object.keys(r).sort(), ["app", "caret", "field", "ok", "scale"], "no how, no ms, no id");
+    const sent = lines.filter((l) => l.cmd === "caret");
+    assert.strictEqual(sent.length, 1);
+    assert.deepStrictEqual(Object.keys(sent[0]).sort(), ["budgetMs", "cmd", "deadline", "id"]);
+    assert.ok(sent[0].budgetMs > 200 && sent[0].budgetMs <= 250, `budget ${sent[0].budgetMs}`);
+    assert.ok(sent[0].deadline >= before + 200 && sent[0].deadline <= Date.now() + 250, "when the driver stops waiting");
+    // The budget can be set (main.js passes desktop.dictation.peekBudgetMs), and is kept sane.
+    for (const [o, lo, hi] of [[{ budgetMs: 600 }, 550, 600], [{ timeoutMs: 400 }, 350, 400], [{ budgetMs: 5 }, 50, 100],
+      [{ budgetMs: 99999 }, 1950, 2000], [{ budgetMs: "soon" }, 200, 250], [null, 200, 250]]) {
+      lines.length = 0;
+      assert.deepStrictEqual(await d.caret(o), CARET);
+      assert.ok(lines[0].budgetMs > lo && lines[0].budgetMs <= hi, `${JSON.stringify(o)}: ${lines[0].budgetMs}`);
+    }
+  } finally { d.stop(); }
+});
+
+test("a password field gives no caret and no field; junk is cleaned and no text gets through", async () => {
+  const sec = fakeDriver("securecaret");
+  try {
+    sec.start();
+    assert.deepStrictEqual(await sec.caret(), { ...CARET, caret: null, field: null });
+  } finally { sec.stop(); }
+  const bad = fakeDriver("badcaret");
+  try {
+    bad.start();
+    const r = await bad.caret();
+    assert.deepStrictEqual(r, { ok: true, caret: null, field: null, app: { name: "", pid: 0 }, scale: "pixels" });
+    const out = JSON.stringify(r);
+    for (const word of ["Priya", "hunter2", "offer", "InPrivate", "Bank", "Dear"]) assert.ok(!out.includes(word), word);
+  } finally { bad.stop(); }
+});
+
+test("a caret the helper never answers resolves timeout within its budget, and the helper carries on", async () => {
+  const d = fakeDriver("hangcaret");
+  try {
+    d.start();
+    await d.trusted();
+    const t0 = Date.now();
+    assert.deepStrictEqual(await d.caret(), { ok: false, error: "timeout" });
+    const took = Date.now() - t0;
+    assert.ok(took >= 230 && took < 600, `took ${took} ms`);
+    assert.strictEqual((await d.snapshot({ max: 2 })).ok, true);
+  } finally { d.stop(); }
+});
+
+test("a caret keeps to its budget while the helper is still warming up, and is not sent late", async () => {
+  const { d, lines } = spiedDriver("slowwarm");
+  try {
+    d.start();
+    const t0 = Date.now();
+    assert.deepStrictEqual(await d.caret(), { ok: false, error: "timeout" });
+    const took = Date.now() - t0;
+    assert.ok(took >= 230 && took < 500, `took ${took} ms, not the warm-up's 700`);
+    assert.deepStrictEqual(lines.map((l) => l.cmd), ["ping"], "no caret line for a helper not ready");
+    await new Promise((r) => setTimeout(r, 600));
+    assert.deepStrictEqual(await d.caret(), CARET, "warm now");
+  } finally { d.stop(); }
+});
+
+test("caret: the command begins a read on TzCaret's threads, which answer its line", () => {
+  const ps = PS_TEXT();
+  assert.match(ps, /'caret' \{[\s\S]*?\$r = TzCaretBegin \$id \$msg\s*if \(\$null -ne \$r\) \{ TzReply \$r \}/);
+  const begin = psFunction(ps, "TzCaretBegin");
+  assert.match(begin, /if \(-not \$script:caretReady\) \{ return @\{ id = \$id; ok = \$false; error = 'no_caret' \} \}/);
+  assert.match(begin, /\$h = \[TzAgent\]::GetForegroundWindow\(\)/);
+  assert.match(begin, /error = 'no_window'/);
+  assert.match(begin, /\$appJson = TzCaretApp \$h \$procId/);
+  // The budget kept sane, then cut to what the driver has left, after the name.
+  assert.match(begin, /if \(\$budget -lt 50\) \{ \$budget = 50 \} elseif \(\$budget -gt 5000\) \{ \$budget = 5000 \}/);
+  assert.match(begin, /\$left = \[long\]\$dl - \[DateTimeOffset\]::UtcNow\.ToUnixTimeMilliseconds\(\) - \$CARET_MARGIN_MS/);
+  assert.match(begin, /if \(\$left -lt 20\) \{ return @\{ id = \$id; ok = \$false; error = 'timeout' \} \}/, "given up on: not read");
+  assert.ok(begin.indexOf("TzCaretApp $h $procId") < begin.indexOf("$msg.deadline"), "cut after the name was had");
+  assert.match(begin, /\$err = \[TzCaret\]::Begin\(\$idJson, \$appJson, \$budget\)/);
+  assert.match(begin, /if \(\$null -ne \$err\) \{ return @\{ id = \$id; ok = \$false; error = "\$err" \} \}/);
+  assert.match(ps, /\$CARET_MS = 250/);
+  // The app's name is cached, by window and process, and kept small.
+  const app = psFunction(ps, "TzCaretApp");
+  assert.match(app, /\$key = "\$h\/\$procId"/);
+  assert.match(app, /if \(\$script:caretApps\.Count -ge 64\) \{ \$script:caretApps\.Clear\(\) \}/);
+  // The ping says whether the caret's C# loaded, for nativeCheck.
+  assert.match(ps, /pool = \(\$null -ne \$script:lookPool\); caret = \[bool\]\$script:caretReady/);
+  assert.match(ps, /\$script:caretReady = \$true\s*\} catch \{\}/);
+  assert.match(ps, /try \{\s*Add-Type -ErrorAction Stop -TypeDefinition @'\r?\nusing System;[\s\S]*?public static class TzCaret \{/);
+});
+
+/** The caret's C#, with its comments taken out. */
+function caretCs() {
+  const cs = [...PS_TEXT().matchAll(/Add-Type[^\n]*-TypeDefinition @'\r?\n([\s\S]*?)\r?\n'@/g)].map((m) => m[1]).find((c) => /class TzCaret\b/.test(c));
+  assert.ok(cs, "TzCaret");
+  return cs.replace(/\/\/.*$/gm, "");
+}
+
+/** One COM interface of TzCaret's: its GUID and its methods, in vtable order. */
+function comInterface(cs, name) {
+  const m = new RegExp(`\\[ComImport, Guid\\("([0-9a-f-]+)"\\), InterfaceType\\(ComInterfaceType\\.InterfaceIsIUnknown\\)\\]\\s*internal interface ${name} \\{([\\s\\S]*?)\\n  \\}`).exec(cs);
+  assert.ok(m, `interface ${name}`);
+  const slots = [...m[2].matchAll(/(\w+)\s*(?:\(|\{ get;)/g)].map((x) => x[1]).filter((n) => !["MarshalAs", "return"].includes(n));
+  return { guid: m[1], slots };
+}
+
+// The COM interfaces are declared by hand, only as far as the slots used, so
+// a slot missed or added before one would call the wrong method with no error
+// at all. These are UIAutomationClient.idl's IIDs and orders.
+test("caret: each COM method sits on its slot of UIAutomationClient's vtables", () => {
+  const cs = caretCs();
+  const want = {
+    IAutomation: ["30cbe57d-d9d0-452a-ab13-7ac5ac4825ee", { GetFocusedElement: 6 }],
+    IElement: ["d22108aa-8ac5-49a5-837b-37bbb3d7591e", { GetCurrentPropertyValue: 8, GetCurrentPattern: 14 }],
+    ITextPattern: ["32eba289-3583-42c9-9c59-3b6d9a1e9b6a", { GetSelection: 3 }],
+    ITextPattern2: ["506a921a-fcc9-409f-b23b-37eb74106872", { GetCaretRange: 8 }],
+    IRangeArray: ["ce4ae76a-e717-4c98-81ea-47371d028eb6", { Length: 1, GetElement: 2 }],
+    IRange: ["a543cc6a-f4ae-494b-8239-c814481187a8", { Clone: 1, CompareEndpoints: 3, ExpandToEnclosingUnit: 4, GetBoundingRectangles: 8, MoveEndpointByRange: 13 }],
+  };
+  for (const [name, [guid, used]] of Object.entries(want)) {
+    const { guid: g, slots } = comInterface(cs, name);
+    assert.strictEqual(g, guid, `${name}'s IID`);
+    for (const [method, slot] of Object.entries(used)) assert.strictEqual(slots.indexOf(method) + 1, slot, `${name}.${method} on slot ${slot}: ${slots.join(",")}`);
+    assert.strictEqual(slots.length, Math.max(...Object.values(used)), `${name} declares nothing past its last slot used`);
+    assert.ok(slots.every((n) => Object.keys(used).includes(n) || /^Gap\d+$/.test(n)), `${name}: ${slots.join(",")}`);
+  }
+  assert.match(cs, /IRange GetCaretRange\(out int isActive\);/);
+  assert.match(cs, /\[return: MarshalAs\(UnmanagedType\.SafeArray, SafeArraySubType = VarEnum\.VT_R8\)\] double\[\] GetBoundingRectangles\(\);/);
+  assert.match(cs, /new Guid\("ff48dba4-60ef-4201-aa87-54103eef594e"\)/, "CUIAutomation");
+  for (const [k, v] of [["TextPatternId", 10014], ["TextPattern2Id", 10024], ["BoundingRectangleId", 30001], ["IsPasswordId", 30019],
+    ["EndpointStart", 0], ["EndpointEnd", 1], ["UnitCharacter", 0]]) assert.match(cs, new RegExp(`const int ${k} = ${v};`));
+});
+
+test("caret: TextPattern2's caret range, the character's edge, then the system caret; a password gives nulls", () => {
+  const cs = caretCs();
+  const from = cs.slice(cs.indexOf("static int[] FromText("), cs.indexOf("static bool IsPasswordEdit("));
+  const two = from.indexOf("el.GetCurrentPattern(TextPattern2Id)");
+  const one = from.indexOf("el.GetCurrentPattern(TextPatternId)");
+  assert.ok(two > 0 && two < one, "TextPattern2 first, TextPattern where there is none");
+  assert.match(from, /range = held\.Keep\(tp2\.GetCaretRange\(out active\)\);/);
+  // A selection is where it starts: the range collapsed there.
+  assert.match(from, /range\.MoveEndpointByRange\(EndpointEnd, start, EndpointStart\);/);
+  // No rectangle: a copy widened to the character, its left edge, or its right one when it is the one before.
+  assert.match(from, /IRange ch = held\.Keep\(range\.Clone\(\)\);\s*ch\.ExpandToEnclosingUnit\(UnitCharacter\);/);
+  assert.match(from, /before = ch\.CompareEndpoints\(EndpointStart, range, EndpointStart\) < 0;/);
+  assert.match(from, /new int\[\] \{ before \? c\[0\] \+ c\[2\] : c\[0\], c\[1\], 2, c\[3\] \}/);
+  const work = cs.slice(cs.indexOf("void Work() {"), cs.indexOf("static object Property("));
+  const pw = work.indexOf("Property(el, IsPasswordId)");
+  assert.ok(pw > 0 && pw < work.indexOf("FromText(el"), "the password check comes first");
+  assert.match(work, /if \(pw is bool && \(bool\)pw\) \{\s*secure = true;/);
+  assert.match(work, /Reply\(idJson, null, null, appJson, "secure", ms\)/);
+  // The field is the element's BoundingRectangle.
+  assert.match(work, /field = Box\(Property\(el, BoundingRectangleId\), false\);/);
+  // The system caret: GetGUIThreadInfo on the foreground thread, rcCaret to the screen.
+  assert.ok(work.indexOf("GetGUIThreadInfo(0, ref g)") > work.indexOf("FromText(el"), "only when the text patterns had none");
+  assert.match(work, /if \(!secure && caret == null\)/);
+  assert.match(work, /ToScreen\(g\.hwndCaret, ref a\) && ToScreen\(g\.hwndCaret, ref b\)/);
+  assert.match(work, /if \(!uia && IsPasswordEdit\(g\.hwndCaret\)\)/);
+  // Only a text box has a box: an element with neither text pattern and no
+  // caret found (a window, a list, a button) gives no field, so Blip never
+  // sits at the corner of something nobody types in.
+  assert.match(work, /caret = FromText\(el, field, held, ref how, ref text\);/);
+  const noBox = work.indexOf("if (!secure && caret == null && !text) field = null;");
+  assert.ok(noBox > work.indexOf("GetGUIThreadInfo(0, ref g)") && noBox < work.indexOf("long ms = "), "after the system caret had its turn");
+  assert.match(from, /ITextPattern2 tp2 = p as ITextPattern2;\s*if \(tp2 != null\) \{\s*text = true;/);
+  assert.match(from, /ITextPattern tp = p as ITextPattern;\s*if \(tp != null\) \{\s*text = true;/);
+  const screen = cs.slice(cs.indexOf("static bool ToScreen("), cs.indexOf("static string N("));
+  assert.match(screen, /SetThreadDpiAwarenessContext\(GetWindowDpiAwarenessContext\(h\)\)/);
+  assert.ok(screen.indexOf("ClientToScreen(h, ref p)") < screen.indexOf("LogicalToPhysicalPointForPerMonitorDPI(h, ref p)"));
+  assert.match(cs, /public RECT rcCaret;/);
+  assert.match(cs, /\[DllImport\("user32\.dll"\)\] static extern bool GetGUIThreadInfo\(uint idThread, ref GUITHREADINFO info\);/);
+});
+
+test("caret: the C# reads no text, and its answer has only rectangles, the app and its own words", () => {
+  const cs = caretCs();
+  // Not the range's words, not a value, not a name: the only properties read
+  // are the bounding rectangle and IsPassword.
+  assert.doesNotMatch(cs, /GetText|GetAttributeValue\(|FindText\(|ValuePattern|GetWindowText|SelectedText/);
+  const ids = [...cs.matchAll(/GetCurrentPropertyValue\(|Property\(el, (\w+)\)/g)].map((m) => m[1]).filter(Boolean);
+  assert.deepStrictEqual([...new Set(ids)].sort(), ["BoundingRectangleId", "IsPasswordId"]);
+  const reply = cs.slice(cs.indexOf("static string Reply("), cs.indexOf("static string Fail("));
+  assert.deepStrictEqual([...reply.matchAll(/\\"(\w+)\\":/g)].map((m) => m[1]), ["id", "ok", "caret", "field", "app", "scale", "how", "ms"]);
+  // how is one of its own words.
+  const hows = [...cs.matchAll(/how = "(\w+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual([...new Set(hows)].sort(), ["caret", "none", "selection", "system"]);
+  assert.match(cs, /how = how \+ \(before \? "\+before" : "\+char"\);/);
+});
+
+test("caret: one read at a time, its work on a thread of its own and a watchdog answering for it in time", () => {
+  const cs = caretCs();
+  const begin = cs.slice(cs.indexOf("public static string Begin("), cs.indexOf("sealed class Read"));
+  assert.match(begin, /if \(Interlocked\.CompareExchange\(ref busy, 1, 0\) != 0\) return "busy";/);
+  const read = cs.slice(cs.indexOf("sealed class Read"), cs.indexOf("static object Property("));
+  assert.match(read, /watchdog = new Timer\(new TimerCallback\(Late\), null, ms, Timeout\.Infinite\);/);
+  assert.match(read, /void Late\(object state\) \{ Answer\(Fail\(idJson, "timeout"\)\); \}/);
+  assert.match(read, /t\.IsBackground = true;/);
+  // Whichever comes first answers, and only once.
+  assert.match(read, /lock \(gate\) \{\s*if \(answered\) return;\s*answered = true;\s*\}/);
+  // The slot is given back when the work is done, however it ended, and the
+  // COM objects it made are released, each once (never the shared client).
+  assert.match(read, /finally \{\s*held\.Release\(\);\s*Interlocked\.Exchange\(ref busy, 0\);\s*\}/);
+  const held = cs.slice(cs.indexOf("sealed class Held"), cs.indexOf("static object Property("));
+  assert.match(held, /if \(o != null && !all\.Contains\(o\)\) all\.Add\(o\);/);
+  assert.match(held, /if \(Marshal\.IsComObject\(o\)\) Marshal\.ReleaseComObject\(o\);/);
+  assert.doesNotMatch(cs, /held\.Keep\(Automation\(\)\)|held\.Keep\(automation\)/);
+  // Every object a read gets from UI Automation is kept to be released.
+  const made = cs.slice(cs.indexOf("void Work() {"), cs.indexOf("static bool IsPasswordEdit("));
+  for (const call of ["GetFocusedElement()", "GetCurrentPattern(TextPattern2Id)", "GetCaretRange(out active)", "GetCurrentPattern(TextPatternId)",
+    "GetSelection()", "GetElement(0)", "range.Clone()"]) {
+    const at = made.indexOf(call);
+    assert.ok(at > 0, call);
+    assert.ok(/held\.Keep\([^;]*$/.test(made.slice(Math.max(0, at - 60), at)), `${call} is kept`);
+  }
+  assert.doesNotMatch(read, /\.Join\(|\.Wait\(|Sleep\(/, "nothing here waits");
+  // One whole line under the console writer's lock, as TzShot's.
+  assert.match(cs, /lock \(o\) \{ o\.WriteLine\(line\); o\.Flush\(\); \}/);
+  // Nothing beyond mscorlib, so it compiles wherever TzAgent does.
+  assert.doesNotMatch(cs, /Stopwatch|System\.Diagnostics|Regex/);
+});
+
+test("nativeCheck asks the real Windows helper for the caret, and its ping must say the C# loaded", () => {
+  const nc = fs.readFileSync(path.join(__dirname, "nativeCheck.js"), "utf8");
+  const win = nc.slice(nc.indexOf('} else if (which === "winagent")'));
+  assert.match(win, /'\{"id":4,"cmd":"caret","budgetMs":3000\}'/);
+  assert.match(win, /if \(ping\.caret !== true\)/);
+  assert.match(win, /caret\.scale !== "pixels"/);
+  assert.match(win, /byId\.has\(1\) && byId\.has\(2\) && byId\.has\(3\) && byId\.has\(4\)/);
 });
 
 test("the helper ends cleanly as command text", () => {
