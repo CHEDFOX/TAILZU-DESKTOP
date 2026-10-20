@@ -16,7 +16,9 @@
     done        a tick, a hop; it tucks itself away
     error       a sentence, in pink, and a sorry brow
 
-  One window over the work area: transparent, never focused (the app you are
+  One window over the work area (on a Mac the whole display, so a menu-bar
+  item can be ringed; the card still keeps to the work area): transparent,
+  never focused (the app you are
   in keeps the keyboard), click-through except while the pointer is over the
   card, and kept out of screenshots. Every size, colour, timing and word is a
   knob (desktop.guide.*); the literals below are only for the first frame.
@@ -24,7 +26,11 @@
     guide.html               the window main.js opens
     guide.html?demo          a scripted run over a mock app, for review
     guide.html?demo=<scene>  one scene held still (listening, thinking, point,
-                             steps, confirm, always, done, error), for screenshots
+                             steps, confirm, always, done, error), for screenshots;
+                             and the hard cases: tall (a confirm with everything
+                             at its longest), top (a target at the window's top
+                             edge), menubar (a Mac's File menu), long (a URL and
+                             a path with nowhere to break)
 -->
 <html>
 <head>
@@ -73,7 +79,17 @@
     background-size:5px 5px;
     -webkit-mask-image: linear-gradient(180deg, #000 0, rgba(0,0,0,.25) 70%, transparent);
   }
-  #inner { position:relative; padding:15px 18px 16px; }
+  /* A column that never outgrows the room it is given (guide.js caps its
+     height to the work area): the answer and the plan give way and scroll,
+     everything else, the quote and its buttons above all, keeps its size. */
+  #inner { position:relative; padding:15px 18px 16px; box-sizing:border-box; display:flex; flex-direction:column; }
+  #inner > * { flex:none; }
+  #inner > #say, #inner > #steps { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
+    scrollbar-width:thin; scrollbar-color:rgba(243,226,198,.22) transparent; }
+  /* Room inside them for what moves a little past their edges (a word rising
+     into place, the step's spinning ring), so only real overflow scrolls. */
+  #inner > #say { padding-bottom:4px; margin-bottom:-4px; }
+  #inner > #steps { padding:5px 0; margin-bottom:-5px; }
 
   header { display:flex; align-items:center; gap:8px; height:22px; }
   #lamp { width:6px; height:6px; border-radius:50%; background:var(--pale-3); flex:0 0 auto; transition:background .2s; }
@@ -92,22 +108,26 @@
   #close:hover { background:rgba(243,226,198,.08); color:var(--pale); }
   #close svg { width:10px; height:10px; }
 
-  #heard { margin:11px 0 0; font:400 italic 15.5px/1.34 var(--serif); color:var(--pale-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  /* A URL, a path or an address has nowhere to break, and the column is
+     312px wide: it breaks anywhere rather than run off the card's edge,
+     where part of what is about to be typed could not be seen. */
+  #heard { margin:11px 0 0; font:400 italic 15.5px/1.34 var(--serif); color:var(--pale-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
   #heard:empty { display:none; }
 
   #voice { display:none; height:30px; margin-top:12px; }
   #card[data-state="listening"] #voice, #card[data-state="thinking"] #voice { display:block; }
   #voice canvas { display:block; width:100%; height:30px; }
 
-  #say { margin:10px 0 0; font:500 16px/1.42 var(--sans); letter-spacing:-.006em; color:var(--pale); text-wrap:pretty; }
+  #say { margin:10px 0 0; font:500 16px/1.42 var(--sans); letter-spacing:-.006em; color:var(--pale); text-wrap:pretty; overflow-wrap:anywhere; }
   #say:empty { display:none; }
-  #say .w { opacity:0; display:inline-block; transform:translateY(3px); animation:word .34s cubic-bezier(.2,.8,.2,1) forwards; }
+  #say .w { opacity:0; display:inline-block; max-width:100%; overflow-wrap:anywhere; transform:translateY(3px); animation:word .34s cubic-bezier(.2,.8,.2,1) forwards; }
   @keyframes word { to { opacity:1; transform:none; } }
   #card[data-state="error"] #say { color:var(--pale); }
 
-  #steps { list-style:none; margin:12px 0 0; padding:0; display:grid; gap:7px; }
+  #steps { list-style:none; margin:7px 0 0; padding:0; display:grid; gap:7px; }
   #steps:empty { display:none; }
-  #steps li { display:grid; grid-template-columns:20px 1fr; gap:10px; align-items:center; font:400 13.5px/1.3 var(--sans); color:var(--pale-2); transition:color .2s; }
+  #steps li { display:grid; grid-template-columns:20px minmax(0, 1fr); gap:10px; align-items:center; font:400 13.5px/1.3 var(--sans); color:var(--pale-2); transition:color .2s; }
+  #steps li span { min-width:0; overflow-wrap:anywhere; }
   #steps li i { width:18px; height:18px; border-radius:50%; box-sizing:border-box; border:1px solid var(--pale-3); display:grid; place-items:center;
     font:500 9px/1 var(--mono); font-style:normal; color:var(--pale-3); position:relative; }
   #steps li[data-s="doing"] { color:var(--pale); }
@@ -122,9 +142,9 @@
 
   #ask { display:none; margin-top:13px; }
   #card[data-state="confirm"] #ask { display:block; }
-  #ask .what { font:500 10px/1.2 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--pale-3); }
+  #ask .what { font:500 10px/1.2 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--pale-3); overflow-wrap:anywhere; }
   #ask blockquote { margin:7px 0 0; padding:1px 0 1px 12px; border-left:2px solid var(--live); font:400 17px/1.36 var(--serif); color:var(--pale);
-    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
   #ask blockquote:empty { display:none; }
   #card[data-risk="always"] #ask blockquote { border-left-color:var(--err); }
   #ask .row { display:flex; align-items:center; gap:4px; margin-top:15px; }
@@ -172,6 +192,9 @@
   body.demo .mock .page h2 { margin:0 0 10px; font-size:22px; }
   body.demo .mock .page .ln { height:10px; border-radius:5px; background:#EFEAE2; margin:10px 0; }
   body.demo .mock .composer { position:absolute; left:214px; right:24px; bottom:22px; height:46px; border:1px solid #DDD5C9; border-radius:10px; display:flex; align-items:center; padding:0 12px; color:#9A9083; }
+  body.demo .menubar { position:fixed; left:0; top:0; right:0; height:25px; background:rgba(246,243,238,.92); display:flex; align-items:center; gap:2px; padding:0 10px;
+    font:13px/1 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; box-shadow:0 1px 0 rgba(0,0,0,.08); }
+  body.demo .menubar b, body.demo .menubar span { padding:4px 8px; border-radius:4px; }
   body.demo .mock .composer em { margin-left:auto; padding:6px 12px; border-radius:7px; background:#1B1712; color:#fff; font-style:normal; font-weight:600; }
 </style>
 </head>

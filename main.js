@@ -914,6 +914,8 @@ function createRecorderWindow() {
     // session now. (Only a listening one was settled, so a crash during
     // the upload left the pill on "writing" until the next press.)
     if (activeSession) { settleSession(activeSession); pill("error", { label: pillError("") }); }
+    // A question it was recording will not come back either.
+    if (ask) ask.recorderGone();
   });
   recorderWin.loadFile("recorder.html");
 }
@@ -1117,10 +1119,17 @@ const cancelled = new Set();
 
 function pillOn() { return cfg.pill !== false && bool("desktop.pill.enabled", true); }
 
+/** The keys whose pair dictates. Ask's key is not one of them while Ask is
+ *  on: its pair asks about the screen instead. */
+function dictationTapKeys() {
+  return cfg.tapKeys.filter((k) => !(askOn() && k === askKey()));
+}
+
 /** The way in, in words, for the keys this computer actually bound. */
 function pillHint() {
-  if (cfg.tap && tapActive && cfg.tapKeys.length) {
-    return txt("desktop.pill.hintTap", "Tap {key} twice to talk", { key: cfg.tapKeys[0] });
+  const keys = dictationTapKeys();
+  if (cfg.tap && tapActive && keys.length) {
+    return txt("desktop.pill.hintTap", "Tap {key} twice to talk", { key: keys[0] });
   }
   return txt("desktop.pill.hintKey", "Press {key} to talk", { key: prettyKey(cfg.hotkey) });
 }
@@ -1644,6 +1653,14 @@ function refreshTray() {
   tray.setContextMenu(buildMenu());
 }
 
+/** The double-tap switch, in words: which keys dictate, and which asks. */
+function tapLabel() {
+  const keys = dictationTapKeys().join(txt("desktop.tray.keyJoiner", " or "));
+  if (!askOn()) return fmt("tray.tapToTalk", { key: keys });
+  if (!keys) return txt("desktop.tray.tapToAsk", "Double-tap {key} to ask about the screen", { key: askKey() });
+  return txt("desktop.tray.tapToTalkAsk", "Double-tap {key} to dictate, {ask} to ask", { key: keys, ask: askKey() });
+}
+
 function buildMenu() {
   return Menu.buildFromTemplate([
     // Says what the press will actually do. A plain "Dictate" on a signed-out
@@ -1653,10 +1670,13 @@ function buildMenu() {
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
+    // One microphone: while a dictation records it is the dictation's, and
+    // a question started now would throw its words away.
     ...(askOn() ? [{
-      label: txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() }),
-      enabled: signedIn(),
-      click: () => { void ask.tap(); },
+      label: cfg.tap && tapActive ? txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() })
+        : txt("desktop.tray.askNoTap", "Ask about this screen"),
+      enabled: signedIn() && !recording,
+      click: () => { if (!recording) void ask.tap({ menu: true }); },
     }] : []),
     {
       label: !notes ? txt("desktop.tray.notesStart", "Take notes") + "  " + prettyKey(cfg.notesHotkey)
@@ -1704,8 +1724,9 @@ function buildMenu() {
     // A switch, not a notice: the gesture lives on the most-used key on the
     // board, and whoever it gets in the way of needs to turn it off from here,
     // not from a config file.
+    // It switches Ask's pair too, and says so: Ask's key does not dictate.
     {
-      label: `${fmt("tray.tapToTalk", { key: cfg.tapKeys.join(txt("desktop.tray.keyJoiner", " or ")) })}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
+      label: `${tapLabel()}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
       type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
       click: (item) => setLocal("tap", item.checked),
     },
@@ -2025,14 +2046,23 @@ function toggleDictation() {
         // The request is marked private so the server keeps nothing either.
         const off = !!info.private || !!info.sensitive;
         sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off });
-        if (ours || off) return;
+        // No field will be read: the recorder is told at once, so a short
+        // first stretch does not wait for one (a private window says so
+        // itself, through recording-target).
+        if (ours || off || !bool("desktop.field.read", true)) {
+          if (!off) sendToRecorder("recording-field", { session: sid, field: null });
+          if (ours || off) return;
+        }
         // THE FIELD: its kind and label, and what is written before the
         // cursor, which becomes the session's context and what its first
         // paste joins (frontApp.focusedField).
         if (bool("desktop.field.read", true)) {
           frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
             .then((field) => {
-              if (!field || sid !== activeSession) return;
+              if (sid !== activeSession) return;
+              // No text field (or none readable): said so, so a short first
+              // stretch is not held waiting for a selection that is not coming.
+              if (!field) { sendToRecorder("recording-field", { session: sid, field: null }); return; }
               // What is selected in it goes too: said with a selection, an
               // instruction ("make this bullet points") rewrites it.
               if (!bool("desktop.field.selection", true)) delete field.selection;
@@ -2042,7 +2072,7 @@ function toggleDictation() {
               }
               sendToRecorder("recording-field", { session: sid, field });
             })
-            .catch(() => {});
+            .catch(() => { if (sid === activeSession) sendToRecorder("recording-field", { session: sid, field: null }); });
         }
         // THE SCREEN AROUND THE FIELD: the conversation, the recipient, the
         // subject (screenRead.readScreen) — the accessibility tree first, and
@@ -2177,8 +2207,12 @@ function setupKeyHook() {
         names: groups.map((g) => g.name),
         onPair: (name) => {
           if (askOn() && name === askKey()) {
+            // The tray's switch is the off switch for this pair too: a
+            // gesture that misfires opens a microphone and reads the screen
+            // whichever of the two it starts.
+            if (!cfg.tap) return;
             // Mid-dictation it still ends the dictation, as it always has.
-            if (recording) { if (cfg.tap) toggleDictation(); return; }
+            if (recording) { toggleDictation(); return; }
             void ask.tap();
             return;
           }
@@ -2310,6 +2344,10 @@ function setupAsk() {
       strings: SHELL.notify, knobs: knobsPayload(),
     }),
     frontInfo: () => frontApp.frontInfo(),
+    // A dictation recording keeps the microphone; a question waits its turn.
+    dictating: () => recording,
+    // The language dictation uses, so a question is heard in it too.
+    language: () => cfg.language,
     requireAccount,
     baseUrl: () => cfg.baseUrl,
     token: async (renew) => {
@@ -2347,7 +2385,7 @@ function settleSession(session) {
 function fromRecorder(e, payload) {
   if (!isFrom(e, recorderWin) || !payload || typeof payload !== "object") return null;
   let text = typeof payload.text === "string" ? payload.text.trim() : "";
-  const ws = (s) => (typeof s === "string" && /^\s{0,8}$/.test(s) ? s : "");
+  const ws = (s) => (typeof s === "string" && /^\s{0,64}$/.test(s) ? s : "");
   if (text && Array.isArray(payload.edges)) text = ws(payload.edges[0]) + text + ws(payload.edges[1]);
   return Object.assign({}, payload, { text });
 }

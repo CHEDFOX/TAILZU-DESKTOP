@@ -136,10 +136,17 @@ function kindOf(role, subrole, lbl) {
 // or not at all: the answer is pasted over all of it, so a rewrite of only
 // its start would lose the rest.
 const SELECTION_MAX = 8000;
+// Fields that take a value rather than prose. An address bar, a search box or
+// a find bar selects its whole contents on focus (Cmd+L, a click), so what is
+// selected there is the old address or query, not text they mean to have
+// rewritten: what they say is the new value. Sent, it would carry a URL with
+// its share keys or reset tokens off the computer and have the rewrite
+// prompt, not the value writer, answer it.
+const NO_SELECTION_KINDS = new Set(["url", "search", "email"]);
 
 /** The field as it leaves this computer: its kind, its label (one short
  *  line), only when the cursor itself was read, what is before it, and what
- *  is selected in it. */
+ *  is selected in it (never in a field that takes a value). */
 function fieldOf({ role, subrole, label: lbl, caret, before, selection }, chars = 1000) {
   const kind = kindOf(role, subrole, lbl);
   if (!kind || kind === "password") return null;
@@ -151,7 +158,7 @@ function fieldOf({ role, subrole, label: lbl, caret, before, selection }, chars 
   if (caret && typeof before === "string") out.before = before.slice(-chars);
   // WHAT IS SELECTED: what they say is then about it ("make this bullet
   // points"), and the server's rewrite of it is pasted over it.
-  if (typeof selection === "string" && selection.trim() && selection.length <= SELECTION_MAX) out.selection = selection;
+  if (!NO_SELECTION_KINDS.has(kind) && typeof selection === "string" && selection.trim() && selection.length <= SELECTION_MAX) out.selection = selection;
   return out;
 }
 
@@ -433,7 +440,11 @@ function macApp() {
  * and Chromium apps (Slack, Chrome, VS Code) build their accessibility tree
  * only when asked to, so they are asked first (AXManualAccessibility, which
  * changes nothing else about them). A secure text field's value is never
- * read. The selection's start is the cursor; without it, no text.
+ * read. The selection's start is the cursor; without it, no text. What is
+ * selected is read only where it can be written over (its AXValue is
+ * settable), as on Windows: a terminal or a read-only text view answers
+ * AXSelectedText too, and a paste there does not replace the selection, so
+ * its rewrite would be typed at the prompt instead.
  */
 function macFieldScript(chars) {
   return `
@@ -469,7 +480,7 @@ if sr is not "AXSecureTextField" and r is in {"AXTextField", "AXTextArea", "AXCo
       set rng to value of attribute "AXSelectedTextRange" of el
     end try
     try
-      set sel to value of attribute "AXSelectedText" of el
+      if settable of attribute "AXValue" of el then set sel to value of attribute "AXSelectedText" of el
     end try
   end tell
   -- What is selected, whole or not at all (see SELECTION_MAX).

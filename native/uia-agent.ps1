@@ -10,8 +10,16 @@
 # Every line is answered, in the order asked, even when UI Automation throws;
 # a line that is not JSON is answered {"ok":false,"error":"malformed"}. The
 # conventions (an Add-Type C# block for Win32, $ErrorActionPreference, UTF-8
-# output, launched with -File and windowsHide by the Node side) mirror
-# frontApp.js's PowerShell, so the two read the same to anyone who knows one.
+# output, run as command text with -EncodedCommand and windowsHide by the Node
+# side) mirror frontApp.js's PowerShell, so the two read the same to anyone who
+# knows one. It is too big to encode whole, so uiaDriver.js encodes a one-line
+# loader that reads this file and dot-sources it: command text is not subject
+# to the execution policy, which Group Policy can set where -ExecutionPolicy
+# Bypass cannot reach, and an unsigned -File would then never start.
+#
+# The Add-Type C# is compiled by the .NET Framework's own compiler under
+# Windows PowerShell 5.1, so it stays C# 5: no $"" strings, no => members, no
+# out var, no tuples.
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -42,6 +50,42 @@ public static class TzAgent {
   [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
   [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr proc, uint access, out IntPtr tok);
   [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr tok, int cls, out uint info, uint len, out uint ret);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+
+  // Per-monitor DPI awareness, so the numbers UI Automation gives (physical
+  // pixels) and the numbers SetCursorPos takes are the same numbers. Windows
+  // PowerShell is not DPI aware, and an unaware process has its cursor
+  // coordinates scaled: at 150% a click meant for one control lands half as
+  // far again from the screen's corner, on another. Per-monitor v2 (-4,
+  // Windows 10 1703 on) where there is one, the older system-wide awareness
+  // where not. Returns which one took, for the ping.
+  public static string MakeDpiAware() {
+    try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return "per_monitor"; } catch (Exception) { }
+    try { if (SetProcessDPIAware()) return "system"; } catch (Exception) { }
+    return "unaware";
+  }
+
+  // The top-level window a window belongs to (GA_ROOT). A UWP app's content
+  // is a CoreWindow child of its ApplicationFrameWindow, and an MDI document
+  // a child of its frame; only the top-level one is ever "in front". Not
+  // GA_ROOTOWNER: an owned dialog is its own top-level window.
+  public static IntPtr TopLevel(IntPtr h) {
+    if (h == IntPtr.Zero) return IntPtr.Zero;
+    return GetAncestor(h, 2);
+  }
+
+  // The window's caption. GetWindowText on another process's window reads
+  // the caption the window manager keeps, without sending the app a message,
+  // so a hung app cannot stall the snapshot here.
+  public static string WindowTitle(IntPtr h) {
+    if (h == IntPtr.Zero) return "";
+    StringBuilder sb = new StringBuilder(1024);
+    GetWindowText(h, sb, sb.Capacity);
+    return sb.ToString();
+  }
 
   [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
   [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
@@ -132,6 +176,13 @@ public static class TzAgent {
 }
 '@
 
+# DPI awareness first, before UI Automation loads and might make a window of
+# its own: from here on rectangles, the cursor and SendInput all speak
+# physical pixels, which is what the snapshot says it gives (scale 'pixels')
+# and what ask.js converts to DIP for the guide's ring.
+$script:dpi = 'unaware'
+try { $script:dpi = [TzAgent]::MakeDpiAware() } catch {}
+
 # UI Automation. If it will not load (a stripped Windows, say) snapshot and the
 # element actions answer ok:false "no_uia", while ping, trusted, key, click,
 # scroll and open — all Win32 — still work.
@@ -154,11 +205,12 @@ try {
 
 # UI Automation control types onto the contract's roles. Anything not here is
 # dropped, except a Pane/Group/Custom that has a name AND can be invoked, which
-# is a clickable thing worth pointing at, so it is kept as a button.
+# is a clickable thing worth pointing at, so it is kept as a button. A
+# Document is decided in the walk: an area only when it can be typed into.
 $ROLES = @{
   'ControlType.Button' = 'button'; 'ControlType.SplitButton' = 'button';
   'ControlType.Hyperlink' = 'link';
-  'ControlType.Edit' = 'field'; 'ControlType.Document' = 'area';
+  'ControlType.Edit' = 'field';
   'ControlType.CheckBox' = 'check'; 'ControlType.RadioButton' = 'radio';
   'ControlType.TabItem' = 'tab';
   'ControlType.MenuItem' = 'menuitem';
@@ -191,13 +243,24 @@ $MODS = @('ctrl', 'control', 'shift', 'alt', 'option', 'cmd', 'command', 'meta',
 $SEL_MAX = 8000
 $VAL_MAX = 120
 $LABEL_MAX = 80
+$TITLE_MAX = 200
+$TITLE_READ = 1024
 $MAX_NODES = 4000
+$BUDGET_MS = 900
+
+# A value that is an address (a page's URL, a link's target) is where the user
+# is, not text they are writing, and it is never sent.
+$URL_VALUE = '(?i)^\s*(?:[a-z][a-z0-9+.-]*://|www\.)'
 
 # The id -> AutomationElement maps: the latest snapshot's, and the one before
 # it, so an action on an id from the last-but-one snapshot still finds its
 # element (the device may act on what it last saw while a new walk is running).
+# Each map's foreground window is kept with it, for the click's foreground
+# check when an element's own window cannot be found (see TzClickEl).
 $script:mapCur = @{}
 $script:mapPrev = @{}
+$script:rootCur = [IntPtr]::Zero
+$script:rootPrev = [IntPtr]::Zero
 
 function TzFind($id) {
   if ($id -ne $null -and $script:mapCur.ContainsKey($id)) { return $script:mapCur[$id] }
@@ -205,12 +268,53 @@ function TzFind($id) {
   return $null
 }
 
+function TzRootOf($id) {
+  if ($id -ne $null -and $script:mapCur.ContainsKey($id)) { return $script:rootCur }
+  if ($id -ne $null -and $script:mapPrev.ContainsKey($id)) { return $script:rootPrev }
+  return [IntPtr]::Zero
+}
+
 function TzGP($el, $prop) { try { return $el.GetCachedPropertyValue($prop) } catch { return $null } }
 
+# The walk's rectangle: the cached one, read in the same cross-process call
+# as the element itself. Never for acting — see TzLiveRect.
 function TzRect($el) {
   try { $r = $el.Cached.BoundingRectangle; if ($r) { return $r } } catch {}
   try { return $el.Current.BoundingRectangle } catch {}
   return $null
+}
+
+# Where the element is NOW, for a click or a wheel. The cached rectangle still
+# answers after the element is gone (a list re-rendered or scrolled while a
+# confirm card was up), and a click there would land on whatever took its
+# place, which nothing ever risk-checked. So it is read live, and an element
+# that is gone, off-screen or without a size is a refusal, never a guess.
+# Read through GetCurrentPropertyValue, a method: PowerShell turns an exception
+# in a property getter ($el.Current.BoundingRectangle) into a quiet $null, so
+# only a method call can say "gone".
+function TzLiveRect($el) {
+  $off = $null
+  $r = $null
+  try {
+    $off = $el.GetCurrentPropertyValue($AE::IsOffscreenProperty)
+    $r = $el.GetCurrentPropertyValue($AE::BoundingRectangleProperty)
+  } catch { return @{ error = 'gone' } }
+  if ($off -eq $true) { return @{ error = 'offscreen' } }
+  if ($r -eq $null -or $r.IsEmpty -or -not ($r.Width -gt 0) -or -not ($r.Height -gt 0)) { return @{ error = 'no_rect' } }
+  return @{ rect = $r }
+}
+
+# Whether what was thrown says the element no longer exists. Matched by name:
+# a [type] in a catch would need UI Automation loaded before this script could
+# run at all, and it may not load.
+function TzIsGone($err) {
+  $e = $null
+  try { $e = $err.Exception } catch {}
+  while ($e -ne $null) {
+    if ($e.GetType().Name -eq 'ElementNotAvailableException') { return $true }
+    $e = $e.InnerException
+  }
+  return $false
 }
 
 # The foreground window's process id, for the elevation gate on commands that
@@ -240,16 +344,40 @@ function TzClean([string]$s, [int]$max) {
   return $s
 }
 
+# The window's title as the device gets it: at most $TITLE_MAX characters and,
+# when it is longer, its start and its end. A browser says a window is private
+# at the END of its title ("... - Mozilla Firefox Private Browsing", "... -
+# [InPrivate] - Microsoft Edge"), so a long page title cut from the end would
+# hide exactly what agent.js looks for to refuse the window.
+function TzTitleCap([string]$t) {
+  if ($t.Length -le $TITLE_MAX) { return $t }
+  $tail = 80
+  return $t.Substring(0, $TITLE_MAX - $tail - 5) + ' ... ' + $t.Substring($t.Length - $tail)
+}
+
 # ---- Snapshot -------------------------------------------------------------------
-function TzSnapshot([int]$max) {
+# $budget is the walk's own time limit in ms. The driver sends about 60% of its
+# timeout: a huge tree (Slack, Teams, a long page) comes back truncated with
+# what was found rather than not at all, and this single-threaded helper is
+# free again before the next question, instead of still walking when it comes.
+function TzSnapshot([int]$max, [int]$budget) {
   $o = [ordered]@{ ok = $false }
   if (-not $uia) { $o.error = 'no_uia'; return $o }
+  if ($budget -le 0) { $budget = $BUDGET_MS }
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
   $h = [TzAgent]::GetForegroundWindow()
   if ($h -eq [IntPtr]::Zero) { $o.error = 'no_window'; return $o }
   [uint32]$procId = 0
   [void][TzAgent]::GetWindowThreadProcessId($h, [ref]$procId)
+
+  # The window's title, for the device alone: agent.js reads it to refuse a
+  # private window or a sensitive app before anything is read or sent, and
+  # never puts it in a request. The walk also uses it to keep the title out of
+  # the elements (a page's root, a caption drawn as text), so it is kept whole
+  # here and only capped on its way out (TzTitleCap).
+  $title = ''
+  try { $title = TzClean ([TzAgent]::WindowTitle($h)) $TITLE_READ } catch {}
 
   $root = $null
   try { $root = $AE::FromHandle($h) } catch {}
@@ -276,6 +404,8 @@ function TzSnapshot([int]$max) {
   # Ids survive one more snapshot, so keep the last map as the previous one.
   $script:mapPrev = $script:mapCur
   $script:mapCur = @{}
+  $script:rootPrev = $script:rootCur
+  $script:rootCur = $h
 
   $els = New-Object System.Collections.Generic.List[object]
   $count = 0
@@ -288,6 +418,7 @@ function TzSnapshot([int]$max) {
   $cr.Push()
   try {
     $rootC = $root.GetUpdatedCache($cr)
+    if (-not $title) { try { $title = TzClean "$($rootC.Cached.Name)" $TITLE_READ } catch {} }
     $winRect = TzRect $rootC
     $wl = if ($winRect) { $winRect.Left } else { -1e9 }
     $wt = if ($winRect) { $winRect.Top } else { -1e9 }
@@ -299,7 +430,7 @@ function TzSnapshot([int]$max) {
     while ($level.Count -gt 0) {
       $next = New-Object System.Collections.Generic.List[object]
       foreach ($w in $level) {
-        if ($count -ge $max -or $visited -ge $MAX_NODES) { $truncated = $true; break }
+        if ($count -ge $max -or $visited -ge $MAX_NODES -or $sw.ElapsedMilliseconds -ge $budget) { $truncated = $true; break }
         $visited++
         $el = $w.el
         $ctName = ''
@@ -335,6 +466,21 @@ function TzSnapshot([int]$max) {
           $role = 'button'
         }
 
+        # A Document is a text area only when it can be typed into. A web
+        # page's root (Chrome, Edge, any Electron app) is a read-only Document
+        # named with the page's title, which is the window's, and valued with
+        # its URL. Listed, it would send both, and keys pressed at the page
+        # (Gmail's "#" deletes) would read as typing in a box and go unasked.
+        # Its children are walked all the same, as the Mac skips AXWebArea.
+        if ($ctName -eq 'ControlType.Document') {
+          $role = $null
+          if ((TzGP $el $AE::IsValuePatternAvailableProperty) -eq $true -and (TzGP $el $VP::IsReadOnlyProperty) -eq $false) { $role = 'area' }
+        }
+
+        # The window's caption drawn as text (a custom title bar) is the title
+        # by another road; it stays here, as it does on the Mac.
+        if ($role -eq 'text' -and $title -and (TzClean $name $TITLE_READ) -ieq $title) { $role = $null }
+
         # A multi-line edit reads as an area, not a one-line field. UI
         # Automation exposes no multi-line flag on the core properties, so a
         # tall box is the signal (documented: unverifiable without Windows).
@@ -350,6 +496,12 @@ function TzSnapshot([int]$max) {
           $autoId = ''
           try { $autoId = $el.Cached.AutomationId } catch {}
           $label = $name; if ([string]::IsNullOrWhiteSpace($label)) { $label = $help }
+          # Never a window's title as a label: not a window's own name, and
+          # not a typed-in Document's name where that is the title or part
+          # of it.
+          if ($role -eq 'window') { $label = '' }
+          elseif ($ctName -eq 'ControlType.Document' -and $title -and -not [string]::IsNullOrWhiteSpace($label) -and
+                  $title.IndexOf((TzClean $label $TITLE_READ), [StringComparison]::OrdinalIgnoreCase) -ge 0) { $label = '' }
 
           # An address/search bar's value is a URL the user is on — their
           # browsing, not a field we help write. Label only, never its value.
@@ -378,7 +530,7 @@ function TzSnapshot([int]$max) {
             $item.secure = $true
           } elseif (-not $isUrlField -and ($role -eq 'field' -or $role -eq 'area' -or $role -eq 'combo') -and (TzGP $el $AE::IsValuePatternAvailableProperty) -eq $true) {
             $v = TzGP $el $VP::ValueProperty
-            if ($v -is [string] -and $v.Length -gt 0) { $item.value = (TzClean $v $VAL_MAX) }
+            if ($v -is [string] -and $v.Length -gt 0 -and $v -notmatch $URL_VALUE) { $item.value = (TzClean $v $VAL_MAX) }
           }
 
           $els.Add($item)
@@ -390,7 +542,7 @@ function TzSnapshot([int]$max) {
           if ($kids -ne $null) { foreach ($k in $kids) { $next.Add(@{ el = $k; pct = $ctName }) } }
         } catch {}
       }
-      if ($count -ge $max -or $visited -ge $MAX_NODES) { $truncated = $true; break }
+      if ($count -ge $max -or $visited -ge $MAX_NODES -or $sw.ElapsedMilliseconds -ge $budget) { $truncated = $true; break }
       $level = $next
     }
   } catch {} finally { $cr.Pop() }
@@ -423,8 +575,14 @@ function TzSnapshot([int]$max) {
     if ($p) { $appName = $p.ProcessName; try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $appName = $d } } catch {} }
   } catch {}
 
+  # The title rides in the window object for the device's own checks only
+  # (see above), capped with its end kept; "" when it could not be read.
   $window = $null
-  if ($winRect) { $window = @{ frame = @([int][math]::Round($winRect.X), [int][math]::Round($winRect.Y), [int][math]::Round($winRect.Width), [int][math]::Round($winRect.Height)) } }
+  if ($winRect -or $title) {
+    $frame = $null
+    if ($winRect) { $frame = @([int][math]::Round($winRect.X), [int][math]::Round($winRect.Y), [int][math]::Round($winRect.Width), [int][math]::Round($winRect.Height)) }
+    $window = [ordered]@{ frame = $frame; title = (TzTitleCap "$title") }
+  }
 
   $sw.Stop()
   $o.ok = $true
@@ -467,13 +625,20 @@ function TzInvokeBounded($block, $argList, [int]$ms) {
 function TzPress($el) {
   # Pick the pattern on this thread (a quick, non-blocking query); only the
   # Invoke/Toggle/Select/Expand itself is run off-thread, so we always know how.
+  # An element that is gone answers "gone", so the device knows nothing was
+  # pressed (and a click fallback then finds it gone too, see TzLiveRect).
   $p = $null
   $how = $null
-  if ($el.TryGetCurrentPattern($IP::Pattern, [ref]$p)) { $how = 'invoke' }
-  elseif ($el.TryGetCurrentPattern($TOG::Pattern, [ref]$p)) { $how = 'toggle' }
-  elseif ($el.TryGetCurrentPattern($SIP::Pattern, [ref]$p)) { $how = 'select' }
-  elseif ($el.TryGetCurrentPattern($ECP::Pattern, [ref]$p)) { $how = 'expand' }
-  else { return @{ ok = $false; error = 'no_action' } }
+  try {
+    if ($el.TryGetCurrentPattern($IP::Pattern, [ref]$p)) { $how = 'invoke' }
+    elseif ($el.TryGetCurrentPattern($TOG::Pattern, [ref]$p)) { $how = 'toggle' }
+    elseif ($el.TryGetCurrentPattern($SIP::Pattern, [ref]$p)) { $how = 'select' }
+    elseif ($el.TryGetCurrentPattern($ECP::Pattern, [ref]$p)) { $how = 'expand' }
+  } catch {
+    if (TzIsGone $_) { return @{ ok = $false; error = 'gone' } }
+    return @{ ok = $false; error = 'exception' }
+  }
+  if ($how -eq $null) { return @{ ok = $false; error = 'no_action' } }
 
   $block = {
     param($p, $how)
@@ -492,21 +657,27 @@ function TzPress($el) {
   return $r
 }
 
-# The top-level window handle an element lives in, for the foreground check.
+# The top-level window handle an element lives in, for the foreground check:
+# the nearest Window ancestor with a handle, taken up to its top-level root,
+# since a UWP app's CoreWindow (Settings, Calculator) and an MDI child are
+# Windows too, but child ones that GetForegroundWindow never returns. Zero
+# when there is none to be found within reach (an element deeper than the climb,
+# a popup menu whose ancestors include no Window).
 function TzTopWindow($el) {
   try {
     $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
     $n = $el
     for ($i = 0; $i -lt 20 -and $n -ne $null; $i++) {
-      $wh = 0; try { $wh = $n.Current.NativeWindowHandle } catch {}
+      # [int]: a getter that failed reads as $null, which is not a handle.
+      $wh = 0; try { $wh = [int]$n.Current.NativeWindowHandle } catch {}
       $isWin = $false; try { $isWin = ("$($n.Current.ControlType.ProgrammaticName)" -eq 'ControlType.Window') } catch {}
-      if ($isWin -and $wh -ne 0) { return [IntPtr]$wh }
+      if ($isWin -and $wh -ne 0) { return [TzAgent]::TopLevel([IntPtr]$wh) }
       $parent = $null; try { $parent = $walker.GetParent($n) } catch {}
       if ($parent -eq $null) { break }
       $n = $parent
     }
-    $wh = 0; try { $wh = $el.Current.NativeWindowHandle } catch {}
-    if ($wh -ne 0) { return [IntPtr]$wh }
+    $wh = 0; try { $wh = [int]$el.Current.NativeWindowHandle } catch {}
+    if ($wh -ne 0) { return [TzAgent]::TopLevel([IntPtr]$wh) }
   } catch {}
   return [IntPtr]::Zero
 }
@@ -521,10 +692,22 @@ function TzEnsureForeground([IntPtr]$hwnd) {
   return [TzAgent]::ForceForeground($hwnd)
 }
 
-function TzClickEl($el) {
-  $r = TzRect $el
-  if ($r -eq $null) { return @{ ok = $false; error = 'no_rect' } }
-  if (-not (TzEnsureForeground (TzTopWindow $el))) { return @{ ok = $false; error = 'not_foreground' } }
+# A real click at the middle of where the element is now. $root is the window
+# that was in front when the element was walked: when its own window cannot be
+# found (a web element deeper than TzTopWindow climbs), that is the window that
+# must be in front, never "whatever is". The rectangle is read live before the
+# foreground dance (nothing is brought forward for an element that is gone) and
+# again after it, since bringing a window forward can move or close what was
+# there.
+function TzClickEl($el, [IntPtr]$root) {
+  $live = TzLiveRect $el
+  if ($live.error) { return @{ ok = $false; error = $live.error } }
+  $top = TzTopWindow $el
+  if ($top -eq [IntPtr]::Zero) { $top = $root }
+  if (-not (TzEnsureForeground $top)) { return @{ ok = $false; error = 'not_foreground' } }
+  $live = TzLiveRect $el
+  if ($live.error) { return @{ ok = $false; error = $live.error } }
+  $r = $live.rect
   $cx = [int][math]::Round($r.X + $r.Width / 2)
   $cy = [int][math]::Round($r.Y + $r.Height / 2)
   [void][TzAgent]::SetCursorPos($cx, $cy)
@@ -545,7 +728,11 @@ function TzSetValue($el, [string]$text) {
 
 function TzScrollEl($el, [string]$dir, [int]$lines) {
   $sp = $null
-  if ($el.TryGetCurrentPattern($SCP::Pattern, [ref]$sp)) {
+  $has = $false
+  try { $has = $el.TryGetCurrentPattern($SCP::Pattern, [ref]$sp) } catch {
+    if (TzIsGone $_) { return @{ ok = $false; error = 'gone' } }
+  }
+  if ($has) {
     $small = [System.Windows.Automation.ScrollAmount]::SmallIncrement
     $dec = [System.Windows.Automation.ScrollAmount]::SmallDecrement
     try {
@@ -560,9 +747,12 @@ function TzScrollEl($el, [string]$dir, [int]$lines) {
       return @{ ok = $true; how = 'scrollpattern' }
     } catch {}
   }
-  # No scroll pattern: the wheel over the element's centre.
-  $r = TzRect $el
-  if ($r -ne $null) { [void][TzAgent]::SetCursorPos([int][math]::Round($r.X + $r.Width / 2), [int][math]::Round($r.Y + $r.Height / 2)) }
+  # No scroll pattern: the wheel over the element's centre, where it is now
+  # (see TzLiveRect); one that is gone is not scrolled blind under the cursor.
+  $live = TzLiveRect $el
+  if ($live.error) { return @{ ok = $false; error = $live.error } }
+  $r = $live.rect
+  [void][TzAgent]::SetCursorPos([int][math]::Round($r.X + $r.Width / 2), [int][math]::Round($r.Y + $r.Height / 2))
   TzWheel $dir $lines
   return @{ ok = $true; how = 'wheel' }
 }
@@ -618,26 +808,84 @@ function TzKey([string]$chord) {
 }
 
 # ---- Open an app ----------------------------------------------------------------
+# OPEN launches an app by the name people know it by, and nothing else. The
+# name is the model's, and the model reads the screen, so a page can put
+# anything there: a path, a share (\\host\x.exe, which also hands that host the
+# user's NTLM hash), a URL or a protocol handler (ms-msdt:...), all of which a
+# bare Start-Process would run. So a name with a path, drive, scheme,
+# environment-variable or wildcard character, or one that starts with a dot, is
+# refused before anything is looked up; and what is launched is only ever
+# something Windows itself lists as an app: a Start Menu shortcut, an installed
+# (Store) app, an App Paths entry, or an .exe on the PATH (never the current
+# directory). The Mac helper likewise resolves only installed apps.
+$OPEN_REFUSE = '[\\/:%*?"<>|\[\]`~]'
+# A loose match is never an uninstaller or a readme that happens to share the
+# app's name ("Uninstall Slack" for "Slack").
+$OPEN_NOT_APP = '(?i)\b(uninstall|deinstall|remove|repair|setup|install|readme|release notes|license|help|manual|website)\b'
+
+function TzOpenRefused([string]$name) {
+  return ($name -match $OPEN_REFUSE) -or $name.StartsWith('.') -or ($name -match '\p{Cc}')
+}
+
+function TzStartMenuLinks {
+  foreach ($d in @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs")) {
+    if (-not (Test-Path -LiteralPath $d)) { continue }
+    Get-ChildItem -LiteralPath $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
+  }
+}
+
 function TzOpen([string]$name) {
   if ([string]::IsNullOrWhiteSpace($name)) { return @{ ok = $false; error = 'no_app' } }
-  $launched = $false
-  # Start-Process resolves an executable, an App Path, or a PATH entry directly.
-  try { Start-Process $name -ErrorAction Stop; $launched = $true } catch {}
-  if (-not $launched) {
-    # Otherwise it is a display name: find its Start Menu shortcut by name,
-    # exact first, then a loose contains, case-insensitive.
-    $dirs = @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs")
-    $exact = $null; $loose = $null
-    foreach ($d in $dirs) {
-      if (-not (Test-Path $d)) { continue }
-      foreach ($lnk in Get-ChildItem -Path $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
-        if ($lnk.BaseName -ieq $name) { $exact = $lnk; break }
-        if ($loose -eq $null -and $lnk.BaseName -like "*$name*") { $loose = $lnk }
-      }
-      if ($exact) { break }
+  $name = $name.Trim()
+  if (TzOpenRefused $name) { return @{ ok = $false; error = 'not_found' } }
+
+  $target = $null   # a shortcut or an .exe, by its full path
+  $appId = $null    # an installed app, by its AppUserModelID
+  $links = @(TzStartMenuLinks)
+  $exe = if ($name -match '(?i)\.exe$') { $name } else { "$name.exe" }
+
+  # A Start Menu shortcut with exactly this name, first: it is what the user
+  # sees in Start, and it starts the app the way Start does.
+  foreach ($lnk in $links) { if ($lnk.BaseName -ieq $name) { $target = $lnk.FullName; break } }
+  # An installed app with exactly this name. Store apps (Settings, Calculator)
+  # have no shortcut file; Start knows them by an AppUserModelID.
+  if (-not $target) {
+    try {
+      $sa = Get-StartApps -ErrorAction Stop | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
+      if ($sa -and $sa.AppID) { $appId = "$($sa.AppID)" }
+    } catch {}
+  }
+  # An App Paths entry, which is what Win+R resolves "excel" or "chrome" by.
+  if (-not $target -and -not $appId) {
+    foreach ($hive in @('HKCU:', 'HKLM:')) {
+      try {
+        $p = (Get-ItemProperty -LiteralPath "$hive\Software\Microsoft\Windows\CurrentVersion\App Paths\$exe" -ErrorAction Stop).'(default)'
+        if ($p) { $p = "$p".Trim().Trim('"'); if (Test-Path -LiteralPath $p -PathType Leaf) { $target = $p; break } }
+      } catch {}
     }
-    $pick = if ($exact) { $exact } else { $loose }
-    if ($pick) { try { Start-Process $pick.FullName -ErrorAction Stop; $launched = $true } catch {} }
+  }
+  # An .exe on the PATH (notepad, calc). Get-Command searches the PATH only,
+  # never the current directory, and only a real .exe is taken, not a script.
+  if (-not $target -and -not $appId) {
+    try {
+      $c = Get-Command -Name $exe -CommandType Application -ErrorAction Stop |
+        Where-Object { $_.Path -and [System.IO.Path]::GetExtension($_.Path) -ieq '.exe' } | Select-Object -First 1
+      if ($c) { $target = $c.Path }
+    } catch {}
+  }
+  # Last, a Start Menu shortcut whose name contains it ("Chrome" for "Google
+  # Chrome"), the closest (shortest) first.
+  if (-not $target -and -not $appId) {
+    $loose = $links | Where-Object { $_.BaseName.IndexOf($name, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.BaseName -notmatch $OPEN_NOT_APP } |
+      Sort-Object { $_.BaseName.Length } | Select-Object -First 1
+    if ($loose) { $target = $loose.FullName }
+  }
+
+  $launched = $false
+  if ($target) {
+    try { Start-Process -FilePath $target -ErrorAction Stop; $launched = $true } catch {}
+  } elseif ($appId) {
+    try { Start-Process -FilePath 'explorer.exe' -ArgumentList ('shell:AppsFolder\' + $appId) -ErrorAction Stop; $launched = $true } catch {}
   }
   if (-not $launched) { return @{ ok = $false; error = 'not_found' } }
   # Best effort: once the new window exists, bring it forward past the
@@ -698,14 +946,19 @@ while ($true) {
   $cmd = "$($msg.cmd)"
   try {
     switch ($cmd) {
-      'ping' { TzReply @{ id = $id; ok = $true; pong = $true }; break }
+      'ping' { TzReply @{ id = $id; ok = $true; pong = $true; dpi = $script:dpi }; break }
       'trusted' { TzReply @{ id = $id; ok = $true; trusted = $true }; break }
 
       'snapshot' {
         $max = 250
         if ($msg.max -ne $null) { [void][int]::TryParse("$($msg.max)", [ref]$max) }
         if ($max -le 0) { $max = 250 }
-        TzReplySnapshot $id (TzSnapshot $max)
+        # The walk's time budget (see TzSnapshot), kept sane whatever is sent.
+        $budget = $BUDGET_MS
+        $b = 0
+        if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
+        if ($budget -lt 50) { $budget = 50 } elseif ($budget -gt 30000) { $budget = 30000 }
+        TzReplySnapshot $id (TzSnapshot $max $budget)
         break
       }
 
@@ -720,7 +973,7 @@ while ($true) {
         $el = TzFind "$($msg.target)"
         if ($el -eq $null) { TzReply @{ id = $id; ok = $false; error = 'bad_target' }; break }
         if (TzElevated (TzElPid $el)) { TzReply @{ id = $id; ok = $false; error = 'elevated' }; break }
-        $r = TzClickEl $el; $r.id = $id; TzReply $r; break
+        $r = TzClickEl $el (TzRootOf "$($msg.target)"); $r.id = $id; TzReply $r; break
       }
 
       'setValue' {
@@ -778,3 +1031,8 @@ while ($true) {
     TzReply @{ id = $id; ok = $false; error = 'exception' }
   }
 }
+
+# stdin closed: the app is done with us. Run as command text, the exit code
+# would otherwise be whatever the last statement left in $?, and a clean end
+# should read as one.
+exit 0

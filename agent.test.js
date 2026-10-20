@@ -352,6 +352,33 @@ test("press falls back to a click when the element has no press action", async (
   assert.strictEqual(r.post.reqs()[1].history[0].result, "ok");
 });
 
+test("a press that timed out, is pending or was slow is never clicked on top of; the screen is read again", async () => {
+  const DIALOG = snap([EXPORT, COMPOSER, SEND, HEADING, { id: "e5", role: "button", label: "Save" }], { focused: "e2" });
+  const answers = [
+    { ok: false, error: "timeout" },
+    { ok: false, error: "dead" },
+    { ok: true, how: "invoke", pending: true },
+    { ok: true, how: "AXPress", slow: true },
+  ];
+  for (const answer of answers) {
+    const r = rig({ snaps: [SLACK, DIALOG], results: { press: answer }, scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]] });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    const why = JSON.stringify(answer);
+    assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]], why + ": no click after it");
+    assert.strictEqual(r.driver.snapshots(), 2, why + ": the screen is read again");
+    const req1 = r.post.reqs()[1];
+    assert.deepStrictEqual(req1.history[0], { said: "export", did: "PRESS e1", result: "failed", note: 'press may have happened; 1 new element like "Save"' }, why);
+    assert.ok(req1.screen.elements.some((e) => e.label === "Save"), why + ": the next step plans from the screen as it is now");
+  }
+  // Nothing visibly changed: the note says only that it may have happened.
+  const r = rig({ results: { press: { ok: false, error: "timeout" } }, scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]]);
+  assert.deepStrictEqual(r.post.reqs()[1].history[0], { said: "export", did: "PRESS e1", result: "failed", note: "press may have happened" });
+});
+
 test("a press and a click that both fail are reported as failed, and the run goes on", async () => {
   const r = rig({
     results: { press: { ok: false, error: "no AXPress" }, click: { ok: false, error: "offscreen" } },
@@ -414,7 +441,51 @@ test("set in a web app is focus, select all, paste — never a value written fro
     await r.agent.heard(AUDIO);
     assert.deepStrictEqual(r.driver.acts(), [["focus", "e2"], ["key", selectAll]]);
     assert.deepStrictEqual(r.pasted, ["hello"]);
+    assert.strictEqual(r.driver.snapshots(), 3, "begin, the focus check after focusing, after");
   }
+});
+
+test("a set sends no select-all unless the field it names has focus after focusing it", async () => {
+  // The focus call said yes, but the keys would go to the document body.
+  const ELSEWHERE = snap([EXPORT, COMPOSER, SEND, HEADING, { id: "e5", role: "area", label: "Document body", frame: [0, 60, 900, 400] }], { focused: "e5" });
+  const unread = { ok: false, error: "timeout" };
+  for (const [after, note] of [[ELSEWHERE, "failed: focus didn't move"], [unread, "failed: couldn't read the focus"]]) {
+    const r = rig({
+      snaps: [SLACK, after, ELSEWHERE],
+      scripts: [[heardDo("clear it"), { t: "action", kind: "set", id: "e2", text: "", risk: "free" }], [{ t: "done" }]],
+    });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    assert.deepStrictEqual(r.driver.acts(), [["focus", "e2"]], "no Cmd+A, no Backspace");
+    assert.deepStrictEqual(r.pasted, []);
+    assert.deepStrictEqual(r.post.reqs()[1].history[0], { said: "clear it", did: "SET e2 | ", result: "failed", note });
+  }
+  // Focus that lands a moment late (a browser reports it on its next frame)
+  // is looked for once more, and then the keys go.
+  const FOCUSED = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e2" });
+  const WRITTEN = snap([EXPORT, Object.assign({}, COMPOSER, { value: "hi" }), SEND, HEADING], { focused: "e2" });
+  const late = rig({
+    snaps: [SLACK, ELSEWHERE, FOCUSED, WRITTEN],
+    scripts: [[heardDo("write hi"), { t: "action", kind: "set", id: "e2", text: "hi", risk: "free" }], [{ t: "done" }]],
+  });
+  late.agent.begin({ app: "Slack" });
+  await late.agent.heard(AUDIO);
+  assert.deepStrictEqual(late.driver.acts(), [["focus", "e2"], ["key", "cmd+a"]]);
+  assert.deepStrictEqual(late.pasted, ["hi"]);
+  assert.strictEqual(late.driver.snapshots(), 4, "begin, two focus checks, after");
+  assert.strictEqual(late.post.reqs()[1].history[0].result, "ok");
+  // The same check guards the paste a native set falls back to.
+  const NOTES = snap([{ id: "e1", role: "field", label: "Title", value: "", frame: [10, 10, 300, 20] }], { app: { name: "TextEdit", pid: 7 } });
+  const OTHER = snap([{ id: "e1", role: "field", label: "Title", value: "" }, { id: "e2", role: "area", label: "Body", focused: true }], { app: { name: "TextEdit", pid: 7 }, focused: "e2" });
+  const r = rig({
+    snaps: [NOTES, OTHER],
+    results: { setValue: { ok: false, error: "not settable" } },
+    scripts: [[heardDo("title it Plan"), { t: "action", kind: "set", id: "e1", text: "Plan", risk: "free" }], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "TextEdit" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["setValue", "e1", "Plan"], ["focus", "e1"]]);
+  assert.deepStrictEqual(r.pasted, []);
 });
 
 test("set in a native app writes the value, and falls back to paste when that fails", async () => {
@@ -425,8 +496,9 @@ test("set in a native app writes the value, and falls back to paste when that fa
   assert.deepStrictEqual(ok.driver.acts(), [["setValue", "e1", "Plan"]]);
   assert.deepStrictEqual(ok.pasted, []);
 
+  const NOTES_FOCUSED = snap([{ id: "e1", role: "field", label: "Title", value: "", focused: true, frame: [10, 10, 300, 20] }], { app: { name: "TextEdit", pid: 7 }, focused: "e1" });
   const bad = rig({
-    snaps: [NOTES],
+    snaps: [NOTES, NOTES_FOCUSED],
     results: { setValue: { ok: false, error: "not settable" } },
     scripts: [[heardDo("title it Plan"), { t: "action", kind: "set", id: "e1", text: "Plan", risk: "free" }], [{ t: "done" }]],
   });
@@ -698,6 +770,95 @@ test("an OPEN that lands in a sensitive app ends the run without sending its scr
   assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blocked]);
 });
 
+// A browser keeps its app name on every site and in every window, so these
+// are told apart by the window's title, which the helpers report for this
+// check only.
+const CHROME = { name: "Google Chrome", pid: 5 };
+const GMAIL = snap([
+  { id: "e1", role: "tab", label: "Chase Online", frame: [200, 0, 160, 30] },
+  { id: "e2", role: "text", label: "Inbox", frame: [20, 80, 100, 20] },
+], { app: CHROME, window: { frame: WIN, title: "Inbox (3) - me@example.com - Gmail" } });
+
+test("a press that lands on a bank site in the same browser ends the run without sending it", async () => {
+  const BANK = snap([
+    { id: "e1", role: "text", label: "Total checking balance $12,345.67", frame: [20, 80, 300, 20] },
+    { id: "e2", role: "text", label: "Account ending 4321", frame: [20, 110, 300, 20] },
+  ], { app: CHROME, window: { frame: WIN, title: "Chase Online - Accounts" } });
+  const r = rig({
+    confirm: true,
+    snaps: [GMAIL, BANK],
+    scripts: [[heardDo("switch to my chase tab"), press("e1")], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Gmail" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]]);
+  assert.strictEqual(r.post.requests.length, 1, "the bank page is never posted");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blocked]);
+  assert.strictEqual(r.agent.active(), false);
+  const sent = JSON.stringify(r.post.reqs());
+  for (const secret of ["12,345", "4321", "me@example.com", "Inbox (3)"]) assert.ok(!sent.includes(secret), secret);
+  assert.ok(!r.logs.join("\n").includes("Chase Online - Accounts"), "the title is not logged either");
+});
+
+test("a key that opens a private window ends the run without sending it", async () => {
+  const INCOGNITO = snap([{ id: "e1", role: "field", label: "Address and search bar", focused: true }], {
+    app: CHROME, focused: "e1", window: { frame: WIN, title: "New Incognito Tab - Google Chrome" },
+  });
+  const r = rig({
+    snaps: [GMAIL, GMAIL, INCOGNITO],
+    scripts: [[heardDo("open an incognito window"), { t: "action", kind: "key", keys: "cmd+shift+n", risk: "free" }], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Gmail" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["key", "cmd+shift+n"]]);
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blockedPrivate]);
+});
+
+test("no key, paste or select-all goes into a window that turned private while the step waited", async () => {
+  const BAR = { id: "e1", role: "field", label: "Address and search bar", value: "", focused: true, frame: [100, 0, 600, 30] };
+  const NORMAL = snap([BAR], { app: CHROME, focused: "e1", window: { frame: WIN, title: "New Tab - Google Chrome" } });
+  const PRIVATE = snap([BAR], { app: CHROME, focused: "e1", window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
+  for (const action of [
+    { t: "action", kind: "key", keys: "enter", risk: "free" },
+    { t: "action", kind: "type", text: "tailzu.space", risk: "free" },
+    { t: "action", kind: "set", id: "e1", text: "tailzu.space", risk: "free" },
+  ]) {
+    const r = rig({ snaps: [NORMAL, PRIVATE], scripts: [[heardDo("go to tailzu"), action], [{ t: "done" }]] });
+    r.agent.begin({ app: "Chrome" });
+    await r.agent.heard(AUDIO);
+    assert.deepStrictEqual(r.driver.acts().filter((c) => c[0] === "key"), [], action.kind);
+    assert.deepStrictEqual(r.pasted, [], action.kind);
+    assert.strictEqual(r.post.requests.length, 1, action.kind);
+    assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blockedPrivate], action.kind);
+  }
+});
+
+test("a first screen that is private or sensitive by its title sends nothing at all", async () => {
+  for (const [title, text] of [["Private Browsing - Safari", TEXT.blockedPrivate], ["Patient portal - MyClinic", TEXT.blocked]]) {
+    const s = snap([{ id: "e1", role: "text", label: "Lab results" }], { app: { name: "Safari", pid: 3 }, window: { frame: WIN, title } });
+    const r = rig({ snaps: [s], scripts: [[heardShow("what is this?"), { t: "done" }]] });
+    r.agent.begin({ app: "Safari" });
+    await r.agent.heard(AUDIO);
+    assert.strictEqual(r.post.requests.length, 0, title);
+    assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", text], title);
+  }
+});
+
+test("the window's title is used on this computer only: never in a request", async () => {
+  const TITLED = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e2", window: { frame: WIN, title: "Q3 layoffs — draft" } });
+  const r = rig({
+    snaps: [TITLED, TITLED, TITLED],
+    scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 2);
+  const sent = JSON.stringify(r.post.reqs());
+  assert.ok(!sent.includes("layoffs"));
+  assert.ok(!sent.includes("title"));
+});
+
 test("a failed snapshot still asks, with no elements and the reason in the log", async () => {
   const r = rig({ snaps: [{ ok: false, error: "not trusted" }], scripts: [[heardShow("what is this?"), { t: "say", text: "A chat app." }, { t: "done" }]] });
   r.agent.begin({ app: "Slack" });
@@ -844,6 +1005,38 @@ test("with a password field focused, neither the selection nor the field goes", 
   assert.strictEqual(screen.selection, undefined);
   assert.strictEqual(screen.field, undefined);
   assert.ok(!JSON.stringify(screen).includes("hunter2"));
+});
+
+test("an address bar's selection never goes, nor one carrying a URL's query; any other goes verbatim", async () => {
+  const cases = [
+    // Focusing the omnibox selects the whole URL, reset token and all.
+    [{ id: "e1", role: "field", label: "Address and search bar", focused: true }, "https://accounts.example.com/reset?token=SECRET-RESET-TOKEN-123", undefined],
+    // Safari's, by its own label; even a URL with no query is the address bar's.
+    [{ id: "e1", role: "field", label: "Smart Search Field", focused: true }, "github.com/tailzu/desktop", undefined],
+    [{ id: "e1", role: "combo", label: "Search Google or type a URL", focused: true }, "example.com/inbox", undefined],
+    // Anywhere else, a query or a fragment keeps the whole selection home.
+    [{ id: "e1", role: "area", label: "Message #design", focused: true }, "see https://x.example.com/a?session=abc123 here", undefined],
+    [null, "https://example.com/cb#access_token=xyz", undefined],
+    [{ id: "e1", role: "area", label: "Message #design", focused: true }, "www.example.com/watch?v=abc", undefined],
+    // A selection with no URL secrets is sent as it is, edges and all: the
+    // rewrite is pasted back over exactly this.
+    [{ id: "e1", role: "area", label: "Message #design", focused: true }, "  the mockups are ready, see https://example.com/mockups  ", "  the mockups are ready, see https://example.com/mockups  "],
+    [{ id: "e1", role: "area", label: "Message #design", focused: true }, "Are we there yet? #design", "Are we there yet? #design"],
+  ];
+  for (const [el, selection, want] of cases) {
+    const s = snap(el ? [el] : [{ id: "e1", role: "text", label: "Docs" }], { focused: el ? "e1" : null, selection });
+    const r = rig({ snaps: [s], scripts: [[heardShow("what is this?"), { t: "done" }]] });
+    r.agent.begin({ app: "Chrome" });
+    await r.agent.heard(AUDIO);
+    const { screen } = r.post.reqs()[0];
+    assert.strictEqual(screen.selection, want, selection);
+    if (want === undefined) for (const secret of ["SECRET", "github.com/tailzu", "inbox", "session=", "access_token", "v=abc"]) assert.ok(!JSON.stringify(screen).includes(secret), selection + ": " + secret);
+  }
+  // The address bar is still named as one: the model knows where focus is.
+  const r = rig({ snaps: [snap([cases[0][0]], { focused: "e1", selection: cases[0][1] })], scripts: [[heardShow("what is this?"), { t: "done" }]] });
+  r.agent.begin({ app: "Chrome" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.post.reqs()[0].screen.field, { kind: "url", label: "Address and search bar" });
 });
 
 test("toRequestElements caps the list at max, and never above 250", () => {
@@ -1175,6 +1368,30 @@ test("makePost: multipart with audio — the request field first, then the recor
   assert.strictEqual(file.type, "audio/webm");
   assert.strictEqual(file.name, "ask.webm");
   assert.strictEqual(Buffer.from(await file.arrayBuffer()).toString(), "not really opus");
+});
+
+test("makePost: the recording is named by its container, not its codec", async () => {
+  const cases = [
+    // What the recorder actually reports: Opus in WebM is a .webm.
+    [{ mime: "audio/webm;codecs=opus", data: Buffer.from("x") }, "ask.webm", "audio/webm"],
+    [{ mime: "audio/ogg;codecs=opus", data: Buffer.from("x") }, "ask.ogg", "audio/ogg"],
+    [{ mime: "audio/opus", data: Buffer.from("x") }, "ask.ogg", "audio/ogg"],
+    [{ mime: "audio/wav", data: Buffer.from("x") }, "ask.wav", "audio/wav"],
+    [{ mime: "audio/mp4", data: Buffer.from("x") }, "ask.m4a", "audio/mp4"],
+    [{ mime: "", data: Buffer.from("x") }, "ask.webm", "audio/webm"],
+    // A Blob with no mime beside it goes by its own type.
+    [{ data: new Blob(["x"], { type: "audio/webm;codecs=opus" }) }, "ask.webm", "audio/webm"],
+    [{ data: new Blob(["x"], { type: "audio/ogg" }) }, "ask.ogg", "audio/ogg"],
+  ];
+  for (const [audio, name, type] of cases) {
+    const fetch = fakeFetch([ndjson([{ t: "done" }])]);
+    const post = makePost({ baseUrl: "http://127.0.0.1:8787", token: async () => "t1", fetch });
+    await collect(post(REQ, audio, undefined));
+    const file = fetch.calls[0].init.body.get("audio");
+    assert.strictEqual(file.name, name, audio.mime || "blob " + audio.data.type);
+    assert.strictEqual(file.type, type, audio.mime || "blob " + audio.data.type);
+    assert.strictEqual(Buffer.from(await file.arrayBuffer()).toString(), "x");
+  }
 });
 
 test("makePost: a 401 renews the token once and sends the step again", async () => {

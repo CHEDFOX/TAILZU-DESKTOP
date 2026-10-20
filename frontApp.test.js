@@ -100,13 +100,34 @@ test("the selection in the field goes with it, whole or not at all", () => {
     { kind: "text", label: "Reply", before: "", selection: "thanks so much" });
 });
 
+test("a field that takes a value sends no selection: it is the old address or query", () => {
+  const RS = "\u001e";
+  // Cmd+L in a browser selects the whole address; a search box its last query.
+  const url = "https://docs.google.com/document/d/abc123/edit?usp=sharing";
+  assert.deepStrictEqual(fieldOf({ role: "field", label: "Address and search bar", caret: true, before: "", selection: url }),
+    { kind: "url", label: "Address and search bar", before: "" });
+  assert.strictEqual(fieldOf({ role: "field", subrole: "AXSearchField", caret: true, before: "", selection: "old query" }).selection, undefined);
+  assert.strictEqual(fieldOf({ role: "field", label: "Email address", caret: true, before: "", selection: "me@x.com" }).selection, undefined);
+  assert.strictEqual(macFieldOf(["AXTextField", "AXSearchField", "Search", "", "", "yes", "last query", ""].join(RS)).selection, undefined);
+  assert.strictEqual(windowsField({ ok: true, type: "ControlType.Edit", name: "Address and search bar", caret: true, before: "", selection: url }).selection, undefined);
+  assert.strictEqual(windowsField({ ok: true, type: "ControlType.ComboBox", name: "Search or type web address", caret: true, before: "", selection: url }).selection, undefined);
+  // Prose fields still send it.
+  assert.strictEqual(fieldOf({ role: "field", label: "Subject", caret: true, before: "", selection: "Q3 plan" }).selection, "Q3 plan");
+  assert.strictEqual(fieldOf({ role: "area", label: "Message #design", caret: true, before: "", selection: "see you" }).selection, "see you");
+});
+
 test("the field scripts read the selection where it can be written over", () => {
   const { macFieldScript, PS } = require("./frontApp.js");
   const mac = macFieldScript(1000);
   assert.match(mac, /AXSelectedText"/);
+  // A Mac reads it only where the field's value can be set, as Windows checks
+  // IsReadOnly: a terminal's selected output is not text a paste replaces.
+  assert.match(mac, /if settable of attribute "AXValue" of el then set sel to value of attribute "AXSelectedText" of el/);
+  assert.ok(!/^\s*set sel to value of attribute "AXSelectedText"/m.test(mac), "AXSelectedText is read with no settable check");
   assert.match(mac, /caret & RS & sel & RS & b/);
   assert.match(mac, /> 8000 then set sel to ""/);
   assert.match(PS, /ValuePattern\]::Pattern/);
+  assert.match(PS, /IsReadOnly/);
   assert.match(PS, /GetText\(8001\)/);
   assert.match(PS, /\$st\.Length -le 8000/);
 });
@@ -176,4 +197,138 @@ test("the merged screen is cut from the end, keeping whole lines", () => {
   assert.ok(out.length <= 30);
   assert.ok(out.endsWith("the newest line"));
   assert.ok(!out.includes("AAAA"));
+});
+
+// THE RECORDER'S SIDE OF IT (recorder.js, the hidden window's script, run
+// here in a sandbox with a stand-in for the main process and the server).
+const vm = require("node:vm");
+const fs = require("node:fs");
+const path = require("node:path");
+
+/** recorder.js in a sandbox: `on` holds the handlers it registered, `sent`
+ *  what it told the main process, `posts` every upload's form fields. */
+function loadRecorder(flags = {}, platform = "MacIntel") {
+  const on = {}, sent = [], posts = [];
+  const tailzu = {
+    token: async () => "token",
+    result: (p) => sent.push(["result", p]), segment: (p) => sent.push(["segment", p]),
+    error: (p) => sent.push(["error", p]), partial: () => {},
+  };
+  for (const name of ["onStart", "onTarget", "onAround", "onField", "onStop", "onCancel"]) tailzu[name] = (cb) => { on[name] = cb; };
+  const reply = { cleanedText: "Shorter.", replacedSelection: true };
+  const sandbox = {
+    window: { tailzu, TailzuKnobs: require("./knobs.js") },
+    // The microphone never opens: these tests send by hand.
+    navigator: { platform, mediaDevices: { getUserMedia: () => new Promise(() => {}) } },
+    setTimeout, clearTimeout, setInterval, clearInterval, Date, Promise, Blob, FormData, AbortController, console,
+    fetch: async (url, init) => {
+      posts.push(Object.fromEntries([...init.body.entries()].filter(([k]) => k !== "audio")));
+      return { ok: true, status: 200, json: async () => reply };
+    },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "recorder.js"), "utf8"), sandbox, { filename: "recorder.js" });
+  const start = (session) => on.onStart({ session, baseUrl: "https://api.example", knobs: { flags, labels: {} } });
+  const upload = async (sid, isSegment = false) => {
+    const report = await sandbox.transcribe(sid, [new Blob(["x"])], "audio/webm", isSegment, 1000, false);
+    if (report) report();
+  };
+  return { on, sent, posts, start, upload, sandbox, reply };
+}
+
+test("a rewrite keeps up to 64 characters of the selection's own whitespace each side", () => {
+  const { sandbox } = loadRecorder();
+  const indent = " ".repeat(12);
+  const sel = indent + "total = 0\n" + indent + "for x in xs:\n" + indent + "    total += x\n";
+  assert.deepStrictEqual([...sandbox.edgesOf(sel)], [indent, "\n"]);
+  assert.deepStrictEqual([...sandbox.edgesOf("\n".repeat(10) + "text" + " ".repeat(30))], ["\n".repeat(10), " ".repeat(30)]);
+  // Beyond 64 the main process would refuse it anyway (fromRecorder).
+  const deep = sandbox.edgesOf(" ".repeat(100) + "x" + "\n".repeat(100));
+  assert.strictEqual(deep[0].length, 64);
+  assert.strictEqual(deep[1].length, 64);
+  // Unchanged text comes back as itself: a no-op edit changes nothing.
+  assert.strictEqual(deep[0] + "x" + deep[1], " ".repeat(64) + "x" + "\n".repeat(64));
+  assert.strictEqual(sandbox.edgesOf(indent + "a")[0] + "a" + sandbox.edgesOf(indent + "a")[1], indent + "a");
+});
+
+test("a short instruction waits for the field read, and carries the selection it found", async () => {
+  const r = loadRecorder({ "desktop.recorder.fieldWaitMs": 2000 });
+  r.start(1);
+  const sel = "We ship on Friday and we should tell the whole team about it.\n";
+  // "shorter", stopped before the main process had read the field.
+  const sending = r.upload(1);
+  setTimeout(() => r.on.onField({ session: 1, field: { kind: "message", label: "Message", before: "", selection: sel } }), 40);
+  await sending;
+  assert.strictEqual(r.posts.length, 1);
+  assert.strictEqual(r.posts[0].selection, sel);
+  assert.strictEqual(r.posts[0].fieldKind, "message");
+  // Pasted over the selection with its own trailing line break.
+  const [kind, msg] = r.sent[0];
+  assert.strictEqual(kind, "result");
+  assert.deepStrictEqual([...msg.edges], ["", "\n"]);
+});
+
+test("the wait is bounded, ends on an empty answer, and only the first request waits", async () => {
+  // No read ever comes: the upload goes after fieldWaitMs, without one.
+  let r = loadRecorder({ "desktop.recorder.fieldWaitMs": 80 });
+  r.start(1);
+  let t0 = Date.now();
+  await r.upload(1);
+  assert.ok(Date.now() - t0 >= 70, "it did not wait for the field read");
+  assert.ok(Date.now() - t0 < 1000);
+  assert.strictEqual(r.posts[0].selection, undefined);
+  // A later request never waits, however long the wait may be, and a read
+  // that lands after the first request is not taken.
+  require("./knobs.js").setKnobs({ flags: { "desktop.recorder.fieldWaitMs": 5000 }, labels: {} });
+  r.reply.cleanedText = "";
+  t0 = Date.now();
+  await r.upload(1, true);
+  assert.ok(Date.now() - t0 < 2000, "a later request waited");
+  r.on.onField({ session: 1, field: { kind: "longtext", before: "", selection: "late" } });
+  await r.upload(1, true);
+  assert.strictEqual(r.posts[2].selection, undefined);
+
+  // The main process said there is no text field: no wait at all.
+  r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000 });
+  r.start(2);
+  r.on.onField({ session: 2, field: null });
+  t0 = Date.now();
+  await r.upload(2);
+  assert.ok(Date.now() - t0 < 500);
+
+  // A private window: its field is never read, so nothing is waited for.
+  r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000 });
+  r.start(3);
+  r.on.onTarget({ session: 3, targetApp: "Chrome", privateField: true });
+  t0 = Date.now();
+  await r.upload(3);
+  assert.ok(Date.now() - t0 < 500);
+  assert.strictEqual(r.posts[0].selection, undefined);
+
+  // Long after the press, a read that has not come never will: no wait.
+  r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000, "desktop.field.timeoutMs": 0 });
+  r.start(4);
+  await new Promise((res) => setTimeout(res, 1600));
+  t0 = Date.now();
+  await r.upload(4);
+  assert.ok(Date.now() - t0 < 500);
+
+  // The app was named: the read began then and gives up desktop.field.timeoutMs
+  // later. The main process sends nothing for "no text field", so that is
+  // where the wait ends, not a second and a half after the press.
+  r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000, "desktop.field.timeoutMs": 150 });
+  r.start(5);
+  r.on.onTarget({ session: 5, targetApp: "Finder" });
+  t0 = Date.now();
+  await r.upload(5);
+  assert.ok(Date.now() - t0 >= 120, "it did not wait for the read that had begun");
+  assert.ok(Date.now() - t0 < 1000, "it waited past the read's own limit");
+
+  // Linux reads no field (frontApp.focusedField), so nothing is waited for.
+  r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000 }, "Linux x86_64");
+  r.start(6);
+  t0 = Date.now();
+  await r.upload(6);
+  assert.ok(Date.now() - t0 < 500);
+  assert.strictEqual(r.posts.length, 1);
 });

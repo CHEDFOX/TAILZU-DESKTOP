@@ -58,6 +58,7 @@ const TEXT = {
   stuck: "That didn't change anything, so I stopped.",
   loop: "I was going round in circles, so I stopped.",
   blocked: "I'll stop here: I don't look at this app.",
+  blockedPrivate: "I'll stop here: I don't look at private windows.",
   network: "Couldn't reach Tailzu.",
   incomplete: "The answer was cut off. Try again?",
   failed: "Something went wrong.",
@@ -161,6 +162,9 @@ const ADDRESS_BAR = /\b(?:address(?:\s+and\s+search)?\s+bar|address\s+and\s+sear
 // tokens live. The path is kept; it says which page, and that is enough.
 const URL_TAIL = /\b((?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s?#]*)[?#]\S*/gi;
 const stripUrls = (s) => s.replace(URL_TAIL, "$1");
+// The same test as a yes or no: some URL in the text has a query or a
+// fragment. Used where stripping is not an option (the selection).
+const HAS_URL_TAIL = /\b(?:[a-z][a-z0-9+.-]*:\/\/|www\.)[^\s?#]*[?#]\S/i;
 
 /**
  * The snapshot's elements as the server takes them: id, role, label, short
@@ -293,6 +297,22 @@ function focusMoved(before, now) {
   const name = printable(fb);
   return name ? `focus moved to ${name}` : fb ? "focus moved" : "focus was lost";
 }
+
+/** True when `now` has keyboard focus on `target` (an element of `before`):
+ *  the same app, and a focused element of the same role and label. Ids are
+ *  renumbered on every walk, so the id cannot be compared. */
+function focusLandedOn(target, before, now) {
+  if (!target || !now || now.ok !== true) return false;
+  const appA = squash(before && before.ok === true && before.app && before.app.name);
+  const appB = squash(now.app && now.app.name);
+  if (appA && appB && appA !== appB) return false;
+  const f = focusedOf(now);
+  return !!f && keyOf(f) === keyOf(target);
+}
+
+/** The window's title, for the checks on this computer only. It is never put
+ *  in a request, a history note or a log line. "" when the helper gave none. */
+const titleOf = (snapshot) => str(snapshot && snapshot.window && snapshot.window.title).slice(0, 200);
 
 // ---- risk -------------------------------------------------------------------
 
@@ -634,6 +654,16 @@ function close(it) {
 
 const hasAudio = (a) => !!(a && a.data && (a.data.length > 0 || a.data.size > 0 || a.data.byteLength > 0));
 
+/** A press's answers that do not mean "nothing happened": the driver gave up
+ *  waiting while the helper still ran it, the helper died part way, or the
+ *  app took it and was slow to say so (an ok with pending or slow set). */
+const UNSURE_PRESS = new Set(["timeout", "pending", "slow", "dead", "helper_exited"]);
+function pressMayHaveHappened(r) {
+  if (!r || typeof r !== "object") return false;
+  if (r.ok === true) return r.pending === true || r.slow === true;
+  return UNSURE_PRESS.has(str(r.error));
+}
+
 /**
  * @param {object} deps
  * @param {object} deps.driver   the §1 driver API
@@ -762,20 +792,37 @@ function createAgent(deps) {
     run.byId = new Map(elementsOf(run.snapshot).filter((e) => typeof e.id === "string").map((e) => [e.id, e]));
   }
 
-  /** adopt(), unless the screen is now a sensitive app's — an OPEN, a link
-   *  or a click of theirs landed in a bank or a password manager. Nothing of
-   *  it is sent: the run ends here. False when it did. */
+  /** adopt(), unless the screen is now a private window or a sensitive app's
+   *  — an OPEN, a link, a tab or a key of theirs landed in a bank, a password
+   *  manager or an incognito window. The check at begin saw only the window
+   *  that was in front then; a browser's app name stays "Google Chrome" on
+   *  every site, so the window's title is checked here too, on every screen
+   *  the run takes in. Nothing of a refused screen is sent: the run ends
+   *  here. False when it did. */
   function adoptChecked(run, snap) {
-    if (snap && snap.ok === true && snap.app && snap.app.name && isSensitive(snap.app.name)) {
-      log(`agent ${run.tag}: the front app is a sensitive one; stopping`);
-      run.snapshot = { ok: false, error: "sensitive", elements: [] };
+    const why = refusal(snap);
+    if (why) {
+      log(`agent ${run.tag}: the front window is ${why === "private" ? "a private one" : "a sensitive app's"}; stopping`);
+      run.snapshot = { ok: false, error: why, elements: [] };
       run.frames = new Map();
       run.byId = new Map();
-      finish(run, "done", TEXT.blocked);
+      run.stop = why === "private" ? "private" : "blocked";
+      finish(run, "done", why === "private" ? TEXT.blockedPrivate : TEXT.blocked);
       return false;
     }
     adopt(run, snap);
     return true;
+  }
+
+  /** "private" or "sensitive" when this screen must not be read or acted
+   *  in, by the app's name and the window's title; "" otherwise. */
+  function refusal(snap) {
+    if (!snap || snap.ok !== true) return "";
+    const name = snap.app && snap.app.name ? str(snap.app.name) : "";
+    const title = titleOf(snap);
+    if (title && frontApp.isPrivate(title)) return "private";
+    if ((name && isSensitive(name)) || (title && isSensitive(squash(name + " " + title)))) return "sensitive";
+    return "";
   }
 
   /** The apps this run counts as "where it started": the short label it was
@@ -795,13 +842,22 @@ function createAgent(deps) {
     const snap = run.snapshot;
     const screen = { elements: toRequestElements(snap, Math.min(MAX_ELEMENTS, num("desktop.agent.maxElements", 250))) };
     const focused = focusedOf(snap);
-    if (snap.ok === true && typeof snap.selection === "string" && snap.selection && snap.selection.length <= 8000 && !(focused && focused.secure)) {
+    // The field's kind in dictation's own words (frontApp.kindOf), so the
+    // server reads it the same way on both routes. Never a password's.
+    const kind = focused ? frontApp.kindOf(focused.role, focused.secure ? "secure" : "", focused.label) : null;
+    // A browser selects the whole URL when its address bar takes focus (a
+    // click, Cmd+L), so the selection there is the page's address with its
+    // reset tokens and session ids: the very thing toRequestElements keeps
+    // off the wire. Nor does any other selection go with a URL's query or
+    // fragment in it. It cannot be stripped instead: a rewrite pastes its
+    // answer over the whole selection, and a stripped copy would put the
+    // link back broken.
+    const addressBar = !!focused && (kind === "url" || ((focused.role === "field" || focused.role === "combo") && ADDRESS_BAR.test(squash(focused.label))));
+    if (snap.ok === true && typeof snap.selection === "string" && snap.selection && snap.selection.length <= 8000
+      && !(focused && focused.secure) && !addressBar && !HAS_URL_TAIL.test(snap.selection)) {
       screen.selection = snap.selection;
     }
     if (focused) {
-      // The field's kind in dictation's own words (frontApp.kindOf), so the
-      // server reads it the same way on both routes. Never a password's.
-      const kind = frontApp.kindOf(focused.role, focused.secure ? "secure" : "", focused.label);
       if (kind && kind !== "password") {
         screen.field = { kind };
         const label = clip(squash(focused.label), 80);
@@ -928,9 +984,33 @@ function createAgent(deps) {
    *  with focus somewhere else selects the whole page, and a paste after it
    *  replaces the wrong thing. */
   async function pasteInto(run, id, text) {
+    const target = run.byId.get(id) || null;
+    const before = run.snapshot;
     const focus = await drive("focus", id);
     if (focus.ok !== true) return { ok: false, error: focus.error || "couldn't focus it" };
     if (!alive(run)) return { ok: false, error: "cancelled" };
+    // A focus the app said yes to is not always a focus that moved: a web
+    // page's wrapper takes the request and keeps nothing, an app answers late.
+    // So the screen is read again, and the keys go only when the focused
+    // element is the field this step names — otherwise Cmd+A selects a whole
+    // document and the paste or Backspace replaces it.
+    // A browser moves focus a moment after it says yes (the page takes it and
+    // reports back on its next frame), so a first read that still shows the
+    // old focus waits a little and looks once more before giving up.
+    for (let look = 0; ; look++) {
+      if (look) {
+        await race(run, sleep(Math.min(150, num("desktop.agent.settleMs", 450))));
+        if (!alive(run)) return { ok: false, error: "cancelled" };
+      }
+      const seen = await race(run, takeSnapshot());
+      if (!alive(run)) return { ok: false, error: "cancelled" };
+      if (!seen || seen.ok !== true) return { ok: false, error: "couldn't read the focus" };
+      // Nothing is typed into a private window or a sensitive app either; the
+      // read after the step ends the run there.
+      if (refusal(seen)) return { ok: false, error: "not this window" };
+      if (focusLandedOn(target, before, seen)) break;
+      if (look >= 1) return { ok: false, error: "focus didn't move" };
+    }
     const all = await drive("key", platform === "mac" ? "cmd+a" : "ctrl+a");
     if (all.ok !== true) return { ok: false, error: all.error || "couldn't select it" };
     if (!alive(run)) return { ok: false, error: "cancelled" };
@@ -944,6 +1024,17 @@ function createAgent(deps) {
     switch (a.kind) {
       case "press": {
         const pressed = await drive("press", id);
+        // A press that timed out, is still running (it opened something
+        // modal) or that the app was slow to answer may well have happened:
+        // the helper does the work whether or not anyone still waits for it.
+        // A click on top of it would press twice — a toggle flips back, Add
+        // adds two. So no click: the step counts as failed, and the screen
+        // read next says what it did.
+        if (pressMayHaveHappened(pressed)) {
+          const how = pressed.ok === true ? (pressed.pending === true ? "pending" : "slow") : clip(str(pressed.error), 40);
+          log(`agent ${run.tag}: press ${id} came back ${how}; not clicking on top of it`);
+          return { ok: false, error: how, maybe: true };
+        }
         if (pressed.ok === true) return pressed;
         // Plenty of controls have no press action to call (custom web
         // widgets, canvas apps); a real click at their centre still works.
@@ -1050,6 +1141,13 @@ function createAgent(deps) {
     if (a.kind === "key" || a.kind === "type") {
       const nowSnap = await race(run, takeSnapshot());
       if (!alive(run)) return null;
+      // The same field in a window that is now private (one of theirs opened
+      // while the guide was asking) is still not one to type in.
+      if (refusal(nowSnap)) {
+        if (frame) tell(run, "unpoint");
+        adoptChecked(run, nowSnap);
+        return null;
+      }
       const moved = focusMoved(run.snapshot, nowSnap);
       if (moved) {
         log(`agent ${run.tag}: ${verb} not sent: focus moved since the step was planned`);
@@ -1076,7 +1174,14 @@ function createAgent(deps) {
     if (!adoptChecked(run, after)) return null;
 
     const ok = !!r && r.ok === true;
-    const note = ok ? describeChange(before, after) : clip("failed" + (r && r.error ? ": " + squash(r.error) : ""), 200);
+    let note;
+    if (ok) note = describeChange(before, after);
+    else if (r && r.maybe === true) {
+      // Not a failure the model should simply try again: what did change, if
+      // anything, goes with it.
+      const change = describeChange(before, after);
+      note = clip("press may have happened" + (change && change !== "nochange" ? "; " + change : ""), 200);
+    } else note = clip("failed" + (r && r.error ? ": " + squash(r.error) : ""), 200);
     const result = !ok ? "failed" : note === "nochange" ? "nochange" : "ok";
     const prev = run.history[run.history.length - 1];
     pushHistory(run, { said, did, result, note });
@@ -1352,12 +1457,18 @@ async function* readEvents(body) {
   }
 }
 
-function audioName(mime) {
+/** The recording's file name and type, by its CONTAINER, which is what the
+ *  server decodes by (the extension first). Opus is a codec that rides in
+ *  either: the recorder's "audio/webm;codecs=opus" is a WebM file, and named
+ *  .ogg it fails the server's speech measurement and goes to speech-to-text
+ *  as the wrong format. A bare "audio/opus" is an Ogg Opus file. */
+function audioFile(mime) {
   const m = str(mime).toLowerCase();
-  if (/ogg|opus/.test(m)) return "ask.ogg";
-  if (/wav|wave/.test(m)) return "ask.wav";
-  if (/mp4|m4a|aac/.test(m)) return "ask.m4a";
-  return "ask.webm";
+  if (/webm/.test(m)) return { name: "ask.webm", type: "audio/webm" };
+  if (/ogg/.test(m) || /^audio\/opus\b/.test(m)) return { name: "ask.ogg", type: "audio/ogg" };
+  if (/wav|wave/.test(m)) return { name: "ask.wav", type: "audio/wav" };
+  if (/mp4|m4a|aac/.test(m)) return { name: "ask.m4a", type: "audio/mp4" };
+  return { name: "ask.webm", type: "audio/webm" };
 }
 
 const STATUS_TEXT = {
@@ -1399,10 +1510,12 @@ function makePost(opts) {
       if (audio && audio.data) {
         body = new FormData();
         body.append("request", JSON.stringify(request));
-        const blob = typeof Blob !== "undefined" && audio.data instanceof Blob
-          ? audio.data
-          : new Blob([audio.data], { type: str(audio.mime) || "audio/webm" });
-        body.append("audio", blob, audioName(audio.mime || blob.type));
+        const given = typeof Blob !== "undefined" && audio.data instanceof Blob ? audio.data : null;
+        const file = audioFile(audio.mime || (given && given.type));
+        // Wrapped again (no copy) so the part's type is the plain container's,
+        // agreeing with its name.
+        const blob = new Blob([audio.data], { type: file.type });
+        body.append("audio", blob, file.name);
       } else {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(request);

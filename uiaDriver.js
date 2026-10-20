@@ -31,12 +31,29 @@ function scriptPath() {
   return path.join(__dirname, "native", "uia-agent.ps1");
 }
 
-/** How the default instance launches the helper (the same flags frontApp uses,
- *  plus -File for a script on disk). Injectable so tests speak to a fake. */
-function defaultCommand() {
+/** The command text that runs the helper: read the script and dot-source it,
+ *  so its $script: maps live in the one scope. The path sits in a
+ *  single-quoted PowerShell string, where only a quote needs doubling, but
+ *  PowerShell reads the typographic single quotes (‘ ’ ‚ ‛) as quotes too: a
+ *  profile folder like C:\Users\O’Brien would otherwise end the string early
+ *  and the helper would never start. Doubled, each stands for itself. */
+function loaderText(file) {
+  const p = String(file).replace(/['\u2018\u2019\u201A\u201B]/g, "$&$&");
+  return `. ([scriptblock]::Create([System.IO.File]::ReadAllText('${p}')))`;
+}
+
+/** How the default instance launches the helper: the same flags frontApp
+ *  uses, -EncodedCommand included. A script run with -File is subject to the
+ *  execution policy, and one set by Group Policy ("allow only signed
+ *  scripts") overrides -ExecutionPolicy Bypass, so the unsigned helper would
+ *  never start there; command text is not subject to it. The script is too big
+ *  to encode whole (the command line stops at 32K characters), so what is
+ *  encoded is a one-line loader. Injectable so tests speak to a fake. */
+function defaultCommand(file = scriptPath()) {
   return {
     cmd: "powershell.exe",
-    args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath()],
+    args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-EncodedCommand", Buffer.from(loaderText(file), "utf16le").toString("base64")],
   };
 }
 
@@ -55,7 +72,6 @@ function createUiaDriver(opts = {}) {
   }
 
   let child = null;
-  let buf = "";
   let seq = 0;
   let ready = null;
   const pending = new Map();
@@ -90,16 +106,29 @@ function createUiaDriver(opts = {}) {
 
   function start() {
     if (child) return;
+    let c;
     try {
-      child = spawnFn(command.cmd, command.args, { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+      c = spawnFn(command.cmd, command.args, { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       child = null;
       return;
     }
-    if (!child || !child.stdout || !child.stdin) { child = null; return; }
-    buf = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (d) => {
+    if (!c || !c.stdout || !c.stdin) { child = null; return; }
+    child = c;
+    // A write to a helper that has just died (killed from Task Manager, by
+    // antivirus, at logoff) is an EPIPE on its stdin, delivered after the
+    // write returned, so rawSend's try cannot catch it. Unheard, it would be
+    // an uncaught exception in Electron's main process and its error dialog.
+    // The exit that follows settles whatever was waiting.
+    c.stdin.on("error", () => {});
+    c.stdout.on("error", () => {});
+    // Each helper has its own line buffer, and its events count only while it
+    // is still the current one: a helper stopped and replaced must not settle,
+    // or reap, the requests of the one that came after it.
+    let buf = "";
+    c.stdout.setEncoding("utf8");
+    c.stdout.on("data", (d) => {
+      if (child !== c) return;
       buf += d;
       let i;
       while ((i = buf.indexOf("\n")) >= 0) {
@@ -108,8 +137,8 @@ function createUiaDriver(opts = {}) {
         if (line) onLine(line);
       }
     });
-    child.on("exit", () => reap("dead"));
-    child.on("error", () => reap("dead"));
+    c.on("exit", () => { if (child === c) reap("dead"); });
+    c.on("error", () => { if (child === c) reap("dead"); });
     ready = rawSend("ping", {}, cfg.warmupMs);
   }
 
@@ -166,7 +195,13 @@ function createUiaDriver(opts = {}) {
         .then((r) => (r && r.ok ? { ok: true, trusted: r.trusted !== false } : { ok: true, trusted: true }));
     },
     snapshot({ max = 250, timeoutMs } = {}) {
-      return send("snapshot", { max }, timeoutMs || cfg.snapshotTimeout);
+      const t = timeoutMs || cfg.snapshotTimeout;
+      // The walk's own budget, well inside the call's, as axDriver sends it:
+      // a huge tree (Slack, Teams, a long page) comes back truncated:true with
+      // what was found instead of timing out with nothing, and the helper,
+      // which does one thing at a time, is free again for the next call.
+      const budgetMs = Math.max(80, Math.min(t - 300, Math.round(t * 0.6)));
+      return send("snapshot", { max, budgetMs }, t);
     },
     press(id) { return send("press", { target: id }, cfg.actionTimeout); },
     click(id) { return send("click", { target: id }, cfg.actionTimeout); },
@@ -203,4 +238,5 @@ module.exports = {
   createUiaDriver,
   scriptPath,
   defaultCommand,
+  loaderText,
 };
