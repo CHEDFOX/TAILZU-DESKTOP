@@ -197,11 +197,12 @@
   }
   /**
    * TIED TO THE PILL: the card's bottom edge a tether's length above it,
-   * centred on it. An answer's ring the card (Blip's head included) would cover sends
-   * it sideways along the bottom, to just right of the ring or just left of
-   * it, whichever fits and moves it least; the tether bends after it. A ring
-   * too big for either (a whole pane) gets the card beside it as before it
-   * had a pill, still tied.
+   * centred on it. What the card (Blip's head included) would cover of the
+   * answer's ring or of the marks drawn on the screen sends it sideways along
+   * the bottom, to just right or just left of what it covered, wherever it
+   * then covers none of them and moves least; the tether bends after it. A
+   * ring too big for that (a whole pane) gets the card beside it as before
+   * it had a pill, still tied. Marks it cannot get clear of it covers.
    */
   function docked(P, cw, ch) {
     const a = room();
@@ -212,15 +213,22 @@
     // it sent the card gliding across the screen in the middle of an
     // answer, for a ring it can never be clear of.
     const ring = S.ring && !S.ring.tentative ? S.ring : null;
-    // Gone aside for a ring, it stays aside when the ring goes: it moves to
-    // make room, and coming back as an answer ends was movement for nothing.
-    // The next card starts over the pill.
-    if (!ring) return [S.slid && S.box ? clampX(S.box.x, cw) : x, y, "dock"];
+    // The marks too: the first one takes the place of the picture's
+    // tentative ring, and the card, back over the pill, sat on the very
+    // triangle it was drawing on, Blip's head over two of its marks.
+    const keep = [];
+    if (ring) {
+      const pad = K.num("desktop.guide.ringPad", 6) + 12;    // the ring's marching dots, and a breath
+      const [rx, ry, rw, rh] = ring.frame;
+      keep.push([rx - pad, ry - pad, rx + rw + pad, ry + rh + pad]);
+    }
+    for (const m of marks) if (!m.fadeAt && m.area) keep.push([m.area[0] - 10, m.area[1] - 10, m.area[0] + m.area[2] + 10, m.area[1] + m.area[3] + 10]);
+    // Gone aside, it stays aside when what it made room for goes: it moves
+    // to make room, and coming back as an answer ends was movement for
+    // nothing. The next card starts over the pill.
+    if (!keep.length) return [S.slid && S.box ? clampX(S.box.x, cw) : x, y, "dock"];
     const blipRoom = K.num("desktop.guide.blipRoom", 66);
-    const pad = K.num("desktop.guide.ringPad", 6) + 12;    // the ring's marching dots, and a breath
-    const [rx, ry, rw, rh] = ring.frame;
-    const l = rx - pad, t = ry - pad, r = rx + rw + pad, b = ry + rh + pad;
-    const over = (cx) => cx < r && cx + cw > l && y - blipRoom < b && y + ch > t;
+    const over = (cx) => keep.some(([l, t, r, b]) => cx < r && cx + cw > l && y - blipRoom < b && y + ch > t);
     if (!over(x)) return [x, y, "dock"];
     // Far enough off that the thread to the ring still shows between them;
     // nearer, down to a small gap, where the screen's edge leaves less room
@@ -228,11 +236,14 @@
     // the bottom and go over the ring with the tether through it.
     const gap = K.num("desktop.guide.slideGap", 44), least = 12;
     let best = null;
-    for (const cx of [Math.min(r + gap, a.r - cw), Math.max(l - gap - cw, a.l)]) {
-      if (cx < a.l || cx + cw > a.r || over(cx) || (cx > x ? cx < r + least : cx + cw > l - least)) continue;
-      if (best === null || Math.abs(cx - x) < Math.abs(best - x)) best = cx;
+    for (const [l, , r] of keep) {
+      for (const cx of [Math.min(r + gap, a.r - cw), Math.max(l - gap - cw, a.l)]) {
+        if (cx < a.l || cx + cw > a.r || over(cx) || (cx > x ? cx < r + least : cx + cw > l - least)) continue;
+        if (best === null || Math.abs(cx - x) < Math.abs(best - x)) best = cx;
+      }
     }
     if (best !== null) return [best, y, "dock"];
+    if (!ring) return [x, y, "dock"];
     // Still tied: never lower than the tether lets it be, or the thread
     // between it and the pill would be all but gone.
     const v1 = beside(ring, cw, ch);
@@ -953,7 +964,7 @@
     const amp = K.num("desktop.guide.inkWobble", 1.2);
     // Around a thing: its frame (`at` as a frame is taken as one too).
     const frame = asFrame(m.frame) || asFrame(m.at);
-    const out = { id, kind, strokes: [], len: 0, fill: null, sweep: null, disc: null, label: null, spots: null, bounds: null, path: null, start: 0, dur: 0, fadeAt: 0 };
+    const out = { id, kind, strokes: [], len: 0, fill: null, sweep: null, disc: null, label: null, spots: null, bounds: null, area: null, path: null, start: 0, dur: 0, fadeAt: 0 };
     const raw = [];
     switch (kind) {
       case "box": {
@@ -1099,6 +1110,16 @@
       for (const st of out.strokes) for (let i = 0; i < st.pts.length; i += 2) { x0 = Math.min(x0, st.pts[i]); x1 = Math.max(x1, st.pts[i]); y0 = Math.min(y0, st.pts[i + 1]); y1 = Math.max(y1, st.pts[i + 1]); }
       out.bounds = [x0 - 3, y0 - 3, x1 - x0 + 6, y1 - y0 + 6];
     } else if (out.sweep) out.bounds = [out.sweep[0], out.sweep[2], out.sweep[1] - out.sweep[0], out.sweep[3] - out.sweep[2]];
+    // All of it, arrows and paths too: what a card tied to the pill keeps
+    // off (docked). Drawn under the card, a mark it covers is not seen.
+    {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      const add = (x, y) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); };
+      for (const st of out.strokes) for (let i = 0; i < st.pts.length; i += 2) add(st.pts[i], st.pts[i + 1]);
+      if (out.disc) { add(out.disc.x - 12, out.disc.y - 12); add(out.disc.x + 12, out.disc.y + 12); }
+      if (out.sweep) { add(out.sweep[0], out.sweep[2]); add(out.sweep[1], out.sweep[3]); }
+      out.area = x1 >= x0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+    }
     const text = typeof m.text === "string" ? m.text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim().slice(0, 48) : "";
     if (text) {
       const size = K.num("desktop.guide.labelSize", 19);
@@ -1192,6 +1213,8 @@
     mk.start = prev && !reduced ? Math.max(ms, prev.start + .7 * prev.dur) : ms;
     if (mk.label) { mk.label.at = mk.start + (mk.kind === "label" ? 0 : mk.kind === "number" ? mk.dur * .6 : mk.dur * .55); placeLabel(mk); }
     marks.push(mk);
+    // Tied to the pill, the card may be over it: it makes room (docked).
+    if (S.docked) place(false);
     // A number that lands on the ring's corner moves the ring's label past
     // it (placeChip), and a label of a mark's that the ring's label now
     // covers moves off it.
