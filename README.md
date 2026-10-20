@@ -39,8 +39,9 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
     accessibility tree) or **uiaDriver.js** on Windows (UI Automation). Each
     is a warm helper speaking JSON lines.
   - **guide.html** + **guide.js** + **blip.js** draw the card, the ring on
-    the target, and Blip, the one-eyed dotted presenter, peeking over the
-    card and pointing.
+    the target, the thread from the pill, the marks Ask draws while it
+    explains, and Blip, the one-eyed dotted presenter, peeking over the
+    card and pointing. **pill.js** parts the pill for the thread.
   - `guide.html?demo` is a review page.
 
 Every page carries a Content-Security-Policy that runs only this folder's own
@@ -115,6 +116,10 @@ window rather than recording into a history no account owns.
     also read from its pixels on the device (the system's own OCR), and a
     question about something drawn sends one cropped picture, after a card
     asks **Allow once / Always for this app / Not now**.
+  - **Out of the pill**: the card grows out of the pill on a thread, stays
+    tied to it while it is up, and folds back into it at the end.
+  - **Drawing**: while it explains, it circles, underlines, numbers and
+    draws arrows on the screen or on the picture, labelled in handwriting.
   - **Mostly text**: what leaves the machine is a text list of the screen's
     buttons, fields and OCR'd lines (roles, labels, short values, a rough
     position), plus that one picture when allowed. No frames or window

@@ -72,6 +72,26 @@ const thread = SP.createThread();
 let pluckedAt = -1e9;
 let snapAt = -1e9;              // the halves met: the capsule clicks shut
 
+// ---- ask (ask.js, guide.html) -------------------------------------------------------
+// A question's card grows out of the pill. Dictation pulls the halves to the
+// edges of the screen; Ask is the same gesture turned upward: the halves part
+// a little at the seam, and the guide's thread rises out of the gap to the
+// card above. A bead sits in the gap, amber while the microphone is open,
+// cream while it thinks and while it shows. When the card folds back into the
+// thread and the thread comes home, the bead goes into the seam and the halves
+// click shut, the same click as after a dictation (snapAt).
+//
+// The gap rides the split's own springs (splitOpts): out to open, the yank in
+// to shut. Prefers-reduced-motion opens and shuts it with no overshoot, and
+// no click.
+const askGap = { x: 0, v: 0 };  // the gap at the seam: 0 shut … 1 open
+let askGapPx = 0;               // and in pixels, this frame
+let bead = 0;                   // how much of the bead there is, 0 … 1
+let beadHot = 0;                // amber (listening) … cream
+let beadSlow = 0;               // the slow pulse while it thinks
+const motionQuery = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+const REDUCED = () => !!(motionQuery && motionQuery.matches);
+
 // ---- state ------------------------------------------------------------------------
 let S = { name: "rest", at: 0, data: {} };
 let hint = "";               // the way in, as main words it for the keys it bound
@@ -87,6 +107,10 @@ function setState(name, data) {
   // pill: "these both we don't need". Written, the pill goes straight back
   // to rest; the words are in the field to be seen.
   if (name === "done" && !K.bool("desktop.pill.showDone", false)) name = "rest";
+  // Ask's phase comes again as the guide moves on (and with every card it
+  // puts up). The same phase again is not a new one: its clock, and the
+  // closing hold above all, runs from when it began.
+  if (name === "ask" && S.name === "ask" && data && data.phase === S.data.phase) { wake(); return; }
   S = { name, at: clock(), data: data || {} };
   if (name !== "listening") caption = "";
   wake();
@@ -174,6 +198,14 @@ function targets(t) {
     g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
     return g;
   }
+  // Ask, without the capsule: the small pill, solid, with the bead on its
+  // top edge where the thread leaves it. Shown even when the rest pill is
+  // not: the thread has to come out of something.
+  if (st === "ask") {
+    g.w = K.num("desktop.pill.restWidth", 46); g.h = K.num("desktop.pill.restHeight", 14);
+    g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
+    return g;
+  }
   if (st === "rest") {
     const open = hovered && restShown && !!hint;
     g.w = open ? K.num("desktop.pill.hoverPad", 30) + 3 * sq + 10 + textW(hint) : K.num("desktop.pill.restWidth", 46);
@@ -195,7 +227,7 @@ function targets(t) {
 
 let last = 0, running = false;
 function wake() { if (!running && !CAPTURE) { running = true; last = clock(); requestAnimationFrame(loop); } }
-function loop() { const settled = frame(); if (settled && S.name === "rest") { running = false; return; } requestAnimationFrame(loop); }
+function loop() { const settled = frame(); if (settled && (S.name === "rest" || S.name === "ask")) { running = false; return; } requestAnimationFrame(loop); }
 
 /** One frame. Returns true when nothing is moving. */
 function frame() {
@@ -225,6 +257,38 @@ function frame() {
     if (flashAt > pluckedAt) { pluckedAt = flashAt; if (S.name === "listening") thread.pluck(0.7, threadOpts()); }
   }
 
+  // Ask: open at the seam while a question is up. Closing, the gap is held
+  // while the guide's thread comes home (askCloseDelayMs), then the bead goes
+  // into the seam and, a beat behind it, the halves are pulled shut.
+  // 590 ms is when the guide's fold (desktop.guide.foldMs, 620) has the
+  // thread inside the bead: it is pulled down from 300 ms to 600 ms, slow and
+  // then fast. At 420 the bead sank while the thread still stood two thirds
+  // of its height over an empty gap, and the halves shut across its last few
+  // dots. The two are set together: a longer fold wants a longer hold.
+  const asking = S.name === "ask", phase = asking ? S.data.phase : "";
+  const shutAt = K.num("desktop.pill.askCloseDelayMs", 590);
+  const shutting = asking && phase === "closing" && t * 1000 >= shutAt;
+  const askTarget = asking && !(shutting && t * 1000 >= shutAt + K.num("desktop.pill.askShutLagMs", 110)) ? 1 : 0;
+  const agWas = clamp(askGap.x);
+  if (REDUCED()) { askGap.x = ease(askGap.x, askTarget, 18, dt); askGap.v = 0; }
+  else SP.spring(askGap, askTarget, splitOpts(), dt);
+  // The click only for halves that are home. A dictation that takes the pill
+  // mid-question shuts the gap as the halves leave for the edges, and the
+  // click's squash, drawn about the middle, threw the halves out past the
+  // ends of their thread.
+  if (agWas > 0.02 && askGap.x <= 0.004 && !REDUCED() && se <= 0.004) snapAt = now;
+  askGapPx = CAPSULE() ? K.num("desktop.pill.askGap", 9) * clamp(askGap.x) : 0;
+  // The bead goes in slowly, then quickly (askBeadMs), and the halves close
+  // on the last of it; anything else that ends it lets it go at its own pace.
+  const beadTarget = asking && !shutting ? 1 : 0;
+  if (shutting) bead = Math.min(bead, 1 - Math.pow(clamp((t * 1000 - shutAt) / Math.max(1, K.num("desktop.pill.askBeadMs", 160))), 2));
+  else bead = ease(bead, beadTarget, 14, dt);
+  beadHot = ease(beadHot, asking && phase === "listening" ? 1 : 0, 9, dt);
+  beadSlow = ease(beadSlow, asking && phase === "thinking" ? 1 : 0, 6, dt);
+  // Shut, and the click spent: back to rest by itself, unless main has
+  // already said so (it does, once the guide's window has gone).
+  if (shutting && askTarget === 0 && !SP.springMoving(askGap, 0) && bead < 0.01 && now - snapAt > 320) setState("rest");
+
   const g = targets(t), k = K.num("desktop.pill.spring", 16);
   const before = P.w + P.h + P.solid + P.buttons + P.text + P.cap;
   P.w = ease(P.w, g.w, k, dt); P.h = ease(P.h, g.h, k, dt);
@@ -235,6 +299,11 @@ function frame() {
   let moving = Math.abs(P.w + P.h + P.solid + P.buttons + P.text + P.cap - before) > 0.01;
   if (now - snapAt < 400) moving = true;
   if (SP.springMoving(splitState, splitTarget) || thread.energy() > 0.05) moving = true;
+  // Listening and thinking the bead breathes, and closing it is on its way
+  // in. Showing it is still: once the gap and the bead have settled, the
+  // frames stop for as long as the card is up (a confirm's is thirty seconds),
+  // as they do at rest.
+  if ((asking && (phase === "listening" || phase === "thinking" || phase === "closing")) || SP.springMoving(askGap, askTarget) || Math.abs(bead - beadTarget) > 0.005 || beadHot > 0.005 || beadSlow > 0.005) moving = true;
 
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
@@ -307,7 +376,7 @@ function frame() {
   for (let i = 0; i < n; i++) {
     const a = aa[i], d = Math.abs(i - mid), side = i < mid ? -1 : 1;
     let tx = cx, th = sq, ty = 0, ta = 0, hot = 0;
-    if (S.name === "rest" || (SPLIT() && (S.name === "listening" || S.name === "writing"))) {
+    if (S.name === "rest" || S.name === "ask" || (SPLIT() && (S.name === "listening" || S.name === "writing"))) {
       const open = P.text > .5 && hint;
       const gx = open ? x0 + 15 + sq : cx - 5 - sq / 2;
       if (d <= 1) { tx = gx + (i - mid + 1) * (sq + 2.6) + (open ? 0 : 5 - sq - 2.6 + sq / 2); ta = open ? .85 : .6; }
@@ -385,6 +454,8 @@ function frame() {
     ctx.beginPath(); ctx.moveTo(rx - r * .38, cy + r * .02); ctx.lineTo(rx - r * .1, cy + r * .3); ctx.lineTo(rx + r * .4, cy - r * .3); ctx.stroke();
     ctx.globalAlpha = P.show;
   }
+  // Ask, without the capsule: the bead on the small pill's top edge.
+  if (!CAPSULE() && bead > 0.01) drawBead(cx, y0, Infinity, now);
 
   // Words: the hint on hover, the count when done, the reason on error.
   if (P.text > 0.01) {
@@ -446,9 +517,14 @@ function drawCapsule(se, cy, err, t, now) {
   // Shut again: a small click, the capsule squashing and settling.
   const sk = (now - snapAt) / 300, snap = sk < 1 ? Math.sin(sk * Math.PI) * (1 - sk) : 0;
   if (snap) { ctx.translate(W / 2, cy); ctx.scale(1 + .12 * snap, 1 - .1 * snap); ctx.translate(-W / 2, -cy); }
+  // Ask parts the halves at the seam, each by half the gap, so the gap (and
+  // the bead in it) stays where the seam was. Its cut edges soften a little
+  // as it opens: two pieces, not a capsule with a slot in it. Shut, both
+  // are nothing, and the capsule is exactly what it was.
+  const ag = askGapPx, seamR = Math.max(inner, Math.min(1, ag / 4) * K.num("desktop.pill.askSeamRound", 2.5));
   const parts = [
-    { x: hb.lx - hb.lw / 2, w: hb.lw, r: [outer, inner, inner, outer], fill: mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), solid), edge: rgba(C.pale(), .16), gloss: .10 },
-    { x: hb.rx - hb.rw / 2, w: hb.rw, r: [inner, outer, outer, inner], fill: mixHex(C.pale(), C.rose(), err * (1 - g)), edge: rgba(C.ink(), .3), gloss: .45 },
+    { x: hb.lx - hb.lw / 2 - ag / 2, w: hb.lw, r: [outer, seamR, seamR, outer], fill: mixHex(K.color("desktop.pill.restFill", "#2A2522"), C.ink(), solid), edge: rgba(C.pale(), .16), gloss: .10 },
+    { x: hb.rx - hb.rw / 2 + ag / 2, w: hb.rw, r: [seamR, outer, outer, seamR], fill: mixHex(C.pale(), C.rose(), err * (1 - g)), edge: rgba(C.ink(), .3), gloss: .45 },
   ];
   for (const h of parts) {
     if (h.w < 0.5) continue;
@@ -478,6 +554,9 @@ function drawCapsule(se, cy, err, t, now) {
     ctx.globalAlpha = a; ctx.fillStyle = gr; ctx.fillRect(gx - 6, y, 12, hh);
     ctx.restore();
   }
+  // The bead in the gap, never wider than the gap leaves room for: it comes
+  // out of the seam as the halves part, and goes back into it as they shut.
+  if (bead > 0.01 && ag > 2) drawBead(W / 2, cy, (ag - 2) / 2, now);
   // ✕ on the ink half, ✓ on the cream one, as they become discs.
   const ic = SP.smooth(0.45, 1, g);
   if (ic > 0.01) {
@@ -493,8 +572,38 @@ function drawCapsule(se, cy, err, t, now) {
   ctx.restore();
 }
 
+/**
+ * THE BEAD, where the guide's thread leaves the pill. Amber and breathing
+ * while the microphone is open (the one amber the brand allows: something
+ * live), cream with a slow pulse while it thinks, steady cream while it
+ * shows. An ink edge keeps it on a white page, as the guide's own seed has.
+ * `room` is the most the gap leaves for its radius.
+ */
+function drawBead(x, y, room, now) {
+  const R = K.num("desktop.pill.askBead", 3.5), s = now / 1000, still = REDUCED();
+  const breath = 0.5 + 0.5 * Math.sin(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askBreathS", 1.25)));
+  const pulse = 0.5 - 0.5 * Math.cos(s * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askPulseS", 1.8)));
+  // It breathes in from its full size, never out past it: the gap is cut to fit it.
+  // With reduced motion it does not grow or shrink, only fades in and out.
+  const size = still ? 1 : (1 - 0.22 * beadHot * (1 - breath) - 0.1 * beadSlow * (1 - pulse)) * bead;
+  const r = Math.min(room, R * size);
+  if (r < 0.3) return;
+  ctx.save();
+  ctx.globalAlpha = P.show * (1 - 0.45 * beadSlow * (1 - pulse)) * clamp(still ? bead : bead * 1.6);
+  ctx.shadowColor = rgba(C.amber(), (0.3 + 0.45 * breath) * beadHot); ctx.shadowBlur = (4 + 5 * breath) * beadHot;
+  ctx.fillStyle = mixHex(C.pale(), C.amber(), beadHot);
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowColor = "transparent";
+  // The edge thins out as the bead does: on a dot a pixel across it would
+  // be all edge, a ring rather than a bead.
+  const edge = .4 * clamp((r - 1) / 1.5);
+  if (edge > 0.01) { ctx.strokeStyle = rgba(C.ink(), edge); ctx.lineWidth = .8; ctx.beginPath(); ctx.arc(x, y, Math.max(0, r - .4), 0, Math.PI * 2); ctx.stroke(); }
+  ctx.restore();
+}
+
 // ---- pointer: the window lets clicks through everywhere but the pill ------------
-function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2, y: bottom - P.h, w: P.w, h: P.h }; }
+// Parted for a question, the pill is the gap wider (askGapPx; 0 otherwise).
+function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2 - askGapPx / 2, y: bottom - P.h, w: P.w + askGapPx, h: P.h }; }
 function podsNow() { return SP.pods(podSeed(), W, clamp(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
@@ -527,7 +636,10 @@ window.addEventListener("mousedown", (e) => {
   if (!inside(e.clientX, e.clientY)) return;
   // Halves on their way home after a stop are not buttons any more.
   if (apart() && S.name !== "listening") return;
-  const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish") : null;
+  const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish")
+    // A question up: a press puts it away, as Esc does. Closing, it is
+    // already going.
+    : S.name === "ask" ? (S.data.phase === "closing" ? null : "askCancel") : null;
   if (act && bridge && bridge.pillAction) bridge.pillAction(act);
 });
 
@@ -565,7 +677,14 @@ if (DEMO) {
   if (!BARE) document.body.insertAdjacentHTML("afterbegin", `<div class="doc"><div class="bar"><i style="left:14px"></i><i style="left:30px"></i><i style="left:46px"></i></div>
     <h4>Standup notes</h4><p>Design review moved to Thursday.</p><p id="line"><span id="typed"></span><span class="caret"></span></p></div>`);
   const SENT = "Can we push the call to four? The deck needs one more pass.";
-  const script = [[0, "rest"], [1.1, "hover"], [2.2, "listening"], [6.9, "writing"], [7.9, "done"], [9.4, "rest"], [10.6, "listening2"], [12.2, "error"]];
+  // Then a question (?demo=ask: only that): Ask's phases as ask.js sends
+  // them, and rest again when main does, foldMs + 80 after the close.
+  const ASK = [["askListening", 0], ["askThinking", 2.0], ["askShowing", 3.2], ["askClosing", 5.6], ["rest", 6.3]];
+  const ONLY_ASK = q.get("demo") === "ask";
+  const script = ONLY_ASK ? [[0, "rest"]].concat(ASK.map(([n, at]) => [0.8 + at, n]))
+    : [[0, "rest"], [1.1, "hover"], [2.2, "listening"], [6.9, "writing"], [7.9, "done"], [9.4, "rest"], [10.6, "listening2"], [12.2, "error"]]
+      .concat(ASK.map(([n, at]) => [15.2 + at, n]));
+  const LOOP = ONLY_ASK ? 8 : 22.5;
   let step = -1;
   const speech = (t) => {           // syllables: bursts with gaps, as a voice has
     const syl = Math.max(0, Math.sin(t * 11.5)) * (0.55 + 0.45 * Math.sin(t * 2.3 + 1)) * (Math.sin(t * 0.9) > -0.6 ? 1 : 0.05);
@@ -582,6 +701,7 @@ if (DEMO) {
       if (name === "writing") onPill({ state: "writing" });
       if (name === "done") { onPill({ state: "done", words: 12 }); }
       if (name === "error") onPill({ state: "error", label: "Didn't catch that" });
+      if (name.startsWith("ask")) { setHover(false); onPill({ state: "ask", phase: name.slice(3).toLowerCase() }); }
     }
     const name = script[step][1];
     if (name === "listening") {
@@ -604,7 +724,7 @@ if (DEMO) {
     virtual = 0; last = 0; window.__demo(0); frame();
   } else {
     const t0 = performance.now();
-    (function tick() { window.__demo(((performance.now() - t0) / 1000) % 13.5); requestAnimationFrame(tick); })();
+    (function tick() { window.__demo(((performance.now() - t0) / 1000) % LOOP); requestAnimationFrame(tick); })();
   }
 }
 })();

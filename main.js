@@ -29,7 +29,7 @@ const updater = require("./updater.js");
 const frontApp = require("./frontApp.js");
 const screenRead = require("./screenRead.js");
 const driver = require("./driver.js");
-const { createAsk } = require("./ask.js");
+const { createAsk, pillAskMove, capsuleRect } = require("./ask.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -1257,8 +1257,10 @@ function pill(state, data) {
     pillState = state; pillData = data || {};
     // Held on top for as long as it is listening or writing, and never
     // past it: every other state ends the guard, a switched-off pill too
-    // (its interval used to run on for the rest of the launch).
-    guardPill(pillOn() && (state === "listening" || state === "writing"));
+    // (its interval used to run on for the rest of the launch). And while a
+    // question has it: the guide's window is shown over the pill's, and the
+    // guard puts the pill back over it (see raiseGuide).
+    guardPill(pillOn() && (state === "listening" || state === "writing" || state === "ask"));
   }
   // Switched off, by the tray or by the server: hidden, not left on screen
   // showing whatever it showed last.
@@ -1270,6 +1272,50 @@ function pill(state, data) {
   // A change of state reclaims the top. Captions and flashes (several a
   // second while live captions run) leave that to the guard.
   else if (!moment) raisePill(w);
+}
+
+/**
+ * ASK GROWS OUT OF THE PILL (ask.js, pill.js "ask"). A question's phase,
+ * "listening", "thinking", "showing" or "closing", or null to give the pill
+ * back. Answers with the pill's capsule in screen DIP ({ x, y, w, h }), for
+ * the guide to tie its card to, or null when the question does not have the
+ * pill.
+ *
+ * Dictation always wins it (ask.js pillAskMove): while one records or writes,
+ * nothing here changes. On a question's first phase the pill is put on the
+ * display under the cursor first, as dictation puts it, so the card and the
+ * pill are on the one display.
+ */
+function pillAsk(phase) {
+  if (!pillOn()) return null;
+  const move = pillAskMove(phase, { state: pillState, recording });
+  if (!move) return null;
+  if (move === "rest") { pill("rest"); return null; }
+  const w = createPillWindow();
+  if (move === "take") setBoundsExactly(w, pillBounds());
+  pill("ask", { phase });
+  try { return capsuleRect(w.getBounds(), { num, bool }); } catch { return null; }
+}
+
+/**
+ * THE GUIDE GOES UNDER THE PILL. The card's thread comes out of the gap
+ * between the pill's halves, and it reads as coming out of it only when the
+ * pill is drawn over the thread's first few pixels. raisePill on the guide
+ * put the guide on top of everything at its level, the pill included, until
+ * the guard's next tick a second later.
+ *
+ * So the guide sits one step below the pill: on a Mac a level below it
+ * (relativeLevel 0 against the pill's 1, both in the screen-saver band), which
+ * no ordering can undo; on Windows, which has no levels among topmost
+ * windows, only an order, the pill is raised again right after the guide
+ * every time the guide is raised, and the guard keeps it there. A click on
+ * the card never reorders them there: neither window can be activated.
+ */
+function raiseGuide(w) {
+  if (!w || w.isDestroyed()) return;
+  try { w.setAlwaysOnTop(true, str("desktop.pill.level", "screen-saver"), 0); } catch { /* default level */ }
+  if (w.isVisible()) { try { w.moveTop(); } catch { /* not supported here */ } }
+  if (pillWin && pillWin !== w && !pillWin.isDestroyed() && pillWin.isVisible()) raisePill(pillWin);
 }
 
 /** The pill where the screens now are, and on top. A monitor unplugged, a
@@ -1349,6 +1395,8 @@ ipcMain.on("pill:action", (e, a) => {
   if (a === "start" && !recording) toggleDictation();
   else if (a === "finish" && recording) toggleDictation();
   else if (a === "cancel" && recording) cancelDictation();
+  // A press on the pill while a question has it puts the question away.
+  else if (a === "askCancel" && ask && pillState === "ask") ask.cancel("pill");
 });
 // The token for one request from the recorder. It was handed one token at
 // the start of a dictation and used it for every stretch, so a dictation
@@ -2331,7 +2379,11 @@ function setupAsk() {
   if (ask) return;
   ask = createAsk({
     BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt },
-    webPrefs, hardenWindow, raisePill, setBoundsExactly,
+    // The guide's window is raised under the pill, not over it (raiseGuide).
+    webPrefs, hardenWindow, raisePill: raiseGuide, setBoundsExactly,
+    // The question's card grows out of the pill, and the pill follows its
+    // phases (pillAsk).
+    pillAsk,
     driver,
     sendToRecorder,
     createRecorderWindow,

@@ -17,10 +17,65 @@
  * drawn sends one picture of it, cropped here, only once the card has been
  * answered "Allow once" or "Always for <app>".
  *
+ * The card grows out of the pill (main.js pillAsk): the pill's halves part,
+ * the card is opened on the pill's display and tied to it by a thread, and
+ * the pill's bead follows the card's phase until the card folds back into it.
+ * While it explains, the answer may mark up the screen (draw), in the guide
+ * window's own coordinates.
+ *
  * Kept apart from main.js, with everything it needs handed in, so the order
  * of what happens can be read in one place and tested without Electron.
  */
 const agentCore = require("./agent.js");
+
+// ---- the pill (main.js pillAsk) ------------------------------------------------------
+// A question grows out of the pill: its halves part, and the guide's thread
+// rises from the gap to the card (pill.js "ask", guide.js dock). These two
+// are main.js's rules for that, kept here, without Electron, so they can be
+// tested.
+const PILL_PHASES = new Set(["listening", "thinking", "showing", "closing"]);
+
+/**
+ * What a question may do with the pill, given what the pill is doing now
+ * (`now`: { state: main's pill state, recording }).
+ *
+ * DICTATION ALWAYS WINS THE PILL. While one records or writes, nothing
+ * changes. Closing, and giving it back (null), touch only a pill that is
+ * still the question's: a dictation that started meanwhile owns it, and
+ * putting it back to rest under that dictation would hide it listening.
+ *
+ *   null     leave it as it is
+ *   "rest"   give it back
+ *   "ask"    the next phase of the question that has it
+ *   "take"   the first phase: put on the display under the cursor first
+ */
+function pillAskMove(phase, now) {
+  const o = now || {};
+  if (o.recording || o.state === "listening" || o.state === "writing") return null;
+  if (phase == null) return o.state === "ask" ? "rest" : null;
+  if (!PILL_PHASES.has(phase)) return null;
+  if (o.state === "ask") return "ask";
+  return phase === "closing" ? null : "take";
+}
+
+/**
+ * The pill's capsule in screen DIP, for a pill window whose bounds are `b`:
+ * centred across it, its bottom desktop.pill.bottomPad above the window's,
+ * exactly where pill.js draws it, from the same knobs pill.js reads. The
+ * small pill's size when the capsule look is off.
+ */
+function capsuleRect(b, K) {
+  if (!b || ![b.x, b.y, b.width, b.height].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
+  const capsule = K.bool("desktop.pill.split", true) && K.bool("desktop.pill.capsule", true);
+  const w = capsule ? K.num("desktop.pill.capsuleWidth", 40) : K.num("desktop.pill.restWidth", 46);
+  const h = capsule ? K.num("desktop.pill.capsuleHeight", 16) : K.num("desktop.pill.restHeight", 14);
+  return { x: b.x + b.width / 2 - w / 2, y: b.y + b.height - K.num("desktop.pill.bottomPad", 14) - h, w, h };
+}
+
+// What the guide can draw (guide.js draw).
+const MARKS = new Set(["box", "circle", "underline", "highlight", "arrow", "number", "label", "path"]);
+// The ones drawn round (or under, or over) a frame.
+const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
 function createAsk(ctx) {
   const { BrowserWindow, screen, ipcMain, knobs: K } = ctx;
@@ -59,7 +114,14 @@ function createAsk(ctx) {
   // points, which are already Electron's DIP.
   const pixels = platform === "win32";
   let hideTimer = null;
-  let goneTimer = null;    // the window itself going, after the card has faded
+  let goneTimer = null;    // the window itself going, after the card has folded away
+  // THE PILL, while a question has it (main.js pillAsk): the phase it was
+  // last given (null once it is given back), and where its capsule is, in
+  // screen DIP, as main last said. The card is opened on that display and
+  // tied to it (dock).
+  let pillPhase = null;
+  let pillAt = null;
+  let drawSeq = 0;         // the marks' ids, d1, d2, ...: never reused, so one fading out is never taken for a new one
   // None of this file's timers keeps a process alive by itself: in the app
   // Electron does that, and the tests end when their run does.
   const soft = (t) => { if (t && typeof t.unref === "function") t.unref(); return t; };
@@ -86,15 +148,25 @@ function createAsk(ctx) {
     };
   }
   const sameRect = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  /** The guide's window over `display`, made or moved there. True when it
+   *  was (and the card has been told its new area, and where the pill is
+   *  from there); false when it was already there. */
   function ensureWindow(display) {
     const area = areaOf(display);
     if (win && !win.isDestroyed()) {
       if (!sameRect(bounds, area)) {
         bounds = Object.assign({}, area);
         ctx.setBoundsExactly(win, bounds);
+        // The marks up were drawn in the window's coordinates on the display
+        // it has left: kept, a circle round a menu on one screen went on
+        // being drawn on the other, round whatever was there. They go; the
+        // answer draws on in this one's.
+        send({ type: "clear" });
         send({ type: "area", inset: insetOf(display, bounds) });
+        dock();
+        return true;
       }
-      return win;
+      return false;
     }
     bounds = Object.assign({}, area);
     ready = false;
@@ -125,8 +197,9 @@ function createAsk(ctx) {
       if (win !== w) return;
       console.warn("[ask] the guide's page went away; a new one is made for the next question");
       win = null; ready = false; bounds = null; shown = false; queue.length = 0;
-      clearTimeout(goneTimer);
+      clearTimeout(goneTimer); goneTimer = null;
       try { w.destroy(); } catch { /* already gone */ }
+      // Nothing is left to fold back into the pill: it is given back at once.
       cancel("guide gone");
     });
     // Only this window's own close: a late one from a window already
@@ -134,17 +207,79 @@ function createAsk(ctx) {
     w.on("closed", () => { if (win === w) { win = null; ready = false; bounds = null; } });
     w.loadFile("guide.html");
     send({ type: "area", inset: insetOf(display, bounds) });
-    return w;
+    dock();
+    return true;
   }
   function send(m) {
     if (!win || win.isDestroyed()) return;
     if (ready) win.webContents.send("guide", m); else queue.push(m);
   }
+  // main.js hands in a raise that leaves the pill over the guide: the thread
+  // comes out of the gap between the pill's halves only if the pill is drawn
+  // over its first few pixels (main.js raiseGuide).
   function showWindow() {
     if (!win || win.isDestroyed()) return;
-    clearTimeout(goneTimer);
+    clearTimeout(goneTimer); goneTimer = null;
     if (!win.isVisible()) win.showInactive();
     ctx.raisePill(win);
+  }
+
+  // ---- the pill ------------------------------------------------------------------
+  /** Docked: on, and there is a pill to dock to. With desktop.guide.dock off
+   *  the card is what it was before it had one, and the pill is left alone. */
+  const docking = () => typeof ctx.pillAsk === "function" && bool("desktop.guide.dock", true);
+  /**
+   * The pill to a phase of the question: "listening", "thinking", "showing",
+   * "closing". Main says no while a dictation has it (null). Each phase once:
+   * the same one again is asked of main only when the card needs to know
+   * where the pill is now (`fresh`, at show). Returns the capsule in screen
+   * DIP, or null.
+   */
+  function pillTo(phase, fresh) {
+    if (!docking()) return null;
+    // Never had it: there is nothing to close.
+    if (phase === "closing" && pillPhase === null) return null;
+    if (!fresh && phase === pillPhase) return pillAt;
+    let r = null;
+    try { r = ctx.pillAsk(phase); } catch (e) { console.warn("[ask] the pill would not take the question:", (e && e.message) || e); }
+    pillPhase = phase;
+    if (phase !== "closing") {
+      const ok = r && [r.x, r.y, r.w, r.h].every((v) => typeof v === "number" && Number.isFinite(v)) && r.w > 0 && r.h > 0;
+      const was = pillAt;
+      pillAt = ok ? { x: r.x, y: r.y, w: r.w, h: r.h } : null;
+      // Taken back mid-card (an error of dictation's said on the pill, "Out
+      // of words this month", then the next phase), main puts it under the
+      // cursor again, which can be elsewhere: the card is told, or its
+      // thread would go on rising from where the pill was. At show the
+      // caller tells it.
+      if (!fresh && shown && !sameCapsule(was, pillAt)) dock();
+    }
+    return pillAt;
+  }
+  const sameCapsule = (a, b) => (!a && !b) || (!!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h);
+  /** The next phase, for a card that is up; nothing for one put away. */
+  function phaseTo(phase) { if (shown) pillTo(phase); }
+  /** The pill back to dictation: at rest, unless a dictation has it by now. */
+  function letPill() {
+    if (pillPhase === null) return;
+    pillPhase = null; pillAt = null;
+    try { ctx.pillAsk(null); } catch (e) { console.warn("[ask] the pill would not let go:", (e && e.message) || e); }
+  }
+  /**
+   * Tell the card where the pill is, in its window's own coordinates, so it
+   * grows from it (guide.js dock). `pill: null` when no question has the pill
+   * (off, or a dictation's): the card grows from a seed of its own. And
+   * `seed: false` with it when the pill is on another display than the guide
+   * (a ring there took it there): no seed, no tether, the card placed as it
+   * was before it had a pill. The pill never follows the guide.
+   */
+  function dock() {
+    if (!bounds) return;
+    const r = pillAt;
+    if (!r) { send({ type: "dock", pill: null }); return; }
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    const here = cx >= bounds.x && cx < bounds.x + bounds.width && cy >= bounds.y && cy < bounds.y + bounds.height;
+    send(here ? { type: "dock", pill: { x: r.x - bounds.x, y: r.y - bounds.y, w: r.w, h: r.h } } : { type: "dock", pill: null, seed: false });
   }
   /** A screen frame (the driver's units) in screen DIP, or null. */
   function dip(frame) {
@@ -159,9 +294,76 @@ function createAsk(ctx) {
     }
     return { x, y, w, h };
   }
+  /** A screen point (the driver's units, [x, y]) in screen DIP, or null. */
+  function dipPoint(pt) {
+    if (!Array.isArray(pt) || pt.length !== 2) return null;
+    let [x, y] = pt.map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    if (pixels && typeof screen.screenToDipPoint === "function") {
+      try {
+        const q = screen.screenToDipPoint({ x: Math.round(x), y: Math.round(y) });
+        x = q.x; y = q.y;
+      } catch { /* as it is: right on a display at 100% */ }
+    }
+    return { x, y };
+  }
   /** A DIP rectangle as the guide window's own coordinates. */
   function local(r) { return r && bounds ? [r.x - bounds.x, r.y - bounds.y, r.w, r.h] : null; }
   function localPoint(p) { return p && bounds ? { x: p.x - bounds.x, y: p.y - bounds.y } : null; }
+
+  // ---- the marks -----------------------------------------------------------------
+  // What the agent draws (agent.js draw) comes in the driver's units, frames
+  // [x, y, w, h] and points [x, y], and goes to the guide in its window's own.
+  // A mark is drawn where the guide is or not at all: one with any part off
+  // its window is dropped, and the window never moves for one (only a ring
+  // takes the guide to another display).
+  const onWindow = {
+    frame: (f) => !!bounds && f[2] >= 0 && f[3] >= 0 && f[0] < bounds.width && f[1] < bounds.height && f[0] + f[2] > 0 && f[1] + f[3] > 0,
+    point: (p) => !!bounds && p[0] >= 0 && p[1] >= 0 && p[0] <= bounds.width && p[1] <= bounds.height,
+  };
+  function markFrame(f) {
+    const r = dip(f), l = r && local(r);
+    return l && onWindow.frame(l) ? l : null;
+  }
+  function markPoint(p) {
+    const q = dipPoint(p), l = q && bounds ? [q.x - bounds.x, q.y - bounds.y] : null;
+    return l && onWindow.point(l) ? l : null;
+  }
+  /** A frame or a point, by its length, as the guide's own. */
+  const markSpot = (s) => (Array.isArray(s) && s.length === 4 ? markFrame(s) : markPoint(s));
+  /** The guide's draw message for a mark, or null when it is not to be drawn. */
+  function markOf(mark) {
+    const m = mark && typeof mark === "object" ? mark : {};
+    const kind = String(m.kind || "");
+    if (!MARKS.has(kind) || !bounds) return null;
+    const out = { type: "draw", id: "", kind };
+    if (m.frame != null) { if (!(out.frame = markFrame(m.frame))) return null; }
+    if (m.at != null) { if (!(out.at = markSpot(m.at))) return null; }
+    if (m.from != null || m.to != null) {
+      out.from = markSpot(m.from); out.to = markSpot(m.to);
+      if (!out.from || !out.to) return null;
+    }
+    if (m.points != null) {
+      if (!Array.isArray(m.points) || m.points.length < 2) return null;
+      out.points = m.points.map(markPoint);
+      if (out.points.some((p) => !p)) return null;
+    }
+    // Somewhere to draw it, of the kind it needs: a ring, a line under or a
+    // swipe over goes round a frame, an arrow from one place to another, a
+    // path through its points. The guide draws what it is sent, and a box
+    // sent only a point had nothing to go round.
+    if (FRAMED.has(kind) ? !out.frame : kind === "arrow" ? !out.from : kind === "path" ? !out.points : !out.frame && !out.at) return null;
+    if (m.closed === true) out.closed = true;
+    const n = Math.round(Number(m.n));
+    if (Number.isFinite(n) && n >= 1 && n <= 9) out.n = n;
+    // A number is its numeral (the card's step 2 is the badge "2"), and a
+    // label is its words: without them there is nothing to show.
+    else if (kind === "number") return null;
+    const text = typeof m.text === "string" ? m.text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ").replace(/\s+/g, " ").trim().slice(0, 48) : "";
+    if (text) out.text = text;
+    else if (kind === "label") return null;
+    return out;
+  }
 
   // ---- what the agent drives ---------------------------------------------------
   // What agent.js calls (its §3 guide), turned into the guide window's
@@ -175,8 +377,14 @@ function createAsk(ctx) {
       if (permitWait) permitWait("no");
       // A new card: whatever the last one was still saying stops.
       quiet();
+      // THE CARD GROWS OUT OF THE PILL. The pill first: main parts it on the
+      // display under the cursor (on the question's first phase) and says
+      // where it is. The guide opens on that display, told where the pill is
+      // before it shows anything, so the thread starts from it. Without a
+      // pill (off, or a dictation's), the cursor's display, as before.
+      const r = pillTo(state === "listening" || state === "thinking" ? state : "showing", true);
       const anchor = (data && data.anchor) || screen.getCursorScreenPoint();
-      ensureWindow(displayFor(anchor));
+      if (!ensureWindow(displayFor(r ? { x: r.x + r.w / 2, y: r.y + r.h / 2 } : anchor))) dock();
       showWindow();
       shown = true;
       send({ type: "show", state, app: (data && data.app) || "", anchor: localPoint(anchor), key: str("desktop.agent.tapKey", "Alt") });
@@ -189,6 +397,10 @@ function createAsk(ctx) {
       if (confirmWait) confirmWait(false);
       if (permitWait) permitWait("no");
       const text = typeof data === "string" ? data : "";
+      // The pill's bead follows: amber while the microphone is open (an
+      // ASK's reply opens it again), cream while it thinks, and while it
+      // shows what it has (acting, done).
+      phaseTo(s === "listening" || s === "thinking" ? s : "showing");
       if (s === "acting") { send({ type: "state", state: "doing", label: text }); return; }
       // Over (its deadline, say) while an ASK's reply records: that
       // microphone has nobody left to answer.
@@ -204,6 +416,7 @@ function createAsk(ctx) {
       const o = opts || {};
       const text = String(t || "");
       if (!text) return;
+      phaseTo("showing");
       send(o.append ? { type: "say", text, append: true } : { type: "say", text });
       if (bool("desktop.agent.speak", true)) sayAloud(text, o);
     },
@@ -214,6 +427,9 @@ function createAsk(ctx) {
       permitGone();
       const r = dip(frame);
       if (!r) return;
+      // A guess while they are still talking leaves the bead amber: the
+      // microphone is still open. Only an answer's ring is showing.
+      if (!(opts && opts.tentative)) phaseTo("showing");
       // The ring is on another display: the guide goes there. Found from the
       // DIP rectangle, as displays are: on a scaled display a physical pixel
       // position can lie in the next display's DIP, and the guide would move
@@ -230,6 +446,7 @@ function createAsk(ctx) {
     steps(items) { permitGone(); send({ type: "steps", items: items || [] }); },
     confirm(text, risk) {
       if (confirmWait) confirmWait(false);
+      phaseTo("showing");
       send({ type: "confirm", text: String(text || ""), risk: risk === "always" ? "always" : "confirm" });
       confirmAt = Date.now();
       return new Promise((resolve) => {
@@ -253,10 +470,20 @@ function createAsk(ctx) {
       dropReply();
       // Refused before anything was shown (a private window): the card
       // comes up to say so.
-      if (!shown) guide.show("error", {});
+      if (!shown) guide.show("error", {}); else phaseTo("showing");
       send({ type: "state", state: "error" });
       if (msg) send({ type: "say", text: String(msg) });
     },
+    // A mark on the screen while it explains (agent.js draw): converted to
+    // the guide's own coordinates, given a fresh id, or dropped.
+    draw(mark) {
+      if (!shown || !win || win.isDestroyed()) return;
+      const m = markOf(mark);
+      if (!m) return;
+      m.id = "d" + (++drawSeq);
+      send(m);
+    },
+    clear() { send({ type: "clear" }); },
   };
   /** An error only this file knows of, on a card it then puts away itself. */
   function cardError(msg) {
@@ -269,18 +496,34 @@ function createAsk(ctx) {
   }
   function hide() {
     clearTimeout(hideTimer);
+    const was = shown;
     shown = false;
     if (confirmWait) confirmWait(false);
     if (permitWait) permitWait("no");
     quiet();
     send({ type: "hide" });
-    // Gone, once Blip has ducked and the card has faded; unless a card came
-    // back up in the meantime. The not-heard card is put up right after the
-    // run's own hide, and it is meant to stay doneMs, not half a second.
+    // No window to fold back into the pill (its page went away): the pill is
+    // given back at once.
+    if (!win || win.isDestroyed()) { clearTimeout(goneTimer); goneTimer = null; letPill(); return; }
+    // Already folding: the first hide's time stands. A second one (the run's
+    // own, right behind a cancel) used to put the window's going off again.
+    if (goneTimer && !was) return;
+    // THE CARD FOLDS BACK INTO THE PILL. The guide folds the card into the
+    // thread's end and pulls the thread down into the bead (foldMs); the
+    // pill is told at once, and holds its gap open until the thread is home
+    // (pill.js askCloseDelayMs) before it clicks shut. The window stays up
+    // for the fold, and then the pill is given back: at rest, unless a
+    // dictation has it by now. A card that came back up in the meantime (a
+    // new question; the not-heard card, put up right after the run's own
+    // hide and meant to stay doneMs) keeps both.
+    pillTo("closing");
     clearTimeout(goneTimer);
     goneTimer = soft(setTimeout(() => {
-      if (win && !win.isDestroyed() && !shown && !agent.active()) { win.setIgnoreMouseEvents(true, { forward: true }); win.hide(); }
-    }, 520));
+      goneTimer = null;
+      if (shown || agent.active()) return;
+      if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(true, { forward: true }); win.hide(); }
+      letPill();
+    }, Math.max(0, num("desktop.guide.foldMs", 620)) + 80));
   }
 
   // ---- the voice -------------------------------------------------------------------
@@ -406,6 +649,12 @@ function createAsk(ctx) {
    * window's frame and the picture's own size; a frame that misses the
    * window, or is too thin to see anything in, is the whole window instead.
    * Null when there is no picture to crop.
+   *
+   * `frame` comes back with it: the part of the window the picture really
+   * shows, in the driver's units (the frame asked for, cut to the window, or
+   * the whole window). The answer's marks in the picture are places in THIS
+   * picture: an icon too small to crop on a 4K window sent the whole window,
+   * and a circle the model put in its middle was drawn in the icon's.
    */
   function crop(look, frame) {
     try {
@@ -418,10 +667,15 @@ function createAsk(ctx) {
       const size = pic.getSize();
       const sx = size.width / win[2], sy = size.height / win[3];
       let rect = { x: 0, y: 0, width: size.width, height: size.height };
+      let shows = win.slice();
       if (ok(frame)) {
         const x0 = Math.max(0, Math.floor((frame[0] - win[0]) * sx)), y0 = Math.max(0, Math.floor((frame[1] - win[1]) * sy));
         const x1 = Math.min(size.width, Math.ceil((frame[0] + frame[2] - win[0]) * sx)), y1 = Math.min(size.height, Math.ceil((frame[1] + frame[3] - win[1]) * sy));
-        if (x1 - x0 >= 8 && y1 - y0 >= 8) rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+        if (x1 - x0 >= 8 && y1 - y0 >= 8) {
+          rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+          const l = Math.max(frame[0], win[0]), t = Math.max(frame[1], win[1]);
+          shows = [l, t, Math.min(frame[0] + frame[2], win[0] + win[2]) - l, Math.min(frame[1] + frame[3], win[1] + win[3]) - t];
+        }
       }
       let out = rect.x === 0 && rect.y === 0 && rect.width === size.width && rect.height === size.height ? pic : pic.crop(rect);
       const max = Math.max(64, num("desktop.agent.pictureMaxSide", 1024));
@@ -430,7 +684,7 @@ function createAsk(ctx) {
         out = out.resize(got.width >= got.height ? { width: max, quality: "good" } : { height: max, quality: "good" });
       }
       const data = out.toJPEG(Math.max(1, Math.min(100, num("desktop.agent.pictureQuality", 82))));
-      return data && data.length ? { mime: "image/jpeg", data } : null;
+      return data && data.length ? { mime: "image/jpeg", data, frame: shows } : null;
     } catch (e) {
       console.warn("[ask] the picture could not be cropped:", (e && e.message) || e);
       return null;
@@ -745,4 +999,4 @@ function createAsk(ctx) {
   };
 }
 
-module.exports = { createAsk };
+module.exports = { createAsk, pillAskMove, capsuleRect };

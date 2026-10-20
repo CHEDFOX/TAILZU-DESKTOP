@@ -46,7 +46,8 @@ contextBridge.exposeInMainWorld("tailzu", {
   onPill: (cb) => ipcRenderer.on("pill", (_e, m) => cb(m)),
   onLevel: (cb) => ipcRenderer.on("pill-level", (_e, p) => cb(p)),
   // pill → main: the pointer is over it (take clicks) or not (let them
-  // through), and what a click on it asks for: start, finish or cancel.
+  // through), and what a click on it asks for: start, finish or cancel, or
+  // askCancel while a question has it (main puts the question away).
   pillHover: (on) => ipcRenderer.send("pill:hover", !!on),
   pillAction: (a) => ipcRenderer.send("pill:action", String(a || "")),
   // main → overlay
