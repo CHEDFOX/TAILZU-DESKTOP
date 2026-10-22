@@ -78,6 +78,7 @@
     stateAt: 0,          // seconds: when the state last changed (the thinking light runs from it)
     errAt: -1e9,         // seconds: when it last went wrong (the tether's end dot goes rose)
     risk: "confirm",
+    server: false,       // the confirm card is the server's own (a connected app): Not now and Edit answer for themselves
     ring: null,          // { frame:[x,y,w,h], caption, at, tentative }
     where: "default",    // where the card went: dock, below / above / right / left (of the ring), anchor, default
     box: null,           // the card's rectangle as laid out (where it is going, not where it is)
@@ -1880,6 +1881,29 @@
     steps: (m) => { setSteps(m.items); fit(); },
     confirm: (m) => {
       S.risk = m.risk === "always" ? "always" : "confirm";
+      // THE SERVER'S CARD (a connected app): its words, drawn as they came.
+      // The title is the card's heading, the app and what the words are come
+      // above them, what it will and won't do below, and the buttons are the
+      // ones the server named, in its order (yes, change it, no).
+      const c = m.card && typeof m.card === "object" ? m.card : null;
+      S.server = !!c;
+      $("ask").toggleAttribute("data-server", S.server);
+      if (c) {
+        const by = (id) => (Array.isArray(c.buttons) ? c.buttons : []).find((b) => b && b.id === id);
+        $("what").textContent = [c.app, c.label].filter(Boolean).join(" · ");
+        $("quote").textContent = String(c.preview || "");
+        $("note").textContent = String(c.note || "");
+        $("note").hidden = !c.note;
+        $("yes").textContent = String((by("approve") || {}).label || "");
+        $("edit").textContent = String((by("edit") || {}).label || "");
+        $("edit").hidden = !by("edit");
+        $("no").textContent = String((by("deny") || {}).label || "");
+        setState("confirm", String(c.title || ""));
+        fit();
+        return;
+      }
+      $("note").hidden = true;
+      $("edit").hidden = true;
       const [what, quote] = splitConfirm(m.text);
       $("what").textContent = what;
       $("quote").textContent = quote;
@@ -1903,7 +1927,10 @@
   bridge.onGuide((m) => { if (m && handlers[m.type]) { try { handlers[m.type](m); } catch (e) { console.error(e); } } });
 
   $("yes").addEventListener("click", () => { bridge.confirm(true); setState("doing"); fit(); });
-  $("no").addEventListener("click", () => { bridge.confirm(false); });
+  // On the server's card Not now and Edit are answers of their own (the agent
+  // calls the route each names); on any other it is a plain no.
+  $("no").addEventListener("click", () => { bridge.confirm(S.server ? "deny" : false); });
+  $("edit").addEventListener("click", () => { bridge.confirm("edit"); });
   // Whichever it is, the answer is on its way next: with the picture, or
   // from the words alone.
   for (const [id, choice] of [["once", "once"], ["always", "always"], ["notnow", "no"]]) {
@@ -2117,6 +2144,20 @@
         send({ type: "draw", id: "d1", kind: "number", frame: box("m-design"), n: 1 });
         send({ type: "draw", id: "d2", kind: "number", frame: box("m-composer"), n: 2 });
         send({ type: "draw", id: "d3", kind: "number", frame: box("m-send"), n: 3 });
+      },
+      // The server's own card, for something in a connected app.
+      approval: () => {
+        send({ type: "show", state: "thinking", app: "Slack" });
+        send({ type: "heard", text: "post the standup summary to design" });
+        send({
+          type: "confirm", text: "", risk: "confirm",
+          card: {
+            title: "Ready to send?", app: "Slack", label: "The exact message",
+            preview: "Post message in Slack \u2014 channel: #design; text: \u201cStandup summary: shipped the new onboarding, two bugs left on Android, Rahul reviews the pricing copy tomorrow.\u201d",
+            note: "I\u2019ll do this in Slack, as you. I won\u2019t do anything else.",
+            buttons: [{ id: "approve", label: "Approve" }, { id: "edit", label: "Edit" }, { id: "deny", label: "Not now" }],
+          },
+        });
       },
       confirm: () => {
         scenes.steps();

@@ -430,6 +430,28 @@ function createAsk(ctx) {
   // messages. When the card goes away is the agent's to say (hide), except
   // for what only this file knows about (a question nobody said: cardError).
   let shown = false;
+  /** A card with a question on it, and the wait for its answer: `pick` turns
+   *  what the guide (or Alt twice) answered into what the agent is given,
+   *  `silent` is what no answer is. */
+  function holdCard(message, pick, silent) {
+    if (confirmWait) confirmWait(false);
+    phaseTo("showing");
+    send(message);
+    confirmAt = Date.now();
+    return new Promise((resolve) => {
+      let timer = null;
+      const answer = (yes) => {
+        clearTimeout(timer);
+        if (confirmWait === answer) confirmWait = null;
+        resolve(pick(yes));
+      };
+      confirmWait = answer;
+      // The agent stops waiting after confirmMs, and so does the card: a
+      // wait left open would take the next Alt twice, meant as a new
+      // question, as the answer to one nobody is asking any more.
+      timer = soft(setTimeout(() => answer(false), Math.max(0, num("desktop.agent.confirmMs", 30000))));
+    }).then((v) => v, () => silent);
+  }
   const guide = {
     show(state, data) {
       clearTimeout(hideTimer);
@@ -509,23 +531,20 @@ function createAsk(ctx) {
     unpoint() { permitGone(); send({ type: "unpoint" }); },
     steps(items) { permitGone(); send({ type: "steps", items: items || [] }); },
     confirm(text, risk) {
-      if (confirmWait) confirmWait(false);
-      phaseTo("showing");
-      send({ type: "confirm", text: String(text || ""), risk: risk === "always" ? "always" : "confirm" });
-      confirmAt = Date.now();
-      return new Promise((resolve) => {
-        let timer = null;
-        const answer = (yes) => {
-          clearTimeout(timer);
-          if (confirmWait === answer) confirmWait = null;
-          resolve(!!yes);
-        };
-        confirmWait = answer;
-        // The agent stops waiting after confirmMs, and so does the card: a
-        // wait left open would take the next Alt twice, meant as a new
-        // question, as the answer to one nobody is asking any more.
-        timer = soft(setTimeout(() => answer(false), Math.max(0, num("desktop.agent.confirmMs", 30000))));
-      });
+      return holdCard({ type: "confirm", text: String(text || ""), risk: risk === "always" ? "always" : "confirm" }, (v) => v === true, false);
+    },
+    // The server's own card for something in a connected app (agent.js
+    // approve): its words as they came, and the person's answer, "approve",
+    // "edit" or "deny". Alt twice is the yes, on the same timing as any
+    // confirm card. Silence, or the card taken away, answers "".
+    approve(card) {
+      const c = card && typeof card === "object" ? card : {};
+      const text = (v, n) => String(v == null ? "" : v).slice(0, n);
+      const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 3).map((b) => ({ id: text(b && b.id, 12), label: text(b && b.label, 40) }));
+      return holdCard({
+        type: "confirm", text: "", risk: "confirm",
+        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 400), note: text(c.note, 200), buttons },
+      }, (v) => (v === true ? "approve" : v === "edit" || v === "deny" ? v : ""), "");
     },
     hide() { hide(); },
     // A button on the finished card for what stopped the answer: only
@@ -980,6 +999,24 @@ function createAsk(ctx) {
     driver,
     guide,
     post: agentCore.makePost({ baseUrl: ctx.baseUrl, token: ctx.token, fetch: ctx.fetch || ((...a) => fetch(...a)) }),
+    approveElsewhere: () => txt("desktop.agent.approveElsewhere", "I need your OK in Tailzu first."),
+    // The server's confirm card's buttons: a task's yes or no, with the
+    // account's token the way every call here is made. Those two routes and
+    // nothing else, whatever the card named.
+    call: async (route) => {
+      const r = route && typeof route === "object" ? route : {};
+      const none = { status: 0, body: null };
+      if (r.method !== "POST" || !agentCore.isTaskRoute(r.path) || typeof ctx.authorizedFetch !== "function") return none;
+      try {
+        const res = await ctx.authorizedFetch(r.path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(r.body && typeof r.body === "object" ? r.body : {}),
+          signal: AbortSignal.timeout(Math.max(1000, num("desktop.agent.approveCallMs", 25000))),
+        });
+        return { status: res.status, body: await res.json().catch(() => null) };
+      } catch { return none; }
+    },
     paste: (text) => ctx.paste(text),
     // An ASK's answer: the microphone again, its clip back to the agent;
     // opened once the question has been said, or the microphone hears Blip
@@ -1179,7 +1216,9 @@ function createAsk(ctx) {
     if (inside) win.setIgnoreMouseEvents(false);
     else win.setIgnoreMouseEvents(true, { forward: true });
   });
-  ipcMain.on("guide:confirm", (e, yes) => { if (fromGuide(e) && confirmWait) confirmWait(!!yes); });
+  // A yes or a no; on the server's card also "edit" and "deny" (Not now),
+  // which are answers of their own. Anything else is read as a no.
+  ipcMain.on("guide:confirm", (e, yes) => { if (fromGuide(e) && confirmWait) confirmWait(yes === "edit" || yes === "deny" ? yes : !!yes); });
   ipcMain.on("guide:permit", (e, choice) => { if (fromGuide(e) && permitWait) permitWait(String(choice || "")); });
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
   // The card's button (guide offer): only the one it was given, once. The

@@ -117,7 +117,8 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   onGuide: (cb) => ipcRenderer.on("guide", (_e, m) => cb(m)),
   // Over the card (take clicks) or not (let them through to the app).
   mouse: (inside) => ipcRenderer.send("guide:mouse", !!inside),
-  confirm: (yes) => ipcRenderer.send("guide:confirm", !!yes),
+  // true or false; on the server's card also "edit" and "deny" (its Not now).
+  confirm: (yes) => ipcRenderer.send("guide:confirm", yes === "edit" || yes === "deny" ? yes : !!yes),
   // The picture card's answer: "once", "always" (for this app) or "no".
   permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),

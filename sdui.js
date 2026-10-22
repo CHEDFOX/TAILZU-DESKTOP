@@ -82,6 +82,10 @@ const SYSTEM_AUDIO = "DeskSystemAudio";
  *  server may send its one-time setup card, which this window draws with the
  *  permission states only the main process can read. */
 const ASK_SETUP_CARD = "DeskAskSetup";
+/** This window shows the assistant's side: Connected apps in Settings, the
+ *  Tasks page, and the connector.connect action that signs an app in. The
+ *  server sends them only while connected apps are switched on there. */
+const CONNECTORS_CAN = "DeskConnectors";
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -116,6 +120,9 @@ const ACTIONS = [
   // where. picturesAll takes `on` (true or false); relaunch restarts Tailzu,
   // which macOS can need before a new Screen Recording grant takes.
   "ask.openAccessibility", "ask.openScreenRecording", "ask.picturesAll", "ask.relaunch",
+  // Connect an app from Settings: POST /v1/connectors/:id/connect, then the
+  // sign-in page it answers with opens in the browser (connectApp).
+  "connector.connect",
 ];
 
 /**
@@ -275,7 +282,7 @@ function capabilities() {
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : []),
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN]),
     actions: ACTIONS,
     templates: [],
     device: {
@@ -1976,7 +1983,7 @@ window.addEventListener("focus", () => {
 // dictation lands — never over a live capture, and throttled by refreshMs so
 // alt-tabbing is not a request storm. Train (a live canvas) and Notes (often
 // mid-edit) keep their own refresh and are left alone.
-const LIVE_TABS = new Set(["desk_today", "desk_insights", "desk_words", "desk_voices"]);
+const LIVE_TABS = new Set(["desk_today", "desk_insights", "desk_words", "desk_voices", "desk_tasks"]);
 function onLiveTab() {
   const top = STACK[STACK.length - 1];
   return DESK && !!top && STACK.length === 1 && LIVE_TABS.has(top.screenId);
@@ -2354,6 +2361,7 @@ async function run(action, eventValue) {
     case "ask.openScreenRecording": askAction("openScreenRecording"); return;
     case "ask.picturesAll": askAction("picturesAll", action.on === true || action.on === "true"); return;
     case "ask.relaunch": askAction("relaunch"); return;
+    case "connector.connect": return connectApp(action);
 
     // ── buying ────────────────────────────────────────────────────────────
     // Every row on the paywall fires one of these, and this window answered
@@ -2404,6 +2412,41 @@ async function run(action, eventValue) {
     default: return;
   }
 }
+
+/**
+ * CONNECT AN APP. The window names which app (by the id the server gave the
+ * row) and never an address: the one route is built here, and what it opens
+ * is the sign-in page the API itself answered with, over https. An app that
+ * takes a pasted link sends what the row's field holds (`urlPath`) instead.
+ * Coming back to the window after the browser has had the sign-in is when the
+ * row may have changed, so the next focus redraws the page once.
+ */
+const CONNECTOR_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+let CONNECT_PENDING = false;
+async function connectApp(action) {
+  const id = String(action.id || "");
+  try {
+    if (!CONNECTOR_ID.test(id)) throw new Error("not an app id");
+    const pasted = action.urlPath ? String(stateAt(action.urlPath) == null ? "" : stateAt(action.urlPath)).trim() : "";
+    const res = await api("/v1/connectors/" + id + "/connect", action.urlPath ? { url: pasted } : {}, "POST");
+    const to = res && typeof res.authorizeUrl === "string" ? res.authorizeUrl : "";
+    if (/^https:\/\//i.test(to)) {
+      CONNECT_PENDING = true;
+      window.tailzuApp.openExternal(to);
+    } else if (!(res && res.connected === true)) {
+      throw new Error("no sign-in page");
+    }
+    await run(action.onSuccess);
+    if (res.connected === true) await paint(true);
+  } catch {
+    await run(action.onError);
+  }
+}
+window.addEventListener("focus", () => {
+  if (!CONNECT_PENDING) return;
+  CONNECT_PENDING = false;
+  if (SESSION) void paint(true);
+});
 
 function deepResolve(v) {
   if (typeof v === "string") return resolveValue(v);
