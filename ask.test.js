@@ -3470,3 +3470,36 @@ test("the email hand-off opens a Gmail compose link or a mailto: link, and nothi
   // Without a way to open it, nothing opens and nothing breaks.
   assert.strictEqual(await harness().deps().open(gmail), false);
 });
+
+test("a hand-off opens each link of the contract a computer can finish, and no near miss of one", async () => {
+  const opened = [];
+  const h = harness({ openExternal: async (u) => { opened.push(u); return true; } });
+  const open = h.deps().open;
+  const good = [
+    "https://wa.me/919876543210?text=Running%2010%20minutes%20late", "https://wa.me/?text=Hi",
+    "https://api.whatsapp.com/send?phone=919876543210&text=Hi", "https://t.me/share/url?url=https%3A%2F%2Ftailzu.space&text=Look",
+    "https://t.me/rahul_k?text=Hi", "https://www.google.com/maps/dir/?api=1&destination=Indiranagar%2C%20Bengaluru",
+    "https://www.google.com/maps/search/?api=1&query=filter%20coffee", "https://m.uber.com/ul/?action=setPickup&pickup=my_location",
+    "https://www.amazon.in/s?k=usb%20c%20cable", "https://www.flipkart.com/search?q=running%20shoes",
+    "https://www.youtube.com/results?search_query=lofi%20beats", "https://music.youtube.com/search?q=arijit%20singh",
+    "https://open.spotify.com/search/arijit%20singh", "https://www.threads.net/intent/post?text=Shipped%20it",
+    "https://www.threads.com/intent/post?text=Shipped%20it", "https://www.booking.com/searchresults.html?ss=Goa",
+  ];
+  for (const url of good) assert.strictEqual(await open(url), true, url);
+  for (const bad of [
+    // lookalike hosts
+    "https://wa.me.evil.test/919876543210", "https://w\u0430.me/919876543210", "https://telegram.me/share/url?url=x", "https://maps.google.com/maps/dir/?api=1",
+    "https://amazon.in/s?k=x", "https://www.amazon.com/s?k=x", "https://m.youtube.com/results?search_query=x", "https://threads.net/intent/post?text=x",
+    // credentials and ports
+    "https://user@wa.me/919876543210", "https://wa.me@evil.test/919876543210", "https://www.youtube.com:444/results?search_query=x",
+    // other paths on the same sites
+    "https://www.google.com/url?q=https%3A%2F%2Fevil.test", "https://www.google.com/maps/dir/?destination=Goa", "https://www.youtube.com/redirect?q=x",
+    "https://www.flipkart.com/searchx?q=x", "https://open.spotify.com/track/abc", "https://www.booking.com/myreservations.html",
+    "https://t.me/proxy?server=1.2.3.4&port=443&secret=x", "https://t.me/joinchat/AAAAAEkk2WdoDrB4", "https://t.me/rahul_k?start=x",
+    // other schemes, phone-only links among them
+    "http://wa.me/919876543210", "upi://pay?pa=rahul%40okicici&am=100", "tel:+919876543210", "sms:+919876543210?body=Hi",
+    "whatsapp://send?text=Hi", "tg://resolve?domain=rahul_k", "file:///etc/passwd", "javascript:alert(1)",
+    "https://wa.me/?text=" + "a".repeat(8000),
+  ]) assert.strictEqual(await open(bad), false, bad.slice(0, 60));
+  assert.deepStrictEqual(opened, good);
+});
