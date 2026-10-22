@@ -87,6 +87,13 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   askSetup: () => ipcRenderer.invoke("app:askSetup"),
   onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
   askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),
+  // The folders Ask may use (Settings > Ask, localfiles.js createFolderSettings):
+  // the list as it stands, told again whenever it changes, and the row's three
+  // buttons ("add", "remove" with the row's index, "reset"). The main process
+  // checks each one; adding opens the system's own folder chooser.
+  folders: () => ipcRenderer.invoke("app:folders"),
+  onFolders: (cb) => ipcRenderer.on("ask-folders", (_e, s) => cb(s)),
+  foldersAction: (kind, i) => ipcRenderer.send("app:foldersAction", { kind: String(kind || ""), i: Number.isInteger(i) ? i : -1 }),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
   changed: () => ipcRenderer.send("app:changed"),

@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer, systemPreferences,
+  desktopCapturer, systemPreferences, dialog,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -30,6 +30,7 @@ const frontApp = require("./frontApp.js");
 const screenRead = require("./screenRead.js");
 const driver = require("./driver.js");
 const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
+const { createLocalFiles, createFolderSettings } = require("./localfiles.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -671,6 +672,8 @@ function signedOut() {
   accountTone = null;
   accountNickname = "";
   if (picturesAllowed().length || localState.askPicturesAlwaysAll === true) forgetPictures();
+  // The kinds of change to their files they said yes to were theirs too.
+  if (deviceKinds().length) { localState.askDeviceOk = []; saveLocalState(); }
 }
 
 async function setAccountTone(tone) {
@@ -2449,6 +2452,26 @@ function forgetPictures(app) {
   if (every) askSetup.push();
 }
 
+// ASK'S "THIS COMPUTER" (localfiles.js): the person's own files, found, sorted,
+// moved and so on here, only inside the folders they allowed (Settings > Ask).
+// The kinds of change they said yes to once are kept here, on this computer.
+const localFiles = createLocalFiles({
+  shell, userData: app.getPath("userData"), home: app.getPath("home"),
+  // This program and where it lives are never touched, wherever it was put (a Downloads folder, say).
+  protect: [process.execPath, path.dirname(process.execPath), typeof app.getAppPath === "function" ? app.getAppPath() : ""],
+  roots: () => (Array.isArray(localState.askFolders) ? localState.askFolders : null),
+});
+function deviceKinds() {
+  return Array.isArray(localState.askDeviceOk) ? localState.askDeviceOk.filter((k) => typeof k === "string") : [];
+}
+const askFolders = createFolderSettings({
+  ipcMain, fromApp, dialog, window: () => (appWin && !appWin.isDestroyed() ? appWin : undefined),
+  files: localFiles, localState, saveLocalState, home: app.getPath("home"),
+  send: (state) => {
+    if (appWin && !appWin.isDestroyed() && !appWin.webContents.isLoading()) appWin.webContents.send("ask-folders", state);
+  },
+});
+
 // The Mac's Screen Recording page in System Settings, for Ask's card when a
 // look was refused for want of it (agent.js TEXT.needScreen). A fixed
 // address: the card's button opens this and nothing else.
@@ -2545,6 +2568,18 @@ function setupAsk() {
     // A look's word on Screen Recording changed: the setup card is told, so
     // it can offer the restart a granted permission still needs.
     lookPermission: () => askSetup.push(),
+    // The person's own files (localfiles.js): planned here, shown on a card,
+    // done here. A kind of change they approved once is not asked again.
+    device: {
+      enabled: askOn,
+      plan: (tool, args) => localFiles.plan(tool, args),
+      remembered: (tool) => deviceKinds().includes(tool),
+      remember: (tool) => {
+        if (localFiles.riskOf(tool) !== "write" || deviceKinds().includes(tool)) return;
+        localState.askDeviceOk = deviceKinds().concat(tool).slice(-20);
+        saveLocalState();
+      },
+    },
     allowPicturesAlways: (name) => {
       const list = picturesAllowed();
       const key = String(name || "").trim().slice(0, 60);

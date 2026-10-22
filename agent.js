@@ -57,6 +57,7 @@
 const crypto = require("crypto");
 const frontApp = require("./frontApp.js");
 const resolver = require("./resolver.js");
+const localFiles = require("./localfiles.js");
 
 /** The server takes this many elements and answers 413 above it. */
 const MAX_ELEMENTS = 250;
@@ -69,6 +70,12 @@ const MAX_ELEMENTS = 250;
 const SCREEN_CHARS = 20000;
 /** History the server takes, oldest first. Older turns fall off the front. */
 const MAX_HISTORY = 16;
+/** What a device result may carry back, as the server reads it. */
+const DEVICE_DATA_MAX = 5000;
+/** Device events one run may carry out. */
+const DEVICE_PER_RUN = 6;
+/** A remembered kind of change still asks when it touches more files than this. */
+const DEVICE_BIG = 100;
 /** A run that has not finished in this long is stopped: a loop that keeps
  *  "almost" getting there costs a request a step and holds the guide up. */
 const RUN_DEADLINE_MS = 60000;
@@ -107,7 +114,7 @@ const DRAW_KINDS = new Set(["box", "circle", "underline", "highlight", "arrow", 
 /** The kinds drawn around (or under) a frame. */
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
-const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve"]);
+const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve", "device"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
 /** Actions that mean nothing without an element. */
 const NEEDS_ID = new Set(["press", "set", "focus"]);
@@ -1610,16 +1617,24 @@ function createAgent(deps) {
     if (input.image && input.picture) req.picture = { region: input.picture.region === "element" ? "element" : "window" };
     const lang = language();
     if (lang) req.language = lang;
+    // "This computer": the person's own files, offered to the planner only when this copy can do them.
+    if (canDevice()) req.capabilities = ["DeviceFiles"];
     if (run.history.length) req.history = run.history.slice(-MAX_HISTORY).map((h) => Object.assign({}, h));
     return req;
   }
 
   function pushHistory(run, turn) {
     const t = {};
-    for (const k of ["said", "did", "result", "note"]) if (turn[k]) t[k] = turn[k];
+    for (const k of ["said", "did", "result", "note", "data"]) if (turn[k]) t[k] = turn[k];
     if (t.said) t.said = clip(t.said, 1000);
     if (t.did) t.did = clip(t.did, 200);
     if (t.note) t.note = clip(t.note, 200);
+    // What the files gave back (names, sizes, kinds, dates): lines kept, and only the newest two turns keep it.
+    if (t.data) {
+      t.data = str(t.data).replace(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]+/g, " ").slice(0, DEVICE_DATA_MAX);
+      let kept = 0;
+      for (let i = run.history.length - 1; i >= 0; i--) if (run.history[i].data && ++kept >= 2) delete run.history[i].data;
+    }
     run.history.push(t);
     while (run.history.length > MAX_HISTORY) run.history.shift();
   }
@@ -2006,6 +2021,116 @@ function createAgent(deps) {
     return {};
   }
 
+  // ---- this computer's files (localfiles.js) ------------------------------------
+
+  /** This copy can look after the person's files: main handed in the way to. */
+  function canDevice() {
+    const dev = d.device;
+    if (!dev || typeof dev.plan !== "function") return false;
+    try { return typeof dev.enabled === "function" ? dev.enabled() !== false : true; } catch { return false; }
+  }
+
+  /** The plan card's words: the server's, one voice, each kept to what a card holds; ours in English where it sent none. */
+  function deviceWords(sent) {
+    const w = Object.assign({}, localFiles.EN_WORDS);
+    if (sent && typeof sent === "object") for (const k of Object.keys(w)) if (typeof sent[k] === "string" && squash(sent[k])) w[k] = clip(squash(sent[k]), 300);
+    return w;
+  }
+
+  /** The plan, as the guide's confirm card draws it: the headline, then each file's line. */
+  function planCard(p, w) {
+    const rows = (Array.isArray(p.lines) ? p.lines : []).map((l) => `• ${clip(squash(l), 90)}`);
+    const preview = [
+      localFiles.fill(w[p.say && p.say.key] || "", p.say && p.say.vars),
+      ...rows,
+      p.more > 0 ? localFiles.fill(w.more, { n: p.more }) : "",
+      p.extra ? clip(squash(p.extra), 120) : "",
+    ].filter(Boolean).join("\n");
+    const trash = p.risk === "destructive";
+    return {
+      title: trash ? w.titleTrash : w.title,
+      app: "This computer", label: w.label, preview,
+      note: trash ? w.noteTrash : w.note,
+      buttons: [{ id: "approve", label: w.ok }, { id: "deny", label: w.later }],
+    };
+  }
+
+  /**
+   * The server's `device` event: something to do to the person's own files.
+   * localfiles.js plans it first (no change made), and holds its own risk
+   * table, rules and folders: the server's word is only a request. A look
+   * runs at once. A change shows its plan on a card and waits for a yes (said
+   * once per kind of change and then remembered, never for the Trash, and not
+   * for a big one); the outcome goes back to the server on the next step as
+   * this turn's `data`: names, sizes, kinds and dates, never contents.
+   */
+  async function device(run, ev) {
+    const tool = clip(squash(str(ev.tool)), 40);
+    const did = `DEVICE ${tool}`;
+    const said = run.said || undefined;
+    const dev = d.device;
+    const failed = (why) => { pushHistory(run, { said, did, result: "failed", note: why, data: why }); return {}; };
+    if (!canDevice()) { log(`agent ${run.tag}: a device event with no files to work on`); return failed("this computer can’t do that here"); }
+    const id = clip(squash(str(ev.id)), 64);
+    run.deviceIds = run.deviceIds || new Set();
+    if ((id && run.deviceIds.has(id)) || run.deviceIds.size >= DEVICE_PER_RUN) { log(`agent ${run.tag}: device event refused (repeat or too many)`); finish(run, "done"); return null; }
+    run.deviceIds.add(id || String(run.deviceIds.size));
+    let p;
+    try { p = await race(run, Promise.resolve().then(() => dev.plan(tool, ev.args && typeof ev.args === "object" ? ev.args : {}))); } catch (e) {
+      log(`agent ${run.tag}: device plan failed: ${errText(e)}`);
+      p = { ok: false, error: "that didn’t work" };
+    }
+    if (!alive(run) || p === ABORTED) return null;
+    if (!p || p.ok !== true) return failed(clip(squash(p && p.error) || "I can’t do that", 200));
+    const risk = localFiles.higher(p.risk, ["read", "write", "destructive"].includes(ev.risk) ? ev.risk : "");
+    // The server never asks for a change in a show run; this is the second lock.
+    if (risk !== "read" && run.mode === "show") { log(`agent ${run.tag}: refused a change in a show run`); finish(run, "done"); return null; }
+    const w = deviceWords(ev.words);
+    log(`agent ${run.tag}: ${tool} (${risk}${p.count ? `, ${p.count} files` : ""})`);
+    if (risk !== "read") {
+      const big = (p.count || 0) > DEVICE_BIG;
+      // A name in the person's files can say anything (a download's name is whoever sent it's text), and the planner
+      // has read names in this run: so a change that follows a look at them asks, said yes to before or not.
+      const known = risk === "write" && !big && !run.sawNames && typeof dev.remembered === "function" && (() => { try { return dev.remembered(tool) === true; } catch { return false; } })();
+      if (!known) {
+        const showCard = guide && guide.approve;
+        if (typeof showCard !== "function") { log(`agent ${run.tag}: no card to ask on`); finish(run, "done", w.left); return null; }
+        // The person's time on the card is theirs, not the run's.
+        clearTimeout(run.deadlineTimer);
+        run.deadline = Infinity;
+        const asked = Promise.resolve().then(() => showCard.call(guide, planCard(p, w))).then((v) => (v === "approve" ? v : ""), (e) => {
+          log(`agent ${run.tag}: plan card failed: ${errText(e)}`);
+          return "";
+        });
+        const answer = await race(run, within(asked, num("desktop.agent.confirmMs", 30000), ""));
+        if (!alive(run) || answer === ABORTED) return null;
+        if (answer !== "approve") {
+          log(`agent ${run.tag}: ${tool} not approved`);
+          pushHistory(run, { said, did, result: "declined", note: "they said no" });
+          finish(run, "done", w.left);
+          return null;
+        }
+        if (risk === "write" && typeof dev.remember === "function") { try { dev.remember(tool); } catch (e) { log(`agent ${run.tag}: remember failed: ${errText(e)}`); } }
+        // The run's clock starts again once the card has been answered.
+        const again = num("desktop.agent.deadlineMs", 60000);
+        run.deadline = now() + again;
+        run.deadlineTimer = setTimeout(() => stop(run, "deadline"), again);
+      }
+    }
+    tell(run, "state", "acting", clip(squash(w.working), 60));
+    let res;
+    try { res = await race(run, Promise.resolve().then(() => p.run())); } catch (e) {
+      log(`agent ${run.tag}: ${tool} threw: ${errText(e)}`);
+      res = { ok: false, text: "that didn’t work", note: "that didn’t work" };
+    }
+    if (!alive(run) || res === ABORTED) return null;
+    const r = res && typeof res === "object" ? res : {};
+    if (risk === "read" && (tool === "find_files" || tool === "list_folder") && str(r.text)) run.sawNames = true;
+    pushHistory(run, { said, did, result: r.ok === false ? "failed" : "ok", note: clip(squash(r.note), 200), data: str(r.text) });
+    log(`agent ${run.tag}: step ${run.step} ${tool} → ${r.ok === false ? "failed" : "ok"}`);
+    return {};
+  }
+
   /** The server's yes-or-no before it does something in a connected app. */
   async function approve(run, ev) {
     const card = approvalOf(ev);
@@ -2167,6 +2292,8 @@ function createAgent(deps) {
         return ask(run, terminal);
       case "approve":
         return approve(run, terminal);
+      case "device":
+        return device(run, terminal);
       default:
         return act(run, terminal);
     }

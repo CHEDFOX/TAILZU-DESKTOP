@@ -89,6 +89,10 @@ const SYSTEM_AUDIO = "DeskSystemAudio";
  *  server may send its one-time setup card, which this window draws with the
  *  permission states only the main process can read. */
 const ASK_SETUP_CARD = "DeskAskSetup";
+/** The allowed-folders row under Ask (Settings): which folders Ask may work in,
+ *  kept by the main process (localfiles.js createFolderSettings). Declared with
+ *  the setup card, in the same copies that have Ask. */
+const FOLDERS_CARD = "DeskFolders";
 /** This window shows the assistant's side: Connected apps in Settings, the
  *  Tasks page, and the connector.connect action that signs an app in. The
  *  server sends them only while connected apps are switched on there. */
@@ -127,6 +131,9 @@ const ACTIONS = [
   // where. picturesAll takes `on` (true or false); relaunch restarts Tailzu,
   // which macOS can need before a new Screen Recording grant takes.
   "ask.openAccessibility", "ask.openScreenRecording", "ask.picturesAll", "ask.relaunch",
+  // The folders row: add one (the system's chooser), take one out (`i`, its
+  // place in the list), or go back to the usual three.
+  "ask.folderAdd", "ask.folderRemove", "ask.folderReset",
   // Connect an app from Settings: POST /v1/connectors/:id/connect, then the
   // sign-in page it answers with opens in the browser (connectApp).
   "connector.connect",
@@ -289,7 +296,7 @@ function capabilities() {
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN]),
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN]),
     actions: ACTIONS,
     templates: [],
     device: {
@@ -838,6 +845,62 @@ function askAction(kind, on) {
   }
 }
 
+// ---- the folders Ask may use (DeskFolders) ----------------------------------------
+
+/** The main process's last answer: { custom, folders: [{ label, path }], error }, or null until it gives one. */
+let FOLDERS = null;
+let FOLDERS_LISTENING = false;
+
+function foldersWatch() {
+  if (FOLDERS_LISTENING || !ENV || !ENV.askSetup) return;
+  FOLDERS_LISTENING = true;
+  try { window.tailzuApp.onFolders((st) => foldersTook(st)); } catch { /* an older main process */ }
+  foldersRead();
+}
+function foldersRead() {
+  try { Promise.resolve(window.tailzuApp.folders()).then(foldersTook, () => {}); } catch { /* an older main process */ }
+}
+function foldersTook(st) {
+  if (!st || typeof st !== "object") return;
+  FOLDERS = {
+    custom: st.custom === true,
+    error: typeof st.error === "string" ? st.error.slice(0, 160) : "",
+    folders: (Array.isArray(st.folders) ? st.folders : []).slice(0, 12)
+      .map((f) => ({ label: String((f && f.label) || "").slice(0, 80), path: String((f && f.path) || "").slice(0, 240) }))
+      .filter((f) => f.label),
+  };
+  if (CURRENT_SCREEN && findNode(CURRENT_SCREEN.root, "DeskFolders")) repaint();
+}
+function foldersAction(kind, i) {
+  try { window.tailzuApp.foldersAction(kind, Number.isInteger(i) ? i : -1); } catch { /* an older main process */ }
+}
+
+/** The row: each allowed folder with a button to take it out, then Add a folder and, once the list is the person's own, Back to the usual three. Rows reuse the setup card's look. */
+function foldersNode(p, s) {
+  if (!FOLDERS) return "";
+  const t = (v) => esc(label(v) || "");
+  const tick = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.4 6.6 11.4 12.6 4.8"/></svg>';
+  const btn = (action, words, quiet, title) => '<button type="button" class="d-ask-btn' + (quiet ? " d-ask-quiet" : "") + '"' +
+    bind(action) + ' aria-label="' + esc(String(words) + ": " + title) + '">' + esc(words) + "</button>";
+  const rows = FOLDERS.folders.map((f, i) =>
+    '<div class="d-ask-row" data-folder="' + i + '" data-done="1"><span class="d-ask-n" aria-hidden="true">' + tick + "</span>" +
+    '<div class="d-ask-text"><div class="d-ask-t">' + esc(f.label) + '</div><div class="d-ask-s">' + esc(f.path) + "</div></div>" +
+    '<div class="d-ask-act">' + btn({ kind: "ask.folderRemove", i: i }, label(p.remove) || "", true, f.label) + "</div></div>").join("") ||
+    '<div class="d-ask-row"><span class="d-ask-n" aria-hidden="true">·</span><div class="d-ask-text"><div class="d-ask-s">' + t(p.none) + "</div></div></div>";
+  const policy = typeof p.policyUrl === "string" && /^https:\/\//.test(p.policyUrl) && label(p.policyLabel)
+    ? ' <button type="button" class="d-ask-link"' + bind({ kind: "openUrl", url: p.policyUrl }) + ">" + t(p.policyLabel) + "</button>"
+    : "";
+  const more = String(p.cls || "").split(/\s+/).filter((c) => /^d-[a-z0-9-]+$/.test(c));
+  return '<section class="' + ["d-ask", "d-folders"].concat(more).join(" ") + '" data-place="settings" aria-label="' + esc(label(p.title) || "") + '" style="' + s + '"><div class="d-ask-in">' +
+    (p.lede ? '<p class="d-ask-lede">' + t(p.lede) + "</p>" : "") +
+    '<div class="d-ask-card">' + rows + "</div>" +
+    '<p class="d-ask-foot d-folders-act">' + btn({ kind: "ask.folderAdd" }, label(p.add) || "", false, label(p.title) || "") +
+    (FOLDERS.custom ? " " + btn({ kind: "ask.folderReset" }, label(p.reset) || "", true, label(p.title) || "") : "") + "</p>" +
+    (FOLDERS.error ? '<p class="d-ask-foot" role="alert">' + t(p.refused) + " " + esc(FOLDERS.error) + "</p>" : "") +
+    (p.foot || policy ? '<p class="d-ask-foot">' + t(p.foot) + policy + "</p>" : "") +
+    "</div></section>";
+}
+
 function bind(action) {
   if (!action) return "";
   const id = "h" + handlers.length;
@@ -1104,6 +1167,7 @@ function node(n) {
     case "BlipSpot": return blipSpotNode(p, s);
 
     case "DeskAskSetup": return askSetupNode(p, s);
+    case "DeskFolders": return foldersNode(p, s);
 
     case "WordMeter": return wordMeter(p);
     case "PieChart": case "DonutChart": return pie(p);
@@ -3001,6 +3065,9 @@ async function run(action, eventValue) {
     case "ask.openScreenRecording": askAction("openScreenRecording"); return;
     case "ask.picturesAll": askAction("picturesAll", action.on === true || action.on === "true"); return;
     case "ask.relaunch": askAction("relaunch"); return;
+    case "ask.folderAdd": foldersAction("add"); return;
+    case "ask.folderRemove": foldersAction("remove", Number(action.i)); return;
+    case "ask.folderReset": foldersAction("reset"); return;
     case "connector.connect": return connectApp(action);
 
     // ── buying ────────────────────────────────────────────────────────────
@@ -4420,6 +4487,7 @@ function refreshDisc(method) {
   // Ask's permission states, asked now so the first page that carries the
   // setup card has them rather than drawing it twice.
   askSetupWatch();
+  foldersWatch();
 
   $("dictate").addEventListener("click", () => {
     window.tailzuApp.dictate();
