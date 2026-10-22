@@ -131,6 +131,20 @@ window rather than recording into a history no account owns.
   - **One-time setup**: a card in the app ("Let Ask see what you see.")
     allows reading the screen, seeing it and looking when needed, so the
     working screens never stop to ask.
+  - **Connected apps** (when the server has them on): Settings lists the
+    apps (state, Connect, how far it may go: Can look / Can draft / Can send,
+    Disconnect) and a Tasks tab lists what was done (Waiting for you /
+    Running / Done). Both are pages the server builds; the window adds only
+    the `connector.connect` action, which asks `POST /v1/connectors/:id/connect`
+    and opens the sign-in page it answers with. When a do-run reaches a
+    change in one of those apps, the stream's `approve` event carries the
+    server's own confirm card (its words, its Approve / Edit / Not now, the
+    route each calls). The guide draws it as sent, and the button's route is
+    called through `authorizedFetch` (agent.js `approve`, ask.js `call`: a
+    task's own approve or deny, nothing else). Alt twice is Approve, on the
+    same `desktop.agent.confirmTapMs` wait as any confirm card; Edit says no
+    to that one and asks what to change; no answer leaves it waiting in
+    Tasks. `desktop.agent.approveCallMs` bounds the call.
   - **Mostly text**: what leaves the machine is a text list of the screen's
     buttons, fields and OCR'd lines (roles, labels, short values, a rough
     position), the question's audio on the live stream, plus that one

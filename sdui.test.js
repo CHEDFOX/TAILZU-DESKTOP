@@ -29,7 +29,7 @@ const ALL_ON = { platform: "mac", read: "on", see: "on", pictures: "on" };
 const WINDOWS = { platform: "windows", read: "na", see: "na", pictures: "off" };
 
 /** A fresh page: its own module state, its own bridge. */
-function page(env = { askSetup: true }) {
+function page(env = { askSetup: true }, extra = {}) {
   const calls = [];
   const noop = () => {};
   // The page's clock, moved by hand: the card drops a second press inside
@@ -45,7 +45,9 @@ function page(env = { askSetup: true }) {
     addEventListener: noop,
     matchMedia: () => ({ matches: false, addEventListener: noop }),
     document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], activeElement: null },
+    fetch: extra.fetch,
     tailzuApp: {
+      openExternal: (u) => { (extra.opened || []).push(u); },
       env: () => new Promise(() => {}),
       onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop,
       askSetup: async () => MAC,
@@ -244,4 +246,76 @@ test("a malformed node or state draws what it can and never throws", () => {
   assert.deepStrictEqual(rows(p, p.run("ASK_SETUP")).map((r) => r.mode), ["wait", "wait", "wait"]);
   p.ctx.__n = { type: "DeskAskSetup", props: { ...PROPS, place: "settings" } };
   assert.doesNotMatch(p.run("node(__n)"), /d-ask-btn/);
+});
+
+// ---- connected apps: the Connect button ------------------------------------------
+
+const CONNECT_ENV = { baseUrl: "https://api.test" };
+function connectPage(reply, state) {
+  const requests = [];
+  const opened = [];
+  const fetch = async (url, init) => {
+    requests.push({ url, method: init.method, body: init.body === undefined ? undefined : JSON.parse(init.body) });
+    return typeof reply === "function" ? reply(url) : reply;
+  };
+  const p = page(CONNECT_ENV, { fetch, opened });
+  for (const [path, value] of Object.entries(state || {})) { p.ctx.__v = value; p.run(`setStatePath(${JSON.stringify(path)}, __v)`); }
+  const connect = async (a) => { p.ctx.__a = a; await p.run("run(__a)"); };
+  const reached = (path) => p.run(`stateAt(${JSON.stringify(path)})`);
+  return { p, requests, opened, connect, reached };
+}
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const AFTER = { onSuccess: { kind: "setState", path: "flag", value: "yes" }, onError: { kind: "setState", path: "flag", value: "no" } };
+
+test("the window says it shows the assistant's side, and can connect an app", () => {
+  const p = page({ askSetup: false });
+  assert.ok(p.run("capabilities().components").includes("DeskConnectors"));
+  assert.ok(p.run("capabilities().actions").includes("connector.connect"));
+});
+
+test("Connect asks the API's own connect route and opens the sign-in page it answers with", async () => {
+  const c = connectPage(json({ authorizeUrl: "https://mcp.notion.com/authorize?state=x" }));
+  await c.connect(Object.assign({ kind: "connector.connect", id: "notion" }, AFTER));
+  assert.deepStrictEqual(c.requests, [{ url: "https://api.test/v1/connectors/notion/connect", method: "POST", body: {} }]);
+  assert.deepStrictEqual(c.opened, ["https://mcp.notion.com/authorize?state=x"]);
+  assert.strictEqual(c.reached("flag"), "yes");
+  // Coming back to the window redraws the page once (the focus handler).
+  assert.strictEqual(c.p.run("CONNECT_PENDING"), true);
+});
+
+test("a sign-in page that is not https is never opened", async () => {
+  for (const authorizeUrl of ["http://evil.test/x", "javascript:alert(1)", "file:///etc/passwd", "", undefined, 7]) {
+    const c = connectPage(json({ authorizeUrl }));
+    await c.connect(Object.assign({ kind: "connector.connect", id: "notion" }, AFTER));
+    assert.deepStrictEqual(c.opened, [], String(authorizeUrl));
+    assert.strictEqual(c.reached("flag"), "no", String(authorizeUrl));
+  }
+});
+
+test("only an app's id goes into the route: nothing else is asked", async () => {
+  for (const id of ["../v1/tasks", "notion/level", "a b", "", "Notion", undefined, "x".repeat(60), "https://evil.test"]) {
+    const c = connectPage(json({ authorizeUrl: "https://ok.test/" }));
+    await c.connect(Object.assign({ kind: "connector.connect", id }, AFTER));
+    assert.deepStrictEqual(c.requests, [], String(id));
+    assert.deepStrictEqual(c.opened, [], String(id));
+    assert.strictEqual(c.reached("flag"), "no", String(id));
+  }
+});
+
+test("an app that takes a pasted link sends what the field holds, and needs no browser", async () => {
+  const c = connectPage(json({ connected: true }), { "link.zapier": "  https://mcp.zapier.com/api/mcp/s/abc  " });
+  await c.connect(Object.assign({ kind: "connector.connect", id: "zapier", urlPath: "link.zapier" }, AFTER));
+  assert.deepStrictEqual(c.requests, [{ url: "https://api.test/v1/connectors/zapier/connect", method: "POST", body: { url: "https://mcp.zapier.com/api/mcp/s/abc" } }]);
+  assert.deepStrictEqual(c.opened, []);
+  assert.strictEqual(c.reached("flag"), "yes");
+});
+
+test("a refusal, or an API that cannot be reached, is the action's onError", async () => {
+  const refused = connectPage(json({ code: "bad_request", message: "Paste the link." }, 400));
+  await refused.connect(Object.assign({ kind: "connector.connect", id: "zapier", urlPath: "link.zapier" }, AFTER));
+  assert.strictEqual(refused.reached("flag"), "no");
+  const gone = connectPage(() => { throw new TypeError("offline"); });
+  await gone.connect(Object.assign({ kind: "connector.connect", id: "notion" }, AFTER));
+  assert.strictEqual(gone.reached("flag"), "no");
+  assert.deepStrictEqual(gone.opened, []);
 });

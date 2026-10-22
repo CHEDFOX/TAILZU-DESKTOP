@@ -40,6 +40,7 @@ function harness(opts = {}) {
   const windows = [];
   const requests = [];      // /v1/agent bodies
   const speakCalls = [];
+  const taskCalls = [];
   const ipc = new EventEmitter();
   const ipcMain = { on: (ch, f) => ipc.on(ch, f) };
   class FakeWindow {
@@ -143,6 +144,11 @@ function harness(opts = {}) {
     baseUrl: () => "https://api.test",
     token: async () => "tok",
     authorizedFetch: async (p, init) => {
+      // A confirm card's button (a task's yes or no), when a test plays one.
+      if (/^\/v1\/tasks\//.test(p)) {
+        taskCalls.push({ path: p, method: init.method, body: JSON.parse(init.body), headers: init.headers });
+        return opts.taskReply ? opts.taskReply(p) : new Response(JSON.stringify({ ok: true, result: "Message posted." }), { status: 200 });
+      }
       speakCalls.push(p);
       const text = JSON.parse(init.body).text;
       if (opts.speakMs) await sleep(typeof opts.speakMs === "function" ? opts.speakMs(text) : opts.speakMs);
@@ -168,7 +174,7 @@ function harness(opts = {}) {
     paste: async () => {},
     screenSettings: opts.screenSettings,
   });
-  return { ask, sent, recorder, log, windows, requests, speakCalls, ipc, actions, calls, allowed, deps: () => deps,
+  return { ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
     heardCalls: () => calls.filter((c) => c[0] === "heard"),
     previews: () => calls.filter((c) => c[0] === "preview").map((c) => c[1]),
     types: () => sent.map((m) => m.type),
@@ -3321,4 +3327,127 @@ test("preload: the app window's bridge carries the setup card's three calls, by 
   ]);
   // The other windows' bridges have none of it.
   for (const k of ["tailzu", "tailzuGuide", "tailzuNotes"]) assert.ok(!("askSetup" in exposed[k]) && !("askSetupAction" in exposed[k]), k);
+});
+
+// ---- the server's confirm card (a connected app) ---------------------------------------
+
+const APPROVE = [
+  [{ t: "heard", text: "post the summary", mode: "do" }, {
+    t: "approve", taskId: "t1",
+    approval: { id: "ap1", connector: "slack", tool: "post_message", risk: "send", preview: "Post message in Slack" },
+    card: {
+      title: "Ready to send?", app: "Slack", label: "The exact message", preview: "Post message in Slack \u2014 channel: #design",
+      note: "I\u2019ll do this in Slack, as you. I won\u2019t do anything else.",
+      buttons: [
+        { id: "approve", label: "Approve", call: { method: "POST", path: "/v1/tasks/t1/approve", body: { approvalId: "ap1" } } },
+        { id: "edit", label: "Edit", call: { method: "POST", path: "/v1/tasks/t1/deny" }, then: "listen" },
+        { id: "deny", label: "Not now", call: { method: "POST", path: "/v1/tasks/t1/deny" } },
+      ],
+      after: { done: "Done \u2713", left: "Okay, I left it.", failed: "That didn\u2019t go through.", change: "What should I change?" },
+    },
+  }],
+];
+const askAndWaitForCard = async (h) => {
+  await h.ask.tap();
+  h.ask.audioIn({ session: h.lastSession(), data: new Uint8Array([1]).buffer });
+  await until(() => h.types().includes("confirm"));
+};
+
+test("the card the server sent is what the guide is given, whole, and nothing is called until it is answered", async () => {
+  const h = harness({ steps: APPROVE });
+  await askAndWaitForCard(h);
+  const m = h.sent.find((x) => x.type === "confirm");
+  assert.strictEqual(m.card.title, "Ready to send?");
+  assert.strictEqual(m.card.preview, "Post message in Slack \u2014 channel: #design");
+  assert.strictEqual(m.card.note, "I\u2019ll do this in Slack, as you. I won\u2019t do anything else.");
+  assert.deepStrictEqual(m.card.buttons, [
+    { id: "approve", label: "Approve" }, { id: "edit", label: "Edit" }, { id: "deny", label: "Not now" },
+  ]);
+  // The routes stay on this side: the guide window is only told the words.
+  assert.ok(!JSON.stringify(m).includes("/v1/tasks"));
+  assert.deepStrictEqual(h.taskCalls, []);
+  h.ask.cancel("test over");
+});
+
+test("Alt twice is Approve, after the same wait as any confirm card, and the result is shown on the card", async () => {
+  const h = harness({ steps: APPROVE, knobs: { "desktop.agent.confirmTapMs": 40 } });
+  await askAndWaitForCard(h);
+  await sleep(60);
+  await h.ask.tap();
+  await until(() => h.sent.some((x) => x.type === "state" && x.state === "done"));
+  assert.strictEqual(h.taskCalls.length, 1);
+  const c = h.taskCalls[0];
+  assert.deepStrictEqual([c.path, c.method, c.body], ["/v1/tasks/t1/approve", "POST", { approvalId: "ap1" }]);
+  assert.strictEqual(c.headers["Content-Type"], "application/json");
+  assert.ok(h.sent.some((x) => x.type === "say" && x.text === "Done \u2713 Message posted."));
+});
+
+test("Alt twice the moment the card comes up is the stop gesture, not Approve", async () => {
+  const h = harness({ steps: APPROVE });
+  await askAndWaitForCard(h);
+  await h.ask.tap();
+  await sleep(30);
+  assert.deepStrictEqual(h.taskCalls, []);
+  assert.ok(!h.ask.active());
+});
+
+test("the guide's Approve, Not now and Edit are each answers of their own", async () => {
+  for (const [answer, path] of [[true, "/v1/tasks/t1/approve"], ["deny", "/v1/tasks/t1/deny"], ["edit", "/v1/tasks/t1/deny"]]) {
+    const h = harness({ steps: APPROVE });
+    await askAndWaitForCard(h);
+    h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, answer);
+    await until(() => h.taskCalls.length > 0);
+    assert.strictEqual(h.taskCalls[0].path, path, String(answer));
+    if (answer === "deny") {
+      await until(() => h.sent.some((x) => x.type === "say" && x.text === "Okay, I left it."));
+    }
+    if (answer === "edit") {
+      // What to change is asked for, out loud, and the microphone opens for it.
+      await until(() => h.sent.some((x) => x.type === "say" && x.text === "What should I change?"));
+      await until(() => h.starts() === 2);
+    }
+    h.ask.cancel("test over");
+  }
+});
+
+test("a card nobody answered calls nothing: the task stays waiting", async () => {
+  const h = harness({ steps: APPROVE, knobs: { "desktop.agent.confirmMs": 40 } });
+  await askAndWaitForCard(h);
+  await until(() => h.sent.some((x) => x.type === "state" && x.state === "done"));
+  assert.deepStrictEqual(h.taskCalls, []);
+});
+
+test("an answer from anywhere but the guide's own window is not an answer", async () => {
+  const h = harness({ steps: APPROVE });
+  await askAndWaitForCard(h);
+  h.ipc.emit("guide:confirm", { sender: {} }, true);
+  await sleep(30);
+  assert.deepStrictEqual(h.taskCalls, []);
+  h.ask.cancel("test over");
+});
+
+test("the call goes to a task's approve or deny and to nothing else", async () => {
+  const h = harness();
+  const call = h.deps().call;
+  for (const route of [
+    { method: "POST", path: "/v1/connectors/notion", body: {} },
+    { method: "DELETE", path: "/v1/tasks/t1/deny", body: {} },
+    { method: "POST", path: "https://evil.test/v1/tasks/t1/deny", body: {} },
+    { method: "POST", path: "/v1/tasks/t1/approve/extra", body: {} },
+    null,
+  ]) assert.deepStrictEqual(await call(route), { status: 0, body: null });
+  assert.deepStrictEqual(h.taskCalls, []);
+  const ok = await call({ method: "POST", path: "/v1/tasks/t1/deny", body: {} });
+  assert.deepStrictEqual([ok.status, ok.body.ok], [200, true]);
+});
+
+test("a task that is not waiting any more says so, in the server's words", async () => {
+  const h = harness({
+    steps: APPROVE, knobs: { "desktop.agent.confirmTapMs": 0 },
+    taskReply: () => new Response(JSON.stringify({ code: "not_waiting", message: "That isn't waiting for an answer any more." }), { status: 409 }),
+  });
+  await askAndWaitForCard(h);
+  h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, true);
+  await until(() => h.sent.some((x) => x.type === "state" && x.state === "error"));
+  assert.ok(h.sent.some((x) => x.type === "say" && /isn't waiting for an answer/.test(x.text)));
 });

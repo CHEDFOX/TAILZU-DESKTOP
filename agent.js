@@ -107,7 +107,7 @@ const DRAW_KINDS = new Set(["box", "circle", "underline", "highlight", "arrow", 
 /** The kinds drawn around (or under) a frame. */
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
-const TERMINAL = new Set(["action", "ask", "done", "error", "look"]);
+const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
 /** Actions that mean nothing without an element. */
 const NEEDS_ID = new Set(["press", "set", "focus"]);
@@ -137,6 +137,49 @@ const TEXT = {
   looking: "Looking",
   pictureSent: "1 picture sent",
 };
+
+// ---- the server's confirm card ------------------------------------------------
+
+/** The only routes a confirm card's button may call: a task's yes or no. */
+const TASK_ROUTE = /^\/v1\/tasks\/([A-Za-z0-9_-]{1,64})\/(approve|deny)$/;
+const isTaskRoute = (path) => TASK_ROUTE.test(str(path));
+const CARD_BUTTONS = ["approve", "edit", "deny"];
+
+/**
+ * The card of an `approve` event, kept to what the guide may draw and the
+ * routes it may call: the server's words (cut to what a card holds), and for
+ * each button the one route it names, which must be this task's own approve
+ * or deny. Null when it has no card, no way to say yes or no, or a route that
+ * is not that: nothing is then asked, and nothing is called.
+ */
+function approvalOf(ev) {
+  const c = ev && ev.card;
+  if (!c || typeof c !== "object") return null;
+  const taskId = str(ev.taskId);
+  const buttons = [];
+  for (const b of Array.isArray(c.buttons) ? c.buttons : []) {
+    if (!b || typeof b !== "object" || !CARD_BUTTONS.includes(b.id) || buttons.some((x) => x.id === b.id)) continue;
+    const label = clip(squash(b.label), 40);
+    const call = b.call && typeof b.call === "object" ? b.call : {};
+    const m = TASK_ROUTE.exec(str(call.path));
+    if (!label || call.method !== "POST" || !m || m[1] !== taskId) continue;
+    // The yes names its approval; no other body goes anywhere.
+    const approvalId = call.body && typeof call.body === "object" ? str(call.body.approvalId) : "";
+    if ((m[2] === "approve") !== (b.id === "approve")) continue;
+    buttons.push({ id: b.id, label, call: { method: "POST", path: m[0], body: approvalId ? { approvalId: clip(approvalId, 64) } : {} }, then: b.then === "listen" });
+  }
+  const yes = buttons.find((b) => b.id === "approve");
+  const no = buttons.find((b) => b.id === "deny");
+  const preview = clip(squash(c.preview), 400);
+  if (!yes || !no || !preview) return null;
+  const after = c.after && typeof c.after === "object" ? c.after : {};
+  const w = (v, n) => clip(squash(v), n);
+  return {
+    title: w(c.title, 80), app: w(c.app, 60), label: w(c.label, 60), preview, note: w(c.note, 200),
+    buttons,
+    after: { done: w(after.done, 60), left: w(after.left, 120), failed: w(after.failed, 120), change: w(after.change, 120) },
+  };
+}
 
 // ---- small helpers ----------------------------------------------------------
 
@@ -1093,7 +1136,10 @@ function pressMayHaveHappened(r) {
 /**
  * @param {object} deps
  * @param {object} deps.driver   the §1 driver API
- * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, hide, error, badge, draw?, clear?, offer? }:
+ * @param {object} deps.guide    { show, state, heard, say, point, unpoint, steps, confirm, approve?, hide, error, badge, draw?, clear?, offer? }:
+ *        approve(card) shows the server's confirm card for a connected app and resolves
+ *        "approve", "edit", "deny", or "" for no answer (confirmMs, or the card taken away);
+ *        a guide without it cannot ask, and nothing is called
  *        point(frame, caption?, { tentative: true }?) and say(text, { speak, rate, locale?, append? });
  *        draw(mark) with a mark from resolveMark (driver units), clear() to take the marks away.
  *        draw and clear are called only when the guide has them: one without them draws nothing.
@@ -1101,6 +1147,11 @@ function pressMayHaveHappened(r) {
  *        settings, after TEXT.needScreen; a guide without it says the words alone
  * @param {(req: object, audio: object|null, signal: AbortSignal, image?: {mime: string, data: Buffer}|null) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
  *        `image` only on the step that carries the picture
+ * @param {(route: { method: "POST", path: string, body: object }) => Promise<{ status: number, body: object|null }>} [deps.call]
+ *        the confirm card's button: the server route it names (a task's approve or deny), with
+ *        the account's token. Status 0 when it could not be reached. Without it nothing is called.
+ * @param {() => string} [deps.approveElsewhere]  the words for an approval that arrived with no card
+ *        to ask it on (it is then left waiting, to be answered in Tasks)
  * @param {(text: string) => Promise<void>} deps.paste
  * @param {() => Promise<{mime: string, data: Buffer}|null>} deps.listen
  * @param {(name: string, fallback: any) => any} [deps.knob]
@@ -1147,6 +1198,7 @@ function createAgent(deps) {
     try { v = knob(name, fallback); } catch { v = fallback; }
     return typeof v === "boolean" ? v : fallback;
   }
+
   function language() {
     try { return str(typeof d.language === "function" ? d.language() : d.language); } catch { return ""; }
   }
@@ -1857,6 +1909,65 @@ function createAgent(deps) {
     return {};
   }
 
+  /** The server's yes-or-no before it does something in a connected app. */
+  async function approve(run, ev) {
+    const card = approvalOf(ev);
+    const showCard = guide && guide.approve;
+    if (!card || typeof showCard !== "function" || typeof d.call !== "function") {
+      log(`agent ${run.tag}: an approval with no card to ask it on`);
+      // Its words are a label (ask.js), asked for here and never written here.
+      let words = "";
+      try { words = clip(squash(typeof d.approveElsewhere === "function" ? d.approveElsewhere() : ""), 240); } catch { /* none */ }
+      finish(run, "done", words || undefined);
+      return null;
+    }
+    // The person's time on the card is theirs, not the run's: the deadline
+    // does not tick while it is up, and starts again if the run goes on.
+    clearTimeout(run.deadlineTimer);
+    run.deadline = Infinity;
+    const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (CARD_BUTTONS.includes(v) ? v : ""), (e) => {
+      log(`agent ${run.tag}: guide.approve failed: ${errText(e)}`);
+      return "";
+    });
+    const answer = await race(run, within(asked, num("desktop.agent.confirmMs", 30000), ""));
+    if (!alive(run) || answer === ABORTED) return null;
+    // No answer leaves it waiting, where Tasks can still say yes within the hour.
+    if (!answer) { log(`agent ${run.tag}: approval unanswered`); finish(run, "done", card.after.left || undefined); return null; }
+    const button = card.buttons.find((b) => b.id === answer);
+    log(`agent ${run.tag}: approval ${answer}`);
+    if (answer === "approve") tell(run, "state", "acting");
+    const r = await race(run, within(
+      Promise.resolve().then(() => d.call(button.call)).then((v) => (v && typeof v === "object" ? v : { status: 0, body: null }), (e) => {
+        log(`agent ${run.tag}: approval call failed: ${errText(e)}`);
+        return { status: 0, body: null };
+      }),
+      num("desktop.agent.approveCallMs", 25000), { status: 0, body: null },
+    ));
+    if (!alive(run) || r === ABORTED) return null;
+    const body = r.body && typeof r.body === "object" ? r.body : {};
+    const said = (v) => clip(squash(v), 240);
+    if (r.status === 0) { finish(run, "error", TEXT.network); return null; }
+    if (answer === "approve") {
+      if (r.status === 200 && body.ok === true) {
+        // What the app answered, after the card's own "Done".
+        finish(run, "done", said([card.after.done, said(body.result)].filter(Boolean).join(" ")) || undefined);
+      } else {
+        const why = r.status === 200 && body.error && typeof body.error === "object" ? body.error.message : body.message;
+        finish(run, "error", said([r.status === 200 ? card.after.failed : "", why].filter(Boolean).join(" ")) || TEXT.failed);
+      }
+      return null;
+    }
+    // A no that arrives after the task has moved on (409) is still a no.
+    if (r.status !== 200 && r.status !== 409) { finish(run, "error", said(body.message) || TEXT.failed); return null; }
+    if (answer === "deny") { finish(run, "done", card.after.left || undefined); return null; }
+    // Edit: this one is left, and what to change is asked for out loud.
+    pushHistory(run, { said: run.said, did: "EDIT", result: "declined", note: card.preview });
+    const again = num("desktop.agent.deadlineMs", 60000);
+    run.deadline = now() + again;
+    run.deadlineTimer = setTimeout(() => stop(run, "deadline"), again);
+    return ask(run, { text: card.after.change });
+  }
+
   async function ask(run, ev) {
     const question = clip(squash(ev.text), 240);
     pushHistory(run, { said: run.said, did: "ASK", note: question });
@@ -1956,6 +2067,8 @@ function createAgent(deps) {
         return null;
       case "ask":
         return ask(run, terminal);
+      case "approve":
+        return approve(run, terminal);
       default:
         return act(run, terminal);
     }
@@ -2526,7 +2639,7 @@ function makePost(opts) {
 }
 
 module.exports = {
-  createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
+  createAgent, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
   ocrElements, pictureRegion, resolveMark, readEvents, makePost,
   MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, MAX_PICTURE_BYTES, SCREEN_CHARS, TEXT,
 };

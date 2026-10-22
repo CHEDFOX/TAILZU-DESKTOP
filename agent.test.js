@@ -16,7 +16,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  createAgent, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
+  createAgent, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
   ocrElements, pictureRegion, resolveMark, readEvents, makePost, SCREEN_CHARS, TEXT,
 } = require("./agent.js");
 
@@ -130,6 +130,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
+    call: o.call, approveElsewhere: o.approveElsewhere,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -2895,4 +2896,161 @@ test("the answer's first mark puts the tentative ring away: the picture's pulsin
   // A mark that could not be placed is not the answer's pen: the ring stays
   // until one is drawn, and goes once.
   assert.deepStrictEqual(seq, [["point", TEXT.looking, { tentative: true }], ["unpoint"], ["draw"], ["draw"]]);
+});
+
+// ---- the server's confirm card, for a connected app ---------------------------------
+//
+// An "approve" event carries the card the server built: its words, its three
+// buttons and the route each one calls. The guide draws it as it came; the
+// answer calls the route that button names, and the result is shown on the
+// card. Nothing here is the device's own wording.
+
+const CARD = (id = "t1") => ({
+  title: "Ready to send?", app: "Slack", label: "The exact message", preview: "Post message in Slack \u2014 channel: #design",
+  note: "I\u2019ll do this in Slack, as you. I won\u2019t do anything else.",
+  buttons: [
+    { id: "approve", label: "Approve", call: { method: "POST", path: `/v1/tasks/${id}/approve`, body: { approvalId: "ap1" } } },
+    { id: "edit", label: "Edit", call: { method: "POST", path: `/v1/tasks/${id}/deny` }, then: "listen" },
+    { id: "deny", label: "Not now", call: { method: "POST", path: `/v1/tasks/${id}/deny` } },
+  ],
+  after: { done: "Done \u2713", left: "Okay, I left it.", failed: "That didn\u2019t go through.", change: "What should I change?" },
+});
+const approveEv = (o) => Object.assign({
+  t: "approve", taskId: "t1",
+  approval: { id: "ap1", connector: "slack", tool: "post_message", risk: "send", preview: "Post message in Slack" },
+  card: CARD(),
+}, o);
+
+/** A run whose guide answers the card with `answer`, and a server that answers each route with `result`. */
+function approvalRig(answer, result, o = {}) {
+  const guide = fakeGuide();
+  guide.approve = async (card) => {
+    guide.calls.push(["approve", card]);
+    return typeof answer === "function" ? answer(card) : answer;
+  };
+  const routes = [];
+  const r = rig(Object.assign({
+    guide,
+    scripts: [[heardDo("post the summary"), approveEv()]],
+    call: async (route) => { routes.push(route); return typeof result === "function" ? result(route) : result; },
+    approveElsewhere: () => "I need your OK in Tailzu first.",
+  }, o));
+  r.routes = routes;
+  return r;
+}
+const run = async (r) => { r.agent.begin({ app: "Slack" }); await r.agent.heard(AUDIO); };
+const lastState = (r) => r.guide.of("state").at(-1);
+
+test("approve: the card is drawn as the server sent it, and Approve calls its route", async () => {
+  const r = approvalRig("approve", { status: 200, body: { ok: true, result: "Message posted.", task: {} } });
+  await run(r);
+  const [[, card]] = r.guide.of("approve");
+  assert.strictEqual(card.title, "Ready to send?");
+  assert.strictEqual(card.preview, "Post message in Slack \u2014 channel: #design");
+  assert.deepStrictEqual(card.buttons.map((b) => b.label), ["Approve", "Edit", "Not now"]);
+  assert.deepStrictEqual(r.routes, [{ method: "POST", path: "/v1/tasks/t1/approve", body: { approvalId: "ap1" } }]);
+  // The result is on the card, after the server's own "Done".
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713 Message posted."]);
+  assert.strictEqual(r.agent.active(), false);
+  // Nothing was done on the screen.
+  assert.deepStrictEqual(r.driver.calls.filter((c) => c[0] === "press"), []);
+});
+
+test("approve: Not now calls the deny route and the card says it was left", async () => {
+  const r = approvalRig("deny", { status: 200, body: { ok: true } });
+  await run(r);
+  assert.deepStrictEqual(r.routes, [{ method: "POST", path: "/v1/tasks/t1/deny", body: {} }]);
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Okay, I left it."]);
+});
+
+test("approve: no answer calls nothing and leaves the task waiting", async () => {
+  const r = approvalRig("", { status: 200, body: {} });
+  await run(r);
+  assert.deepStrictEqual(r.routes, []);
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Okay, I left it."]);
+  // A card nobody answers within confirmMs is no answer.
+  const slow = approvalRig(() => never(), { status: 200, body: {} }, { knobs: { "desktop.agent.confirmMs": 30 } });
+  await run(slow);
+  assert.deepStrictEqual(slow.routes, []);
+  assert.strictEqual(slow.agent.active(), false);
+});
+
+test("approve: a guide that throws, or answers with anything else, is no answer", async () => {
+  for (const answer of [() => { throw new Error("gone"); }, "yes", true, undefined]) {
+    const r = approvalRig(answer, { status: 200, body: {} });
+    await run(r);
+    assert.deepStrictEqual(r.routes, [], String(answer));
+  }
+});
+
+test("approve: Edit says no to this one, then asks what to change and goes on with the reply", async () => {
+  const r = approvalRig("edit", { status: 200, body: { ok: true } }, {
+    listen: async () => REPLY,
+    scripts: [[heardDo("post the summary"), approveEv()], [{ t: "say", text: "Changed." }, { t: "done" }]],
+  });
+  await run(r);
+  assert.deepStrictEqual(r.routes, [{ method: "POST", path: "/v1/tasks/t1/deny", body: {} }]);
+  assert.deepStrictEqual(r.guide.of("say")[0].slice(0, 2), ["say", "What should I change?"]);
+  const second = r.post.requests[1];
+  assert.strictEqual(second.audio, REPLY);
+  // The planner is told what was declined, so "make it shorter" has something to change.
+  assert.deepStrictEqual(second.req.history.at(-2), { said: "post the summary", did: "EDIT", result: "declined", note: "Post message in Slack \u2014 channel: #design" });
+});
+
+test("approve: an app that failed says so in the server's words", async () => {
+  const r = approvalRig("approve", { status: 200, body: { ok: false, error: { code: "needs_reconnect", message: "Slack needs you to sign in again." } } });
+  await run(r);
+  assert.deepStrictEqual(r.guide.of("error").at(-1), ["error", "That didn\u2019t go through. Slack needs you to sign in again."]);
+});
+
+test("approve: an answer that came too late shows the server's message", async () => {
+  const r = approvalRig("approve", { status: 410, body: { code: "expired", message: "That request expired. Ask me again." } });
+  await run(r);
+  assert.deepStrictEqual(r.guide.of("error").at(-1), ["error", "That request expired. Ask me again."]);
+});
+
+test("approve: a server that cannot be reached is the network's words", async () => {
+  const r = approvalRig("approve", { status: 0, body: null });
+  await run(r);
+  assert.deepStrictEqual(r.guide.of("error").at(-1), ["error", TEXT.network]);
+  const gone = approvalRig("approve", () => { throw new Error("offline"); });
+  await run(gone);
+  assert.deepStrictEqual(gone.guide.of("error").at(-1), ["error", TEXT.network]);
+});
+
+test("approve: only this task's own approve and deny routes are ever called", async () => {
+  const other = CARD("t2");
+  const evil = CARD();
+  evil.buttons[0].call.path = "/v1/connectors/notion";
+  const odd = CARD();
+  odd.buttons[2].call.method = "DELETE";
+  const swapped = CARD();
+  swapped.buttons[2].call.path = "/v1/tasks/t1/approve";
+  for (const [name, card] of [["another task", other], ["another route", evil], ["another method", odd], ["deny that approves", swapped], ["no card", undefined]]) {
+    const r = approvalRig("approve", { status: 200, body: { ok: true } }, { scripts: [[heardDo("post"), approveEv({ card })]] });
+    await run(r);
+    assert.deepStrictEqual(r.routes, [], name);
+    assert.deepStrictEqual(r.guide.of("approve"), [], name);
+    assert.deepStrictEqual(lastState(r), ["state", "done", "I need your OK in Tailzu first."], name);
+  }
+  assert.strictEqual(isTaskRoute("/v1/tasks/abc-123/approve"), true);
+  for (const bad of ["/v1/tasks/abc/approve/x", "/v1/tasks//deny", "/v1/tasks/a b/deny", "https://evil.test/v1/tasks/a/deny", "/v1/tasks/a/delete"]) assert.strictEqual(isTaskRoute(bad), false, bad);
+});
+
+test("approve: the card is cut to what it holds", () => {
+  const long = CARD();
+  long.preview = "x".repeat(900);
+  long.title = "T".repeat(300);
+  const c = approvalOf(approveEv({ card: long }));
+  assert.strictEqual(c.preview.length, 400);
+  assert.strictEqual(c.title.length, 80);
+  assert.strictEqual(approvalOf(approveEv({ card: Object.assign(CARD(), { preview: "  " }) })), null);
+});
+
+test("approve: the run's deadline does not tick while the card is up", async () => {
+  const r = approvalRig(async () => { await sleep(120); return "approve"; }, { status: 200, body: { ok: true, result: "Posted." } },
+    { knobs: { "desktop.agent.deadlineMs": 40, "desktop.agent.confirmMs": 1000 } });
+  await run(r);
+  assert.deepStrictEqual(r.routes.map((x) => x.path), ["/v1/tasks/t1/approve"]);
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713 Posted."]);
 });
