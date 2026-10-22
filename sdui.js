@@ -69,6 +69,13 @@ const COMPONENTS = [
   // own (groundView). A build without it drew the field behind the sheet, so
   // the server keeps the field off the desk's pages for those.
   "DeskField",
+  // THE ONBOARDING: a stage that glides one step out and the next in, and the
+  // empty spot where Blip stands in each step. Declaring them also promises the
+  // optional props that ship in the same release (the field sign-in, the code
+  // boxes, the labelled Google and Apple buttons, a held mic, a style value
+  // that follows state). The server sends the new onboarding only to a build
+  // that says both; an older installer is served the one it has always had.
+  "OnboardStage", "BlipSpot",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;
@@ -577,22 +584,52 @@ const RN_PAIRS = {
   marginVertical: ["margin-top", "margin-bottom"],
 };
 
+/**
+ * A STYLE VALUE THAT FOLLOWS STATE: `{<condition>, then, else}`.
+ *
+ * The phones resolve one on every redraw, and the onboarding leans on it (a
+ * language chip's border and fill, the card the cleaned words land in). This
+ * printed it as "[object Object]", which no browser reads, so the chip never
+ * lit. The condition is the tree's own (visible()). An object that is not one
+ * is no value, rather than a word in a style attribute.
+ */
+function styleValue(v) {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return v;
+  if (!("then" in v)) return undefined;
+  const cond = Object.assign({}, v);
+  delete cond.then; delete cond.else;
+  return visible(cond) ? v.then : v.else;
+}
+
 function css(st) {
   if (!st) return "";
   const out = [];
+  // A border with a width and no style is no border in CSS; on the phones it
+  // is a solid one. Said here for the onboarding, whose cards and chips lean
+  // on it, and written first so an explicit borderStyle still wins. Nowhere
+  // else: a screen drawn without borders for years does not grow them now.
+  if (IN_STAGE) {
+    for (const k of Object.keys(st)) {
+      const m = /^border(Top|Right|Bottom|Left)?Width$/.exec(k);
+      if (m && Number(styleValue(st[k])) > 0) out.push("border" + (m[1] ? "-" + m[1].toLowerCase() : "") + "-style:solid");
+    }
+  }
   // The pairs first, so a specific side named alongside one overrides it.
   for (const k of Object.keys(RN_PAIRS)) {
-    const v = tok(st[k]);
+    const v = tok(styleValue(st[k]));
     if (v == null) continue;
     const val = typeof v === "number" ? v + "px" : String(v);
     for (const prop of RN_PAIRS[k]) out.push(prop + ":" + val);
   }
   for (const k of Object.keys(st)) {
     if (RN_PAIRS[k]) continue;
-    let v = tok(st[k]);
+    let v = tok(styleValue(st[k]));
     if (v == null) continue;
     let prop = MAP[k] || k.replace(/[A-Z]/g, (ch) => "-" + ch.toLowerCase());
     if (prop === "align-items" || prop === "justify-content" || prop === "align-self") v = ALIGN[v] || v;
+    // The onboarding's two faces are Latin only; a line in Hindi or Tamil is
+    // set in a face that has it, not in the browser's default serif.
+    if (IN_STAGE && prop === "font-family") v = v + ",var(--f-ui),var(--f-deva)";
     if (typeof v === "number" && !NUMERIC_OK.test(prop)) v = v + "px";
     out.push(prop + ":" + v);
   }
@@ -839,6 +876,8 @@ function cls(p) {
 function node(n) {
   if (!n) return "";
   if (!visible(n.visibleIf)) return n.fallback ? node(n.fallback) : "";
+  // The onboarding stage draws the one step it is on, not all of them.
+  if (n.type === "OnboardStage") return stageNode(n);
   const p = n.props || {}, st = n.style || {}, s = css(st);
   const kids = (n.children || []).map(node).join("");
   const press = n.on && (n.on.onPress || n.on.onChange || n.on.onSubmit);
@@ -874,6 +913,12 @@ function node(n) {
       }
       // falls through
     case "Stack": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
+      // A Grid with columns is a grid. It was a column of its children, which
+      // is a long way from three apps across.
+      if (n.type === "Grid" && Number(p.columns) > 0) {
+        return '<div' + bind(press) + rolePress(press) + cls(p) + ' style="position:relative;display:grid;grid-template-columns:repeat(' +
+          Math.floor(Number(p.columns)) + ",minmax(0,1fr));gap:" + (Number(p.gap) || 0) + "px" + (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
+      }
       // POSITION:RELATIVE, AND IT IS LOAD-BEARING.
       //
       // React Native paints children in the order they are written. CSS does
@@ -887,7 +932,7 @@ function node(n) {
       // means. It also fixes the containing block: an absolutely-positioned
       // child now measures against its own parent, which is what it does on
       // the phones and not what it was doing here.
-      return '<div' + bind(press) + cls(p) + ' style="' +
+      return '<div' + bind(press) + rolePress(press) + cls(p) + ' style="' +
         (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
         (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
@@ -899,7 +944,10 @@ function node(n) {
         kids + (txt ? "<div>" + txt + "</div>" : "") + "</div>";
 
     case "Spacer":
-      return '<div style="height:' + esc(st.height || K.num("desktop.spacer.height", 8)) + "px;flex:" + esc(st.flex || 0) + '"></div>';
+      // minHeight is what keeps a flexible spacer from closing up completely
+      // (the onboarding's, which pushes its button to the foot of the window).
+      return '<div style="height:' + esc(st.height || K.num("desktop.spacer.height", 8)) + "px;flex:" + esc(st.flex || 0) +
+        (st.minHeight != null ? ";min-height:" + esc(Number(st.minHeight) || 0) + "px" : "") + '"></div>';
 
     case "Divider":
       return '<div style="height:1px;background:var(--border);margin:' + K.num("desktop.divider.margin", 12) + 'px 0"></div>';
@@ -937,9 +985,13 @@ function node(n) {
         const words = bound != null ? esc(String(bound)) : txt;
         return '<span' + bind(press) + cls(p) + ' style="' + s + '">' + words + "</span>";
       }
-      return '<span' + bind(press) + ' style="white-space:pre-wrap;' +
+      // In the onboarding a line can be drawn from state (a language's name, an
+      // app's, the words the mic wrote), as the phones do; the server sends no
+      // words for it, so it is never put through a translator.
+      const live = IN_STAGE && n.bind && n.bind.content ? stateAt(n.bind.content) : undefined;
+      return '<span' + bind(press) + rolePress(press) + ' style="white-space:pre-wrap;' +
         role(p.variant || "body", "color:var(--text)") + ";" +
-        (press ? "cursor:pointer;" : "") + s + '">' + txt + "</span>";
+        (press ? "cursor:pointer;" : "") + s + '">' + (live != null ? esc(String(live)) : txt) + "</span>";
 
     case "Badge": case "Chip":
       return '<span' + bind(press) + ' style="display:inline-block;border:1px solid var(--border);border-radius:999px;' +
@@ -1046,6 +1098,11 @@ function node(n) {
 
     case "Keys": return keysNode(p, s);
 
+    // Where Blip stands in this step: an empty box the size of his figure, that
+    // says in which pose and with what words. The one Blip who walks the
+    // onboarding (blip.js createWalker) finds it and goes there.
+    case "BlipSpot": return blipSpotNode(p, s);
+
     case "DeskAskSetup": return askSetupNode(p, s);
 
     case "WordMeter": return wordMeter(p);
@@ -1072,7 +1129,7 @@ function node(n) {
       const vb = esc(p.viewBox || "0 0 24 24");
       const fill = p.fill && p.fill !== "none" ? esc(tok(p.fill)) : "none";
       const stroke = p.stroke ? esc(tok(p.stroke)) : "none";
-      return '<svg viewBox="' + vb + '" style="' + s + ';display:block" ' +
+      return '<svg viewBox="' + vb + '" style="' + s + ';display:block' + (IN_STAGE ? ";flex:none" : "") + '" ' +
         'fill="' + fill + '" stroke="' + stroke + '" ' +
         'stroke-width="' + (Number(p.strokeWidth) || K.num("desktop.svg.strokeWidth", 2)) + '" ' +
         'stroke-linecap="' + esc(p.strokeLinecap || "round") + '" ' +
@@ -1358,6 +1415,8 @@ let MIC = null;   // { rec, stream, path, node } while a capture is open
 
 function voiceButton(n, p, s) {
   const size = Number(p.size) || K.num("desktop.voice.buttonSize", 44);
+  // Held to speak, let go to stop: the onboarding's.
+  if (p.hold === true) return holdMicButton(n, p, s, size);
   const on = !!(MIC && MIC.path === ((n.bind && n.bind.value) || ""));
   return '<button class="tz-press" data-mic="' + esc((n.bind && n.bind.value) || "") + '"' +
     ' aria-pressed="' + on + '" title="' +
@@ -1380,6 +1439,25 @@ function voiceButton(n, p, s) {
     "</button>";
 }
 
+/**
+ * HOLD TO SPEAK, as the phones' button is held: press to start, let go to stop.
+ * A window has a mouse, which can hold, so the onboarding's mic is the same
+ * gesture it is on the phone. The disc is the node's size and colours; the
+ * glyph on it is this window's own (the phones draw a child node there).
+ */
+const MIC_PATH = "M9 6a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0zM5 11a7 7 0 0 0 14 0M12 18v3";
+function holdMicButton(n, p, s, size) {
+  const path = (n.bind && n.bind.value) || "";
+  const on = !!(MIC && MIC.path === path);
+  const bg = cssv(tok(on ? (p.recordingBackground || p.background) : p.background), "#1C1A17");
+  const words = label(p.label) || K.txt("desktop.voice.hold", "Hold to speak");
+  return '<button type="button" class="tz-press ob-mic" data-mic="' + esc(path) + '" data-hold="1" aria-pressed="' + on + '" aria-label="' + esc(words) + '"' +
+    ' style="' + s + ";flex:none;width:" + size + "px;height:" + size + "px;border-radius:" + okNum(p.radius, size / 2, 0, size) +
+    "px;border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;background:" + bg + '">' +
+    '<svg width="' + Math.round(size * 0.43) + '" height="' + Math.round(size * 0.43) + '" viewBox="0 0 24 24" fill="none" stroke="' +
+    cssv(tok(p.glyphColor), "#FCFBF8") + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + MIC_PATH + '"/></svg></button>';
+}
+
 /** What the microphone is asked for — the same knob the tray's recorder reads. */
 const micConstraints = () =>
   K.obj("desktop.mic.constraints", { echoCancellation: true, noiseSuppression: true, autoGainControl: true });
@@ -1390,10 +1468,16 @@ async function micStart(path, n) {
     .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   const chunks = [];
+  // A node that names a state path is told what the mic is doing there:
+  // "recording", "busy" (turning it into text) and "idle". The onboarding
+  // changes Blip's pose and its captions with it.
+  const sk = n.bind && n.bind.state;
+  const mood = (v) => { if (sk) setStatePath(sk, v); };
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   rec.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
     MIC = null;
+    if (sk) { mood("busy"); repaint(); }
     try {
       if (!chunks.length) throw worded(K.txt("desktop.mic.noAudio", "no audio captured"));
       const type = rec.mimeType || "audio/webm";
@@ -1415,10 +1499,12 @@ async function micStart(path, n) {
       const text = String(j.cleanedText || "").trim();
       if (!text) throw worded(K.txt("desktop.mic.noSpeech", "no speech detected"));
       if (path) setStatePath(path, text);
+      mood("idle");
       repaint();
       const ch = n.on && n.on.onChange;
       if (ch) await run(ch, text);
     } catch (err) {
+      mood("idle");
       repaint();
       const eh = n.on && n.on.onError;
       const msg = userText(err, K.txt("desktop.mic.transcribeFailed", "Couldn't turn that into text. Try again."));
@@ -1427,6 +1513,7 @@ async function micStart(path, n) {
   };
   rec.start();
   MIC = { rec, stream, path, node: n };
+  mood("recording");
   repaint();
 }
 
@@ -2008,6 +2095,426 @@ window.addEventListener("focus", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The onboarding stage
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE FRIEND BESIDE YOU THROUGH THE WHOLE ONBOARDING.
+ *
+ * Blip is not a node in any screen. Drawn inside one, he would be torn down
+ * and drawn again at the two moments that matter most: when the gate gives way
+ * to the app after the code, and between any two screens. So he is one canvas
+ * (#blipStage), drawn by blip.js, for the life of the window, and a step only
+ * says where he should stand: a BlipSpot, an empty box with a pose and a few
+ * words. The stage (OnboardStage) holds the steps, shows the one it is on and
+ * glides the next in; the bar, the bubble and the walker stay where they are.
+ *
+ * TWO STAGES, because signing in comes before there is an account: Welcome,
+ * Sign in and Code are the server's auth tree, drawn by paintGate() into the
+ * gate; everything after is the screen `onboard`, drawn by repaint() into the
+ * view. In between, the gate goes and the screen is fetched, and Blip HOLDS:
+ * the paper, the bar and he himself stay, standing where he last stood, until
+ * the next stage mounts and he walks to its spot. html[data-onboard] is that
+ * hold. He is let go (faded out) only when a screen that is not a stage is
+ * painted.
+ */
+const OB_STEP = {};       // the furthest step each stage has reached, by id
+let IN_STAGE = 0;         // above zero while a stage's step is being drawn
+const OBS = {
+  walker: null,
+  look: null,             // the stage's look (ground, bar, bubble, Blip's colours, glide)
+  key: "",                // where Blip was last sent: stage, step and spot
+  lastId: "",             // the last stage drawn, so the next one glides in
+  watch: null,            // the ResizeObserver on the step on show
+  landT: 0, burstT: 0, hideT: 0, scrollRaf: 0,
+};
+const GLIDE_EASE = "cubic-bezier(.32,.72,0,1)";
+
+/**
+ * A STAGE: only the step it is on is drawn, inside a box that scrolls on its
+ * own (a short window must not cut a step off), with the stage's look riding
+ * along as data for the bar and Blip to read.
+ *
+ * THE STEP IS NEVER LOST ON A REFETCH. A screen fetched again (an app was
+ * connected, or someone went to pick more languages and came back) starts its
+ * state over, and the step with it. The furthest step a stage has reached is
+ * kept by id, and a rebuilt state is raised to it. Going back is not a thing a
+ * stage does; the flow is a line, and each step knows its way to the next.
+ *
+ * The sign-in flow can pick the step as well: while it is in a phase named in
+ * `phaseStep` (the code was sent), that step shows, whatever the stage was on.
+ * That phase is not remembered: "Change it" returns the flow to the entry and
+ * the step with it.
+ */
+function stageNode(n) {
+  const p = n.props || {}, kids = n.children || [];
+  if (!kids.length) return "";
+  const id = String(p.id || "stage");
+  const at = (i) => Math.max(0, Math.min(kids.length - 1, Math.floor(Number(i)) || 0));
+  OB_STEP[id] = Math.max(at(OB_STEP[id]), at(stateAt((n.bind && n.bind.step) || "step")));
+  const phased = p.phaseStep && typeof p.phaseStep === "object" ? p.phaseStep[AUTH.phase] : undefined;
+  const step = Number.isInteger(phased) ? at(phased) : OB_STEP[id];
+  const kid = kids[step];
+  let inner;
+  IN_STAGE++;
+  try { inner = node(kid); } finally { IN_STAGE--; }
+  const look = { ground: p.ground, progress: p.progress, bubble: p.bubble, blip: p.blip, glide: p.glide };
+  return '<div class="ob-stage" data-stage="' + esc(id) + '" data-step="' + step +
+    '" data-first="' + (Math.floor(Number(p.first)) || 0) + '" data-of="' + (Math.floor(Number(p.of)) || kids.length) +
+    '" data-step-id="' + esc((kid && kid.props && kid.props.stepId) || "") + '" data-look="' + esc(JSON.stringify(look)) + '">' +
+    '<div class="ob-step"><div class="ob-content">' + inner + "</div></div></div>";
+}
+
+/** A pressable box in the onboarding is a button to the keyboard as well. */
+function rolePress(press) {
+  return press && IN_STAGE ? ' role="button" tabindex="0"' : "";
+}
+
+/**
+ * WHERE BLIP STANDS. The box is as big as his figure (a little wider than it
+ * is tall, with room for the bubble to start beside it), so the step lays
+ * itself out around where he will be; the walker finds the box and goes to its
+ * foot. What he says and how he looks while he says it ride along as data.
+ */
+function blipSpotNode(p, s) {
+  const h = Math.max(24, Math.min(400, Number(p.h) || 100));
+  const said = label(p.say);
+  const spot = {
+    pose: /^[a-z]{2,10}$/.test(String(p.pose)) ? String(p.pose) : "present",
+    h, say: said == null ? "" : String(said),
+    bubble: p.bubble === "corner" ? "corner" : "side",
+    burst: p.burst === true,
+  };
+  return '<span class="bs" aria-hidden="true" data-blip="' + esc(JSON.stringify(spot)) + '" style="width:' +
+    Math.ceil(h * 1.4) + "px;height:" + Math.ceil(h * 1.16 + 4) + "px;" + s + '"></span>';
+}
+
+/** The last of several spots on show. A step shows one at a time (the server sees to it); if two ever do, the last in the document is the one he goes to. */
+function lastSpot(spots) {
+  return spots && spots.length ? spots[spots.length - 1] : null;
+}
+
+// What the server sends for the look is data into style attributes and a
+// canvas, so each value is checked on the way in and falls back to the
+// design's own.
+const OB_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([0-9., %]+\)|transparent)$/i;
+const okColor = (v, fb) => (typeof v === "string" && OB_COLOR.test(v.trim()) ? v.trim() : fb);
+const okFont = (v, fb) => (typeof v === "string" && /^[A-Za-z0-9 _-]{1,40}$/.test(v) ? v : fb);
+const okNum = (v, fb, lo, hi) => { const x = Number(v); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : fb; };
+
+function stageLook(el) {
+  let raw = {};
+  try { raw = JSON.parse(el.getAttribute("data-look") || "{}") || {}; } catch { raw = {}; }
+  const pg = raw.progress || {}, bb = raw.bubble || {}, bl = raw.blip || {}, gl = raw.glide || {};
+  return {
+    ground: okColor(raw.ground, "#EFEDE8"),
+    progress: { on: okColor(pg.on, "#1C1A17"), off: okColor(pg.off, "rgba(28,26,23,0.13)"), height: okNum(pg.height, 4, 1, 12), gap: okNum(pg.gap, 4, 0, 16) },
+    bubble: {
+      background: okColor(bb.background, "#FCFBF8"), border: okColor(bb.border, "#1C1A17"), ink: okColor(bb.ink, "#1C1A17"),
+      font: okFont(bb.font, "Tailzu Hand"), size: okNum(bb.size, 19, 10, 40), bigSize: okNum(bb.bigSize, 22, 10, 48),
+    },
+    blip: { dot: okColor(bl.dot, "#F3E2C6"), sticker: okColor(bl.sticker, "#151311"), glow: okColor(bl.glow, "#39FF14") },
+    glide: { slide: okNum(gl.slide, 26, 0, 80), outMs: okNum(gl.outMs, 230, 0, 1000), inMs: okNum(gl.inMs, 320, 0, 1500), inDelayMs: okNum(gl.inDelayMs, 60, 0, 500) },
+  };
+}
+
+function glideOut(el, dir, slide, ms, done) {
+  if (typeof el.animate !== "function") { done(el); return; }
+  const cs = getComputedStyle(el), from = { opacity: cs.opacity, transform: cs.transform };
+  el.getAnimations().forEach((a) => a.cancel());
+  el.inert = true;
+  const a = el.animate([from, { opacity: 0, transform: "translate3d(" + (-dir * slide) + "px,0,0)" }], { duration: ms, easing: GLIDE_EASE, fill: "forwards" });
+  a.onfinish = () => { done(el); a.cancel(); };
+}
+
+function glideIn(el, dir, slide, ms, delay) {
+  if (typeof el.animate !== "function") return;
+  el.animate([{ opacity: 0, transform: "translate3d(" + (dir * slide) + "px,0,0)" }, { opacity: 1, transform: "translate3d(0,0,0)" }],
+    { duration: ms, delay, easing: GLIDE_EASE, fill: "backwards" });
+}
+
+/** The stage that is up, in the gate before there is an account and in the view after. */
+function activeStage() {
+  const gate = $("gate");
+  const host = gate && !gate.hidden ? $("gateForm") : $("view");
+  return host ? host.querySelector(".ob-stage") : null;
+}
+
+/** Is the gate showing the sign-in stage? Its state changes (the step) are for it. */
+function gateUp() {
+  const gate = $("gate");
+  return !!(gate && !gate.hidden && AUTH_TREE && AUTH_TREE.type === "OnboardStage");
+}
+
+/** Is a stage the screen on show? */
+function stageUp() {
+  return !!(CURRENT_SCREEN && CURRENT_SCREEN.root && CURRENT_SCREEN.root.type === "OnboardStage");
+}
+
+/**
+ * WHAT IS UP NOW, taken before a paint replaces it: which stage, which step,
+ * and the step itself, to be put back and glided away if the step changes.
+ * The scroll is kept too: a repaint is a new document, and one that starts at
+ * the top would throw a long step back up the moment a chip was tapped.
+ */
+function stageBefore(host) {
+  const el = host && host.querySelector ? host.querySelector(".ob-stage") : null;
+  const live = el ? el.querySelector(".ob-step:not([data-out])") : null;
+  if (!el || !live) return null;
+  return { id: el.getAttribute("data-stage"), step: Number(el.getAttribute("data-step")) || 0, el: live, scroll: live.scrollTop };
+}
+
+/**
+ * AFTER A PAINT: gives back whether a stage is up. If it is, the page takes on
+ * its ground, the bar fills to the step, the step glides in (and the one
+ * before glides out) when it changed, and Blip goes to the spot.
+ */
+function stageAfter(host, before) {
+  const el = host.querySelector ? host.querySelector(".ob-stage") : null;
+  if (!el) return false;
+  const look = stageLook(el);
+  OBS.look = look;
+  const id = el.getAttribute("data-stage"), step = Number(el.getAttribute("data-step")) || 0;
+  const root = document.documentElement;
+  root.dataset.onboard = "1";
+  root.style.setProperty("--ob-ground", look.ground);
+  stageSwap(el, before, look);
+  OBS.lastId = id;
+  stageBar(look, (Math.floor(Number(el.getAttribute("data-first"))) || 0) + step, Math.floor(Number(el.getAttribute("data-of"))) || 1);
+  try {
+    if (document.fonts && document.fonts.load) {
+      document.fonts.load('800 26px "Tailzu Grotesk"').catch(() => {});
+      document.fonts.load('400 19px "Tailzu Hand"').catch(() => {});
+    }
+  } catch { /* the faces arrive when the text asks for them */ }
+  stageWatch(el);
+  stageFollow();
+  return true;
+}
+
+/**
+ * THE GLIDE. Only a change of step glides: the one that was up is put back,
+ * inert, over the new one and slides out as the new one slides in, both on
+ * one curve, about 380 ms from the first move to the last. A repaint inside a
+ * step (a chip lit, the mic held) is instant, as the rest of this window's
+ * repaints are: the document is rebuilt on every state change, and an
+ * animation on each would be a flicker on each. A stage that has just taken
+ * over from another (the app after the code) brings its first step in from the
+ * right, and a repaint of the same step keeps the scroll it had.
+ */
+function stageSwap(el, before, look) {
+  const id = el.getAttribute("data-stage"), step = Number(el.getAttribute("data-step")) || 0;
+  const live = el.querySelector(".ob-step");
+  // Held still, nothing slides and the two just fade, a little slower.
+  const gl = prefers("(prefers-reduced-motion: reduce)") ? { slide: 0, outMs: 260, inMs: 260, inDelayMs: 0 } : look.glide;
+  if (before && before.id === id && before.step !== step) {
+    const dir = step > before.step ? 1 : -1;
+    const out = before.el;
+    out.setAttribute("data-out", "1");
+    out.setAttribute("aria-hidden", "true");
+    out.inert = true;
+    el.appendChild(out);
+    out.scrollTop = before.scroll;
+    glideOut(out, dir, gl.slide, gl.outMs, (e) => e.remove());
+    glideIn(live, dir, gl.slide, gl.inMs, gl.inDelayMs);
+  } else if (!before && OBS.lastId && OBS.lastId !== id) {
+    glideIn(live, 1, gl.slide, gl.inMs, gl.inDelayMs);
+  } else if (before && before.id === id && live) {
+    live.scrollTop = before.scroll;
+  }
+}
+
+/** The bar: one segment a step, filled up to the one you are on. */
+function stageBar(look, upto, of) {
+  const bar = $("blipProg");
+  if (!bar) return;
+  const count = Math.max(1, Math.min(40, of));
+  if (bar.children.length !== count) bar.innerHTML = "<i></i>".repeat(count);
+  const pg = look.progress;
+  bar.style.setProperty("--pg-on", pg.on);
+  bar.style.setProperty("--pg-off", pg.off);
+  bar.style.setProperty("--pg-h", pg.height + "px");
+  bar.style.setProperty("--pg-gap", pg.gap + "px");
+  for (let i = 0; i < bar.children.length; i++) bar.children[i].classList.toggle("on", i <= upto);
+  bar.classList.add("on");
+}
+
+/** The step's box scrolling, or its content changing size (a font arriving, a line wrapping), moves where he should stand. */
+function stageWatch(el) {
+  const live = el.querySelector(".ob-step:not([data-out])");
+  if (!live) return;
+  live.addEventListener("scroll", () => {
+    if (OBS.scrollRaf) return;
+    OBS.scrollRaf = requestAnimationFrame(() => { OBS.scrollRaf = 0; stageFollow(); });
+  });
+  try {
+    if (typeof ResizeObserver === "function") {
+      if (!OBS.watch) OBS.watch = new ResizeObserver(() => stageFollow());
+      OBS.watch.disconnect();
+      const c = live.querySelector(".ob-content");
+      if (c) OBS.watch.observe(c);
+    }
+  } catch { /* a window that cannot watch still follows on resize */ }
+}
+
+const dprNow = () => Math.min(2, window.devicePixelRatio || 1);
+
+function ensureWalker() {
+  if (OBS.walker) return OBS.walker;
+  const cv = $("blipStage"), T = window.TailzuBlip;
+  if (!cv || !T || typeof T.createWalker !== "function" || !OBS.look) return null;
+  const b = OBS.look.blip;
+  OBS.walker = T.createWalker(cv, {
+    dpr: dprNow(), reduced: prefers("(prefers-reduced-motion: reduce)"),
+    raf: (f) => requestAnimationFrame(f), caf: (id) => cancelAnimationFrame(id),
+    dot: b.dot, sticker: b.sticker, glow: b.glow, paper: OBS.look.bubble.background,
+  });
+  OBS.walker.size(window.innerWidth, window.innerHeight, dprNow());
+  try {
+    window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", (e) => { if (OBS.walker) OBS.walker.reduced(e.matches); });
+  } catch { /* an old engine keeps what it started with */ }
+  return OBS.walker;
+}
+
+/**
+ * WHERE THE SPOT IS, in the window: its feet and its bubble's corner, worked
+ * out from the offsets up to the step's content (which the glide's transform
+ * does not move), plus the stage's own place, less the step's scroll. So he
+ * stands where the step will rest, not where a glide has it for the moment,
+ * and he rides along when a short window scrolls the step.
+ */
+function spotAt(stageEl, stepEl, b) {
+  const content = stepEl.querySelector(".ob-content");
+  const rel = (e0) => {
+    let x = 0, y = 0;
+    for (let e = e0; e && e !== content; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
+    return { x, y };
+  };
+  let d = {};
+  try { d = JSON.parse(b.getAttribute("data-blip") || "{}") || {}; } catch { d = {}; }
+  const h = okNum(d.h, 100, 24, 400), o = rel(b), r = stageEl.getBoundingClientRect();
+  const ox = r.left + content.offsetLeft, oy = r.top + content.offsetTop - stepEl.scrollTop;
+  let bx, by;
+  if (d.bubble === "corner" && b.parentElement) {
+    // Welcome's and Done's: the bubble hangs from the top right of Blip's row.
+    const c = b.parentElement, q = rel(c);
+    bx = q.x + c.offsetWidth - 10; by = q.y + 6;
+  } else {
+    bx = o.x + b.offsetWidth - Math.round(h * .16); by = o.y + Math.round(h * .1);
+  }
+  return {
+    x: ox + o.x + b.offsetWidth / 2, y: oy + o.y + b.offsetHeight - 2, h,
+    pose: /^[a-z]{2,10}$/.test(String(d.pose)) ? d.pose : "present", say: typeof d.say === "string" ? d.say : "",
+    mode: d.bubble === "corner" ? "corner" : "side", burst: d.burst === true, bx: ox + bx, by: oy + by,
+  };
+}
+
+/** His words: placed beside him in the stage's own look. False when he has none to say. */
+function sayPlace(sp) {
+  const b = $("blipSay");
+  if (!b || !OBS.look) return false;
+  if (!sp.say) { b.classList.remove("on"); return false; }
+  const bb = OBS.look.bubble, st = b.style;
+  b.firstElementChild.textContent = sp.say;
+  st.setProperty("--bs-bg", bb.background); st.setProperty("--bs-bd", bb.border);
+  st.background = bb.background; st.borderColor = bb.border; st.color = bb.ink;
+  st.fontFamily = '"' + bb.font + '",var(--f-deva),"Comic Sans MS",cursive';
+  st.fontSize = (sp.mode === "corner" ? bb.bigSize : bb.size) + "px";
+  st.top = Math.round(sp.by) + "px";
+  if (sp.mode === "side") { st.left = Math.round(sp.bx) + "px"; st.right = "auto"; }
+  else { st.right = Math.round(document.documentElement.clientWidth - sp.bx) + "px"; st.left = "auto"; }
+  return true;
+}
+
+function sayHide() {
+  const b = $("blipSay");
+  if (b) b.classList.remove("on");
+}
+
+/** He has got there (or was there already): his words come up, and at the end the confetti goes. */
+function stageLand(sp, key, kind) {
+  if (OBS.key !== key) return;                    // he has been sent elsewhere since
+  const b = $("blipSay");
+  if (b && sayPlace(sp)) {
+    const was = b.classList.contains("on");
+    b.classList.add("on");
+    // Same place, new words: the bubble says them again with a small start.
+    if (kind === "pose" && was && !prefers("(prefers-reduced-motion: reduce)") && typeof b.animate === "function") {
+      b.animate([{ transform: "rotate(-1.5deg) scale(.93)" }, { transform: "rotate(-1.5deg) scale(1)" }], { duration: 220, easing: GLIDE_EASE });
+    }
+  }
+  clearTimeout(OBS.burstT);
+  if (sp.burst) {
+    OBS.burstT = setTimeout(() => {
+      if (OBS.key !== key || !window.TailzuBlip) return;
+      window.TailzuBlip.burst(document.body, sp.x, sp.y - sp.h * .75, { reduced: prefers("(prefers-reduced-motion: reduce)") });
+    }, 250);
+  }
+}
+
+/**
+ * SEND BLIP TO THE SPOT THE STEP ON SHOW HAS, or keep him on it: called after
+ * every paint, and again when the window is resized, the step is scrolled or
+ * its content changes size. The same spot as last time is only a measure
+ * (he is moved, with no walk); a new one is a journey, a re-pose or, when he
+ * is not anywhere yet (the first, or the first after he was let go), a
+ * simple arrival with a fade.
+ */
+function stageFollow() {
+  const el = activeStage();
+  if (!el || !OBS.look) return;
+  const live = el.querySelector(".ob-step:not([data-out])");
+  if (!live) return;
+  const b = lastSpot(Array.prototype.slice.call(live.querySelectorAll(".bs")));
+  if (!b) { sayHide(); return; }
+  const w = ensureWalker();
+  if (!w) return;
+  const sp = spotAt(el, live, b);
+  const key = el.getAttribute("data-stage") + ":" + el.getAttribute("data-step") + ":" + b.getAttribute("data-blip");
+  if (OBS.key === key) {
+    w.retarget(sp.x, sp.y, sp.h);
+    const bubble = $("blipSay");
+    if (bubble && bubble.classList.contains("on")) sayPlace(sp);
+    return;
+  }
+  OBS.key = key;
+  clearTimeout(OBS.hideT); clearTimeout(OBS.burstT);
+  const cv = $("blipStage");
+  if (cv) cv.classList.add("on");
+  const how = w.go(sp.x, sp.y, sp.h, sp.pose, (kind) => stageLand(sp, key, kind));
+  // On his way his words are down; they come up when he lands.
+  if (how === "travel") sayHide();
+}
+
+window.addEventListener("resize", () => {
+  if (OBS.walker) OBS.walker.size(window.innerWidth, window.innerHeight, dprNow());
+  stageFollow();
+});
+try { document.fonts.addEventListener("loadingdone", () => stageFollow()); } catch { /* no font events here */ }
+
+/**
+ * LET HIM GO: a screen that is not a stage is up. The paper gives way, the bar
+ * and the words fade, and he fades with them (the walker is told to stop
+ * drawing once that has finished).
+ */
+function leaveOnboard() {
+  const root = document.documentElement;
+  if (root.dataset.onboard !== "1") return;
+  delete root.dataset.onboard;
+  root.style.removeProperty("--ob-ground");
+  OBS.key = ""; OBS.lastId = ""; OBS.look = null;
+  clearTimeout(OBS.burstT);
+  const cv = $("blipStage"), bar = $("blipProg");
+  if (cv) cv.classList.remove("on");
+  if (bar) bar.classList.remove("on");
+  sayHide();
+  if (OBS.walker) {
+    clearTimeout(OBS.hideT);
+    OBS.hideT = setTimeout(() => { if (OBS.walker) OBS.walker.hide(); }, 240);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The sign-in screen
 // ---------------------------------------------------------------------------
 
@@ -2039,6 +2546,11 @@ const AUTH = {
   code: "",
   codeLength: 6,
   codeError: false,
+  /** Sending the code again is in flight / failed (the onboarding's code step says so). */
+  resending: false,
+  sendFailed: false,
+  /** The dial code the server last asked a number to start with, so an edit to it is not undone. */
+  dialFrom: "",
   error: "",
   /** Which pill is open for typing. Only one at a time: opening the second
    *  should close the first, or the screen has two carets in it. */
@@ -2071,6 +2583,8 @@ function pillDefaults() {
 function swipePill(p, s) {
   const method = p.method === "phone" ? "phone" : "email";
   if (method === "phone" && !AUTH.phoneOn) return "";
+  // The onboarding's: a field and a button, nothing to swipe.
+  if (p.variant === "field") return fieldPill(method, p, s);
   const D = pillDefaults();
   const h = Number(p.height) || D.height;
   const open = AUTH.open === method;
@@ -2135,6 +2649,7 @@ function methodGlyph(method) {
 
 /** The code step: one pill, the digits spaced out, dots for what is missing. */
 function codeEntry(p, s) {
+  if (p.variant === "boxes") return codeBoxes(p, s);
   const D = pillDefaults();
   const h = Number(p.height) || D.height;
   const len = AUTH.codeLength;
@@ -2159,16 +2674,141 @@ function codeEntry(p, s) {
 /** Apple and Google, as the round icon buttons the phones draw — not the wide
  *  labelled rows this window used to have. */
 function socialButton(provider, p, s) {
+  // With words of its own it is the onboarding's wide button, not the round one.
+  if (p.label) return wideSocial(provider, p, s);
   const size = Number(p.size) || K.num("desktop.gate.socialSize", 52);
-  const mark = provider === "apple"
-    ? '<svg width="' + Math.round(size * 0.42) + '" height="' + Math.round(size * 0.42) +
-      '" viewBox="0 0 24 24"><path fill="#fff" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.46 1.58-1.51 3.14-.9 1.36-1.84 2.71-3.32 2.71-1.48 0-1.86-.88-3.56-.88-1.66 0-2.25.91-3.6.91-1.36 0-2.3-1.27-3.22-2.61-1.87-2.61-3.34-7.53-1.42-10.86.95-1.66 2.65-2.7 4.5-2.73 1.4-.03 2.72.95 3.58.95.85 0 2.45-1.18 4.12-1.01.7.03 2.67.28 3.93 2.13-.1.06-2.35 1.37-2.33 4.07.03 3.22 2.83 4.29 2.86 4.31z"/></svg>'
-    : '<svg width="' + Math.round(size * 0.40) + '" height="' + Math.round(size * 0.40) +
-      '" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+  const mark = socialMark(provider, Math.round(size * (provider === "apple" ? 0.42 : 0.40)), "#fff");
   return '<button class="tz-social tz-press" data-oauth="' + provider + '"' +
     ' aria-label="' + esc(K.txt("desktop.gate.continueWith", "Continue with {provider}",
       { provider: provider === "apple" ? "Apple" : "Google" })) + '"' +
     ' style="' + s + ";width:" + size + "px;height:" + size + 'px">' + mark + "</button>";
+}
+
+// What the server writes into a style attribute of the onboarding's sign-in is
+// a colour, a number or a short value; anything with a quote, a brace or a
+// semicolon in it is not one, and falls back to the design's own.
+const cssv = (v, fb) => (typeof v === "string" && /^[#a-zA-Z0-9(),.%\s-]{1,80}$/.test(v) ? v : fb);
+const CHECK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const CLOCK_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0-17 0zM12 7.5V12l3 2"/></svg>';
+
+/**
+ * THE ONBOARDING'S SIGN-IN FIELD: a plain input and, under it, a button that
+ * says what it does and lights up when the address (or the number) is good.
+ *
+ * Nothing to swipe and no disc to find. The pill is a gesture for a thumb; a
+ * window has a keyboard, and "type it, then press the button that says what
+ * happens" is how everyone signs in on one. The flow behind it is the same:
+ * the button and Enter both go through commit(), the one door a code is sent
+ * from, so the review address, the retries and the errors are all unchanged.
+ */
+function fieldPill(method, p, s) {
+  const phone = method === "phone";
+  // A number starts in the country the server names, once: a repaint must not
+  // undo the person's own edit to it.
+  if (phone && p.dial && AUTH.dialFrom !== String(p.dial)) { AUTH.dialFrom = String(p.dial); AUTH.dial = String(p.dial); }
+  const value = phone ? AUTH.phone : AUTH.email;
+  const ready = phone ? /^\+?\d{7,15}$/.test((AUTH.dial + value).replace(/[^\d+]/g, "")) : /.+@.+\..+/.test(value.trim());
+  const busy = AUTH.phase !== "entry";
+  const ask = label(p.placeholder) || (phone ? K.txt("desktop.gate.phoneLabel", "Phone number") : K.txt("desktop.gate.emailLabel", "Email address"));
+  const go = label(p.submitLabel) || K.txt("desktop.gate.continue", "Continue");
+  const vars = [
+    "--f-h:" + okNum(p.height, 48, 32, 72) + "px", "--f-r:" + okNum(p.radius, 16, 0, 36) + "px", "--f-fs:" + okNum(p.fontSize, 17, 11, 28) + "px",
+    "--f-bg:" + cssv(tok(p.background), "#FFFFFF"), "--f-bd:" + cssv(tok(p.borderColor), "#1C1A17"),
+    "--f-tx:" + cssv(tok(p.textColor), "#1C1A17"), "--f-ph:" + cssv(tok(p.placeholderColor), "rgba(28,26,23,0.56)"),
+    "--f-bbg:" + cssv(tok(p.buttonBackground), "#1C1A17"), "--f-btx:" + cssv(tok(p.buttonTextColor), "#FCFBF8"),
+    "--f-bh:" + okNum(p.buttonHeight, 48, 32, 72) + "px", "--f-br:" + okNum(p.buttonRadius, 16, 0, 36) + "px",
+    "--f-cbg:" + cssv(tok(p.countryBackground), "#FCFBF8"), "--f-cbd:" + cssv(tok(p.countryBorderColor), "rgba(28,26,23,0.13)"),
+  ].join(";");
+  const input = '<input class="ob-in" data-pill="' + method + '" data-field="1"' +
+    // TEXT, not email, for the reason swipePill gives: the caret.
+    ' type="' + (phone ? "tel" : "text") + '" inputmode="' + (phone ? "tel" : "email") + '"' +
+    ' placeholder="' + esc(ask) + '" aria-label="' + esc(ask) + '" autocomplete="' + (phone ? "tel-national" : "email") + '"' +
+    ' spellcheck="false" value="' + esc(value) + '">';
+  const dial = '<input class="ob-dial" data-dial="1" value="' + esc(AUTH.dial) + '" maxlength="5" inputmode="tel" aria-label="' +
+    esc(K.txt("desktop.gate.countryCode", "Country code")) + '">';
+  return '<div class="ob-field" style="' + s + ";" + vars + '">' +
+    (phone ? '<div class="ob-inrow">' + dial + input + "</div>" : input) +
+    '<button type="button" class="ob-go" data-commit="' + method + '" data-field="1" data-ready="' + ready + '"' +
+    (ready && !busy ? "" : " disabled") + (busy ? ' aria-busy="true"' : "") + ">" + esc(go) + "</button></div>";
+}
+
+/**
+ * THE CODE, IN BOXES: one for each digit, the one to fill next lit, and under
+ * them what is happening, a way to ask again and a way out to correct the
+ * address. A real input is held invisibly over the boxes, so the browser can
+ * offer a one-time code to it (autocomplete) and paste lands whole.
+ *
+ * Typing is drawn in place (liveCode), never by repainting: a repaint swaps
+ * the input under the caret. Everything else repaints with the flow.
+ */
+function codeBoxes(p, s) {
+  const len = AUTH.codeLength, code = AUTH.code;
+  const done = code.length >= len || AUTH.phase === "verifying";
+  const phone = AUTH.method === "phone";
+  const vars = [
+    "--bx-h:" + okNum(p.boxHeight, 60, 36, 90) + "px", "--bx-r:" + okNum(p.boxRadius, 14, 0, 30) + "px", "--bx-g:" + okNum(p.boxGap, 8, 0, 20) + "px",
+    "--bx-bg:" + cssv(tok(p.boxBackground), "#FCFBF8"), "--bx-bd:" + cssv(tok(p.boxBorderColor), "rgba(28,26,23,0.13)"),
+    "--bx-fbg:" + cssv(tok(p.boxFilledBackground), "#FFFFFF"), "--bx-fbd:" + cssv(tok(p.boxFilledBorderColor), "#1C1A17"),
+    "--bx-ring:" + cssv(tok(p.boxActiveRing), "rgba(57,255,20,0.2)"), "--bx-dc:" + cssv(tok(p.digitColor), "#1C1A17"),
+    "--bx-df:" + okFont(tok(p.digitFont), "Tailzu Grotesk") + ",system-ui", "--bx-ds:" + okNum(p.digitSize, 28, 14, 44) + "px",
+    "--bx-tx:" + cssv(tok(p.textColor), "rgba(28,26,23,0.7)"), "--bx-lk:" + cssv(tok(p.linkColor), "#1C1A17"),
+  ].join(";");
+  // {to} and {len} are the flow's to fill; the rest of the line is the server's words, escaped.
+  const sent = esc(label(p.sentTo) || "").replace(/\{len\}/g, () => String(len)).replace(/\{to\}/g, () => "<b>" + esc(AUTH.sentTo) + "</b>");
+  const wait = String(label(p.waitLabel) || ""), ok = String(label(p.okLabel) || "");
+  const shown = AUTH.sendFailed ? String(label(p.failLabel) || "") : done ? ok : wait;
+  let cells = "";
+  for (let i = 0; i < len; i++) {
+    cells += '<div class="ob-box' + (i < code.length ? " f" : i === code.length ? " cur" : "") + '">' + esc(code[i] || "") + "</div>";
+  }
+  const stopped = AUTH.resending || AUTH.phase !== "verify";
+  return '<div class="ob-code" style="' + s + ";" + vars + '">' +
+    '<p class="ob-sent">' + sent + "</p>" +
+    '<div class="ob-boxes' + (AUTH.codeError ? " tz-shake" : "") + '" data-codebox="1" data-variant="boxes">' +
+    '<input data-code="1" inputmode="numeric" autocomplete="one-time-code" maxlength="' + len + '" value="' + esc(code) + '" aria-label="' +
+    esc(K.txt("desktop.gate.codeLabel", "Enter the code we sent you")) + '">' + cells + "</div>" +
+    '<div class="ob-status" data-status="1" data-wait="' + esc(wait) + '" data-ok="' + esc(ok) + '" data-fail="' + (AUTH.sendFailed ? "1" : "") +
+    '" aria-live="polite"><span class="ob-ck"' + (done && !AUTH.sendFailed ? "" : " hidden") + ">" + CHECK_SVG + '</span><span class="ob-st">' + esc(shown) + "</span></div>" +
+    '<button type="button" class="ob-link ob-resend" data-resend="1"' + (stopped ? " disabled" : "") + ">" + CLOCK_SVG + "<span>" + esc(label(p.resendLabel) || "") + "</span></button>" +
+    '<div class="ob-wrong"><span>' + esc(label(phone ? p.wrongLabel : p.wrongEmailLabel) || "") + '</span> <button type="button" class="ob-link" data-back="1">' +
+    esc(label(p.changeLabel) || "") + "</button></div></div>";
+}
+
+/** A digit typed or pasted: the boxes, the lit one and the status line, written in place. */
+function liveCode(box) {
+  const len = AUTH.codeLength, code = AUTH.code;
+  box.querySelectorAll(".ob-box").forEach((cell, i) => {
+    cell.textContent = code[i] || "";
+    cell.className = "ob-box" + (i < code.length ? " f" : i === code.length ? " cur" : "");
+  });
+  const wrap = box.closest ? box.closest(".ob-code") : null;
+  const st = wrap && wrap.querySelector("[data-status]");
+  if (!st) return;
+  const done = code.length >= len;
+  st.querySelector(".ob-ck").hidden = !done;
+  st.querySelector(".ob-st").textContent = (done ? st.getAttribute("data-ok") : st.getAttribute("data-wait")) || "";
+}
+
+/** Google's and Apple's own marks, drawn at `px`; Apple's takes the colour it is on. */
+function socialMark(provider, px, apple) {
+  return provider === "apple"
+    ? '<svg width="' + px + '" height="' + px + '" viewBox="0 0 24 24"><path fill="' + apple + '" d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43zm4.565 15.71c-.03.07-.46 1.58-1.51 3.14-.9 1.36-1.84 2.71-3.32 2.71-1.48 0-1.86-.88-3.56-.88-1.66 0-2.25.91-3.6.91-1.36 0-2.3-1.27-3.22-2.61-1.87-2.61-3.34-7.53-1.42-10.86.95-1.66 2.65-2.7 4.5-2.73 1.4-.03 2.72.95 3.58.95.85 0 2.45-1.18 4.12-1.01.7.03 2.67.28 3.93 2.13-.1.06-2.35 1.37-2.33 4.07.03 3.22 2.83 4.29 2.86 4.31z"/></svg>'
+    : '<svg width="' + px + '" height="' + px + '" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+}
+
+/**
+ * GOOGLE AND APPLE AS A WIDE BUTTON WITH ITS WORDS, the onboarding's. The
+ * round icon is the pill's company; this one stands alone above the email
+ * field and says what it does. The look is the node's own props (the server
+ * writes them once, for both sides of sign-in); ink on paper by default.
+ */
+function wideSocial(provider, p, s) {
+  const h = okNum(p.size, 48, 32, 72), ink = cssv(tok(p.borderColor), "#1C1A17");
+  const words = label(p.label) || K.txt("desktop.gate.continueWith", "Continue with {provider}", { provider: provider === "apple" ? "Apple" : "Google" });
+  return '<button class="tz-social tz-press ob-social" data-oauth="' + provider + '" aria-label="' + esc(words) + '"' +
+    ' style="' + s + ";width:100%;height:" + h + "px;border-radius:" + okNum(p.radius, 16, 0, 36) + "px;background:" + cssv(tok(p.background), "#FCFBF8") +
+    ";border:" + okNum(p.borderWidth, 1.5, 0, 4) + "px solid " + ink + ";color:" + ink + '">' +
+    socialMark(provider, 20, ink) + "<span>" + esc(words) + "</span></button>";
 }
 
 function wordMeter(p) {
@@ -2401,7 +3041,10 @@ async function run(action, eventValue) {
           // Any write could have been the tone. Telling the tray to re-read is
           // cheaper, and more honest, than guessing which writes matter.
           try { window.tailzuApp.changed(); } catch { /* tray only */ }
-          await paint(true);
+          // The onboarding saves as it goes (a language, then the profile at
+          // the end) and nothing it shows depends on the answer; a fetch here
+          // would rebuild the step under the person's hand.
+          if (!stageUp()) await paint(true);
         }
       } catch (err) {
         if (err && err.quota) { go(K.str("quota.screenId", "paywall")); return; }
@@ -2446,6 +3089,17 @@ window.addEventListener("focus", () => {
   if (!CONNECT_PENDING) return;
   CONNECT_PENDING = false;
   if (SESSION) void paint(true);
+});
+// …and the onboarding's Connect apps step, which an app can finish signing in
+// to after the window was last looked at (the sign-in page is in the browser
+// and takes as long as it takes). Only that step: a fetch rebuilds the screen's
+// state, and the words someone just spoke on Try it are not worth losing for
+// an alt-tab. Not while the mic is held, and not twice for one return.
+window.addEventListener("focus", () => {
+  if (!SESSION || !CURRENT_SCREEN || CURRENT_SCREEN.screenId !== "onboard" || MIC || HELD || document.hidden) return;
+  if (Date.now() - (paint._at || 0) < 800) return;
+  const stage = activeStage();
+  if (stage && stage.getAttribute("data-step-id") === "apps") void paint(true);
 });
 
 function deepResolve(v) {
@@ -2513,6 +3167,7 @@ function switchTab(tabId) {
 async function paint(force) {
   const cur = STACK[STACK.length - 1];
   if (!cur) return;
+  paint._at = Date.now();
   // A LOOP THAT OUTLIVES ITS SCREEN HOLDS A LIVE MICROPHONE BEHIND A WINDOW
   // THE USER BELIEVES THEY HAVE LEFT. Ended here, before the next screen can
   // start one of its own.
@@ -2541,7 +3196,9 @@ async function paint(force) {
   const main = $("main");
   const settled = () => { delete main.dataset.wait; view.removeAttribute("aria-busy"); };
   if (!paint._last) {
-    view.innerHTML = '<div class="pad" style="color:var(--label)">' + esc(K.txt("desktop.screen.loading", "Loading…")) + "</div>";
+    // tz-loading: held out of sight while the onboarding holds the window, so
+    // Blip stands on paper and not over a grey word.
+    view.innerHTML = '<div class="pad tz-loading" style="color:var(--label)">' + esc(K.txt("desktop.screen.loading", "Loading…")) + "</div>";
   } else if (fresh) {
     slow = setTimeout(() => {
       if (seq !== paint._seq) return;
@@ -2569,6 +3226,8 @@ async function paint(force) {
       return paint(true);
     }
     dropField();
+    // A bot standing over an error is no help: the onboarding lets go.
+    leaveOnboard();
     // The second line says what to do when there is something to say (a
     // refused request, no network); the error itself goes to the console.
     const why = userText(err, "");
@@ -2876,6 +3535,7 @@ document.addEventListener("visibilitychange", () => fieldSend({ run: !document.h
 
 function wireMic(view, sc) {
   view.querySelectorAll("[data-mic]").forEach((el) => {
+    if (el.hasAttribute("data-hold")) { wireHold(el, sc); return; }
     el.addEventListener("click", async () => {
       // Stop first: a second click on a live button is "stop", not "start
       // another one on top of the one already running".
@@ -2897,6 +3557,49 @@ function wireMic(view, sc) {
   });
 }
 
+/**
+ * THE HELD MIC. Pressing starts, letting go stops, wherever the pointer is by
+ * then: the button is redrawn on every state change (the mic going live is
+ * one), so the release is listened for on the window, not on a button that
+ * will already be a different element. Letting go while the permission prompt
+ * or the device was still opening stops the take the moment it starts, rather
+ * than leaving a microphone running behind a hand that has gone. The window
+ * losing focus mid-hold is a let-go too: nothing else would ever say so.
+ */
+let HELD = false;
+function wireHold(el, sc) {
+  const path = el.getAttribute("data-mic") || "";
+  const n = findNode(sc.root, "VoiceButton") || {};
+  const ends = ["pointerup", "pointercancel", "keyup", "blur"];
+  const release = () => {
+    ends.forEach((t) => window.removeEventListener(t, release));
+    HELD = false;
+    if (MIC) { try { MIC.rec.stop(); } catch { MIC = null; if (n.bind && n.bind.state) setStatePath(n.bind.state, "idle"); repaint(); } }
+  };
+  const press = async () => {
+    if (HELD || MIC) return;
+    HELD = true;
+    ends.forEach((t) => window.addEventListener(t, release));
+    try {
+      await micStart(path, n);
+      if (!HELD && MIC) { try { MIC.rec.stop(); } catch { /* it ended on its own */ } }
+    } catch (err) {
+      ends.forEach((t) => window.removeEventListener(t, release));
+      HELD = false;
+      MIC = null;
+      if (n.bind && n.bind.state) setStatePath(n.bind.state, "idle");
+      repaint();
+      // A blocked microphone is not "I couldn't hear that": it needs the
+      // system's settings, and says so. Anything else is the node's own line.
+      if (err && err.name === "NotAllowedError") toast(K.txt("desktop.voice.micBlocked", "microphone blocked — allow it in your system settings"));
+      else if (n.on && n.on.onError) await run(n.on.onError, userText(err, K.txt("desktop.recorder.micError", "Couldn't start the microphone. Try again.")));
+      else toast(userText(err, K.txt("desktop.recorder.micError", "Couldn't start the microphone. Try again.")));
+    }
+  };
+  el.addEventListener("pointerdown", (e) => { if (e.button !== 0) return; e.preventDefault(); void press(); });
+  el.addEventListener("keydown", (e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); void press(); } });
+}
+
 /** First node in the tree carrying this event, and the action it names. */
 function findEvent(n, name) {
   if (!n || typeof n !== "object") return null;
@@ -2908,6 +3611,8 @@ function findEvent(n, name) {
 let CURRENT_SCREEN = null;
 function repaint(screen) {
   if (screen) CURRENT_SCREEN = screen;
+  // The sign-in stage is up in the gate: a state change (its step) is for it.
+  if (gateUp()) { paintGate(); return; }
   const sc = CURRENT_SCREEN;
   if (!sc) return;
   handlers = [];
@@ -2919,11 +3624,16 @@ function repaint(screen) {
   // A desk page sits on the desk's own ground. A phone screen pushed from one
   // (the paywall, a live training session) keeps its own dark room.
   view.dataset.look = DESK && sc.look === "desk" ? "desk" : "legacy";
+  const before = stageBefore(view);
   view.innerHTML = html;
+  // A stage glides its own steps in; a fade of the whole stage on top of that
+  // would be two entrances. Anything else ends the onboarding if it was on.
+  const staged = stageAfter(view, before);
+  if (!staged) leaveOnboard();
   // A NEW SCREEN ARRIVES, IT DOES NOT SNAP. The first paint of a screen fades
   // its content in over the field, which stays where it was; a repaint of the
   // same screen — a state change mid-session — is instant, as it must be.
-  if (repaint._id !== sc.screenId && view.firstElementChild) {
+  if (repaint._id !== sc.screenId && view.firstElementChild && !staged) {
     view.firstElementChild.classList.add("tz-swap");
   }
   repaint._id = sc.screenId;
@@ -3223,6 +3933,18 @@ if (rememberedLook() === "desk") {
   if (sh) sh.dataset.look = "desk";
 }
 
+/**
+ * WHERE THE WINDOW OPENS: the tab the server names, else the first. `onboard`
+ * is the one landing that is no tab: where a new account starts, with the
+ * whole window to itself (hideChrome), so it is taken as it is rather than
+ * swapped for a tab the server did not ask for.
+ */
+function landingFor(boot, tabs) {
+  if (boot && boot.initialScreenId === "onboard") return { tabId: "", screenId: "onboard", onboard: true };
+  const tab = tabs.find((t) => (t.screenId || t.id) === (boot && boot.initialScreenId)) || tabs[0];
+  return { tabId: tab ? tab.id : "", screenId: tab ? (tab.screenId || tab.id) : "home", onboard: false };
+}
+
 async function render() {
   const signedIn = !!(SESSION && SESSION.access_token);
   $("gate").hidden = signedIn;
@@ -3266,9 +3988,12 @@ async function render() {
   // The tab id is taken from the SAME tab, not from TABS[0]: a bar lighting
   // one tab while another's screen is drawn is worse than a bar that is
   // simply wrong, because the first tap on it does nothing.
-  const landing = TABS.find((t) => (t.screenId || t.id) === BOOT.initialScreenId) || TABS[0];
-  TAB_ID = landing ? landing.id : "";
-  STACK = [{ screenId: landing ? (landing.screenId || landing.id) : "home" }];
+  const landing = landingFor(BOOT, TABS);
+  TAB_ID = landing.tabId;
+  STACK = [{ screenId: landing.screenId }];
+  // The paper goes up before the shell shows, so the rail does not flash for
+  // the round trip to the first screen.
+  if (landing.onboard) document.documentElement.dataset.onboard = "1";
   // A screen the main process asked for while this was booting goes on top
   // of the landing tab, so Back still leads somewhere.
   if (PENDING_SCREEN && PENDING_SCREEN !== STACK[0].screenId) STACK.push({ screenId: PENDING_SCREEN });
@@ -3387,9 +4112,13 @@ function paintGate() {
   // outside repaint(), so it has to clear it too — or the gate accumulates a
   // screen's worth of stale entries and binds by an id that has moved.
   handlers = [];
+  // If the tree is the onboarding's stage, the page takes on its paper and
+  // Blip goes to the step's spot; a step change glides.
+  const before = stageBefore(host);
   host.innerHTML = node(AUTH_TREE);
   $("gateErr").textContent = AUTH.error;
   bindHandlers(host);
+  stageAfter(host, before);
   wireGate();
 }
 
@@ -3404,7 +4133,12 @@ function paintGate() {
 function bindHandlers(root) {
   handlers.forEach((h) => {
     const el = root.querySelector('[data-h="' + h.id + '"]');
-    if (el) el.addEventListener("click", () => { void run(h.action); });
+    if (!el) return;
+    el.addEventListener("click", () => { void run(h.action); });
+    // A pressable box in the onboarding is a button to the keyboard as well.
+    if (el.getAttribute("role") === "button") {
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); void run(h.action); } });
+    }
   });
 }
 
@@ -3418,6 +4152,9 @@ function wireGate() {
     const m = el.getAttribute("data-pill");
     el.addEventListener("focus", () => {
       if (AUTH.open === m) return;
+      // The onboarding's field is already open: nothing to redraw, which would
+      // only cost it the caret.
+      if (el.hasAttribute("data-field")) { AUTH.open = m; AUTH.error = ""; $("gateErr").textContent = ""; return; }
       AUTH.open = m; AUTH.error = "";
       paintGate();
       const again = host.querySelector('[data-pill="' + m + '"]');
@@ -3458,11 +4195,15 @@ function wireGate() {
       // the focus did not always survive the swap, so every digit could cost
       // a click on the pill. The digits, the border and the error line are
       // the only things that change, and each is written in place.
-      const shown = box.querySelector("span");
-      if (shown) shown.textContent = AUTH.code.padEnd(AUTH.codeLength, "\u00b7").split("").join(" ");
       box.classList.remove("tz-shake");
-      const D = pillDefaults();
-      box.style.borderColor = AUTH.code.length === AUTH.codeLength ? tok(D.target) : D.border;
+      if (box.getAttribute("data-variant") === "boxes") {
+        liveCode(box);
+      } else {
+        const shown = box.querySelector("span");
+        if (shown) shown.textContent = AUTH.code.padEnd(AUTH.codeLength, "\u00b7").split("").join(" ");
+        const D = pillDefaults();
+        box.style.borderColor = AUTH.code.length === AUTH.codeLength ? tok(D.target) : D.border;
+      }
       $("gateErr").textContent = "";
       codeIn.setSelectionRange(AUTH.code.length, AUTH.code.length);
       // Six digits is the whole answer — there is nothing else to press.
@@ -3479,6 +4220,10 @@ function wireGate() {
   host.querySelectorAll("[data-oauth]").forEach((el) => {
     el.addEventListener("click", () => { void oauth(el.getAttribute("data-oauth")); });
   });
+
+  // The code boxes' two ways out: ask again, or correct the address.
+  host.querySelectorAll("[data-resend]").forEach((el) => { el.addEventListener("click", () => { void resendCode(); }); });
+  host.querySelectorAll("[data-back]").forEach((el) => { el.addEventListener("click", gateBack); });
 }
 
 /**
@@ -3493,15 +4238,48 @@ function wireGate() {
  * clear the field.
  */
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
-  if ($("gate").hidden || AUTH.phase !== "verify") return;
+  if (e.key === "Escape") gateBack();
+});
+
+/** Back from the code to the address. Escape does it, and so does the code step's own "Change it". */
+function gateBack() {
+  const gate = $("gate");
+  if ((gate && gate.hidden) || AUTH.phase !== "verify") return;
   AUTH.phase = "entry";
   AUTH.code = "";
   AUTH.codeError = false;
+  AUTH.sendFailed = false;
   AUTH.error = "";
   paintGate();
   void dressGate("entry");
-});
+}
+
+/**
+ * SEND THE CODE AGAIN, to the address it first went to. The phase stays
+ * "verify": it is the same step asked a second time, so Blip does not move and
+ * nothing glides. A press while one is in flight is the same press. The old
+ * code is spent the moment a new one is sent, so what was typed is cleared; and
+ * a send that fails says so on the step (sendFailed), where the person is
+ * looking, and not only in the line at the foot of the window.
+ */
+async function resendCode() {
+  if (AUTH.phase !== "verify" || AUTH.resending || !AUTH.sentTo) return;
+  AUTH.resending = true;
+  AUTH.sendFailed = false;
+  AUTH.error = "";
+  paintGate();
+  try {
+    if (AUTH.method === "phone") await signInPhone(AUTH.sentTo); else await signIn(AUTH.sentTo);
+    AUTH.code = "";
+    AUTH.codeError = false;
+  } catch (e) {
+    userText(e, "");            // for the log; the step says it in its own words
+    AUTH.sendFailed = true;
+  } finally {
+    AUTH.resending = false;
+    paintGate();
+  }
+}
 
 /**
  * Send the code. The phones swipe a badge to get here; a mouse has no thumb to
@@ -3511,6 +4289,7 @@ document.addEventListener("keydown", (e) => {
 async function commit(method) {
   if (AUTH.phase !== "entry") return;   // already sending
   AUTH.error = "";
+  AUTH.sendFailed = false;
   try {
     let to;
     if (method === "phone") {
@@ -3600,6 +4379,9 @@ function refreshDisc(method) {
     : /.+@.+\..+/.test(AUTH.email.trim());
   if (el.dataset.ready === String(ready)) return;
   el.dataset.ready = String(ready);
+  // The onboarding's button only lights or dims; nothing is redrawn, so the
+  // caret stays where it is.
+  if (el.hasAttribute("data-field")) { el.disabled = !ready || AUTH.phase !== "entry"; return; }
   // Re-rendered rather than restyled: at the right end it is an arrow, at the
   // left it is the method's own glyph, and those are different drawings.
   paintGate();
@@ -3661,6 +4443,10 @@ function refreshDisc(method) {
     const flags = (b && b.flags) || {};
     AUTH.phoneOn = flags["auth.enablePhone"] === true || flags["auth.enablePhone"] === "true";
     AUTH_TREE = flags["auth.screen"] || null;
+    // The onboarding's own conditions ask the boot flags too (its phone field is
+    // behind auth.enablePhone), and BOOT is where visible() looks. Only for
+    // that tree: the one before it was drawn with no BOOT, and is left as it was.
+    if (b && AUTH_TREE && AUTH_TREE.type === "OnboardStage") BOOT = b;
     paintGate();
     void dressGate("entry");
   }

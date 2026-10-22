@@ -24,6 +24,14 @@
   @font-face { font-family:"Instrument Sans"; font-weight:500; font-display:swap; src:url(assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
   @font-face { font-family:"Instrument Sans"; font-weight:600; font-display:swap; src:url(assets/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
   @font-face { font-family:"Noto Sans Devanagari"; font-weight:100 900; font-display:swap; src:url(assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
+  /* THE ONBOARDING'S TWO FACES, under the names the phones use for the same
+     two (the server's fontFamily values work on both unchanged): Bricolage
+     Grotesque at 800 for the headings, the code's digits and the apps'
+     initials; Kalam for what Blip says. Not swap: a heading that arrives in
+     one face and changes to another in front of someone is the first thing
+     they would see. They are local files, so blocking costs a few milliseconds. */
+  @font-face { font-family:"Tailzu Grotesk"; font-weight:800; font-display:block; src:url(assets/fonts/bricolage-grotesque-latin-800-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Hand"; font-weight:400; font-display:block; src:url(assets/fonts/kalam-latin-400-normal.woff2) format("woff2"); }
 
   /* THE DESK'S TOKENS. Paper and ink in light, ink and pale in dark, the
      site's own rooms for colour. The server can retune any of these
@@ -41,6 +49,10 @@
     --f-label:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
     --f-ui:"Instrument Sans","Segoe UI",system-ui,-apple-system,sans-serif;
     --f-deva:"Noto Sans Devanagari","Nirmala UI",sans-serif;
+    /* The onboarding's: the system face its body text is set in, and the one
+       curve every glide uses, out and in. */
+    --ob-sys:-apple-system,"Segoe UI",system-ui,sans-serif;
+    --ob-ease:cubic-bezier(.32,.72,0,1);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -383,7 +395,7 @@
     position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
     background:var(--card); border:1px solid var(--border); border-radius:12px;
     padding:11px 16px; color:var(--text); font-size:14px; opacity:0;
-    transition:opacity .18s; pointer-events:none; max-width:80%;
+    transition:opacity .18s; pointer-events:none; max-width:80%; z-index:50;
   }
   #toast.on { opacity:1; }
   @media (prefers-reduced-motion:reduce){ #toast{transition:none} }
@@ -471,6 +483,124 @@
     }
     .tz-social:hover{border-color:rgba(255,255,255,.3)}
     .tz-social[disabled]{opacity:.45;cursor:default}
+
+    /* ---- the onboarding ------------------------------------------------- */
+    /* PAPER, ONE FRIEND, ONE BAR. While html[data-onboard] is set (sdui.js:
+       from the moment the sign-in stage is drawn until a screen that is not a
+       stage is), the gate, the shell and the view are all one paper, the rail,
+       masthead and the gate's own heading are gone, and Blip's canvas, bar
+       and bubble (outside both, below) stand over it. They are never cleared
+       between the gate and the app, which is how he stays put through the
+       code. The ground itself is the server's (--ob-ground, from the stage's
+       props); this is only its first frame. */
+    html[data-onboard="1"] { --ob-ground:#EFEDE8; color-scheme:light; }
+    html[data-onboard="1"], html[data-onboard="1"] body,
+    html[data-onboard="1"] #gate, html[data-onboard="1"] #shell, html[data-onboard="1"] #main, html[data-onboard="1"] #view {
+      background:var(--ob-ground) !important;
+    }
+    html[data-onboard="1"] #rail, html[data-onboard="1"] #mast, html[data-onboard="1"] #crumb,
+    html[data-onboard="1"] #gateTitle, html[data-onboard="1"] #gateSub, html[data-onboard="1"] #gateNote,
+    html[data-onboard="1"] #gatebg { display:none !important; }
+    html[data-onboard="1"] .tz-loading { visibility:hidden; }
+    html[data-onboard="1"] #main[data-wait="1"]::before, html[data-onboard="1"] #main[data-wait="1"]::after { display:none; }
+    /* The gate's box becomes the whole window, with the error line (when
+       there is one) under the stage and the stage filling the rest. */
+    html[data-onboard="1"] #gate { position:fixed; inset:0; display:block; padding:0; height:auto; }
+    html[data-onboard="1"] #gate[hidden] { display:none; }
+    html[data-onboard="1"] .gatebox { position:absolute; inset:0; width:auto; max-width:none !important; margin:0 !important; display:flex; flex-direction:column; }
+    html[data-onboard="1"] #gateForm { flex:1; min-height:0; position:relative; }
+    html[data-onboard="1"] #gateErr { flex:none; width:min(460px, 100%); margin:0 auto; padding:0 20px 14px; min-height:0; text-align:center; }
+    html[data-onboard="1"] #gateErr:empty { display:none; }
+
+    /* The stage: a box that fills its parent and holds one step, which
+       scrolls on its own when the window is short. The content is a column
+       the width of a phone's, centred: the design is for a thumb's column, and
+       a wide window gives it paper either side, not a longer line. */
+    .ob-stage { position:absolute; inset:0; overflow:hidden; color:#1C1A17; font-family:var(--ob-sys); }
+    .ob-step { position:absolute; inset:0; overflow-x:hidden; overflow-y:auto; scrollbar-width:thin; scrollbar-color:rgba(28,26,23,.25) transparent; }
+    .ob-content { position:relative; display:flex; flex-direction:column; width:100%; max-width:460px; min-height:100%; margin:0 auto; padding-top:44px; }
+    .ob-step[data-out] { pointer-events:none; }
+    .ob-stage .bs { display:block; flex:none; }
+    .ob-stage [data-h] { cursor:pointer; user-select:none; -webkit-user-select:none; }
+    .ob-stage [data-h]:active { opacity:.7; }
+    .ob-stage [role="button"]:focus-visible, .ob-go:focus-visible, .ob-link:focus-visible, .ob-mic:focus-visible, .ob-social:focus-visible { outline:2px solid #1C1A17; outline-offset:2px; }
+
+    /* The sign-in field: an input, and under it a button that says what it
+       does. Every measure and colour is a custom property the node writes. */
+    .ob-field { display:flex; flex-direction:column; gap:8px; width:100%; }
+    .ob-inrow { display:flex; gap:8px; }
+    .ob-in, .ob-dial {
+      height:var(--f-h); min-width:0; padding:0 14px; border-radius:var(--f-r); border:1.5px solid var(--f-bd); background:var(--f-bg);
+      color:var(--f-tx); font:600 var(--f-fs)/1 var(--ob-sys); letter-spacing:.02em; outline:none;
+    }
+    /* Alone it is a block in a column (flex:none keeps it its own height); in the
+       phone's row it takes what the country code leaves. */
+    .ob-in { flex:none; width:100%; }
+    .ob-inrow .ob-in { flex:1; }
+    .ob-in::placeholder { color:var(--f-ph); font-weight:400; }
+    .ob-in:focus, .ob-dial:focus { box-shadow:0 0 0 3px color-mix(in srgb, var(--f-bd) 16%, transparent); }
+    .ob-dial { flex:none; width:76px; padding:0 8px; text-align:center; background:var(--f-cbg); border-color:var(--f-cbd); font-size:15px; font-weight:700; }
+    .ob-go {
+      height:var(--f-bh); border:0; border-radius:var(--f-br); background:var(--f-bbg); color:var(--f-btx);
+      font:600 16px/1 var(--ob-sys); cursor:pointer; transition:opacity .25s var(--ob-ease);
+    }
+    .ob-go:disabled { opacity:.3; cursor:default; }
+    .ob-social { gap:10px; font:600 15.5px/1 var(--ob-sys); }
+    .ob-social span { white-space:nowrap; }
+
+    /* The code in boxes. */
+    .ob-code { display:flex; flex-direction:column; width:100%; color:var(--bx-tx); font-family:var(--ob-sys); }
+    .ob-sent { margin:6px 0 12px; font-size:15px; line-height:21px; color:var(--bx-tx); overflow-wrap:anywhere; }
+    .ob-sent b { color:var(--bx-lk); font-weight:700; }
+    .ob-boxes { position:relative; display:flex; gap:var(--bx-g); margin:0 0 12px; }
+    .ob-boxes > input { position:absolute; inset:0; width:100%; height:100%; opacity:0; border:0; background:none; cursor:text; }
+    .ob-box {
+      flex:1; min-width:0; height:var(--bx-h); border-radius:var(--bx-r); border:1.5px solid var(--bx-bd); background:var(--bx-bg);
+      display:grid; place-items:center; font:800 var(--bx-ds)/1 var(--bx-df); color:var(--bx-dc); cursor:text;
+      transition:background-color .22s var(--ob-ease), border-color .22s var(--ob-ease), box-shadow .22s var(--ob-ease);
+    }
+    .ob-box.f { border-color:var(--bx-fbd); background:var(--bx-fbg); }
+    .ob-box.cur { border-color:var(--bx-fbd); box-shadow:0 0 0 3px var(--bx-ring); }
+    .ob-box.cur::after { content:""; width:2px; height:28px; background:var(--bx-dc); animation:ob-blink 1s steps(2) infinite; }
+    @keyframes ob-blink { 50% { opacity:0; } }
+    .ob-status { display:flex; align-items:center; justify-content:center; gap:6px; min-height:22px; font-size:14px; font-weight:600; line-height:1.3; text-align:center; }
+    .ob-ck { display:inline-flex; }
+    .ob-ck[hidden] { display:none; }
+    .ob-link { border:0; background:none; padding:0; font:700 14px/1.2 var(--ob-sys); color:var(--bx-lk); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+    .ob-link:disabled { opacity:.4; cursor:default; }
+    .ob-resend { display:inline-flex; align-items:center; gap:6px; align-self:center; margin-top:18px; }
+    .ob-wrong { margin-top:10px; text-align:center; font-size:14px; line-height:1.3; }
+    .ob-mic { transition:transform .12s var(--ob-ease), opacity .12s; }
+    .ob-mic[aria-pressed="true"] { transform:scale(.96); }
+
+    /* Blip, outside the gate and the shell, so nothing that swaps them can
+       touch him. The canvas is the window; he is drawn into it (blip.js). */
+    #blipStage { position:fixed; inset:0; width:100vw; height:100vh; z-index:20; pointer-events:none; opacity:0; transition:opacity .2s ease; }
+    #blipStage.on { opacity:1; }
+    #blipProg { position:fixed; top:22px; left:50%; width:min(420px, calc(100vw - 40px)); transform:translateX(-50%); display:flex; gap:var(--pg-gap, 4px); z-index:21; pointer-events:none; opacity:0; transition:opacity .2s ease; }
+    #blipProg.on { opacity:1; }
+    #blipProg i { flex:1; height:var(--pg-h, 4px); border-radius:2px; background:var(--pg-off, rgba(28,26,23,.13)); transition:background-color .38s var(--ob-ease); }
+    #blipProg i.on { background:var(--pg-on, #1C1A17); }
+    /* His words: the prototype's bubble. Down while he walks, up when he
+       lands (a small rise and a settle); the look is the stage's. */
+    #blipSay {
+      position:fixed; left:0; top:0; z-index:22; pointer-events:none; max-width:190px; padding:6px 12px 7px;
+      border:1.5px solid; border-radius:15px; line-height:1.15; font-weight:400;
+      transform-origin:0 100%; transform:rotate(-1.5deg) scale(.88) translateY(5px); opacity:0;
+      transition:opacity .2s ease, transform .32s var(--ob-ease);
+    }
+    #blipSay.on { opacity:1; transform:rotate(-1.5deg); }
+    #blipSay::before {
+      content:""; position:absolute; left:-7px; bottom:11px; width:11px; height:11px; transform:rotate(45deg);
+      background:var(--bs-bg); border-left:1.5px solid var(--bs-bd); border-bottom:1.5px solid var(--bs-bd);
+    }
+    /* The confetti blip.js throws from him at the end. */
+    .cf { position:fixed; width:7px; height:11px; border-radius:2px; pointer-events:none; z-index:23; animation:ob-cf 1.2s cubic-bezier(.15,.7,.3,1) forwards; }
+    @keyframes ob-cf { to { transform:translate(var(--dx), var(--dy)) rotate(var(--r)); opacity:0; } }
+    @media (prefers-reduced-motion:reduce) {
+      #blipStage, #blipProg, #blipProg i, #blipSay, .ob-go, .ob-box, .ob-mic { transition:none; }
+      .ob-box.cur::after { animation:none; }
+    }
   </style>
 </head>
 <body>
@@ -529,12 +659,21 @@
     </div>
   </div>
 
+  <!-- BLIP, ABOVE THE GATE AND THE SHELL, and cleared by neither (sdui.js
+       OnboardStage). One canvas for the life of the window; the bar and the
+       bubble are drawn here too, so they stay put while the steps glide. None
+       of it takes a click. -->
+  <canvas id="blipStage" aria-hidden="true"></canvas>
+  <div id="blipProg" aria-hidden="true"></div>
+  <div id="blipSay" aria-hidden="true"><span></span></div>
+
   <div id="toast" role="status" aria-live="polite"></div>
 
   <!-- The server's knobs, before the renderer that reads them. The words in
        the markup above are only the first frame's: sdui.js replaces each with
        its label (desktop.gate.*, desktop.rail.*) as soon as knobs are known. -->
   <script src="knobs.js"></script>
+  <script src="blip.js"></script>
   <script src="sdui.js"></script>
 </body>
 </html>
