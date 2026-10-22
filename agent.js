@@ -2046,8 +2046,9 @@ function createAgent(deps) {
     if (r.status === 0) { finish(run, "error", TEXT.network); return null; }
     if (answer === "approve") {
       if (r.status === 200 && body.ok === true) {
-        // What the app answered, after the card's own "Done".
-        finish(run, "done", said([card.after.done, said(body.result)].filter(Boolean).join(" ")) || undefined);
+        // The card's own "Done", and nothing of the app's answer (its ids,
+        // links and raw words are for the server, not for the person).
+        finish(run, "done", said(card.after.done) || undefined);
       } else {
         const why = r.status === 200 && body.error && typeof body.error === "object" ? body.error.message : body.message;
         finish(run, "error", said([r.status === 200 ? card.after.failed : "", why].filter(Boolean).join(" ")) || TEXT.failed);

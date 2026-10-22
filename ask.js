@@ -268,6 +268,30 @@ function createAsk(ctx) {
     clearTimeout(goneTimer); goneTimer = null;
     if (!win.isVisible()) win.showInactive();
     ctx.raisePill(win);
+    feedCursor();
+  }
+
+  // Where the pointer is, in the window's own coordinates, ten times a second
+  // while the window is up and only when it moved: the card works out from it
+  // whether it is under the pointer (guide.js TAKING CLICKS), which a pointer
+  // that has not moved since the card arrived could never tell it otherwise.
+  // It stops by itself once the window is hidden or gone.
+  let cursorTimer = null;
+  let cursorLast = "";
+  function feedCursor() {
+    if (cursorTimer) return;
+    cursorTimer = setInterval(() => {
+      try {
+        if (!win || win.isDestroyed() || !win.isVisible()) { clearInterval(cursorTimer); cursorTimer = null; cursorLast = ""; return; }
+        const p = screen.getCursorScreenPoint();
+        const b = win.getBounds();
+        const key = `${p.x - b.x},${p.y - b.y}`;
+        if (key === cursorLast) return;
+        cursorLast = key;
+        send({ type: "cursor", x: p.x - b.x, y: p.y - b.y });
+      } catch { clearInterval(cursorTimer); cursorTimer = null; cursorLast = ""; }
+    }, 100);
+    if (cursorTimer && cursorTimer.unref) cursorTimer.unref();
   }
 
   // ---- the pill ------------------------------------------------------------------

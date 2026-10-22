@@ -1668,6 +1668,7 @@
     // can last minutes.
     if (!peeking) drawWave(t);
     const demoMoving = demoFrame ? demoFrame(t, dt) : false;
+    hitTest();
     const busy = S.shown || !o.over || marks.length > 0 || blip.shown() || (S.hideAt && t - S.hideAt < .6) || PK.on || demoMoving;
     if (busy) { if (!CAPTURE) raf = requestAnimationFrame(frame); }
     else ctx.clearRect(0, 0, W, H);
@@ -1926,23 +1927,52 @@
   };
   bridge.onGuide((m) => { if (m && handlers[m.type]) { try { handlers[m.type](m); } catch (e) { console.error(e); } } });
 
-  $("yes").addEventListener("click", () => { bridge.confirm(true); setState("doing"); fit(); });
+  // A button answers on its press, not its release: the card glides and
+  // changes height under the pointer, and a release that lands after the
+  // window has gone back to letting clicks through never reached it, so the
+  // click was lost. One answer per question: a second press does nothing.
+  const press = (id, fn) => $(id).addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    fn();
+  });
+  press("yes", () => { if (S.state !== "confirm") return; bridge.confirm(true); setState("doing"); fit(); });
   // On the server's card Not now and Edit are answers of their own (the agent
   // calls the route each names); on any other it is a plain no.
-  $("no").addEventListener("click", () => { bridge.confirm(S.server ? "deny" : false); });
-  $("edit").addEventListener("click", () => { bridge.confirm("edit"); });
+  press("no", () => { if (S.state !== "confirm") return; bridge.confirm(S.server ? "deny" : false); setState("doing"); fit(); });
+  press("edit", () => { if (S.state !== "confirm") return; bridge.confirm("edit"); setState("doing"); fit(); });
   // Whichever it is, the answer is on its way next: with the picture, or
   // from the words alone.
   for (const [id, choice] of [["once", "once"], ["always", "always"], ["notnow", "no"]]) {
-    $(id).addEventListener("click", () => { if (S.state !== "permission") return; bridge.permit(choice); setState("thinking"); fit(); });
+    press(id, () => { if (S.state !== "permission") return; bridge.permit(choice); setState("thinking"); fit(); });
   }
-  $("close").addEventListener("click", () => bridge.dismiss());
-  $("offerBtn").addEventListener("click", () => {
+  press("close", () => bridge.dismiss());
+  press("offerBtn", () => {
     const kind = $("offerBtn").dataset.kind;
     if (kind && bridge.offer) bridge.offer(kind);
   });
-  card.addEventListener("mouseenter", () => bridge.mouse(true));
-  card.addEventListener("mouseleave", () => bridge.mouse(false));
+
+  // TAKING CLICKS. The window lets clicks through to the app below except over
+  // the card. mouseenter and mouseleave fire only when the pointer moves, so a
+  // card that glided or bloomed under a still pointer never took its click,
+  // and one that shrank mid-press lost it. Instead the pointer is checked
+  // against the card on every frame, from where it was last seen: the
+  // window's own (forwarded) moves, and main's report of the pointer while
+  // the window is up (the "cursor" message), which needs no move at all.
+  const PTR = { x: -1, y: -1, inside: false };
+  function hitTest() {
+    const r = card.getBoundingClientRect();
+    const slack = 4;
+    const inside = S.shown && card.classList.contains("on") && r.width > 0 &&
+      PTR.x >= r.left - slack && PTR.x <= r.right + slack && PTR.y >= r.top - slack && PTR.y <= r.bottom + slack;
+    if (inside !== PTR.inside) { PTR.inside = inside; bridge.mouse(inside); }
+  }
+  document.addEventListener("mousemove", (e) => { PTR.x = e.clientX; PTR.y = e.clientY; hitTest(); }, { passive: true });
+  handlers.cursor = (m) => {
+    const x = Number(m && m.x), y = Number(m && m.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    PTR.x = x; PTR.y = y; hitTest();
+  };
 
   if (bridge.knobs) bridge.knobs().then((k) => K.setKnobs(k)).catch(() => {});
   if (bridge.onKnobs) bridge.onKnobs((k) => K.setKnobs(k));
