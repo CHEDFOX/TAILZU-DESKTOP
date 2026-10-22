@@ -2746,10 +2746,46 @@ const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    try { openAppWindow(); } catch { /* the tray is still there either way */ }
+  // A tulmi:// link opened while the app runs (Windows, Linux) arrives here,
+  // in the second launch's arguments.
+  app.on("second-instance", (_e, argv) => {
+    const link = (Array.isArray(argv) ? argv : []).find((a) => /^tulmi:/i.test(String(a)));
+    try { if (link) openFromLink(link); else openAppWindow(); } catch { /* the tray is still there either way */ }
   });
 }
+
+// ---- tulmi:// links ---------------------------------------------------------------------
+// The page a browser lands on after someone connects an app (the server's
+// /v1/connectors/callback) has an "Open Tailzu" button that is a tulmi:// link,
+// the scheme the phone app already answers. A computer answers it too: the
+// window comes up, on Connected apps. Only a screen id is ever taken from a
+// link, and only the ones below: anything else just brings the window up.
+const LINK_SCREENS = { assistant_apps: "desk_settings", assistant_tasks: "desk_tasks" };
+function screenFromLink(raw) {
+  try {
+    const u = new URL(String(raw || ""));
+    if (u.protocol !== "tulmi:" || u.hostname !== "screen") return null;
+    return LINK_SCREENS[u.pathname.replace(/^\//, "")] || null;
+  } catch { return null; }
+}
+let pendingLink = null;
+function openFromLink(raw) {
+  if (!app.isReady()) { pendingLink = raw; return; }
+  openAppWindow(screenFromLink(raw) || undefined);
+}
+try {
+  // Run from source (npm start), the scheme has to name this script as well.
+  if (process.defaultApp && process.argv.length >= 2) app.setAsDefaultProtocolClient("tulmi", process.execPath, [path.resolve(process.argv[1])]);
+  else app.setAsDefaultProtocolClient("tulmi");
+} catch { /* the button then does nothing, as before */ }
+// macOS hands a link to the running app (or to the one it starts) here.
+app.on("open-url", (e, url) => { e.preventDefault(); openFromLink(url); });
+app.whenReady().then(() => {
+  // A link that started the app: macOS's came before ready, Windows' and Linux's are in its arguments.
+  const first = pendingLink || process.argv.find((a) => /^tulmi:/i.test(String(a)));
+  pendingLink = null;
+  if (first) { try { openAppWindow(screenFromLink(first) || undefined); } catch { /* tray only */ } }
+});
 
 /** Started by Windows at login rather than by a person clicking something. */
 function startedHidden() {
