@@ -2950,7 +2950,8 @@ test("approve: the card is drawn as the server sent it, and Approve calls its ro
   assert.deepStrictEqual(card.buttons.map((b) => b.label), ["Approve", "Edit", "Not now"]);
   assert.deepStrictEqual(r.routes, [{ method: "POST", path: "/v1/tasks/t1/approve", body: { approvalId: "ap1" } }]);
   // The result is on the card, after the server's own "Done".
-  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713 Message posted."]);
+  // Only the card's own Done: the app's answer (ids, links) is never shown.
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713"]);
   assert.strictEqual(r.agent.active(), false);
   // Nothing was done on the screen.
   assert.deepStrictEqual(r.driver.calls.filter((c) => c[0] === "press"), []);
@@ -3052,7 +3053,7 @@ test("approve: the run's deadline does not tick while the card is up", async () 
     { knobs: { "desktop.agent.deadlineMs": 40, "desktop.agent.confirmMs": 1000 } });
   await run(r);
   assert.deepStrictEqual(r.routes.map((x) => x.path), ["/v1/tasks/t1/approve"]);
-  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713 Posted."]);
+  assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713"]);
 });
 
 // ---- the server's "open" event: the email hand-off ----------------------------

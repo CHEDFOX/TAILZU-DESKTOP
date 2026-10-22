@@ -3370,7 +3370,7 @@ test("the card the server sent is what the guide is given, whole, and nothing is
   h.ask.cancel("test over");
 });
 
-test("Alt twice is Approve, after the same wait as any confirm card, and the result is shown on the card", async () => {
+test("Alt twice is Approve, after the same wait as any confirm card, and the card says Done", async () => {
   const h = harness({ steps: APPROVE, knobs: { "desktop.agent.confirmTapMs": 40 } });
   await askAndWaitForCard(h);
   await sleep(60);
@@ -3380,7 +3380,7 @@ test("Alt twice is Approve, after the same wait as any confirm card, and the res
   const c = h.taskCalls[0];
   assert.deepStrictEqual([c.path, c.method, c.body], ["/v1/tasks/t1/approve", "POST", { approvalId: "ap1" }]);
   assert.strictEqual(c.headers["Content-Type"], "application/json");
-  assert.ok(h.sent.some((x) => x.type === "say" && x.text === "Done \u2713 Message posted."));
+  assert.ok(h.sent.some((x) => x.type === "say" && x.text === "Done \u2713"));
 });
 
 test("Alt twice the moment the card comes up is the stop gesture, not Approve", async () => {
