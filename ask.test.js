@@ -172,6 +172,7 @@ function harness(opts = {}) {
       return ndjson(script);
     },
     paste: async () => {},
+    openExternal: opts.openExternal,
     screenSettings: opts.screenSettings,
   });
   return { ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
@@ -3450,4 +3451,22 @@ test("a task that is not waiting any more says so, in the server's words", async
   h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, true);
   await until(() => h.sent.some((x) => x.type === "state" && x.state === "error"));
   assert.ok(h.sent.some((x) => x.type === "say" && /isn't waiting for an answer/.test(x.text)));
+});
+
+test("the email hand-off opens a Gmail compose link or a mailto: link, and nothing else", async () => {
+  const opened = [];
+  const h = harness({ openExternal: async (u) => { opened.push(u); return true; } });
+  const open = h.deps().open;
+  const gmail = "https://mail.google.com/mail/?view=cm&fs=1&to=rahul%40example.com&su=Demo&body=Hi%20Rahul";
+  const mailto = "mailto:rahul%40example.com?subject=Demo&body=Hi%20Rahul";
+  assert.strictEqual(await open(gmail), true);
+  assert.strictEqual(await open(mailto), true);
+  for (const bad of [
+    "http://mail.google.com/mail/?view=cm", "https://mail.google.com.evil.test/mail/", "https://evil.test/mail/", "https://mail.google.com:8443/mail/",
+    "https://user:pw@mail.google.com/mail/", "https://mail.google.com/accounts/", "file:///etc/passwd", "javascript:alert(1)", "x-apple.systempreferences:com.apple",
+    "tel:+911234567890", "mailto:a@example.com?attach=/Users/me/secret.pdf", "https://mail.google.com/mail/?su=a b", "", null, 42,
+  ]) assert.strictEqual(await open(bad), false, String(bad));
+  assert.deepStrictEqual(opened, [gmail, mailto]);
+  // Without a way to open it, nothing opens and nothing breaks.
+  assert.strictEqual(await harness().deps().open(gmail), false);
 });

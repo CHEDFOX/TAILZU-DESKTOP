@@ -16,7 +16,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  createAgent, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
+  createAgent, safeOpenUrl, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
   ocrElements, pictureRegion, resolveMark, readEvents, makePost, SCREEN_CHARS, TEXT,
 } = require("./agent.js");
 
@@ -130,7 +130,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
-    call: o.call, approveElsewhere: o.approveElsewhere,
+    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -3053,4 +3053,68 @@ test("approve: the run's deadline does not tick while the card is up", async () 
   await run(r);
   assert.deepStrictEqual(r.routes.map((x) => x.path), ["/v1/tasks/t1/approve"]);
   assert.deepStrictEqual(lastState(r), ["state", "done", "Done \u2713 Posted."]);
+});
+
+// ---- the server's "open" event: the email hand-off ----------------------------
+
+const MAIL_LINK = "https://mail.google.com/mail/?view=cm&fs=1&to=rahul%40example.com&su=Demo&body=Hi%20Rahul";
+const MAIL_TO = "mailto:rahul%40example.com?subject=Demo&body=Hi%20Rahul";
+const openedEv = (o) => Object.assign({ t: "open", url: MAIL_LINK, label: "Open in Gmail", fallback: MAIL_TO }, o);
+const openedRun = async (events, open) => {
+  const opened = [];
+  const r = rig({
+    scripts: [[heardDo("write an email to rahul"), { t: "say", text: "I've written it in Gmail. Check it and hit Send." }, ...events, { t: "done" }]],
+    open: open === undefined ? async (u) => { opened.push(u); return true; } : open ? async (u) => { opened.push(u); return open(u, opened); } : undefined,
+  });
+  await run(r);
+  await sleep(5);
+  return { r, opened };
+};
+
+test("open: a Gmail compose link is opened once, after the guide says its line", async () => {
+  const { r, opened } = await openedRun([openedEv()]);
+  assert.deepStrictEqual(opened, [MAIL_LINK]);
+  assert.strictEqual(r.guide.of("say")[0][1], "I've written it in Gmail. Check it and hit Send.");
+  assert.strictEqual(lastState(r)[1], "done");
+  assert.strictEqual(r.agent.active(), false);
+  // Nothing was done on the screen.
+  assert.deepStrictEqual(r.driver.calls.filter((c) => c[0] === "press"), []);
+});
+
+test("open: a second open in the same run is ignored", async () => {
+  const { opened } = await openedRun([openedEv(), openedEv({ url: "mailto:other%40example.com" })]);
+  assert.deepStrictEqual(opened, [MAIL_LINK]);
+});
+
+test("open: the mailto: fallback is tried when the link could not be opened", async () => {
+  const refused = await openedRun([openedEv()], (u) => u === MAIL_LINK ? false : true);
+  assert.deepStrictEqual(refused.opened, [MAIL_LINK, MAIL_TO]);
+  const threw = await openedRun([openedEv()], (u) => { if (u === MAIL_LINK) throw new Error("no browser"); return true; });
+  assert.deepStrictEqual(threw.opened, [MAIL_LINK, MAIL_TO]);
+  assert.strictEqual(lastState(threw.r)[1], "done");
+});
+
+test("open: only a Gmail compose link or a mailto: link ever reaches the computer", async () => {
+  const bad = [
+    "http://mail.google.com/mail/?view=cm", "https://mail.google.com.evil.test/mail/", "https://evil.test/", "https://mail.google.com:444/mail/",
+    "https://user@mail.google.com/mail/", "https://mail.google.com/accounts/Logout", "file:///etc/passwd", "javascript:alert(1)",
+    "ftp://mail.google.com/mail/", "tel:+911234567890", "mailto:a@example.com?attach=/etc/passwd", "mailto:a@example.com?subject=x&Attach=/x",
+    "https://mail.google.com/mail/?su=has space", "https://mail.google.com/mail/" + "a".repeat(9000), "", 5, null,
+  ];
+  for (const url of bad) {
+    const { opened } = await openedRun([openedEv({ url, fallback: undefined })]);
+    assert.deepStrictEqual(opened, [], String(url).slice(0, 60));
+  }
+  // A refused link does not stop a good fallback, and a refused fallback is never opened.
+  assert.deepStrictEqual((await openedRun([openedEv({ url: "https://evil.test/" })])).opened, [MAIL_TO]);
+  assert.deepStrictEqual((await openedRun([openedEv({ fallback: "https://evil.test/" })], () => false)).opened, [MAIL_LINK]);
+  assert.deepStrictEqual(bad.map((u) => safeOpenUrl(u)).filter(Boolean), []);
+  assert.strictEqual(safeOpenUrl(MAIL_LINK), MAIL_LINK);
+  assert.strictEqual(safeOpenUrl(MAIL_TO), MAIL_TO);
+});
+
+test("open: a computer with no way to open it still finishes the run", async () => {
+  const { r } = await openedRun([openedEv()], null);
+  assert.strictEqual(lastState(r)[1], "done");
+  assert.strictEqual(r.agent.active(), false);
 });
