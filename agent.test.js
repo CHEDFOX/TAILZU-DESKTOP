@@ -3094,7 +3094,7 @@ test("open: the mailto: fallback is tried when the link could not be opened", as
   assert.strictEqual(lastState(threw.r)[1], "done");
 });
 
-test("open: only a Gmail compose link or a mailto: link ever reaches the computer", async () => {
+test("open: a link that is no hand-off never reaches the computer", async () => {
   const bad = [
     "http://mail.google.com/mail/?view=cm", "https://mail.google.com.evil.test/mail/", "https://evil.test/", "https://mail.google.com:444/mail/",
     "https://user@mail.google.com/mail/", "https://mail.google.com/accounts/Logout", "file:///etc/passwd", "javascript:alert(1)",
@@ -3111,6 +3111,91 @@ test("open: only a Gmail compose link or a mailto: link ever reaches the compute
   assert.deepStrictEqual(bad.map((u) => safeOpenUrl(u)).filter(Boolean), []);
   assert.strictEqual(safeOpenUrl(MAIL_LINK), MAIL_LINK);
   assert.strictEqual(safeOpenUrl(MAIL_TO), MAIL_TO);
+});
+
+// The hand-offs a computer can finish, as the server writes them: a message,
+// a share, a search or a route, each on its site's own link.
+const HAND_OFFS = [
+  "https://wa.me/919876543210?text=Running%2010%20minutes%20late",
+  "https://wa.me/?text=Running%2010%20minutes%20late",
+  "https://api.whatsapp.com/send?phone=919876543210&text=Hi%20Rahul",
+  "https://t.me/share/url?url=https%3A%2F%2Ftailzu.space&text=Have%20a%20look",
+  "https://t.me/rahul_k",
+  "https://t.me/rahul_k?text=Hi%20Rahul",
+  "https://www.google.com/maps/dir/?api=1&destination=Indiranagar%2C%20Bengaluru&travelmode=driving",
+  "https://www.google.com/maps/search/?api=1&query=filter%20coffee%20near%20me",
+  "https://m.uber.com/ul/?action=setPickup&pickup=my_location&dropoff%5Bformatted_address%5D=Kempegowda%20Airport",
+  "https://www.amazon.in/s?k=usb%20c%20cable",
+  "https://www.flipkart.com/search?q=running%20shoes",
+  "https://www.youtube.com/results?search_query=lofi%20beats",
+  "https://music.youtube.com/search?q=arijit%20singh",
+  "https://open.spotify.com/search/arijit%20singh",
+  "https://www.threads.net/intent/post?text=Shipped%20it",
+  "https://www.threads.com/intent/post?text=Shipped%20it",
+  "https://www.booking.com/searchresults.html?ss=Goa&checkin=2026-11-20&checkout=2026-11-22&group_adults=2",
+];
+
+// Each one a step away from a hand-off: a lookalike host, credentials, a
+// port, another path on the same site, or another scheme.
+const NEAR_MISSES = [
+  // lookalike hosts
+  "https://wa.me.evil.test/919876543210", "https://evilwa.me/919876543210", "https://www.wa.me/919876543210", "https://wa.me./919876543210",
+  "https://api.whatsapp.com.evil.test/send?text=x", "https://whatsapp.com/send?text=x", "https://telegram.me/share/url?url=x", "https://t.me.evil.test/rahul_k",
+  "https://www.google.co.in/maps/dir/?api=1", "https://maps.google.com/maps/dir/?api=1", "https://google.com/maps/search/?api=1&query=x",
+  "https://uber.com/ul/?action=setPickup", "https://m.uber.com.evil.test/ul/", "https://amazon.in/s?k=x", "https://www.amazon.com/s?k=x",
+  "https://www.amazon.in.evil.test/s?k=x", "https://flipkart.com/search?q=x", "https://youtube.com/results?search_query=x",
+  "https://m.youtube.com/results?search_query=x", "https://www.youtube.com.evil.test/results?search_query=x", "https://spotify.com/search/x",
+  "https://threads.net/intent/post?text=x", "https://www.threads.org/intent/post?text=x", "https://booking.com/searchresults.html?ss=Goa",
+  "https://w\u0430.me/919876543210", "https://www.amaz\u043en.in/s?k=x",
+  // credentials and ports
+  "https://user@wa.me/919876543210", "https://a:b@www.youtube.com/results?search_query=x", "https://wa.me@evil.test/919876543210",
+  "https://www.google.com:443@evil.test/maps/dir/?api=1", "https://wa.me:8443/919876543210", "https://www.youtube.com:444/results?search_query=x",
+  // other paths on the same sites
+  "https://www.google.com/url?q=https%3A%2F%2Fevil.test", "https://www.google.com/maps/dir/?destination=Goa", "https://www.google.com/maps/search/?api=2&query=x",
+  "https://www.google.com/maps/place/Goa", "https://www.google.com/search?q=x", "https://www.google.com/maps/dir/../../url?q=https%3A%2F%2Fevil.test&api=1",
+  "https://www.amazon.in/gp/buy/spc/handlers/display.html", "https://www.amazon.in/sx?k=x", "https://www.flipkart.com/searchx?q=x",
+  "https://www.flipkart.com/viewcart", "https://www.youtube.com/watch?v=abc", "https://www.youtube.com/redirect?q=https%3A%2F%2Fevil.test",
+  "https://music.youtube.com/watch?v=abc", "https://open.spotify.com/track/abc", "https://www.threads.net/@someone",
+  "https://www.booking.com/myreservations.html", "https://www.booking.com/searchresults.html.evil", "https://api.whatsapp.com/sendx?text=x",
+  "https://api.whatsapp.com/", "https://m.uber.com/looking", "https://t.me/share/urlx?url=x", "https://t.me/proxy?server=1.2.3.4&port=443&secret=x",
+  "https://t.me/socks?server=1.2.3.4&port=1080", "https://t.me/Proxy", "https://t.me/joinchat/AAAAAEkk2WdoDrB4", "https://t.me/+AbCdEfGh",
+  "https://t.me/login/12345", "https://t.me/invoice/abc", "https://t.me/addstickers/abc", "https://t.me/rahul_k?start=x", "https://t.me/rahul_k/123",
+  "https://t.me/abc", "https://t.me/1rahul", "https://mail.google.com/accounts/Logout",
+  // other schemes
+  "http://wa.me/919876543210", "upi://pay?pa=rahul%40okicici&pn=Rahul&am=100", "tel:+919876543210", "sms:+919876543210?body=Hi",
+  "file:///etc/passwd", "javascript:alert(1)", "whatsapp://send?text=Hi", "tg://resolve?domain=rahul_k", "spotify:search:arijit",
+  "intent://maps#Intent;end", "data:text/html,<script>alert(1)</script>", "ftp://wa.me/919876543210", "uber://?action=setPickup",
+  // too long, or not a link as written
+  "https://wa.me/?text=" + "a".repeat(8000), "https://wa.me/919876543210 ", " https://wa.me/919876543210", "https://wa.me/\t91",
+];
+
+test("open: each hand-off a computer can finish is opened, as written", async () => {
+  for (const url of HAND_OFFS) {
+    assert.strictEqual(safeOpenUrl(url), url, url);
+    const { opened } = await openedRun([openedEv({ url, label: "Open", fallback: undefined })]);
+    assert.deepStrictEqual(opened, [url], url);
+  }
+});
+
+test("open: a hand-off is still once a run, with its fallback tried when it could not open", async () => {
+  const [chat, send, route] = [HAND_OFFS[0], HAND_OFFS[2], HAND_OFFS[6]];
+  const twice = await openedRun([openedEv({ url: chat, fallback: undefined }), openedEv({ url: route, fallback: undefined })]);
+  assert.deepStrictEqual(twice.opened, [chat]);
+  const refused = await openedRun([openedEv({ url: chat, fallback: send })], (u) => u !== chat);
+  assert.deepStrictEqual(refused.opened, [chat, send]);
+  // A phone-only link is never opened here, as the link or as its fallback.
+  const phone = await openedRun([openedEv({ url: "upi://pay?pa=rahul%40okicici&am=100", fallback: "tel:+919876543210" })]);
+  assert.deepStrictEqual(phone.opened, []);
+  assert.strictEqual(lastState(phone.r)[1], "done");
+  assert.deepStrictEqual((await openedRun([openedEv({ url: "sms:+919876543210?body=Hi", fallback: chat })])).opened, [chat]);
+});
+
+test("open: a near miss of a hand-off is never opened", async () => {
+  assert.deepStrictEqual(NEAR_MISSES.filter((u) => safeOpenUrl(u) !== null), []);
+  for (const url of NEAR_MISSES.filter((_, i) => i % 4 === 0)) {
+    const { opened } = await openedRun([openedEv({ url, fallback: undefined })]);
+    assert.deepStrictEqual(opened, [], url.slice(0, 60));
+  }
 });
 
 test("open: a computer with no way to open it still finishes the run", async () => {

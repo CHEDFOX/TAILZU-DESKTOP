@@ -2526,8 +2526,9 @@ function setupAsk() {
     authorizedFetch,
     // The same one-at-a-time paste dictation uses; resolved once it is in.
     paste: (text) => { paste(text); return pasting; },
-    // The email hand-off: ask.js has already checked that this is a Gmail
-    // compose link or a mailto: link and nothing else.
+    // The server's hand-off: ask.js has already checked that this is a link
+    // agent.js safeOpenUrl allows (an email, a message, a search or a route)
+    // and nothing else.
     openExternal: (url) => shell.openExternal(url).then(() => true, () => false),
     // A question's picture is cropped here, from the window the driver
     // captured at Alt twice, before anything of it leaves (ask.js crop).

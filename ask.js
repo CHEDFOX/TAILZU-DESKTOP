@@ -1018,9 +1018,10 @@ function createAsk(ctx) {
       } catch { return none; }
     },
     paste: (text) => ctx.paste(text),
-    // The server's `open` (an email written in Gmail, for the person to send):
-    // only a Gmail compose link or a mailto: link, checked here again, and
-    // opened by main. Anything else is not opened, whatever asked.
+    // The server's `open` (a hand-off for the person to finish: an email in
+    // Gmail, a message, a search or a route): only a link safeOpenUrl allows,
+    // checked here again, and opened by main. Anything else is not opened,
+    // whatever asked.
     open: (url) => {
       const link = agentCore.safeOpenUrl(url);
       return link && typeof ctx.openExternal === "function" ? ctx.openExternal(link) : false;
