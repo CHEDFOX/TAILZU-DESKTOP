@@ -28,6 +28,13 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
   pause writes only speech and silence is never uploaded (node --test).
 - **pasteJoin.js** — the space (or none) between two pasted stretches.
 - **app.html** + **sdui.js** — the app window, drawn from the server's screens.
+  - The onboarding is two node types the server sends (`OnboardStage`,
+    `BlipSpot`) and one friend who is not a node: **blip.js** `createWalker`
+    draws Blip on `#blipStage`, over both the sign-in gate and the app, and
+    walks him to wherever the step on show says he stands. Only the steps'
+    content glides; he, the bar and his bubble stay put (`html[data-onboard]`
+    is that hold). Its two faces are bundled (`assets/fonts`): the window's
+    policy loads fonts from its own files only.
 - **Ask** — tap Alt twice and ask about the app in front:
   - **ask.js** wires it in the main process: the question's microphone, the
     guide's window, the agent's hands.

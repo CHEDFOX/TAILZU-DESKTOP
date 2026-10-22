@@ -2,10 +2,11 @@
 // the small things the peek asks of the figure (a nod, the voice on its
 // antenna, holding still). The drawing itself is checked on the page
 // (guide.html?demo=peek and peekdoc); this is the geometry, which decides
-// whether it covers the words being written.
+// whether it covers the words being written. At the foot: the walker who
+// goes with you through the onboarding, whose journeys are timed here.
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekSpot, createBlip, POSES } = require("./blip.js");
+const { peekSpot, createBlip, POSES, createWalker, burst, WALKER_POSES } = require("./blip.js");
 
 const view = { w: 1440, h: 900, top: 0 };
 const o = { height: 54, tall: 120 };
@@ -197,4 +198,225 @@ test("a nod dips the head and is over in 340 ms; held still, there is none", () 
   const still = peeking((x) => { x.still(true); x.nod(); });
   const ref = peeking((x) => x.still(true));
   assert.deepStrictEqual(frameAt(still, .17), frameAt(ref, .17));
+});
+
+// ---- the walker: Blip on the onboarding's stage ------------------------------------------
+
+/** A walker on a recording canvas, with a clock held in the test's hand. */
+function stage(extra) {
+  let now = 1000, ctx = null;
+  const canvas = { width: 0, height: 0, getContext: () => (ctx = recorder()) };
+  const w = createWalker(canvas, Object.assign({ now: () => now, dpr: 1 }, extra));
+  w.size(800, 600, 1);
+  return { w, canvas, log: () => ctx.log, at: (t) => { now = t; }, tick: (t) => { now = t; w.tick(t); } };
+}
+const where = (s) => { const t = s.w.state(); return [t.x, t.y, t.H, t.pose]; };
+
+test("the first spot is an arrival, and one that is as good as where he stands is only a new pose", () => {
+  const s = stage();
+  const lands = [];
+  assert.strictEqual(s.w.go(200, 300, 100, "wave", (k) => lands.push(k)), "snap");
+  assert.deepStrictEqual(where(s), [200, 300, 100, "wave"]);
+  assert.deepStrictEqual([s.w.state().placed, s.w.state().traveling], [true, false]);
+  // Within 8 px, the same height: no journey, his pose springs to the new one.
+  assert.strictEqual(s.w.go(206, 292, 100, "tap", (k) => lands.push(k)), "pose");
+  assert.deepStrictEqual(where(s), [206, 292, 100, "tap"]);
+  assert.deepStrictEqual(lands, ["snap", "pose"]);
+  // Nine away is a journey; so is the same place at another size.
+  assert.strictEqual(s.w.go(215, 292, 100, "tap"), "travel");
+  s.tick(5000);
+  assert.strictEqual(s.w.go(215, 292, 120, "tap"), "travel");
+});
+
+test("a short move is a hop: a 90 ms crouch, 460 ms, his pose changing at 45%, a squash on landing", () => {
+  const s = stage();
+  s.w.go(200, 300, 100, "present");
+  const lands = [];
+  s.at(1000);
+  assert.strictEqual(s.w.go(230, 300, 100, "tap", (k) => lands.push(k)), "travel");
+  const j = s.w.state().journey;
+  assert.deepStrictEqual([j.hop, j.T, j.t0, j.swapAt, j.dist], [true, 460, 1090, .45, 30]);
+  assert.strictEqual(s.w.state().pose, "walk", "he goes in his walking pose");
+  s.tick(1000); s.tick(1060);
+  assert.strictEqual(s.w.state().x, 200, "crouching: he has not moved yet");
+  s.tick(1090 + 460 * .44);
+  assert.strictEqual(s.w.state().pose, "walk");
+  s.tick(1090 + 460 * .46);
+  assert.strictEqual(s.w.state().pose, "tap", "the new pose from the swap on");
+  assert.ok(s.w.state().lift > 0, "he is in the air");
+  assert.deepStrictEqual(lands, []);
+  s.tick(1090 + 460);
+  const t = s.w.state();
+  assert.deepStrictEqual([t.x, t.y, t.pose, t.traveling, t.lift], [230, 300, "tap", false, 0]);
+  assert.deepStrictEqual(lands, ["travel"]);
+  assert.ok(t.sq > .01, "squashed as he lands (a spring, so it is already on its way back)");
+  // Landing is once.
+  s.tick(3000);
+  assert.deepStrictEqual(lands, ["travel"]);
+});
+
+test("a long move is a walk of clamp(430 + 2.3 d, 520, 960) ms, his pose changing at 60%", () => {
+  const timing = (dx, dH = 0) => {
+    const s = stage();
+    s.w.go(100, 300, 100, "present");
+    s.w.go(100 + dx, 300, 100 + dH, "tap");
+    const j = s.w.state().journey;
+    return [j.hop, Math.round(j.T * 10) / 10, j.swapAt];
+  };
+  assert.deepStrictEqual(timing(100), [false, 660, .6]);
+  assert.deepStrictEqual(timing(300), [false, 960, .6], "never longer than 960");
+  assert.deepStrictEqual(timing(50), [false, 545, .6]);
+  assert.deepStrictEqual(timing(46), [false, 535.8, .6], "46 is a walk, not a hop");
+  assert.deepStrictEqual(timing(45.9), [true, 460, .45]);
+  // A change of size counts half toward the distance.
+  assert.deepStrictEqual(timing(0, 90), [true, 460, .45]);
+  assert.deepStrictEqual(timing(0, 100), [false, 545, .6]);
+  const s = stage();
+  s.w.go(100, 300, 100, "present");
+  const lands = [];
+  s.at(1000);
+  s.w.go(500, 300, 100, "listen", (k) => lands.push(k));
+  s.tick(1090 + 960 * .59);
+  assert.strictEqual(s.w.state().pose, "walk");
+  assert.ok(s.w.state().x > 100 && s.w.state().x < 500, "on his way");
+  s.tick(1090 + 960 * .61);
+  assert.strictEqual(s.w.state().pose, "listen");
+  s.tick(1090 + 960 + 5);
+  assert.deepStrictEqual([s.w.state().x, lands], [500, ["travel"]]);
+});
+
+test("with his hands full he keeps what he holds while he walks, and otherwise walks", () => {
+  for (const held of ["wave", "key", "carry"]) {
+    const s = stage();
+    s.w.go(100, 300, 100, held);
+    s.w.go(500, 300, 100, "tap");
+    assert.strictEqual(s.w.state().pose, held, held);
+  }
+  for (const free of ["present", "listen", "tada", "think", "nod"]) {
+    const s = stage();
+    s.w.go(100, 300, 100, free);
+    s.w.go(500, 300, 100, "tap");
+    assert.strictEqual(s.w.state().pose, "walk", free);
+  }
+});
+
+test("a new spot while he is on his way starts from where he is", () => {
+  const s = stage();
+  s.w.go(100, 300, 100, "present");
+  s.at(1000);
+  s.w.go(500, 300, 100, "tap");
+  s.tick(1500);
+  const mid = s.w.state().x;
+  assert.ok(mid > 100 && mid < 500);
+  s.w.go(100, 300, 100, "wave");
+  assert.strictEqual(s.w.state().journey.dist, Math.hypot(mid - 100, 0));
+});
+
+test("the place he is going to can move (a scroll, a resize) and he follows, with no walk", () => {
+  const s = stage();
+  s.w.go(100, 300, 100, "present");
+  // At rest: he is moved.
+  s.w.retarget(100, 250, 100);
+  assert.deepStrictEqual(where(s), [100, 250, 100, "present"]);
+  // On a journey: its end moves, and he lands there.
+  s.at(1000);
+  s.w.go(500, 250, 100, "tap");
+  s.w.retarget(500, 200, 100);
+  s.tick(1000 + 90 + 960 + 10);
+  assert.deepStrictEqual(where(s), [500, 200, 100, "tap"]);
+});
+
+test("held still (reduced motion) there is no journey: a beat of 160 ms and he is there", () => {
+  const s = stage({ reduced: true });
+  s.w.go(100, 300, 100, "wave");
+  const lands = [];
+  s.at(1000);
+  assert.strictEqual(s.w.go(500, 100, 150, "tada", (k) => lands.push(k)), "travel");
+  assert.strictEqual(s.w.state().journey, null, "no walk is timed");
+  assert.strictEqual(s.w.state().pose, "wave", "he does not even change to a walking pose");
+  s.tick(1100); s.tick(1159);
+  assert.deepStrictEqual([where(s), lands], [[100, 300, 100, "wave"], []]);
+  s.tick(1160);
+  assert.deepStrictEqual([where(s), lands, s.w.state().traveling], [[500, 100, 150, "tada"], ["travel"], false]);
+  // The frame loop asks for nothing more once he is still.
+  assert.strictEqual(s.w.frame(1200), false);
+  // …and for frames while he is on his way, and always when he is not held still.
+  s.w.go(300, 100, 150, "wave");
+  assert.strictEqual(s.w.frame(1300), true);
+  assert.strictEqual(stage().w.frame(1000), false, "nobody shown: nothing to draw");
+  const live = stage(); live.w.snap(100, 100, 100, "present");
+  assert.strictEqual(live.w.frame(1000), true);
+});
+
+test("sent away, the next spot is a first one again", () => {
+  const s = stage();
+  s.w.go(100, 300, 100, "present");
+  s.w.hide();
+  assert.deepStrictEqual([s.w.state().placed, s.w.state().shown], [false, false]);
+  assert.strictEqual(s.w.go(400, 200, 100, "wave"), "snap");
+  assert.deepStrictEqual(where(s), [400, 200, 100, "wave"]);
+  assert.strictEqual(s.w.state().shown, true);
+});
+
+test("every pose draws only finite numbers, at rest and mid-stride, and a missing pose is a plain one", () => {
+  for (const reduced of [true, false]) for (const pose of Object.keys(WALKER_POSES)) {
+    const s = stage({ reduced });
+    s.w.snap(300, 400, 110, pose);
+    s.w.draw(.016); s.w.draw(.016);
+    const log = s.log().join("\n");
+    assert.ok(log.length > 200, pose + " drew nothing");
+    assert.doesNotMatch(log, /NaN|Infinity/, `${pose} reduced=${reduced}`);
+  }
+  const s = stage();
+  s.w.snap(300, 400, 110, "no-such-pose");
+  s.w.draw(.016);
+  assert.doesNotMatch(s.log().join("\n"), /NaN|Infinity/);
+  // Mid-journey, facing away, squashed.
+  const w = stage();
+  w.w.go(100, 400, 150, "present");
+  w.at(2000); w.w.go(700, 380, 110, "tap");
+  for (let t = 2000; t < 3300; t += 40) { w.tick(t); w.w.draw(.04); }
+  assert.doesNotMatch(w.log().join("\n"), /NaN|Infinity/);
+});
+
+test("he is drawn where his feet are, and a frame clears only the box he was in", () => {
+  const s = stage();
+  s.w.snap(300, 400, 100, "present");
+  s.w.draw(.016);
+  const first = s.log().filter((l) => l.startsWith("clearRect"));
+  assert.strictEqual(first.length, 0, "nothing to clear the first time");
+  s.w.snap(500, 300, 100, "present");
+  s.w.draw(.016);
+  const cleared = s.log().filter((l) => l.startsWith("clearRect"));
+  assert.deepStrictEqual(cleared, ["clearRect(205,222,190,190)"], "the box around the old place: 95 either side, 150 + 28 above, 40 below");
+});
+
+test("the confetti is 22 pieces thrown from where he lands, gone in 1.4 s, and none when held still", async () => {
+  const made = [];
+  const host = {
+    ownerDocument: {
+      createElement: () => {
+        const e = { className: "", style: { props: {}, setProperty(k, v) { this.props[k] = v; } }, removed: false, remove() { this.removed = true; } };
+        made.push(e);
+        return e;
+      },
+    },
+    kids: [],
+    appendChild(e) { this.kids.push(e); },
+  };
+  const out = burst(host, 120, 80, { rand: () => .5, ttl: 5 });
+  assert.strictEqual(out.length, 22);
+  assert.strictEqual(host.kids.length, 22);
+  assert.ok(out.every((e) => e.className === "cf" && e.style.left === "120px" && e.style.top === "80px"));
+  assert.deepStrictEqual(out.slice(0, 5).map((e) => e.style.background), ["#1C1A17", "#39FF14", "#F3E2C6", "#8D8983", "#1C1A17"]);
+  assert.deepStrictEqual([out[0].style.props["--dx"], out[0].style.props["--dy"], out[0].style.props["--r"]], ["0px", "-30px", "0deg"], "rand .5 is the middle of every range");
+  // Each takes itself away once its time is up.
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(out.every((e) => e.removed));
+  // Held still: nothing is thrown. No page to throw it on: nothing either.
+  assert.deepStrictEqual(burst(host, 1, 1, { reduced: true }), []);
+  assert.deepStrictEqual(burst(null, 1, 1), []);
+  assert.strictEqual(host.kids.length, 22);
+  // The stage's own colours, when it names them.
+  assert.strictEqual(burst(host, 1, 1, { colors: ["#123456"], ttl: 5 })[3].style.background, "#123456");
 });
