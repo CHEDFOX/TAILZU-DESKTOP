@@ -140,7 +140,11 @@ jobs:
           # from before versions refuses the pair (exit 2): send the name alone.
           V=$(node -p "require('./package.json').version")
           up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu.dmg; }
-          up "Tailzu.dmg $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu.dmg"; else exit "$rc"; fi; }
+          # The server's SSH has dropped connections from these runners now and
+          # then (port 22 timed out, exit 255): a dropped connection is tried
+          # again, a refusal is not.
+          upr() { for i in 1 2 3 4; do if up "$1"; then return 0; else rc=$?; fi; [ "$rc" -ne 255 ] && return "$rc"; echo "connection dropped, again in $((i*20))s"; sleep $((i*20)); done; return 255; }
+          upr "Tailzu.dmg $V" || { rc=$?; if [ "$rc" -eq 2 ]; then upr "Tailzu.dmg"; else exit "$rc"; fi; }
           rm -f ~/.ssh/tailzu_ci
 
   win:
@@ -213,7 +217,11 @@ jobs:
           # from before versions refuses the pair (exit 2): send the name alone.
           V=$(node -p "require('./package.json').version")
           up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu-Setup.exe; }
-          up "Tailzu-Setup.exe $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu-Setup.exe"; else exit "$rc"; fi; }
+          # The server's SSH has dropped connections from these runners now and
+          # then (port 22 timed out, exit 255): a dropped connection is tried
+          # again, a refusal is not.
+          upr() { for i in 1 2 3 4; do if up "$1"; then return 0; else rc=$?; fi; [ "$rc" -ne 255 ] && return "$rc"; echo "connection dropped, again in $((i*20))s"; sleep $((i*20)); done; return 255; }
+          upr "Tailzu-Setup.exe $V" || { rc=$?; if [ "$rc" -eq 2 ]; then upr "Tailzu-Setup.exe"; else exit "$rc"; fi; }
           rm -f ~/.ssh/tailzu_ci
 
   linux:
@@ -253,5 +261,9 @@ jobs:
           # from before versions refuses the pair (exit 2): send the name alone.
           V=$(node -p "require('./package.json').version")
           up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "$1" < dist/Tailzu.AppImage; }
-          up "Tailzu.AppImage $V" || { rc=$?; if [ "$rc" -eq 2 ]; then up "Tailzu.AppImage"; else exit "$rc"; fi; }
+          # The server's SSH has dropped connections from these runners now and
+          # then (port 22 timed out, exit 255): a dropped connection is tried
+          # again, a refusal is not.
+          upr() { for i in 1 2 3 4; do if up "$1"; then return 0; else rc=$?; fi; [ "$rc" -ne 255 ] && return "$rc"; echo "connection dropped, again in $((i*20))s"; sleep $((i*20)); done; return 255; }
+          upr "Tailzu.AppImage $V" || { rc=$?; if [ "$rc" -eq 2 ]; then upr "Tailzu.AppImage"; else exit "$rc"; fi; }
           rm -f ~/.ssh/tailzu_ci

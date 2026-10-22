@@ -3218,6 +3218,9 @@ function navigateTo(screenId) {
   if (!SESSION || !STACK.length) { PENDING_SCREEN = screenId; return; }
   const top = STACK[STACK.length - 1];
   if (top && top.screenId === screenId) return;
+  // Coming back from connecting an app in the middle of onboarding: stay on
+  // it, and read it again so the app shows as connected.
+  if (top && top.screenId === "onboard") { paint(true); return; }
   go(screenId);
 }
 function back() {
