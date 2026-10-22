@@ -138,6 +138,37 @@ const TEXT = {
   pictureSent: "1 picture sent",
 };
 
+// ---- the server's "open" event ---------------------------------------------------
+
+/** Longest link the server's `open` event may carry: a mail draft, not a download. */
+const OPEN_URL_MAX = 8000;
+/** The only parts of a mailto: link that are an email. `attach` and the like are not. */
+const MAILTO_FIELDS = new Set(["to", "cc", "bcc", "subject", "body"]);
+
+/**
+ * The link the server's `open` event may open on this computer, or null.
+ * Exactly two kinds: a Gmail compose link (https on mail.google.com itself,
+ * under /mail/, no credentials or port) and a mailto: link carrying only mail
+ * fields. Anything else, whatever the server says, is dropped, so an `open`
+ * can write an email for the person to send and can never launch a program,
+ * a file or any other site.
+ */
+function safeOpenUrl(raw) {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > OPEN_URL_MAX) return null;
+  if (/[\u0000-\u0020\u007f]/.test(raw)) return null;
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol === "https:") {
+    if (u.hostname !== "mail.google.com" || u.username || u.password || u.port) return null;
+    return u.pathname.startsWith("/mail/") ? u.href : null;
+  }
+  if (u.protocol === "mailto:") {
+    for (const k of u.searchParams.keys()) if (!MAILTO_FIELDS.has(k.toLowerCase())) return null;
+    return u.pathname ? u.href : null;
+  }
+  return null;
+}
+
 // ---- the server's confirm card ------------------------------------------------
 
 /** The only routes a confirm card's button may call: a task's yes or no. */
@@ -1152,6 +1183,10 @@ function pressMayHaveHappened(r) {
  *        the account's token. Status 0 when it could not be reached. Without it nothing is called.
  * @param {() => string} [deps.approveElsewhere]  the words for an approval that arrived with no card
  *        to ask it on (it is then left waiting, to be answered in Tasks)
+ * @param {(url: string) => boolean|void|Promise<boolean|void>} [deps.open]  the server's `open` event
+ *        (the email hand-off): a link already checked by safeOpenUrl, to open in the person's
+ *        browser or mail app. Resolves false (or throws) when it could not, and the mailto:
+ *        fallback is tried. Without it an `open` does nothing.
  * @param {(text: string) => Promise<void>} deps.paste
  * @param {() => Promise<{mime: string, data: Buffer}|null>} deps.listen
  * @param {(name: string, fallback: any) => any} [deps.knob]
@@ -1633,8 +1668,25 @@ function createAgent(deps) {
         showPlan(run);
         break;
       }
+      case "open":
+        openLink(run, ev);
+        break;
       default: break;   // a newer server's event this build does not know
     }
+  }
+
+  /** The server's `open` (an email written in Gmail): the link, or its mailto: fallback, handed to main to open. At most once a run. */
+  function openLink(run, ev) {
+    if (run.opened) return;
+    const links = [safeOpenUrl(ev.url), safeOpenUrl(ev.fallback)].filter(Boolean);
+    if (!links.length) { log(`agent ${run.tag}: open skipped: not a link this app opens`); return; }
+    if (typeof d.open !== "function") return;
+    run.opened = true;
+    void (async () => {
+      for (const link of links) {
+        try { if ((await d.open(link)) !== false) return; } catch (e) { log(`agent ${run.tag}: open failed: ${errText(e)}`); }
+      }
+    })();
   }
 
   /** A yes or no from the person, within confirmMs. Silence is no. So is a
@@ -2639,7 +2691,7 @@ function makePost(opts) {
 }
 
 module.exports = {
-  createAgent, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
+  createAgent, safeOpenUrl, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
   ocrElements, pictureRegion, resolveMark, readEvents, makePost,
   MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, MAX_PICTURE_BYTES, SCREEN_CHARS, TEXT,
 };

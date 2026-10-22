@@ -1018,6 +1018,13 @@ function createAsk(ctx) {
       } catch { return none; }
     },
     paste: (text) => ctx.paste(text),
+    // The server's `open` (an email written in Gmail, for the person to send):
+    // only a Gmail compose link or a mailto: link, checked here again, and
+    // opened by main. Anything else is not opened, whatever asked.
+    open: (url) => {
+      const link = agentCore.safeOpenUrl(url);
+      return link && typeof ctx.openExternal === "function" ? ctx.openExternal(link) : false;
+    },
     // An ASK's answer: the microphone again, its clip back to the agent;
     // opened once the question has been said, or the microphone hears Blip
     // ask it, and a reply in ask mode ends at its first pause.
