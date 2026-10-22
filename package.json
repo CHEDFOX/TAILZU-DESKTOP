@@ -38,6 +38,7 @@
       "axDriver.js",
       "uiaDriver.js",
       "agent.js",
+      "localfiles.js",
       "resolver.js",
       "ask.js",
       "guide.html",

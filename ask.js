@@ -567,7 +567,7 @@ function createAsk(ctx) {
       const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 3).map((b) => ({ id: text(b && b.id, 12), label: text(b && b.label, 40) }));
       return holdCard({
         type: "confirm", text: "", risk: "confirm",
-        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 400), note: text(c.note, 200), buttons },
+        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons },
       }, (v) => (v === true ? "approve" : v === "edit" || v === "deny" ? v : ""), "");
     },
     hide() { hide(); },
@@ -1024,6 +1024,9 @@ function createAsk(ctx) {
     guide,
     post: agentCore.makePost({ baseUrl: ctx.baseUrl, token: ctx.token, fetch: ctx.fetch || ((...a) => fetch(...a)) }),
     approveElsewhere: () => txt("desktop.agent.approveElsewhere", "I need your OK in Tailzu first."),
+    // "This computer": the person's own files, done here by localfiles.js and
+    // only inside the folders they allowed (main.js hands it in).
+    device: ctx.device,
     // The server's confirm card's buttons: a task's yes or no, with the
     // account's token the way every call here is made. Those two routes and
     // nothing else, whatever the card named.

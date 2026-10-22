@@ -213,7 +213,7 @@
   #no:hover { color:var(--pale); background:rgba(243,226,198,.07); }
   /* The server's own card for a connected app (a message, a change): the
      exact words in full, what it will and won't do, and a third answer. */
-  #ask[data-server] blockquote { display:block; max-height:30vh; overflow-y:auto; -webkit-line-clamp:unset; }
+  #ask[data-server] blockquote { display:block; max-height:30vh; overflow-y:auto; -webkit-line-clamp:unset; white-space:pre-line; overflow-wrap:anywhere; }
   #note { margin:10px 0 0; font:400 12.5px/1.4 var(--sans); color:var(--pale-2); overflow-wrap:anywhere; }
   #note[hidden], #edit[hidden] { display:none; }
   #edit { background:transparent; color:var(--pale); padding:10px 12px; box-shadow:inset 0 0 0 1px rgba(243,226,198,.3); }
