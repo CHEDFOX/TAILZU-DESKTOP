@@ -66,6 +66,7 @@
       "tapDetector.js",
       "pasteJoin.js",
       "speechMeter.js",
+      "heldStop.js",
       "updater.js",
       "knobs.js",
       "neuralField.html",

@@ -60,6 +60,9 @@ let liveRec = null, liveChunks = [], recordedSession = 0, liveAt = 0;
 // with a space. Per session, because a stop's last stretch can still be
 // on its way when the next session starts.
 const wrote = new Map();   // session → text
+// The full stop each session held back at its last pause (heldStop.js): the
+// next stretch's answer settles it, and a dictation that ends there gets it.
+const heldStops = new Map();   // session → "." or "…"
 // Stretches this session has sent on a pause.
 let sentStretches = 0;
 
@@ -78,6 +81,7 @@ window.tailzu.onStart((c) => {
   forceTeardownAll();
   // Sessions with nothing left to send are done with.
   for (const k of wrote.keys()) if (!queues.has(k)) wrote.delete(k);
+  for (const k of heldStops.keys()) if (!queues.has(k)) heldStops.delete(k);
   sentStretches = 0;
   metered = false;
   // ASK: a question for the guide (agent.js), not a dictation. One clip, no
@@ -843,6 +847,9 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     // What this session already wrote, so this stretch continues it.
     const before = wrote.get(sid) || "";
     if (before) fd.append("context", before.slice(-K.num("desktop.recorder.contextChars", 600)));
+    // The context stops where they paused, its full stop held back: the server
+    // is told, and its answer either opens with that stop or carries on.
+    if (before && heldStops.has(sid)) fd.append("heldStop", "1");
     // Said with text selected: what they say is about it, and the answer is
     // the selection rewritten, to paste over it (see selections).
     const selection = selectionFor(sid);
@@ -886,18 +893,31 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     // A rewrite of the selection goes back in its place with its own edges.
     const edges = json.replacedSelection && selection ? edgesOf(selection) : undefined;
     return () => {
+      // A HELD STOP (heldStop.js). Any words in this answer settle the stop
+      // held at the last pause: it opened with that stop, or it carries the
+      // sentence on. A pause stretch holds its own closing stop in turn, when
+      // the server says it can be told (holdsStops). A dictation that ends on
+      // the pause, with nothing more to write, gets the held stop after all.
+      const stop = heldStops.get(sid);
+      let text = cleaned;
+      if (text) heldStops.delete(sid);
+      if (text && isSegment && json.holdsStops === true && !edges) {
+        const h = window.TailzuHeld && window.TailzuHeld.holdStop(text);
+        if (h && h.text.trim()) { text = h.text; heldStops.set(sid, h.stop); }
+      }
+      if (!text && !isSegment && stop) { heldStops.delete(sid); text = stop; }
       // Added in the order spoken, so the context reads as it was said.
-      const placed = edges ? edges[0] + cleaned + edges[1] : cleaned;
-      if (cleaned) wrote.set(sid, before ? before + (join === false ? "" : " ") + placed : placed);
+      const placed = edges ? edges[0] + text + edges[1] : text;
+      if (text) wrote.set(sid, before ? before + (join === false || text === stop ? "" : " ") + placed : placed);
       // Pasted, it takes the selection's place: the next stretch is plain
       // dictation after it.
-      if (cleaned) selections.delete(sid);
+      if (text) selections.delete(sid);
       // ONLY THE WRITTEN TEXT IS EVER PASTED. An empty `cleanedText` is the
       // server deciding there is nothing to write: silence, noise the
       // recogniser turned into words, a stretch that was only an
       // instruction. The raw transcript used to be pasted in its place,
       // which put exactly those invented or unwritten words at the cursor.
-      if (cleaned) deliver(sid, cleaned, join, edges);
+      if (text) deliver(sid, text, text === stop ? false : join, edges);
       else if (!isSegment) {
         // Nothing to write at the end. After stretches that were written,
         // or when words were heard and the writer chose to write none,
