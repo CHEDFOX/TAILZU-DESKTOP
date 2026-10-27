@@ -54,6 +54,8 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
 Every page carries a Content-Security-Policy that runs only this folder's own
 script files, which is why no page has an inline script (neuralField.html's
 one is allowed by hash, written by gen-field.js).
+- **runner/** — Tailzu Code on this computer: the person's own computer as a
+  runner for the Code bot's live sessions (see the section of that name).
 - **preload.js** — the tiny IPC bridge.
 - **knobs.js** — the server's values for everything above (see below).
 
@@ -85,6 +87,8 @@ it would pin those values against anything the server later changes.
 | `holdKey` | key name for hold-to-talk, e.g. `F9` (`desktop.hold.key`) |
 | `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`) |
 | `autoStart` | launch at login (`desktop.autoStart.default`; installed app; also in the tray menu) |
+| `runnerImage` | the Docker image for "Run in a container" (default `node:22-bookworm`; it needs `bash`) |
+| `runnerName` | the name this computer is listed under for the Code bot (default: the computer's name) |
 
 There is no `token` any more. Signed out, nothing is sent with an
 Authorization header; dictation needs a signed-in account.
@@ -160,6 +164,103 @@ window rather than recording into a history no account owns.
   - **Knobs**: `desktop.agent.*` and `desktop.guide.*`; off with
     `desktop.agent.enabled`. While Ask is on, Alt twice asks instead of
     dictating. Ctrl twice dictates.
+
+## Tailzu Code on this computer
+
+The Code bot works on a project's code and needs somewhere to run commands (tests,
+builds, installs). Its first choice is the person's own computer, if they have said
+it may: free, and fast, because nothing waits for a cloud computer to start. This
+app speaks the backend's runner protocol for that (`docs/desktop-runner-session.md`
+in the backend repository; the code is `runner/`).
+
+**It is off until the person turns it on** (tray: *Use this computer for Tailzu Code*,
+which says what it means the first time; or *Tailzu Code activity…*, the window).
+While it is on and the app is running, one WebSocket stays open to the jobs Worker, so
+the router knows this computer is here. That costs one small text frame every 30
+seconds and nothing else; reconnects wait 1, 2, 4 … 60 seconds with a little jitter,
+each with a new one-use ticket (`POST /v1/code/runner/ticket`).
+
+**Which projects.** Per project, on this computer. The first time the bot offers a
+project's work here, a dialog asks (*Allow for this project / Not on this computer /
+Ask me later*). The answer is kept; a project never answered is not run, a refused one
+is left out of the list the server is told. The window lists them and changes them.
+Signing out forgets the answers.
+
+**The code.** `<userData>/workspaces/<projectId>`, a git repository kept from job to
+job: the first job fetches the commit (shallow), later ones only what changed (nothing
+when the commit is already there), and `node_modules` and other untracked files stay.
+The token for it is the server's read-only one for that one repository; it goes to
+git in that process's environment as an HTTP header, and is in no file, config or
+command line. A project connected by sign-in comes as a one-time download link
+instead. Workspaces unused for 30 days are removed.
+
+**What a command gets.** A shell in the workspace with a *scrubbed* environment: `PATH`
+(the person's own login PATH, read once from their shell), `HOME`, `LANG`, the temp
+folder and the npm, pip and cargo caches, and nothing else of the app's own
+environment, so no token or cloud credential. `HOME` is a private folder inside the
+app's data (`<userData>/runner/home`), where the caches live, not the person's. Each
+command gets the time the step has left (a timeout kills its whole process group, exit
+124); output is streamed a line at a time with secrets replaced, with a cap on how much
+is sent (a head and a tail; the rest is said to be left out); the exit code is reported.
+Unlike the GitHub runner it uses `bash -c`, not `bash -lc` (the login PATH is given
+instead), and on Windows `bash` if Git for Windows has put one on the PATH, else `cmd.exe`.
+
+**What it refuses**, with a clear reason, before running anything (every command of a
+request is read first; a refusal is `done` with exit code 126):
+
+- paths for file operations that leave the workspace (`..`, absolute, through a link)
+- `sudo`, `doas`, `su`, `pkexec`, `runas`
+- writes to a home directory's dotfiles or settings folders (`~/.bashrc`, `~/.ssh`,
+  `Library`, `AppData`), anywhere else in the person's own home outside the workspace,
+  and system folders (`/etc`, `/usr`, `C:\Windows`, ...)
+- `rm -rf` (or `find -delete`, `chmod -R`) of `/`, a home folder, `..`, or a parent of the workspace
+- naming places where keys live (`~/.aws`, `~/.npmrc`, the app's own sign-in file, ...)
+- `curl` or `wget` piped to a shell (`| sh`, `bash <(curl ...)`, `eval "$(curl ...)"`)
+- publishing and deploying: `npm publish`, `cargo publish`, `twine upload`, `docker push`,
+  `terraform apply`, `vercel deploy`, ... and `git push`, which would fail anyway (the
+  server never sends a write token)
+- installing software for the whole computer (`apt`, `brew`, `npm -g`, `pip --user`)
+
+This is a guard against mistakes, and against a repository that talks the agent into
+one, not a sandbox: a shell can say the same thing many ways. The wall is the next part.
+
+**Run in a container (Docker).** In the window, turn on *Run in a container* and each
+command runs in a throwaway container instead: `docker run --rm --init`, the workspace
+mounted at `/workspace` (the only part of this computer a command can change), the tool
+caches in a folder mounted at `/cache`, all capabilities dropped, `no-new-privileges`, run
+as the person's own user, the image `node:22-bookworm` unless `runnerImage` in
+`config.json` says another (it needs `bash`), and an environment of exactly what the
+command is given: nothing of the app's. The first command pulls the image, which takes a
+while. A dev server's one port is published on `127.0.0.1` only. It **fails closed**:
+if Docker is not installed or not running, the job is declined and a notification says
+why; it never falls back to running on the computer itself. Git (fetching the code) is
+still run by the app on the computer, since it holds the token.
+
+**The preview.** For the design round the bot may ask for the project's dev server:
+started on `127.0.0.1` with `PORT`, `HOST` and `BROWSER=none`, its port found from what
+it prints, and the room's requests passed to it over the session's own socket (never a
+WebSocket upgrade, never anywhere but `127.0.0.1` / `::1`, at most 1 MB in and 10 MB out).
+It is killed, with everything it started, when the room says, when a command needs the
+checkout, and when the session ends.
+
+**Standing down.** Paused (the socket closed, nothing running) while on battery below 20%
+(back at 25%) or in a low-power mode: macOS `pmset`, Linux sysfs and power-profiles-daemon,
+Windows WMI for the battery (Battery Saver is not read). Where it cannot tell it never pauses.
+A job already running is finished.
+
+**Seeing and stopping it.** The tray says *Tailzu is working on <project>* with a **Stop**,
+which kills what is running, tells the room, reports the step stopped and turns this off
+until the person turns it on again. The window lists the last commands with time, project,
+exit code and duration. Every command also goes into an audit log under
+`<userData>/runner/audit`, one JSON line per event, a file a day, 7 days kept, owner-only.
+
+**Nothing is left behind.** Every process started is in a process group of its own and
+is killed when the session closes, on Stop, when the app quits, when the process exits
+or an uncaught error ends it, and, through a small watchdog process, when the app is
+killed outright (it holds a pipe to the app and kills the groups when it closes).
+
+Tests: `node --test runner/*.test.js` (a fake Worker and room over real sockets, real bash
+and git; a local bare repository stands in for GitHub; the battery source is stubbed).
 
 ## What comes from the backend
 

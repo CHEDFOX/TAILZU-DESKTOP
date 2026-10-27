@@ -149,3 +149,15 @@ contextBridge.exposeInMainWorld("tailzuNotes", {
   status: (p) => ipcRenderer.send("notes:status", p),
   done: (p) => ipcRenderer.send("notes:done", p),
 });
+
+// Tailzu Code on this computer (runner/runner.html): its switch, its projects and what it ran. The main process answers these for that
+// window only, and checks each one.
+contextBridge.exposeInMainWorld("tailzuRunner", {
+  state: () => ipcRenderer.invoke("runner:state"),
+  set: (key, value) => ipcRenderer.invoke("runner:set", String(key || ""), !!value),
+  project: (id, name, action) => ipcRenderer.invoke("runner:project", String(id || ""), String(name || ""), String(action || "")),
+  checkDocker: () => ipcRenderer.invoke("runner:checkDocker"),
+  stop: () => ipcRenderer.send("runner:stop"),
+  openAudit: () => ipcRenderer.send("runner:openAudit"),
+  onUpdate: (cb) => ipcRenderer.on("runner:update", (_e, s) => cb(s)),
+});

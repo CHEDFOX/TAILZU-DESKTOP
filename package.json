@@ -70,6 +70,9 @@
       "updater.js",
       "knobs.js",
       "neuralField.html",
+      "runner/**",
+      "!runner/**/*.test.js",
+      "!runner/testkit*.js",
       "assets/**"
     ],
     "mac": {
