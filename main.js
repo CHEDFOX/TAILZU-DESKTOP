@@ -23,6 +23,7 @@ const { execFile, spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const os = require("os");
 const { createTapDetector } = require("./tapDetector.js");
 const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
@@ -31,6 +32,8 @@ const screenRead = require("./screenRead.js");
 const driver = require("./driver.js");
 const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
 const { createLocalFiles, createFolderSettings } = require("./localfiles.js");
+// Tailzu Code on this computer: the person's own computer as a runner for the Code bot (runner/).
+const { createRunner } = require("./runner/index.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -476,6 +479,9 @@ function loadConfig() {
     // The pill at the foot of the screen: dictation's state, where you are
     // looking, instead of a tray icon you cannot see.
     pill: flag(file.pill, bool("desktop.pill.default", true)),
+    // Tailzu Code on this computer (README): the Docker image for "Run in a container", and the name this computer is listed under.
+    runnerImage: typeof file.runnerImage === "string" ? file.runnerImage.trim() : "",
+    runnerName: typeof file.runnerName === "string" ? file.runnerName.trim().slice(0, 80) : "",
   };
 }
 let cfg = loadConfig();
@@ -536,6 +542,7 @@ function toneLabel(id) {
 // itself and refreshes it; it does not wait to be handed a token by a window
 // the user may never open. The window still pushes its token when it has one,
 // which only ever makes this fresher.
+let runner = null;                 // Tailzu Code on this computer (setupRunner, below)
 let authSession = loadSession();   // { access_token, refresh_token, expires_at }
 let accountTone = null;            // last value read from the account
 let accountNickname = "";          // their own name for the assistant ("Jarvis"), "" when none
@@ -581,6 +588,8 @@ function adoptSession(raw) {
       }
     : null;
   saveSession(authSession);
+  // Signed in, or out: the runner goes online for the Code bot, or stands down and forgets which projects the last person allowed.
+  if (runner) { try { runner.sessionChanged(); } catch { /* the runner's own */ } }
 }
 
 /** The session as the window holds it. The refresh token stays in this
@@ -1718,13 +1727,15 @@ function trayIcon(live = false) {
 }
 function refreshTray() {
   if (!tray) return;
-  const live = recording || !!notes;
+  const codeWork = runner ? runner.status() : null;
+  const live = recording || !!notes || !!(codeWork && codeWork.working);
   if (live !== trayLive) {
     trayLive = live;
     tray.setImage(trayIcon(trayLive));
   }
   tray.setToolTip(recording ? t("tray.tooltipListening")
     : notes ? fmt("tray.notesTooltip", { time: elapsedLabel(notesElapsed()) })
+    : codeWork && codeWork.working ? txt("desktop.tray.runnerWorking", "Tailzu is working on {project}", { project: codeWork.project })
     : signedIn() ? t("tray.tooltipReady") : t("tray.tooltipSignIn"));
   tray.setContextMenu(buildMenu());
 }
@@ -1779,6 +1790,7 @@ function buildMenu() {
       click: toggleNotes,
     },
     { label: t("tray.open"), click: () => openAppWindow() },
+    ...runnerMenuItems(),
     { type: "separator" },
     {
       label: `${t("tray.tone")}: ${toneLabel(currentTone())}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
@@ -1872,6 +1884,169 @@ function setLocal(key, value) {
   }
   if (key === "tap") pillSend({ hint: pillHint() });
 }
+
+// ---- Tailzu Code on this computer ---------------------------------------------
+// The person's own computer as a runner for the Code bot (runner/index.js; the protocol is the backend's
+// docs/desktop-runner-session.md). OFF until they turn it on, here or in its window. When it is on, the tray says what it is doing
+// ("Tailzu is working on <project>", with a Stop), its window lists the commands it ran, and every command goes into an audit log.
+let runnerWin = null;
+
+/** The runner's one-line state, for under its switch in the tray. */
+function runnerStateLine(st) {
+  switch (st.state) {
+    case "online": return txt("desktop.tray.runnerOnline", "Online for Tailzu Code");
+    case "paused": return st.pausedReason === "low_power_mode"
+      ? txt("desktop.tray.runnerPausedLowPower", "Paused: Low Power Mode is on")
+      : txt("desktop.tray.runnerPausedBattery", "Paused: battery is under 20%");
+    case "signed_out": return txt("desktop.tray.runnerSignIn", "Sign in to use this computer");
+    case "live_off": return txt("desktop.tray.runnerLiveOff", "Tailzu Code is not on for your account yet");
+    case "replaced": return txt("desktop.tray.runnerReplaced", "Another copy of Tailzu has this computer");
+    case "connecting": case "backoff": return txt("desktop.tray.runnerConnecting", "Connecting…");
+    default: return "";
+  }
+}
+
+function runnerMenuItems() {
+  if (!runner) return [];
+  const st = runner.status();
+  const items = [{ type: "separator" }];
+  if (st.working) {
+    items.push({ label: txt("desktop.tray.runnerWorking", "Tailzu is working on {project}", { project: st.project }), enabled: false });
+    // Ends what is running, and stands this computer down until the person turns it on again: a Stop that was offered the next job at
+    // once would not be one.
+    items.push({ label: txt("desktop.tray.runnerStop", "Stop"), click: () => runner.stopWork() });
+  }
+  items.push({
+    label: txt("desktop.tray.runnerUse", "Use this computer for Tailzu Code"),
+    type: "checkbox", checked: st.enabled, click: (item) => { void runnerSwitch(item.checked); },
+  });
+  const line = runnerStateLine(st);
+  if (st.enabled && line && !st.working) items.push({ label: "    " + line, enabled: false });
+  items.push({ label: txt("desktop.tray.runnerActivity", "Tailzu Code activity…"), click: openRunnerWindow });
+  return items;
+}
+
+/** What turning it on means, in plain words: said the first time it is turned on from the tray, and written under the switch in its window. */
+const RUNNER_EXPLAIN = () => txt("desktop.runner.explain",
+  "When this is on, and only while Tailzu is open, Tailzu Code can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in Tailzu Code on this computer, and kept in a log here for 7 days. Turn it off any time.");
+
+/** The switch. Turned on from the tray for the first time, it says what it does first; from its window the words are already on the page. */
+async function runnerSwitch(on) {
+  if (!runner) return;
+  if (on && !(localState.runner && localState.runner.explained)) {
+    let yes = false;
+    try {
+      try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
+      const r = await dialog.showMessageBox({
+        type: "question", noLink: true, defaultId: 1, cancelId: 1,
+        title: txt("desktop.runner.askTitle", "Tailzu Code"),
+        message: txt("desktop.runner.onMessage", "Use this computer for Tailzu Code?"),
+        detail: RUNNER_EXPLAIN(),
+        buttons: [txt("desktop.runner.onYes", "Turn on"), txt("desktop.runner.onNo", "Not now")],
+      });
+      yes = r.response === 0;
+    } catch { yes = false; }
+    if (!yes) { refreshTray(); return; }
+    if (localState.runner) { localState.runner.explained = true; saveLocalState(); }
+  }
+  runner.setEnabled(on);
+}
+
+/** The first time a project's work is offered to this computer: ask. Resolves true (allow), false (not here) or null (closed, no answer). */
+async function askRunnerProject({ name }) {
+  try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
+  try {
+    const r = await dialog.showMessageBox({
+      type: "question", noLink: true, defaultId: 1, cancelId: 2,
+      title: txt("desktop.runner.askTitle", "Tailzu Code"),
+      message: txt("desktop.runner.askMessage", "Let Tailzu Code run {project} on this computer?", { project: name }),
+      detail: txt("desktop.runner.askDetail",
+        "Tailzu Code wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in Tailzu Code on this computer."),
+      buttons: [
+        txt("desktop.runner.askAllow", "Allow for this project"),
+        txt("desktop.runner.askDeny", "Not on this computer"),
+        txt("desktop.runner.askLater", "Ask me later"),
+      ],
+    });
+    return r.response === 0 ? true : r.response === 1 ? false : null;
+  } catch { return null; }
+}
+
+function setupRunner() {
+  if (runner) return;
+  runner = createRunner({
+    userData: app.getPath("userData"), version: app.getVersion(), platform: process.platform, hostname: os.hostname(),
+    state: (localState.runner = localState.runner && typeof localState.runner === "object" ? localState.runner : {}),
+    saveState: saveLocalState,
+    // Everything the runner asks of the server is as the signed-in person, renewed once on a 401 (authorizedFetch).
+    api: { fetch: authorizedFetch, signedIn },
+    secrets: () => [authSession && authSession.access_token, authSession && authSession.refresh_token].filter(Boolean),
+    ask: askRunnerProject,
+    notify: (body) => notify(body),
+    // config.json: "runnerImage" (the Docker image) and "runnerName" (the name this computer is listed under); read when used.
+    config: { get image() { return cfg.runnerImage; }, get name() { return cfg.runnerName; } },
+    powerMonitor,
+    onChange: () => { refreshTray(); pushRunnerWindow(); },
+    log: (line) => { if (process.env.TAILZU_DEBUG_RUNNER) console.log("[runner] " + line); },
+  });
+  // Whatever it started is ended if this process exits, or an error nobody caught takes it down (and, through its watchdog, if it is killed).
+  runner.installProcessHooks(process);
+  for (const sig of ["SIGTERM", "SIGHUP", "SIGINT"]) process.on(sig, () => { try { runner.killAllSync(); } catch { /* exiting */ } app.quit(); });
+  for (const ev of ["on-ac", "on-battery", "resume", "unlock-screen", "speed-limit-change"]) {
+    try { powerMonitor.on(ev, () => runner.powerEvent(ev)); } catch { /* an event this platform lacks */ }
+  }
+  runner.start();
+}
+
+function openRunnerWindow() {
+  if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); return; }
+  const size = fitToDisplay(num("desktop.runner.width", 860), num("desktop.runner.height", 740));
+  runnerWin = new BrowserWindow({
+    ...size, minWidth: 560, minHeight: 460, title: txt("desktop.runner.title", "Tailzu Code on this computer"),
+    backgroundColor: "#151210", show: false, autoHideMenuBar: true, webPreferences: webPrefs(),
+  });
+  runnerWin.once("ready-to-show", () => { if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); } });
+  hardenWindow(runnerWin);
+  runnerWin.on("closed", () => { runnerWin = null; });
+  runnerWin.loadFile("runner/runner.html");
+}
+
+// Told on every change, at most four times a second.
+let runnerPushTimer = null;
+function pushRunnerWindow() {
+  if (!runnerWin || runnerWin.isDestroyed() || runnerPushTimer) return;
+  runnerPushTimer = setTimeout(async () => {
+    runnerPushTimer = null;
+    if (!runnerWin || runnerWin.isDestroyed() || !runner || runnerWin.webContents.isLoading()) return;
+    try { runnerWin.webContents.send("runner:update", await runner.snapshot({ fetchProjects: false })); } catch { /* the window went */ }
+  }, 250);
+}
+
+// What the runner's window may ask for: narrow, checked here, and only from that window.
+const fromRunnerWin = (e) => isFrom(e, runnerWin);
+ipcMain.handle("runner:state", async (e) => (fromRunnerWin(e) && runner ? runner.snapshot() : null));
+ipcMain.handle("runner:set", async (e, key, value) => {
+  if (!fromRunnerWin(e) || !runner || typeof value !== "boolean") return null;
+  if (key === "enabled") {
+    // Its words are on the page the switch is on.
+    if (value && localState.runner && !localState.runner.explained) { localState.runner.explained = true; saveLocalState(); }
+    runner.setEnabled(value);
+  } else if (key === "container") runner.setContainer(value);
+  return runner.snapshot({ fetchProjects: false });
+});
+ipcMain.handle("runner:project", async (e, id, name, action) => {
+  if (!fromRunnerWin(e) || !runner) return null;
+  if (!["allow", "deny", "ask"].includes(action)) return null;
+  await runner.setProject(String(id || ""), String(name || "").slice(0, 120), action);
+  return runner.snapshot({ fetchProjects: false });
+});
+ipcMain.handle("runner:checkDocker", async (e) => {
+  if (!fromRunnerWin(e) || !runner) return null;
+  await runner.checkDocker();
+  return runner.snapshot({ fetchProjects: false });
+});
+ipcMain.on("runner:stop", (e) => { if (fromRunnerWin(e) && runner) runner.stopWork(); });
+ipcMain.on("runner:openAudit", (e) => { if (fromRunnerWin(e) && runner) shell.openPath(runner.auditDir).catch(() => {}); });
 
 // ---- What the app window is allowed to ask for -------------------------------
 // Narrow on purpose: the renderer gets the backend URL, the session, and the
@@ -2903,6 +3078,8 @@ app.whenReady().then(() => {
 
   tray = new Tray(trayIcon());
   refreshTray();
+  // Tailzu Code on this computer: off until the person turns it on (the tray, or its window), online for the Code bot when they have.
+  setupRunner();
 
   // ASK THE SERVER NOW, window or no window. A login-item start never opens
   // one, and it is the launch that most needs the server's current answer —
@@ -3010,6 +3187,7 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in the tray
 app.on("will-quit", () => {
+  if (runner) { try { runner.shutdown(); } catch { /* quitting anyway */ } }
   globalShortcut.unregisterAll();
   try { uiohookRef?.stop(); } catch { /* already stopped */ }
   try { driver.stop(); } catch { /* not running */ }

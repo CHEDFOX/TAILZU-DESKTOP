@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- This app's own files only: the script is ui.js, and nothing is fetched. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tailzu Code on this computer</title>
+    <style>
+      @font-face { font-family:"Instrument Sans"; font-weight:500; src:url(../assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
+      @font-face { font-family:"IBM Plex Mono"; font-weight:500; src:url(../assets/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); }
+      :root { --ink:#151210; --paper:#F3E2C6; --dim:rgba(243,226,198,.62); --faint:rgba(243,226,198,.14); --amber:#E8A23C; --red:#E5736B; --green:#8FC48A; }
+      * { box-sizing:border-box; }
+      html, body { margin:0; background:var(--ink); color:var(--paper); }
+      body { font:500 14px/1.5 "Instrument Sans", -apple-system, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing:antialiased; padding:24px 28px 40px; max-width:820px; margin:0 auto; }
+      h1 { font-size:20px; margin:0 0 4px; font-weight:500; }
+      h2 { font:500 11px/1 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing:.16em; text-transform:uppercase; color:var(--dim); margin:28px 0 10px; }
+      p { margin:0 0 10px; color:var(--dim); }
+      .card { border:1px solid var(--faint); border-radius:12px; padding:14px 16px; margin:0 0 12px; background:rgba(243,226,198,.03); }
+      .row { display:flex; align-items:center; gap:12px; }
+      .row > label { flex:1; color:var(--paper); cursor:pointer; }
+      .grow { flex:1; min-width:0; }
+      input[type=checkbox] { width:18px; height:18px; accent-color:var(--amber); cursor:pointer; flex:0 0 auto; }
+      .status { display:inline-flex; align-items:center; gap:8px; font-size:13px; }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); flex:0 0 auto; }
+      .dot.online { background:var(--green); } .dot.working { background:var(--amber); animation:pulse 1.4s ease-in-out infinite; } .dot.paused, .dot.bad { background:var(--red); }
+      @keyframes pulse { 0%,100% { box-shadow:0 0 0 0 rgba(232,162,60,.55); } 60% { box-shadow:0 0 0 6px rgba(232,162,60,0); } }
+      button { font:inherit; color:var(--paper); background:transparent; border:1px solid var(--faint); border-radius:8px; padding:5px 12px; cursor:pointer; }
+      button:hover { border-color:var(--amber); } button.primary { background:var(--amber); color:var(--ink); border-color:var(--amber); } button[disabled] { opacity:.4; cursor:default; }
+      .small { font-size:12.5px; color:var(--dim); }
+      .proj { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--faint); }
+      .proj:first-child { border-top:0; }
+      .proj .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .badge { font:500 11px/1 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing:.08em; text-transform:uppercase; padding:4px 7px; border-radius:6px; border:1px solid var(--faint); color:var(--dim); }
+      .badge.allowed { color:var(--green); border-color:rgba(143,196,138,.4); } .badge.denied { color:var(--red); border-color:rgba(229,115,107,.4); }
+      table { width:100%; border-collapse:collapse; font-size:13px; }
+      th { text-align:left; font:500 11px/1 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); padding:6px 8px; border-bottom:1px solid var(--faint); }
+      td { padding:6px 8px; border-bottom:1px solid var(--faint); vertical-align:top; }
+      td.cmd { font:500 12.5px/1.45 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; word-break:break-all; }
+      td.exit.ok { color:var(--green); } td.exit.fail { color:var(--red); } td.exit.run { color:var(--amber); }
+      .empty { color:var(--dim); padding:14px 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Tailzu Code on this computer</h1>
+    <p>Let the Code bot do its work here first: free, and fast, because nothing has to wait for a cloud computer to start.</p>
+
+    <div class="card">
+      <div class="row">
+        <input type="checkbox" id="enabled" />
+        <label for="enabled">Use this computer for Tailzu Code</label>
+        <span class="status"><span class="dot" id="dot"></span><span id="state"></span></span>
+      </div>
+      <p class="small" style="margin-top:10px">
+        <b>Off until you turn it on.</b> When it is on, and only while Tailzu is open, Tailzu Code can run its commands (tests, builds,
+        installs) on this computer, for the projects you allow below. Each project is asked about the first time. It works in a folder of
+        its own, from a read-only copy of your code, and cannot see your passwords, keys or other files: commands get a clean
+        environment and a private home folder, and things like <code>sudo</code>, <code>git push</code>, publishing or deleting your home
+        folder are refused. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed
+        below and kept in a log on this computer for 7 days.
+      </p>
+      <div class="row" id="workingRow" hidden style="margin-top:6px">
+        <span class="grow" id="working"></span>
+        <button id="stop" class="primary">Stop</button>
+      </div>
+      <p class="small" id="stopNote" hidden style="margin:6px 0 0">Stop ends what is running and turns this off until you turn it on again.</p>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <input type="checkbox" id="container" />
+        <label for="container">Run in a container (Docker)</label>
+        <button id="recheck" hidden>Check Docker</button>
+      </div>
+      <p class="small" style="margin-top:10px" id="dockerNote"></p>
+    </div>
+
+    <h2>Projects</h2>
+    <div class="card" id="projects"></div>
+
+    <h2>What it ran</h2>
+    <div class="card" style="padding:4px 8px">
+      <table>
+        <thead><tr><th style="width:84px">Time</th><th style="width:120px">Project</th><th>Command</th><th style="width:70px">Exit</th><th style="width:70px">Took</th></tr></thead>
+        <tbody id="activity"></tbody>
+      </table>
+    </div>
+    <p class="small"><button id="audit">Open the audit log folder</button>&nbsp; <span id="where"></span></p>
+    <script src="ui.js"></script>
+  </body>
+</html>
