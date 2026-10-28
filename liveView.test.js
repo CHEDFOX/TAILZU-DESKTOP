@@ -207,6 +207,49 @@ test("an ask kept in the window goes out with its own id, once online, and every
   assert.ok(JSON.parse(p.store["tz.outbox.u-1"]).length === 1);   // kept per account
 });
 
+test("offline, an ask bar on any screen keeps the ask in the outbox instead of sending it; online it sends as before", async () => {
+  const sent = [];
+  const fetch = async (url, init) => { sent.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 200, json: async () => ({ shell: {} }) }; };
+  // What the server's ask bar sends (kit askAction / keptOffline): offline, keep it; online, POST /v1/ask.
+  const BAR = { kind: "condition", if: { eq: ["online", false] },
+    then: { kind: "sequence", actions: [
+      { kind: "outbox", op: "add", path: "/v1/shell/ask", body: { message: "$state.ask", bot: "any", device: "desktop", mode: "text" }, label: "$state.ask", sub: "Any bot · asked {time}" },
+      { kind: "clearState", path: "ask" },
+      { kind: "toast", message: "Kept. It will send when you're back." },
+    ] },
+    else: { kind: "callEndpoint", method: "POST", path: "/v1/ask", body: { message: "$state.ask", device: "desktop", mode: "text", bot: "any" } } };
+  const p = page({ online: false, fetch });
+  p.run("var __toasts = []; toast = (m) => { __toasts.push(m); }; repaint = () => {};");
+  p.run("STATE = Object.assign({ ask: 'Book a cab to the airport at 6' }, offlineState())");
+  assert.strictEqual(p.run("STATE.online"), false);
+  p.ctx.__bar = BAR;
+  await p.run("run(__bar)");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepStrictEqual(sent, []);   // nothing went: the window is offline
+  const st = JSON.parse(p.run("JSON.stringify(offlineState())"));
+  assert.deepStrictEqual(st.outbox.map((x) => [x.label, x.state]), [["Book a cab to the airport at 6", "waiting"]]);
+  assert.strictEqual(st.outboxWaiting, 1);
+  assert.match(st.outbox[0].sub, /^Any bot · asked \d{1,2}:\d{2}$/);
+  assert.strictEqual(p.run("STATE.ask"), undefined);
+  assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(__toasts)")), ["Kept. It will send when you're back."]);
+  // Back online, it goes in order, once.
+  p.run('STACK = [{ screenId: "bots.ask" }]; offlineTurn(true)');
+  for (let i = 0; i < 20 && !sent.length; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent[0].url, "https://api.test/v1/shell/ask");
+  assert.strictEqual(sent[0].body.message, "Book a cab to the airport at 6");
+  // Online, the same bar asks at once, and keeps nothing.
+  const on = page({ fetch });
+  on.run("toast = () => {}; repaint = () => {}; paint = () => {};");
+  on.run("STATE = Object.assign({ ask: 'What is on today?' }, offlineState())");
+  on.ctx.__bar = BAR;
+  const before = sent.length;
+  await on.run("run(__bar)");
+  for (let i = 0; i < 20 && sent.length === before; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.strictEqual(sent.at(-1).url, "https://api.test/v1/ask");
+  assert.deepStrictEqual(JSON.parse(on.run("JSON.stringify(offlineState().outbox)")), []);
+});
+
 test("offline, Home is drawn as the kept Offline page, and the stack remembers what it stands in for", () => {
   const p = page({ online: false });
   p.run(`STACK = [{ screenId: "bots.home" }]; OFFLINE_KEPT = { owner: "u-1", screen: { screenId: "bots.offline", root: { type: "Stack" } } };`);

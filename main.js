@@ -993,7 +993,9 @@ app.on("before-quit", () => { quitting = true; });
 /** Show the window; with a screen id, on that screen. Menu items call this
  *  with a MenuItem, so only a string counts as a screen. */
 function openAppWindow(screenId) {
-  const target = typeof screenId === "string" && screenId ? screenId : null;
+  // A screen id, or { screenId, params } (a link's: screenFromLink).
+  const target = typeof screenId === "string" && screenId ? screenId
+    : screenId && typeof screenId === "object" && typeof screenId.screenId === "string" && screenId.screenId ? { screenId: screenId.screenId, params: screenId.params || {} } : null;
   if (appWin && !appWin.isDestroyed()) {
     appWin.show(); appWin.focus();
     if (target) {
@@ -2141,7 +2143,8 @@ ipcMain.handle("app:env", (e) => {
     // Ask is here, so the window declares its one-time setup card
     // (DeskAskSetup) and reads its states with askSetup().
     askSetup: askOn(),
-    notesHotkey: prettyKey(cfg.notesHotkey),
+    // The notes chord, when there is one: with the one key none is bound (notes go by "take notes" with it held).
+    notesHotkey: cfg.oneKey ? "" : prettyKey(cfg.notesHotkey),
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
@@ -2179,7 +2182,8 @@ function localSettings() {
     pill: cfg.pill !== false, pauseFlush: cfg.pauseFlush !== false, autoStart: !!cfg.autoStart,
     live: !!cfg.live, tap: one ? cfg.tap !== false : !!cfg.tap && tapActive, tapKeys: one ? [] : cfg.tapKeys.slice(),
     hotkey: one || prettyKey(cfg.hotkey), hold: one ? true : !!cfg.hold && holdActive, holdKey: one || cfg.holdKey,
-    notesHotkey: prettyKey(cfg.notesHotkey),
+    // No notes chord with the one key (bindHotkeys is not asked for one): the window says "take notes" with the key instead.
+    notesHotkey: cfg.oneKey ? "" : prettyKey(cfg.notesHotkey),
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
     oneKey: cfg.oneKey || "", oneKeyLabel: one, oneKeyOn: !!one,
   };
@@ -3296,12 +3300,21 @@ if (!primaryInstance) {
 // the scheme the phone app already answers. A computer answers it too: the
 // window comes up, on Connected apps. Only a screen id is ever taken from a
 // link, and only the ones below: anything else just brings the window up.
+// A space's invite (its page's "Open in Tailzu": tulmi://screen/bots.spaces?join=CODE)
+// opens Spaces at joining, with the code and nothing else from the link.
 const LINK_SCREENS = { assistant_apps: "desk_settings", assistant_tasks: "desk_tasks" };
+const JOIN_SCREEN = "bots.spaces";
+const JOIN_CODE = /^[A-Z0-9]{6,16}$/;
 function screenFromLink(raw) {
   try {
     const u = new URL(String(raw || ""));
     if (u.protocol !== "tulmi:" || u.hostname !== "screen") return null;
-    return LINK_SCREENS[u.pathname.replace(/^\//, "")] || null;
+    const id = u.pathname.replace(/^\//, "");
+    if (id === JOIN_SCREEN) {
+      const join = String(u.searchParams.get("join") || "").toUpperCase();
+      return JOIN_CODE.test(join) ? { screenId: JOIN_SCREEN, params: { join } } : null;
+    }
+    return Object.prototype.hasOwnProperty.call(LINK_SCREENS, id) ? LINK_SCREENS[id] : null;
   } catch { return null; }
 }
 let pendingLink = null;

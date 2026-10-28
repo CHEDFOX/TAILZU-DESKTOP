@@ -113,7 +113,7 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // every newer set is pushed here.
   onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
   // The main process asking the window to show a screen — the paywall, when
-  // dictation is refused for being out of words.
+  // dictation is refused for being out of words; a link's, as { screenId, params }.
   onNavigate: (cb) => ipcRenderer.on("app:navigate", (_e, screenId) => cb(screenId)),
   // A dictation was written (and pasted where the cursor was).
   onDictated: (cb) => ipcRenderer.on("app:dictated", () => cb()),
