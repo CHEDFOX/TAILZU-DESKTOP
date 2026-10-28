@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 2d6267af625350233525d0805f6c96508fef7419b1bd502f549e94a283c227ae
-// body sha256 d4bce6da18a0f75b47eb477fcd627e0ab5f4d1c4b7103718efa62ca8c88c76f3
+// core.ts sha256 2cef81277d31529d4b4b9d12817167b63f98d9b02a61516be67ff286b8154f5e
+// body sha256 9bc52c274632abb372e705b5234590bfaf4fc86060ffa63ab1343f582f75ef1d
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -31,7 +31,7 @@
    * frame, a fixed 1/120 s step with the frame time clamped to 1/20 s, and drawing batched into a few paths.
    */
   /** The tap: press, the other bots look, the others' words fade to fadeTo, and after holdMs the tile's action runs. */
-  const TAP = { holdMs: 450, fadeTo: 0.35, fadeMs: 200, pressScale: 0.97, restoreMs: 1400 };
+  const TAP = { holdMs: 1000, fadeTo: 0.35, fadeMs: 260, pressScale: 0.97, restoreMs: 1400 };
   /** The fixed step, and the longest frame that is simulated (a longer pause is not caught up). */
   const STEP = 1 / 120;
   const MAX_FRAME = 1 / 20;
@@ -394,6 +394,8 @@
           /** A look asked from outside (the tap moment): it wins over the brain's own. */
           this.focusX = NaN;
           this.focusY = NaN;
+          /** Where he steps to when another tile is tapped: set once, on the first frame of the look. */
+          this.focusGoal = NaN;
           this.cheerT = -1;
           // The brain.
           this.act = A_STAND;
@@ -492,6 +494,7 @@
       lookAway() {
           this.focusX = NaN;
           this.focusY = NaN;
+          this.focusGoal = NaN;
       }
       /** A press at (x, y): the cloth is drawn in under the finger, and the bot perks up and looks out at the person. */
       press(x, y) {
@@ -1577,10 +1580,13 @@
           // A look from outside (another tile was tapped): stop, turn the head to it.
           const focused = this.focusX === this.focusX && (this.kind !== "make" || this.together > 0.9);
           if (focused) {
-              this.goalX = this.x[HIP];
               const dx = this.focusX - this.x[HEAD], dy = this.focusY - this.y[HEAD];
-              this.tilt = clamp(Math.atan2(dx, -dy) * 0.36, -0.38, 0.38);
-              this.lean = clamp(dx / (Math.abs(dx) + S * 6), -0.12, 0.12);
+              // Readable at tile size: one step its way, the head turned hard to it, the body leaning in.
+              if (this.focusGoal !== this.focusGoal)
+                  this.focusGoal = clamp(this.x[HIP] + (dx >= 0 ? 1 : -1) * S * 0.9, this.wallL + S, this.wallR - S);
+              this.goalX = this.focusGoal;
+              this.tilt = clamp(Math.atan2(dx, -dy) * 0.6, -0.62, 0.62);
+              this.lean = clamp(dx / (Math.abs(dx) + S * 3), -0.3, 0.3);
               this.lidTo = 0;
               this.sitTo(0, h);
               return;

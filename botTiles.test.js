@@ -32,7 +32,7 @@ test("the core runs as the window loads it: every bot, a few seconds, finite and
     assert.ok(t.finite(), kind);
     assert.ok(t.inside(), kind);
   }
-  assert.strictEqual(api.TAP.holdMs, 450);
+  assert.strictEqual(api.TAP.holdMs, 1000);
   assert.strictEqual(api.kindOf("travel"), "travel");
   assert.strictEqual(api.kindOf("gym"), "custom");
 });
