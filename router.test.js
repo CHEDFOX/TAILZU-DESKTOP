@@ -1,0 +1,186 @@
+// node --test
+//
+// Where the one key's words go (router.js): every rule as a sentence someone
+// would say, with where they said it. Nothing here touches Electron.
+
+const test = require("node:test");
+const assert = require("node:assert");
+const r = require("./router.js");
+
+const NAMES = ["Tailzu", "Blip", "Jarvis"];
+const BOX = {};                      // a text box has focus
+const NONE = null;                   // no text box
+const UNKNOWN = Symbol("not read");   // the field was never read
+const field = (f) => (f === UNKNOWN ? undefined : f);
+const go = (heard, f = BOX, o = {}) => r.route(Object.assign({ heard, field: field(f), names: NAMES, askOn: true, notesOn: false }, o));
+const look = (heard, f = BOX, o = {}) => r.firstLook(Object.assign({ heard, field: field(f), names: NAMES, askOn: true, notesOn: false }, o));
+
+test("a text box in focus and nothing else: typed, at once, with no label", () => {
+  for (const s of ["Running late, be there in ten.", "Kal 7 baje milte hain", "I need to take notes on the budget", "Is this file ready?",
+    "Hello how are you", "Can you send me the deck?"]) {
+    assert.strictEqual(look(s), "type", s);
+    const x = go(s);
+    assert.strictEqual(x.to, "type", s);
+    assert.strictEqual(x.close, false, s);
+    assert.strictEqual(x.alt, null, s);
+  }
+});
+
+test("where the field could not be read at all (Linux, reading off), everything is typed as before", () => {
+  for (const s of ["Tailzu, what is this?", "take notes", "plan my Saturday", "what does this error mean?"]) {
+    assert.strictEqual(look(s, UNKNOWN), "type", s);
+  }
+  assert.strictEqual(go("what does this error mean?", UNKNOWN).to, "type");
+});
+
+test("Tailzu's own window in front: always typed", () => {
+  assert.strictEqual(look("Tailzu, what is this?", NONE, { ours: true }), "type");
+  assert.strictEqual(go("take notes", NONE, { ours: true }).to, "type");
+});
+
+test("meeting notes: the whole sentence is the command, in English, Hinglish and Hindi", () => {
+  for (const s of ["take notes", "Take notes.", "start meeting notes", "Start taking meeting notes please", "notes lo", "meeting notes shuru karo",
+    "मीटिंग नोट्स शुरू करो", "नोट्स लो", "Tailzu, take notes", "okay start notes now"]) {
+    assert.strictEqual(look(s), "hold", s);
+    assert.strictEqual(go(s).to, "notesStart", s);
+    assert.strictEqual(go(s, NONE).to, "notesStart", s);
+  }
+  for (const s of ["stop meeting notes", "Stop taking notes.", "end notes", "notes band karo", "meeting notes band kar do", "नोट्स बंद करो।", "Blip, stop notes"]) {
+    assert.strictEqual(go(s).to, "notesStop", s);
+  }
+  // "meeting notes" alone turns them on, or off when they are on.
+  assert.strictEqual(go("meeting notes").to, "notesStart");
+  assert.strictEqual(go("meeting notes", BOX, { notesOn: true }).to, "notesStop");
+  // A sentence about notes is a sentence.
+  for (const s of ["I'll take notes in the meeting", "please send me your notes", "notes from today are attached"]) assert.strictEqual(go(s).to, "type", s);
+  // Its alternative is to type it.
+  assert.strictEqual(go("take notes").alt, "type");
+});
+
+test("addressed by name: Ask, the name taken off; heard many ways", () => {
+  for (const [s, msg] of [["Tailzu, what is this error?", "What is this error?"], ["hey Blip where is the export button", "Where is the export button"],
+    ["Jarvis kya hai yeh", "Kya hai yeh"], ["What does this say, Tailzu?", "What does this say?"], ["tail zoo how do I mute here", "How do I mute here"]]) {
+    assert.strictEqual(look(s), "hold", s);
+    const x = go(s);
+    assert.strictEqual(x.to, "ask", s);
+    assert.strictEqual(x.message, msg, s);
+    assert.strictEqual(x.alt, "type", s);
+  }
+  // A name that only starts a word is not the name.
+  assert.strictEqual(go("Tailzuish things happen").to, "type");
+  assert.strictEqual(go("Blipping along").to, "type");
+});
+
+test("addressed by name with a text box: the writer's own instruction is still typed", () => {
+  for (const s of ["Tailzu, reply saying I'm running late", "Jarvis, write a thank you note", "Tailzu make it formal", "Tailzu, translate this in Hindi"]) {
+    const x = go(s);
+    assert.strictEqual(x.to, "type", s);
+    assert.strictEqual(x.close, true, s);
+    assert.strictEqual(x.alt, "ask", s);
+  }
+  // With no text box it is a request for Ask.
+  assert.strictEqual(go("Tailzu, write a thank you note", NONE).to, "ask");
+});
+
+test("about what is on the screen: Ask, even into a text box when it can only mean the screen", () => {
+  for (const s of ["what does this error mean?", "What is on my screen", "where's the export button", "what am I looking at", "yeh kya hai",
+    "what is this", "how do I mute here"]) {
+    assert.strictEqual(look(s), "hold", s);
+    assert.strictEqual(go(s).to, "ask", s);
+  }
+  // "this file" into a text box is a message; with no text box it is about the screen.
+  assert.strictEqual(go("Is this file ready?").to, "type");
+  assert.strictEqual(go("Is this file ready?", NONE).to, "ask");
+});
+
+test("text selected: an instruction rewrites it (the server's path); a question about it goes to Ask", () => {
+  const sel = { selection: "The quarterly numbers were up." };
+  for (const s of ["make this shorter", "bullet points", "in Hindi", "fix the grammar", "Tailzu, make this formal"]) {
+    assert.strictEqual(look(s, sel), s.startsWith("Tailzu") ? "hold" : "type", s);
+    assert.strictEqual(go(s, sel).to, "rewrite", s);
+  }
+  assert.strictEqual(go("Tailzu, make this formal", sel).close, true, "addressed: said, with Ask beside it");
+  assert.strictEqual(go("Tailzu, make this formal", sel).alt, "ask");
+  for (const s of ["what does this mean?", "explain this", "iska matlab kya hai", "is this correct?"]) {
+    assert.strictEqual(look(s, sel), "hold", s);
+    const x = go(s, sel);
+    assert.strictEqual(x.to, "ask", s);
+    assert.strictEqual(x.alt, "type", s);
+  }
+  // A blank selection is no selection.
+  assert.strictEqual(go("make this shorter", { selection: "   " }).to, "type");
+});
+
+test("a task for a bot: to a bot, named or not; typed into a text box unless it names one", () => {
+  for (const [s, slug] of [["plan my Saturday", "plan"], ["book a flight to Goa", "travel"], ["fix the login bug in tailzu-web", "code"],
+    ["remind me to call mom at 6", "plan"], ["what's on my calendar tomorrow", "plan"], ["flight book karo", "travel"]]) {
+    assert.strictEqual(look(s, NONE), "hold", s);
+    const x = go(s, NONE);
+    assert.strictEqual(x.to, "bot", s);
+    assert.strictEqual(x.slug, slug, s);
+    assert.strictEqual(x.alt, "type", s);
+    // Into a text box ("book a table" to a friend): typed, said so, with the bot beside it.
+    const t = go(s);
+    assert.strictEqual(t.to, "type", s);
+    assert.strictEqual(t.close, true, s);
+    assert.strictEqual(t.alt, "bot", s);
+  }
+  // Named, it goes whatever has focus.
+  for (const [s, slug] of [["Plan bot, what's on tomorrow", "plan"], ["ask the code bot to fix the build", "code"], ["Travel bot find me a hotel", "travel"]]) {
+    assert.strictEqual(look(s), "hold", s);
+    const x = go(s);
+    assert.strictEqual(x.to, "bot", s);
+    assert.strictEqual(x.slug, slug, s);
+  }
+  // The person's own bot, by its name.
+  assert.strictEqual(go("Chef bot, dinner for four", BOX, { bots: [{ slug: "chef", name: "Chef bot" }] }).slug, "chef");
+  // Addressed to Tailzu, a bot's task still goes to a bot.
+  assert.strictEqual(go("Tailzu, plan my Saturday").to, "bot");
+});
+
+test("no text box: a question to Ask, another command is the backend's call, a sentence is typed and said so", () => {
+  assert.strictEqual(go("how far is Goa from Mumbai?", NONE).to, "ask");
+  assert.strictEqual(go("kaise hai aaj ka mausam", NONE).to, "ask");
+  for (const s of ["open gmail", "Gmail kholo", "send this to Rahul"]) {
+    assert.strictEqual(look(s, NONE), "hold", s);
+    assert.strictEqual(go(s, NONE).to, "unclear", s);
+  }
+  const x = go("hello how are you", NONE);
+  assert.strictEqual(look("hello how are you", NONE), "type");
+  assert.strictEqual(x.to, "type");
+  assert.strictEqual(x.close, true);
+  assert.strictEqual(x.alt, "ask");
+});
+
+test("Ask off on this computer: nothing is sent to it", () => {
+  assert.strictEqual(go("Tailzu, what is this?", BOX, { askOn: false }).to, "unclear");
+  assert.strictEqual(go("what does this error mean?", BOX, { askOn: false }).to, "type");
+  assert.strictEqual(go("how far is Goa?", NONE, { askOn: false }).to, "unclear");
+  assert.strictEqual(go("hello", NONE, { askOn: false }).alt, null);
+  assert.strictEqual(look("what does this error mean?", BOX, { askOn: false }), "type");
+});
+
+test("nothing said: typed (nothing), never held", () => {
+  assert.strictEqual(look("", NONE), "type");
+  assert.strictEqual(go("  ", NONE).to, "type");
+  assert.strictEqual(r.route({}).to, "type");
+});
+
+test("the pieces: names, questions, commands", () => {
+  assert.deepStrictEqual(r.address(r.norm("Hey Tailzu, open mail"), NAMES), { addressed: true, rest: "open mail" });
+  assert.deepStrictEqual(r.address(r.norm("open mail"), NAMES), { addressed: false, rest: "open mail" });
+  assert.deepStrictEqual(r.address(r.norm("Tailzu"), []), { addressed: false, rest: "tailzu" }, "no names, no address");
+  assert.strictEqual(r.stripName("Hey Tailzu, what's this?", NAMES), "What's this?");
+  assert.strictEqual(r.stripName("plain words", NAMES), "plain words");
+  assert.ok(r.isQuestion("is it raining", "is it raining"));
+  assert.ok(r.isQuestion("Raining?", "raining"));
+  assert.ok(r.isQuestion("", "yeh kab hai"));
+  assert.ok(!r.isQuestion("It is raining.", "it is raining"));
+  assert.ok(r.isCommand("open settings"));
+  assert.ok(r.isCommand("settings kholo"));
+  assert.ok(!r.isCommand("the settings are open"));
+  assert.strictEqual(r.notesCommand("take notes"), "start");
+  assert.strictEqual(r.notesCommand("stop notes"), "stop");
+  assert.strictEqual(r.notesCommand("meeting notes"), "toggle");
+  assert.strictEqual(r.notesCommand("notes"), null);
+});

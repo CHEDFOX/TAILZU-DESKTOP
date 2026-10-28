@@ -695,5 +695,17 @@
   <script src="blip.js"></script>
   <script src="botTiles.js"></script>
   <script src="sdui.js"></script>
+  <!-- Send a picked file, play a sound (after sdui.js, whose session, state and painting it uses). -->
+  <script src="media.js"></script>
+  <!-- Sign in with the phone: the QR panel beside the sign-in form (after sdui.js, whose pieces it uses). -->
+  <script src="linkSignIn.js"></script>
+  <!-- Files, a link or text dropped on the window: the share-in screen (after sdui.js, whose session and navigation it uses). -->
+  <script src="shareIn.js"></script>
+  <!-- Live updates: a change made on another device reloads the screen that is up, quietly (after sdui.js, whose session, stack, state and painting it uses). -->
+  <script src="live.js"></script>
+  <!-- A running page or artifact, in a webview of its own (after sdui.js, whose state, actions and painting it uses). -->
+  <script src="liveView.js"></script>
+  <!-- Offline: the outbox, the Offline page in place of Home, the line over the rest (after sdui.js, likewise). -->
+  <script src="outbox.js"></script>
 </body>
 </html>

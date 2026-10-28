@@ -1778,7 +1778,9 @@
     // A new card's marks are its own: the last one's fade.
     fadeMarks();
     setState(m.state || "listening", m.label);
-    $("askHint").textContent = K.txt("desktop.guide.askHint", "or tap {key} twice", { key: m.key || "Alt" });
+    // The one key is tapped once; Ask's own pair, twice.
+    $("askHint").textContent = m.once ? K.txt("desktop.guide.askHintOnce", "or tap {key}", { key: m.key || "Fn" })
+      : K.txt("desktop.guide.askHint", "or tap {key} twice", { key: m.key || "Alt" });
     card.classList.add("on");
     capCard();
     place(fresh);

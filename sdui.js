@@ -118,6 +118,12 @@ const CONNECTORS_CAN = "DeskConnectors";
 const MIC_ASK = "DeskMicAsk";
 const micAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.micStatus === "function" &&
   navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+/** This window can say whether the computer lets Tailzu type into other apps
+ *  (tailzuApp.axStatus: the Mac's Accessibility; any other system has none):
+ *  a page that asks after it gets the answer in $state.axGranted (axFollow),
+ *  so the Bots app's arrival card moves on, and closes, once it is on. */
+const AX_STATE = "DeskAxState";
+const axAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.axStatus === "function");
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -319,8 +325,10 @@ function capabilities() {
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : []),
-    actions: ACTIONS,
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
+      // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.
+      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : []),
+    actions: typeof outboxRun === "function" ? ACTIONS.concat(["outbox"]) : ACTIONS,
     templates: [],
     device: {
       // WHAT THIS IS, as opposed to what it can draw.
@@ -1669,6 +1677,10 @@ function node(n) {
     case "BlipSpot": return blipSpotNode(p, s);
 
     case "DeskAskSetup": return askSetupNode(p, s);
+    // A running page or artifact: a slot here, the page a layer over it (liveView.js, loaded after this file).
+    case "LiveView": return typeof liveViewNode === "function" ? liveViewNode(n, p, s) : "";
+    // Sign in with the phone: the QR panel beside the sign-in form (linkSignIn.js, loaded after this file).
+    case "DeskLinkSignIn": return typeof linkSignInNode === "function" ? linkSignInNode(p, s) : "";
     case "BotTiles": return botTilesNode(p);
     case "BotCard": return botCardNode(n, p, kids);
     case "BotBuddy": return botBuddyNode(p);
@@ -2667,6 +2679,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 window.addEventListener("focus", () => {
   if (ASK_LISTENING && CURRENT_SCREEN && findNode(CURRENT_SCREEN.root, "DeskAskSetup")) askSetupRead();
   micFollow();
+  axFollow();
 });
 
 /**
@@ -2693,6 +2706,33 @@ function micFollow() {
     repaint();
   });
 }
+
+/**
+ * ACCESSIBILITY'S ANSWER, the same way, for a page that asks after it
+ * ($state.axGranted: the arrival card's second step). The Mac keeps it, so the
+ * main process reads it (isTrustedAccessibilityClient, without prompting):
+ * "granted" is yes, "denied" no, "unknown" (a system with no such switch) is
+ * nothing to ask for. Read when the page is painted and again on coming back
+ * to the window or to the front, which is when System Settings may have
+ * turned it on.
+ */
+async function axReading() {
+  try {
+    const st = String(await window.tailzuApp.axStatus() || "unknown");
+    return st === "granted" || st === "unknown";
+  } catch { return null; }
+}
+
+function axFollow() {
+  if (!axAskOn() || !CURRENT_SCREEN || !CURRENT_SCREEN.state || !Object.hasOwn(CURRENT_SCREEN.state, "axGranted")) return;
+  const screen = CURRENT_SCREEN;
+  axReading().then((on) => {
+    if (on === null || CURRENT_SCREEN !== screen || STATE.axGranted === on) return;
+    setStatePath("axGranted", on);
+    repaint();
+  });
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) axFollow(); });
 
 /**
  * ASK FOR THE MICROPHONE: open it once, which is what makes the system ask
@@ -3606,9 +3646,14 @@ async function run(action, eventValue) {
       repaint();
       return;
     }
+    // Keep an ask to send once online, take one out, try one again, clear the sent (outbox.js, loaded after this file).
+    case "outbox": return typeof outboxRun === "function" ? outboxRun(action) : undefined;
     case "dictate":
       try { window.tailzuApp.dictate(); } catch { /* tray only */ }
       return;
+    // Send a picked file, play a sound (media.js, loaded after this file).
+    case "uploadFile": case "playAudio": case "stopAudio":
+      return typeof mediaRun === "function" ? mediaRun(action) : undefined;
     case "signOut":
       await signOutHere();
       return;
@@ -3805,6 +3850,8 @@ async function paint(force) {
   // start one of its own.
   stopSession();
   if (MIC) { try { MIC.rec.stop(); } catch {} MIC = null; }
+  // A sound or an upload started on another screen stops with it (media.js).
+  if (typeof mediaLeave === "function") mediaLeave(cur);
   const view = $("view");
   // THE SCREEN THAT IS UP STAYS UP UNTIL THE NEXT ONE IS READY.
   //
@@ -3844,8 +3891,10 @@ async function paint(force) {
   if (paint._last !== cur.screenId) ASK_HOLD = false;
   paint._last = cur.screenId;
   let screen;
+  // Offline, Home is drawn as the Offline page kept from the last time it was fetched (outbox.js); else fetched as ever.
+  const kept = typeof offlineInstead === "function" ? offlineInstead(cur) : null;
   try {
-    screen = await fetchScreen(cur.screenId, cur.params);
+    screen = kept || await fetchScreen(cur.screenId, cur.params);
   } catch (err) {
     clearTimeout(slow);
     if (seq !== paint._seq) return;
@@ -3875,6 +3924,9 @@ async function paint(force) {
   settled();
   STATE = Object.assign({}, screen.state || {});
   STATE.desktop = Object.assign({}, LOCAL);
+  // `online`, `outbox`, `outboxWaiting` (outbox.js), and the Offline page kept while online.
+  if (typeof offlineState === "function") Object.assign(STATE, offlineState());
+  if (!kept && typeof offlineKeep === "function") offlineKeep(cur, screen);
   // Picks belong to the thread that was on screen. A new screen has none.
   CHAT_PICKED = {};
   CURRENT_ACTIONS = screen.actions || {};
@@ -3883,6 +3935,7 @@ async function paint(force) {
   applyChrome(screen);
   repaint(screen);
   micFollow();
+  axFollow();
 }
 
 /**
@@ -4313,6 +4366,8 @@ function repaint(screen) {
   wireChat(view, sc);
   wireMic(view, sc);
   wireField(view);
+  // Live pages: a layer over each slot this paint drew (liveView.js).
+  if (typeof wireLive === "function") wireLive(view);
   // Last: the living tiles and cards (an overlay card is lifted out to the body, after everything above is wired).
   mountBotTiles(view);
   document.querySelectorAll("#tabs .tab, #mtabs .mtab").forEach((b) => {
@@ -5045,11 +5100,12 @@ function refreshDisc(method) {
       if (onLiveTab()) setTimeout(() => { lastLiveRefresh = Date.now(); void paint(true); }, K.num("desktop.desk.refreshMs", 1500));
     });
   } catch { /* an older main process */ }
-  // A note was organised: the Notes pages redraw to show it.
+  // A note was organised: the Notes pages redraw to show it (in the Bots app, Notes' pages and Home's Notes tile).
   try {
     window.tailzuApp.onNotes(() => {
       const top = STACK[STACK.length - 1];
-      if (DESK && top && (top.screenId === "desk_notes" || top.screenId === "desk_note")) void paint(true);
+      if (!top) return;
+      if ((DESK && (top.screenId === "desk_notes" || top.screenId === "desk_note")) || /^bots\.(notes|note|home)$/.test(top.screenId)) void paint(true);
     });
   } catch { /* an older main process */ }
 

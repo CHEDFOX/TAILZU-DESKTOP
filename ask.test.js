@@ -3505,3 +3505,50 @@ test("a hand-off opens each link of the contract a computer can finish, and no n
   ]) assert.strictEqual(await open(bad), false, bad.slice(0, 60));
   assert.deepStrictEqual(opened, good);
 });
+
+// ---- the one key's words, routed to Ask (routing.js), and the Accessibility prompt ----------
+
+test("a question already said (askHeard): no microphone; the app is named and the words go in as the final caption", async () => {
+  const h = harness();
+  assert.strictEqual(await h.ask.askHeard("  where's   export "), true);
+  assert.strictEqual(h.starts(), 0, "nothing recorded: it was said already");
+  const begin = h.calls.find((c) => c[0] === "begin");
+  assert.strictEqual(begin[1].app, "Keynote");
+  assert.deepStrictEqual(h.heardCalls()[0].slice(1), [null, { text: "where's export", final: true }]);
+  // Answered from the screen it read (an instant answer: Export is right there).
+  await until(() => h.types().includes("point"));
+});
+
+test("askHeard: nothing while a dictation has the microphone, signed out, for no words, or for a window it cannot tell", async () => {
+  assert.strictEqual(await harness({ dictating: true }).ask.askHeard("where's export"), false);
+  assert.strictEqual(await harness({ signedIn: false }).ask.askHeard("where's export"), false);
+  assert.strictEqual(await harness().ask.askHeard("   "), false);
+  const h = harness({ frontInfo: async () => null });
+  assert.strictEqual(await h.ask.askHeard("where's export"), false);
+  assert.strictEqual(h.calls.filter((c) => c[0] === "begin").length, 0, "nothing was looked at");
+  // A private window: the agent refuses it, and says so on its card.
+  const p = harness({ info: { label: "Chrome", private: true } });
+  assert.strictEqual(await p.ask.askHeard("where's export"), false);
+});
+
+test("setup: Open Settings for Accessibility asks macOS first, once, so Tailzu is in the list on a fresh Mac", () => {
+  const c = setupCard({ trusted: false });
+  c.act({ kind: "openAccessibility" });
+  c.act({ kind: "openAccessibility" });
+  const asked = c.did.filter((d) => d[0] === "trusted?" && d[1] === true);
+  assert.strictEqual(asked.length, 1, "once a launch");
+  const first = c.did.findIndex((d) => d[0] === "trusted?" && d[1] === true);
+  assert.ok(first < c.did.findIndex((d) => d[0] === "open"), "asked before the page opens");
+  assert.strictEqual(c.did.filter((d) => d[0] === "open").length, 2, "the page opens each time");
+  // Already allowed: never the prompt.
+  const on = setupCard({ trusted: true });
+  on.act({ kind: "openAccessibility" });
+  assert.ok(!on.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  // Screen Recording's button does not ask for Accessibility; nor does anything off a Mac.
+  const sr = setupCard({ trusted: false });
+  sr.act({ kind: "openScreenRecording" });
+  assert.ok(!sr.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  const win = setupCard({ trusted: false, platform: "win32" });
+  win.act({ kind: "openAccessibility" });
+  assert.deepStrictEqual(win.did, []);
+});

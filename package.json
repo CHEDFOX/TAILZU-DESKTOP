@@ -16,7 +16,8 @@
     "test": "node --test",
     "audiotap": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/audiotap-arm64 audiotap/main.swift && swiftc -O -target x86_64-apple-macos13 -o build/audiotap-x64 audiotap/main.swift && lipo -create -output build/audiotap build/audiotap-arm64 build/audiotap-x64 && rm build/audiotap-arm64 build/audiotap-x64",
     "tzocr": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzocr-arm64 native/tzocr.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzocr-x64 native/tzocr.swift && lipo -create -output build/tzocr build/tzocr-arm64 build/tzocr-x64 && rm build/tzocr-arm64 build/tzocr-x64",
-    "tzax": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzax-arm64 native/tzax.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzax-x64 native/tzax.swift && lipo -create -output build/tzax build/tzax-arm64 build/tzax-x64 && rm build/tzax-arm64 build/tzax-x64"
+    "tzax": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzax-arm64 native/tzax.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzax-x64 native/tzax.swift && lipo -create -output build/tzax build/tzax-arm64 build/tzax-x64 && rm build/tzax-arm64 build/tzax-x64",
+    "tzkey": "mkdir -p build && swiftc -O -target arm64-apple-macos13 -o build/tzkey-arm64 native/tzkey.swift && swiftc -O -target x86_64-apple-macos13 -o build/tzkey-x64 native/tzkey.swift && lipo -create -output build/tzkey build/tzkey-arm64 build/tzkey-x64 && rm build/tzkey-arm64 build/tzkey-x64"
   },
   "optionalDependencies": {
     "uiohook-napi": "^1.5.4"
@@ -64,12 +65,23 @@
       "pillSplit.js",
       "app.html",
       "sdui.js",
+      "liveView.js",
+      "liveViewMain.js",
+      "liveViewGuest.js",
+      "outbox.js",
+      "media.js",
+      "linkSignIn.js",
+      "shareIn.js",
+      "live.js",
       "tapDetector.js",
       "pasteJoin.js",
       "speechMeter.js",
       "heldStop.js",
       "updater.js",
       "knobs.js",
+      "oneKey.js",
+      "router.js",
+      "routing.js",
       "neuralField.html",
       "runner/**",
       "!runner/**/*.test.js",
@@ -83,7 +95,7 @@
       ],
       "icon": "assets/icon-mac.png",
       "artifactName": "Tailzu.${ext}",
-      "x64ArchFiles": "{**/*.node,**/audiotap,**/tzocr,**/tzax}",
+      "x64ArchFiles": "{**/*.node,**/audiotap,**/tzocr,**/tzax,**/tzkey}",
       "extraResources": [
         {
           "from": "build/audiotap",
@@ -96,6 +108,10 @@
         {
           "from": "build/tzax",
           "to": "tzax"
+        },
+        {
+          "from": "build/tzkey",
+          "to": "tzkey"
         }
       ],
       "hardenedRuntime": true,
