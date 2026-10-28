@@ -883,3 +883,80 @@ test("a window with an older main process, with no folders bridge, does not brea
   p.run("delete window.tailzuApp.folders; delete window.tailzuApp.onFolders");
   assert.doesNotThrow(() => p.run("foldersWatch()"));
 });
+
+// ---- the Bots app's microphone card: the system's answer, and its prompt --------------------
+
+/** A page whose main process reads the microphone (micStatus) and whose window can open one (getUserMedia). */
+function micAskPage(status, getUserMedia) {
+  const p = page({ askSetup: false }, { globals: { navigator: { language: "en-US", mediaDevices: { getUserMedia } } } });
+  p.g.tailzuApp.micStatus = async () => status.value;
+  p.run("globalThis.__repaints = 0; repaint = () => { globalThis.__repaints++; }");
+  return p;
+}
+const MIC_ACTION = {
+  kind: "requestPermission", permission: "microphone",
+  onGranted: { kind: "setState", path: "flag", value: "granted" },
+  onDenied: { kind: "setState", path: "flag", value: "denied" },
+  onBlocked: { kind: "setState", path: "flag", value: "blocked" },
+};
+const stream = () => ({ getTracks: () => [{ stop() { stream.stopped = (stream.stopped || 0) + 1; } }] });
+
+test("the window declares DeskMicAsk and requestPermission only with a main process that reads the microphone", () => {
+  const on = micAskPage({ value: "granted" }, async () => stream());
+  assert.ok(on.run("capabilities().components").includes("DeskMicAsk"));
+  assert.ok(on.run("capabilities().actions").includes("requestPermission"));
+  const old = page({ askSetup: false });
+  assert.ok(!old.run("capabilities().components").includes("DeskMicAsk"));
+});
+
+test("asking opens the microphone once (the system's prompt) and closes it, then runs the page's answer", async () => {
+  const status = { value: "granted" };
+  stream.stopped = 0;
+  const p = micAskPage(status, async () => stream());
+  p.ctx.__a = MIC_ACTION;
+  await p.run("run(__a)");
+  assert.strictEqual(p.run("stateAt('flag')"), "granted");
+  assert.strictEqual(stream.stopped, 1);
+  // Refused at the system's switch: blocked (its settings are the only way back); no microphone at all: denied.
+  const blocked = micAskPage(status, async () => { throw Object.assign(new Error("no"), { name: "NotAllowedError" }); });
+  blocked.ctx.__a = MIC_ACTION;
+  await blocked.run("run(__a)");
+  assert.strictEqual(blocked.run("stateAt('flag')"), "blocked");
+  const none = micAskPage(status, async () => { throw Object.assign(new Error("none"), { name: "NotFoundError" }); });
+  none.ctx.__a = MIC_ACTION;
+  await none.run("run(__a)");
+  assert.strictEqual(none.run("stateAt('flag')"), "denied");
+  // Anything but the microphone is not this window's to ask for.
+  const cam = micAskPage(status, async () => stream());
+  cam.ctx.__a = Object.assign({}, MIC_ACTION, { permission: "camera" });
+  await cam.run("run(__a)");
+  assert.strictEqual(cam.run("stateAt('flag')"), "denied");
+});
+
+test("a page that asks after the microphone gets the system's answer in $state.micGranted, and only such a page", async () => {
+  const status = { value: "denied" };
+  const p = micAskPage(status, async () => stream());
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  p.run("CURRENT_SCREEN = { state: { micGranted: true }, root: { type: 'Stack' } }; STATE = { micGranted: true }");
+  p.run("micFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.micGranted"), false);
+  assert.strictEqual(p.run("__repaints"), 1);
+  // Allowed in System Settings, then back to the window: read again, and the card goes.
+  status.value = "granted";
+  p.run("micFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.micGranted"), true);
+  // A system with no such switch is nothing to ask for.
+  status.value = "unknown";
+  p.run("micFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.micGranted"), true);
+  assert.strictEqual(p.run("__repaints"), 2);
+  // A page that does not ask is left alone.
+  p.run("CURRENT_SCREEN = { state: {}, root: { type: 'Stack' } }; STATE = {}");
+  status.value = "denied";
+  p.run("micFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.micGranted"), undefined);
+});

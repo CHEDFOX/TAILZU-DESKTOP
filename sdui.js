@@ -103,6 +103,13 @@ const FOLDERS_CARD = "DeskFolders";
  *  Tasks page, and the connector.connect action that signs an app in. The
  *  server sends them only while connected apps are switched on there. */
 const CONNECTORS_CAN = "DeskConnectors";
+/** This window can say whether the computer lets Tailzu use the microphone
+ *  (tailzuApp.micStatus, the main process's reading) and ask for it (the
+ *  system's own prompt, through requestPermission): the Bots app then sends its
+ *  microphone card, drawn while the answer is no. */
+const MIC_ASK = "DeskMicAsk";
+const micAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.micStatus === "function" &&
+  navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -143,6 +150,8 @@ const ACTIONS = [
   // Connect an app from Settings: POST /v1/connectors/:id/connect, then the
   // sign-in page it answers with opens in the browser (connectApp).
   "connector.connect",
+  // The microphone card's button: the system's own prompt (microphone only).
+  "requestPermission",
 ];
 
 /**
@@ -302,7 +311,7 @@ function capabilities() {
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN]),
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : []),
     actions: ACTIONS,
     templates: [],
     device: {
@@ -2201,7 +2210,53 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) refr
 // costs one local call and keeps the row honest if a push is missed.
 window.addEventListener("focus", () => {
   if (ASK_LISTENING && CURRENT_SCREEN && findNode(CURRENT_SCREEN.root, "DeskAskSetup")) askSetupRead();
+  micFollow();
 });
+
+/**
+ * THE MICROPHONE'S ANSWER, for a page that asks after it ($state.micGranted:
+ * the Bots app's microphone card). The OS keeps it, outside this window, so
+ * it is the main process that reads it (granted, denied, not-determined,
+ * restricted); anything but "granted" is a no, except "unknown" (a system
+ * with no such switch), which is nothing to ask for. Read when the page is
+ * painted and again on coming back to the window (from System Settings).
+ */
+async function micReading() {
+  try {
+    const st = String(await window.tailzuApp.micStatus() || "unknown");
+    return st === "granted" || st === "unknown";
+  } catch { return null; }
+}
+
+function micFollow() {
+  if (!micAskOn() || !CURRENT_SCREEN || !CURRENT_SCREEN.state || !Object.hasOwn(CURRENT_SCREEN.state, "micGranted")) return;
+  const screen = CURRENT_SCREEN;
+  micReading().then((on) => {
+    if (on === null || CURRENT_SCREEN !== screen || STATE.micGranted === on) return;
+    setStatePath("micGranted", on);
+    repaint();
+  });
+}
+
+/**
+ * ASK FOR THE MICROPHONE: open it once, which is what makes the system ask
+ * (macOS shows its prompt the first time), and close it at once. Allowed, the
+ * page's onGranted; refused, onBlocked (the system's switch is off: only its
+ * settings can turn it on) or onDenied.
+ */
+async function askMic(action) {
+  let ok = false, blocked = false;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+    ok = true;
+  } catch (err) {
+    blocked = !!err && err.name === "NotAllowedError";
+  }
+  if (ok && micAskOn()) ok = (await micReading()) !== false;
+  if (ok) return run(action.onGranted);
+  return run(blocked ? (action.onBlocked || action.onDenied) : action.onDenied);
+}
 
 // ---------------------------------------------------------------------------
 // The onboarding stage
@@ -3117,6 +3172,9 @@ async function run(action, eventValue) {
     case "ask.folderRemove": foldersAction("remove", Number(action.i)); return;
     case "ask.folderReset": foldersAction("reset"); return;
     case "connector.connect": return connectApp(action);
+    case "requestPermission":
+      if (action.permission === "microphone") return askMic(action);
+      return run(action.onDenied);
 
     // ── buying ────────────────────────────────────────────────────────────
     // Every row on the paywall fires one of these, and this window answered
@@ -3368,6 +3426,7 @@ async function paint(force) {
   $("back").hidden = STACK.length <= 1;
   applyChrome(screen);
   repaint(screen);
+  micFollow();
 }
 
 /**
