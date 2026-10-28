@@ -84,6 +84,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // may have changed, and the card's buttons ("openAccessibility",
   // "openScreenRecording", "picturesAll" with on true or false, "relaunch").
   // The main process checks each one and opens only its own fixed pages.
+  // Whether this computer lets Tailzu use the microphone (the Bots app's card).
+  micStatus: () => ipcRenderer.invoke("app:micStatus"),
   askSetup: () => ipcRenderer.invoke("app:askSetup"),
   onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
   askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),

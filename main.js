@@ -2135,6 +2135,17 @@ ipcMain.handle("app:session", async (e) => {
   await refreshSession();
   return forWindow(authSession);
 });
+// Whether the OS lets Tailzu use the microphone ("granted", "denied",
+// "not-determined", "restricted"), for the Bots app's microphone card. Read
+// here because only the main process can see it; "unknown" where the system
+// keeps no such answer (Linux), which the window treats as nothing to ask.
+ipcMain.handle("app:micStatus", (e) => {
+  if (!fromApp(e)) return null;
+  try {
+    return typeof systemPreferences.getMediaAccessStatus === "function" && process.platform !== "linux"
+      ? systemPreferences.getMediaAccessStatus("microphone") : "unknown";
+  } catch { return "unknown"; }
+});
 ipcMain.on("app:openExternal", (e, url) => {
   // Only ever http(s). A renderer handing this a file:// or a shell scheme is
   // the whole reason this check exists.
