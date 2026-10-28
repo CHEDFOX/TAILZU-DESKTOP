@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 2cef81277d31529d4b4b9d12817167b63f98d9b02a61516be67ff286b8154f5e
-// body sha256 9bc52c274632abb372e705b5234590bfaf4fc86060ffa63ab1343f582f75ef1d
+// core.ts sha256 11bdf3b28d1cac497ce6916e450b10954f18d5700b4bbe28ed8bb45942b41cfe
+// body sha256 7316a8190de69f0da35aeaff90b545573c56e40076b4ef31964754e6bd94a545
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -20,6 +20,7 @@
    *
    *   BotTile        one tile: a bot (13 particles), its props (<= 8 bodies), its fabric (14 x 9 points).
    *   BotTilesWorld  the tiles of one grid, laid out in one space, so every other bot can look at a tapped one.
+   *   LiveMark       the Tailzu dot mark, alive (Home's header): its ring dots on springs, its eyes on the finger.
    *   TileCtx        what drawing needs: a strict subset of CanvasRenderingContext2D. The window and the phone on the
    *                  web hand a real canvas context; the phone hands onboard/skiaCtx.ts's SkiaCtx (Skia).
    *
@@ -270,13 +271,14 @@
   const CAP = 40;
   const CCAP = 64;
   const DUST = 128;
-  const SPARKS = 8;
+  const SPARKS = 16;
   // Prop kinds.
   const P_ZERO = 1, P_ONE = 2, P_KEY = 3, P_DAY = 4, P_PLANE = 5, P_BALL = 6;
   // Contact flags (per particle, per step).
   const C_FLOOR = 1, C_WALL = 2, C_CEIL = 4, C_SUPPORT = 8;
   // Acts.
   const A_STAND = 0, A_WANDER = 1, A_SIT = 2, A_STRETCH = 3, A_PEEK = 4, A_LOOK = 5, A_PLAY = 6, A_NEEDS = 7;
+  const A_WAVE = 8, A_SURVEY = 9, A_READ = 10, A_THINK = 11;
   class BotTile {
       constructor(o) {
           // The tile.
@@ -290,6 +292,8 @@
           this.acc = 0;
           /** Reduce Motion: drawn in a resting pose, nothing steps. */
           this.still = false;
+          /** How strongly the fabric is drawn (1: a tile's; 0: none, a bot on a page's own stage stands on nothing). */
+          this.cloth = 1;
           // Particles (structure of arrays).
           this.n = 0;
           this.x = new Float64Array(CAP);
@@ -428,7 +432,12 @@
           this.svy = new Float64Array(SPARKS);
           this.slife = new Float64Array(SPARKS);
           this.sbuoy = new Float64Array(SPARKS);
+          /** A spark that flows into his head (reading) instead of rising or falling. */
+          this.shome = new Uint8Array(SPARKS);
           this.sNext = 0;
+          /** On his own page (BotBuddy): the moment he is in, and where the page's ask field is (0 none, 1 down, 2 left, 3 right, 4 up). */
+          this.moment = "play";
+          this.hintDir = 0;
           this.fixedS = 0;
           this.sitWant = 0;
           this.lookNext = 0;
@@ -500,6 +509,18 @@
       press(x, y) {
           this.fabric.kick(x, y, -55, this.S * 1.8);
           this.cheer();
+      }
+      /** On his own page (BotBuddy): what he does now (see BuddyAct). A change starts at once. */
+      setAct(a) {
+          if (a === this.moment)
+              return;
+          this.moment = a;
+          if (this.placed)
+              this.next(true);
+      }
+      /** Where the page's ask field is from his stage ("down", "left", "right", "up"; anything else: none). He glances at it. */
+      setLookTo(dir) {
+          this.hintDir = dir === "down" ? 1 : dir === "left" ? 2 : dir === "right" ? 3 : dir === "up" ? 4 : 0;
       }
       /** A small happy moment: a hop with both arms up, and the antenna lights. */
       cheer() {
@@ -1451,11 +1472,27 @@
           this.svy[i] = vy;
           this.slife[i] = 1;
           this.sbuoy[i] = buoy;
+          this.shome[i] = 0;
       }
       sparksStep(h) {
           for (let i = 0; i < SPARKS; i++) {
               if (this.slife[i] <= 0)
                   continue;
+              if (this.shome[i]) {
+                  // Into his head: a damped pull to it; it is gone when it arrives, and the antenna lights a little.
+                  const dx = this.x[HEAD] - this.sx[i], dy = this.y[HEAD] - this.sy[i];
+                  if (dx * dx + dy * dy < this.rH * this.rH) {
+                      this.slife[i] = 0;
+                      this.glowV += 2.5;
+                      continue;
+                  }
+                  this.svx[i] = this.svx[i] + (dx * 14 - this.svx[i] * 3.2) * h;
+                  this.svy[i] = this.svy[i] + (dy * 14 - this.svy[i] * 3.2) * h;
+                  this.sx[i] = this.sx[i] + this.svx[i] * h;
+                  this.sy[i] = this.sy[i] + this.svy[i] * h;
+                  this.slife[i] = this.slife[i] - h * 0.45;
+                  continue;
+              }
               this.svy[i] = this.svy[i] + (this.g * 0.35 - this.sbuoy[i] * this.g * 0.5) * h;
               this.svx[i] = this.svx[i] * (1 - 2.2 * h);
               this.svy[i] = this.svy[i] * (1 - 2.2 * h);
@@ -1491,6 +1528,12 @@
           this.target = -1;
           if (reset)
               this.release();
+          const m = this.moment;
+          if (m === "think" && this.kind !== "make") {
+              this.act = A_THINK;
+              this.actDur = 99;
+              return;
+          }
           if (this.mood === "needs" && this.kind !== "make") {
               this.act = A_NEEDS;
               this.actDur = 3;
@@ -1499,6 +1542,39 @@
           if (this.kind === "make") {
               this.act = A_PLAY;
               this.actDur = 99;
+              return;
+          }
+          if (m === "read") {
+              this.act = A_READ;
+              this.actDur = 99;
+              return;
+          }
+          if (m === "survey") {
+              this.act = A_SURVEY;
+              this.actDur = 99;
+              this.tx = this.w * (0.15 + r * 0.7);
+              return;
+          }
+          if (m === "settle") {
+              if (r < 0.85) {
+                  this.act = A_SIT;
+                  this.actDur = 5 + this.rand() * 4;
+              }
+              else {
+                  this.act = A_STRETCH;
+                  this.actDur = 1.6;
+              }
+              return;
+          }
+          if (m === "wave") {
+              if (r < 0.4) {
+                  this.act = A_WAVE;
+                  this.actDur = 2.4;
+              }
+              else {
+                  this.act = A_PLAY;
+                  this.actDur = 8;
+              }
               return;
           }
           const play = busy ? 0.8 : 0.42;
@@ -1626,6 +1702,18 @@
               case A_PLAY:
                   this.play(h);
                   break;
+              case A_WAVE:
+                  this.waving();
+                  break;
+              case A_SURVEY:
+                  this.survey();
+                  break;
+              case A_READ:
+                  this.reading();
+                  break;
+              case A_THINK:
+                  this.thinking();
+                  break;
               default: this.goalX = NaN;
           }
           if (this.actT >= this.actDur && this.act !== A_PLAY)
@@ -1661,7 +1749,9 @@
           if (this.phaseT > this.lookNext || (this.lookX !== this.lookX && this.lookOut < 0.5 && this.phaseT > 0.4)) {
               this.phaseT = 0;
               this.lookNext = (0.7 + this.rand() * 1.6) / rate;
-              if (this.rand() < 0.25) {
+              if (this.hintDir > 0 && this.rand() < 0.5)
+                  this.lookToHint();
+              else if (this.rand() < 0.25) {
                   this.lookX = NaN;
                   this.lookOut = 1;
               }
@@ -1669,6 +1759,109 @@
                   this.lookX = this.w * this.rand();
                   this.lookY = this.floor * (0.1 + this.rand() * 0.9);
               }
+          }
+      }
+      /** A glance at the page's ask field (BotBuddy lookTo): below his stage, beside it, or above. */
+      lookToHint() {
+          const d = this.hintDir, S = this.S;
+          this.lookOut = 0;
+          this.lookX = d === 2 ? -this.w : d === 3 ? this.w * 2 : this.x[HEAD] + (this.face >= 0 ? 1 : -1) * S * 0.5;
+          this.lookY = d === 1 ? this.h + S * 4 : d === 4 ? -S * 4 : this.floor * 0.5;
+      }
+      /** Hello: turned to the person, one hand up and waving, a small bob first. */
+      waving() {
+          const S = this.S, t = this.actT;
+          this.goalX = NaN;
+          this.lookOut = 1;
+          this.lookX = NaN;
+          this.lidTo = 0;
+          if (t < 0.14) {
+              this.crouch = 0.3;
+              return;
+          }
+          if (t > 2.1)
+              return;
+          this.armR = true;
+          this.armK = 420;
+          this.armRx = this.x[NECK] + S * (0.2 + 0.08 * Math.sin((t - 0.14) * 15));
+          this.armRy = this.y[NECK] - S * 0.24;
+      }
+      /** Over a list below him: a slow walk along it with his head bent to it, and a stop now and then to look closer. */
+      survey() {
+          const S = this.S;
+          this.speed = 0.55;
+          let dir = this.face >= 0 ? 1 : -1;
+          if (this.phase === 0) {
+              this.goalX = this.tx;
+              dir = this.tx >= this.x[HIP] ? 1 : -1;
+              if ((Math.abs(this.x[HIP] - this.tx) < S * 0.2 && this.phaseT > 0.4) || this.phaseT > 4) {
+                  this.phase = 1;
+                  this.phaseT = 0;
+              }
+          }
+          else {
+              this.goalX = NaN;
+              this.crouch = 0.15;
+              this.lean = 0.1 * dir;
+              if (this.phaseT > 1.2) {
+                  this.phase = 0;
+                  this.phaseT = 0;
+                  const to = this.w * (0.12 + this.rand() * 0.76);
+                  this.tx = Math.abs(to - this.x[HIP]) < S * 0.6 ? this.w - to : to;
+              }
+          }
+          this.lookX = this.x[HEAD] + dir * S * 0.9;
+          this.lookY = this.floor + S * 2.5;
+          this.tilt = 0.22 * dir;
+          this.lidTo = 0.15;
+      }
+      /** Reading: he stands still, eyes half closed, and dots and short lines flow in from the right and above into his head. */
+      reading() {
+          const S = this.S, home = this.w * 0.3;
+          if (this.phase === 0) {
+              this.goalX = home;
+              if (Math.abs(this.x[HIP] - home) < S * 0.25 || this.actT > 3)
+                  this.phase = 1;
+          }
+          else
+              this.goalX = NaN;
+          this.lookX = this.w;
+          this.lookY = this.y[HEAD] - S * 0.25;
+          this.lidTo = 0.4;
+          this.tilt = 0.06;
+          if (this.phaseT > 0.12) {
+              this.phaseT = 0;
+              const top = this.rand() < 0.3;
+              const x = top ? this.w * (0.45 + this.rand() * 0.5) : this.w - 2;
+              const y = top ? 2 : this.floor * (0.12 + this.rand() * 0.7);
+              const i = this.sNext;
+              this.spark(x, y, -S * (1.2 + this.rand()), (this.rand() - 0.5) * S * 1.5, 0);
+              this.shome[i] = 1;
+          }
+      }
+      /** Thinking (an answer is on its way): still, a hand to his chin, eyes up and aside, the antenna pulsing, small dots rising. */
+      thinking() {
+          const S = this.S, f = this.face >= 0 ? 1 : -1;
+          this.goalX = NaN;
+          if (f > 0) {
+              this.armR = true;
+              this.armRx = this.x[HEAD] + S * 0.06;
+              this.armRy = this.y[HEAD] + this.rH * 1.05;
+          }
+          else {
+              this.armL = true;
+              this.armLx = this.x[HEAD] - S * 0.06;
+              this.armLy = this.y[HEAD] + this.rH * 1.05;
+          }
+          this.armK = 340;
+          this.tilt = -0.16 * f;
+          this.lookX = this.x[HEAD] + f * S * 0.8;
+          this.lookY = this.y[HEAD] - S;
+          this.lidTo = 0.3;
+          if (this.phaseT > 0.55) {
+              this.phaseT = 0;
+              this.glowV += 7;
+              this.spark(this.x[HEAD] + f * this.rH * 0.8, this.y[HEAD] - this.rH * 1.4, f * S * 0.3, -S * 0.9, 1.25);
           }
       }
       needs(h) {
@@ -2449,7 +2642,9 @@
               this.phase = 2;
               this.solid = 1;
           }
-          this.act = this.mood === "needs" ? A_NEEDS : this.mood === "idle" && this.kind !== "make" ? A_SIT : A_STAND;
+          const m = this.moment;
+          this.act = m === "settle" && this.kind !== "make" ? A_SIT : m !== "play" && m !== "think" && this.mood !== "needs" ? A_STAND
+              : this.mood === "needs" ? A_NEEDS : this.mood === "idle" && this.kind !== "make" ? A_SIT : A_STAND;
           this.actT = 0;
           this.actDur = 1e9;
           this.cheerT = -1;
@@ -2532,7 +2727,8 @@
       draw(ctx, alpha = 1) {
           if (!this.placed)
               return;
-          this.fabric.draw(ctx, alpha);
+          if (this.cloth > 0)
+              this.fabric.draw(ctx, alpha * this.cloth);
           // On the floor, his toys are behind him; up in the air (a glyph, the plane), in front.
           this.drawProps(ctx, alpha, 0);
           if (this.kind === "make")
@@ -2857,11 +3053,23 @@
       drawSparks(ctx, alpha) {
           const S = this.S;
           ctx.fillStyle = this.kind === "make" ? this.makeColor : this.color;
+          ctx.strokeStyle = ctx.fillStyle;
+          ctx.lineWidth = Math.max(1, S * 0.04);
+          ctx.lineCap = "round";
           for (let i = 0; i < SPARKS; i++) {
               const l = this.slife[i];
               if (l <= 0)
                   continue;
               ctx.globalAlpha = alpha * clamp(l, 0, 1) * 0.7;
+              if (this.shome[i] && i % 2) {
+                  // A short line along its way (what he reads: a line of code, a word).
+                  const vx = this.svx[i], vy = this.svy[i], k = (S * 0.16) / (Math.sqrt(vx * vx + vy * vy) + 1e-6);
+                  ctx.beginPath();
+                  ctx.moveTo(this.sx[i], this.sy[i]);
+                  ctx.lineTo(this.sx[i] - vx * k, this.sy[i] - vy * k);
+                  ctx.stroke();
+                  continue;
+              }
               ctx.beginPath();
               ctx.arc(this.sx[i], this.sy[i], S * (0.035 + 0.02 * l), 0, TAU);
               ctx.fill();
@@ -2925,5 +3133,194 @@
               t.settle(on);
       }
   }
-  return { TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, Fabric, BotTile, BotTilesWorld };
+  /**
+   * A grid's world as it is drawn (Home painted again, a return to it): its bots are kept across screens (by slug), so a
+   * look left over from a tap, whose tile opened a screen and whose letting-go went with Home, is let go here, and
+   * every bot goes back to its own play.
+   */
+  function gridWorld(tiles) {
+      const w = new BotTilesWorld();
+      for (const t of tiles)
+          w.add(t);
+      w.release();
+      return w;
+  }
+  // ===================================================================== the living mark
+  /** The Tailzu mark in its own 34 x 34 units: eight ring dots, then the two eyes (glyphs.ts MARK_DOTS on the server). */
+  const MARK_DOTS = [
+      [17, 4, 2], [26, 7, 2], [30, 16, 2], [27, 25, 2], [17, 30, 2], [7, 25, 2], [4, 16, 2], [8, 7, 2], [13, 15, 2.6], [21, 15, 2.6],
+  ];
+  /** Which ring dot lights for the first, second… working bot: spread around the ring. */
+  const LIT_ORDER = [1, 4, 6, 2, 7, 3, 0, 5];
+  /**
+   * THE TAILZU MARK, ALIVE (Home's header: the LiveMark node). Physics like the tiles': each ring dot sits on a spring
+   * at its place and drifts a little on its own; the two eyes are dots on stiffer springs that look toward the finger
+   * or the cursor (`look`), swing with a scroll (`nudge`) and blink now and then; a ring dot lights in a bot's colour
+   * while that bot works (`setLit`), breathing; a press squishes the whole mark (`press`). Units are the mark's own;
+   * `size` scales it when drawn. Reduce Motion: `settle()`, the mark at rest, lit dots lit.
+   */
+  class LiveMark {
+      constructor(seed = 1) {
+          this.size = 34;
+          this.x = new Float64Array(10);
+          this.y = new Float64Array(10);
+          this.vx = new Float64Array(10);
+          this.vy = new Float64Array(10);
+          this.ph = new Float64Array(10);
+          /** Per ring dot: "" or the colour it is lit in. */
+          this.lit = ["", "", "", "", "", "", "", ""];
+          this.lookX = NaN;
+          this.lookY = NaN;
+          this.squish = 0;
+          this.squishV = 0;
+          this.blinkAt = 2.5;
+          this.blinkT = 0;
+          this.t = 0;
+          this.acc = 0;
+          this.still = false;
+          this.rand = rng(seed);
+          for (let i = 0; i < 10; i++) {
+              this.x[i] = MARK_DOTS[i][0];
+              this.y[i] = MARK_DOTS[i][1];
+              this.ph[i] = this.rand() * TAU;
+          }
+      }
+      /** The colours of the bots at work now (up to eight): each lights one ring dot. */
+      setLit(colors) {
+          for (let i = 0; i < 8; i++)
+              this.lit[i] = "";
+          colors.slice(0, 8).forEach((c, i) => { this.lit[LIT_ORDER[i]] = c; });
+      }
+      /** Look toward a point in the mark's units (it may be far outside the mark: a finger on the page). */
+      look(x, y) { this.lookX = x; this.lookY = y; }
+      lookAway() { this.lookX = NaN; this.lookY = NaN; }
+      /** A scroll at v px/s (down: positive): the dots swing against it, the eyes most, and spring back. */
+      nudge(v) {
+          const k = clamp(v / 1400, -1.2, 1.2);
+          for (let i = 0; i < 10; i++)
+              this.vy[i] = this.vy[i] - k * (i >= 8 ? 30 : 12 + 4 * Math.sin(this.ph[i]));
+      }
+      /** A press: the mark squishes, and springs back. */
+      press() { this.squishV += 11; }
+      step(dt) {
+          if (this.still)
+              return;
+          this.acc += clamp(dt, 0, MAX_FRAME);
+          let k = 0;
+          while (this.acc >= STEP && k < 8) {
+              this.stepOnce(STEP);
+              this.acc -= STEP;
+              k++;
+          }
+      }
+      stepOnce(h) {
+          const t = (this.t += h);
+          // Where the eyes go: toward what they look at (at most 1.7 units), else a slow wander.
+          let ox = 0.5 * Math.sin(t * 0.37), oy = 0.3 * Math.sin(t * 0.53 + 1);
+          if (this.lookX === this.lookX) {
+              const dx = this.lookX - 17, dy = this.lookY - 15, d = Math.sqrt(dx * dx + dy * dy) + 1e-6, m = Math.min(1.7, d * 0.12);
+              ox = (dx / d) * m;
+              oy = (dy / d) * m;
+          }
+          for (let i = 0; i < 10; i++) {
+              const eye = i >= 8, ph = this.ph[i];
+              const tx = MARK_DOTS[i][0] + (eye ? ox : 0.45 * Math.sin(t * 0.8 + ph));
+              const ty = MARK_DOTS[i][1] + (eye ? oy : 0.45 * Math.cos(t * 0.65 + ph * 1.3));
+              const kk = eye ? 150 : 55, c = eye ? 14 : 6.5;
+              this.vx[i] = this.vx[i] + ((tx - this.x[i]) * kk - this.vx[i] * c) * h;
+              this.vy[i] = this.vy[i] + ((ty - this.y[i]) * kk - this.vy[i] * c) * h;
+              this.x[i] = this.x[i] + this.vx[i] * h;
+              this.y[i] = this.y[i] + this.vy[i] * h;
+          }
+          this.squishV += (-this.squish * 260 - this.squishV * 13) * h;
+          this.squish += this.squishV * h;
+          this.blinkAt -= h;
+          if (this.blinkAt <= 0) {
+              this.blinkT = 0.13;
+              this.blinkAt = 2.2 + this.rand() * 4;
+          }
+          if (this.blinkT > 0)
+              this.blinkT -= h;
+      }
+      /** Reduce Motion: at rest, nothing moves after it (until settle(false)). */
+      settle(on = true) {
+          this.still = on;
+          if (!on)
+              return;
+          for (let i = 0; i < 10; i++) {
+              this.x[i] = MARK_DOTS[i][0];
+              this.y[i] = MARK_DOTS[i][1];
+              this.vx[i] = 0;
+              this.vy[i] = 0;
+          }
+          this.squish = 0;
+          this.squishV = 0;
+          this.blinkT = 0;
+      }
+      finite() {
+          for (let i = 0; i < 10; i++)
+              if (!Number.isFinite(this.x[i]) || !Number.isFinite(this.y[i]))
+                  return false;
+          return Number.isFinite(this.squish);
+      }
+      /** The mark at `size` px (the caller clips and places it). */
+      draw(ctx, alpha = 1) {
+          const s = this.size / 34, sq = clamp(this.squish, -0.6, 0.6), sx = (1 + sq * 0.16) * s, sy = (1 - sq * 0.16) * s;
+          const px = (i) => 17 * s + (this.x[i] - 17) * sx, py = (i) => 17 * s + (this.y[i] - 17) * sy;
+          // The ink dots, in one path; an eye mid-blink is a flattened dot.
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = INK;
+          ctx.beginPath();
+          for (let i = 0; i < 10; i++) {
+              if (i < 8 && this.lit[i])
+                  continue;
+              const r = MARK_DOTS[i][2] * s, x = px(i), y = py(i);
+              if (i >= 8 && this.blinkT > 0) {
+                  const ry = r * 0.22;
+                  ctx.moveTo(x - r, y);
+                  ctx.quadraticCurveTo(x - r, y - ry, x, y - ry);
+                  ctx.quadraticCurveTo(x + r, y - ry, x + r, y);
+                  ctx.quadraticCurveTo(x + r, y + ry, x, y + ry);
+                  ctx.quadraticCurveTo(x - r, y + ry, x - r, y);
+              }
+              else {
+                  ctx.moveTo(x + r, y);
+                  ctx.arc(x, y, r, 0, TAU);
+              }
+          }
+          ctx.fill();
+          // The lit dots: the bot's colour, and a soft breathing halo.
+          for (let i = 0; i < 8; i++) {
+              const c = this.lit[i];
+              if (!c)
+                  continue;
+              const r = MARK_DOTS[i][2] * s, x = px(i), y = py(i), b = 0.5 + 0.5 * Math.sin(this.t * 2.6 + i);
+              ctx.fillStyle = c;
+              ctx.globalAlpha = alpha * (0.14 + 0.16 * b);
+              ctx.beginPath();
+              ctx.arc(x, y, r * (1.7 + 0.35 * b), 0, TAU);
+              ctx.fill();
+              ctx.globalAlpha = alpha;
+              ctx.beginPath();
+              ctx.arc(x, y, r * 1.08, 0, TAU);
+              ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+      }
+  }
+  /**
+   * When each word of a line that writes itself (the WriteOn node) comes, in ms from the start: dictation's uneven pace
+   * (a word's length, a little jitter, a breath after a comma or a full stop). Same seed, same timing.
+   */
+  function writeOnTimes(words, seed = 1) {
+      const r = rng(seed);
+      const out = [];
+      let t = 260;
+      for (const w of words) {
+          out.push(Math.round(t));
+          t += 95 + Math.min(10, w.length) * 16 + r() * 90 + (/[,;:]$/.test(w) ? 170 : /[.?!]$/.test(w) ? 260 : 0);
+      }
+      return out;
+  }
+  return { TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, Fabric, BotTile, BotTilesWorld, gridWorld, LiveMark, writeOnTimes };
 });
