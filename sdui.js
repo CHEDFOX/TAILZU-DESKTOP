@@ -82,6 +82,10 @@ const COMPONENTS = [
   // (look "bots") where a border with a width is a solid one. The server boots the Bots app only for a build
   // that says this.
   "BotsKit",
+  // THE LIVING BOT TILES (shared/types/sdui.ts, "The living bot tiles"): BotTiles, Home's grid with a tiny Blip
+  // playing in each tile on a faint fabric, and BotCard, a card with one on top (the first-arrival permission
+  // card, Keybot's). The physics is botTiles.js, generated from the phone's core so the two cannot differ.
+  "BotsMotion", "BotTiles", "BotCard",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;
@@ -945,6 +949,242 @@ function svgShapes(p, s) {
   return '<svg viewBox="' + esc(p.viewBox || "0 0 24 24") + '"' + aria + ' style="' + s + ';display:block;flex:none;overflow:visible">' + shapes + "</svg>";
 }
 
+// ---------------------------------------------------------------------------
+// The living bot tiles (BotTiles, BotCard): botTiles.js draws, this places
+// ---------------------------------------------------------------------------
+//
+// A node is drawn as HTML here (the words, the frame, an empty <canvas>) and registered in BT_PENDING; after the
+// HTML lands, mountBotTiles() gives each canvas its bot and runs one animation frame loop per grid or card. A repaint
+// replaces the DOM, so the bots themselves are kept (BT_LIVES, by slug) and the new canvases pick them up where they
+// were. A loop stops by itself once its canvas has left the page, and waits while the window is hidden or the grid is
+// scrolled away. Reduce Motion: the bots rest in a pose, painted once; a tap runs its action at once.
+
+let BT_PENDING = [];
+const BT_LIVES = new Map();
+const BT_CARDS = new Map();   // a BotCard's life across repaints: phase, step, completed, entered
+const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold" };
+
+function btLife(spec, i) {
+  const api = window.TailzuBotTiles;
+  const kind = spec.kind || api.kindOf(String(spec.slug || ""));
+  const key = String(spec.slug) + "|" + kind + "|" + spec.color;
+  let b = BT_LIVES.get(key);
+  if (!b) {
+    let seed = 7 + i * 131;
+    for (const ch of String(spec.slug || "")) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    b = new api.BotTile({ kind, color: String(spec.color || "#0a0a0a"), mood: spec.state || "idle", seed });
+    if (BT_LIVES.size > 24) BT_LIVES.clear();
+    BT_LIVES.set(key, b);
+  }
+  b.setMood(spec.state || "idle");
+  return b;
+}
+
+function botTilesNode(p) {
+  const tiles = Array.isArray(p.tiles) ? p.tiles : [];
+  const cols = Math.max(1, Number(p.columns) || 4), H = Number(p.height) || 150, pad = Number(p.padding) || 18, gap = Number(p.gap) || 14;
+  const f = Object.assign({}, BT_FONT, p.faces || {});
+  const id = BT_PENDING.push({ kind: "tiles", p }) - 1;
+  const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
+  const body = tiles.map((t, i) => {
+    const make = t.kind === "make";
+    const mark = make ? "" : t.state === "working" ? t.color : t.state === "needs" ? "#0a0a0a" : "";
+    const sub = t.state === "working" ? face(f.medium) + ";color:" + esc(t.color) + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+      : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+        : face(f.regular) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden";
+    return '<div class="tz-bt-tile" data-i="' + i + '" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
+      "position:relative;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
+      "transition:transform .18s cubic-bezier(.3,1.5,.5,1);" +
+      (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
+      '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
+      (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
+      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;bottom:" + pad + 'px;display:flex;flex-direction:column;gap:3px;transition:opacity .2s;pointer-events:none">' +
+      '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
+      '<div style="' + sub + ';font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
+  }).join("");
+  return '<div data-bt="' + id + '" style="position:relative;display:grid;grid-template-columns:repeat(' + cols + ",minmax(0,1fr));gap:" + gap + 'px">' + body + "</div>";
+}
+
+/** BotCard: the frame, its stage and the step on show (the children that are visible). The life is in BT_CARDS. */
+function botCardNode(n, p, kids) {
+  const api = window.TailzuBotTiles;
+  const once = typeof p.once === "string" ? p.once : "";
+  const key = once || "card:" + (p.label || "") + ":" + p.color;
+  let life = BT_CARDS.get(key);
+  if (!life) { life = { phase: "wait", step: -1, completed: false, entered: false, doneSeen: false }; BT_CARDS.set(key, life); }
+  let remembered = false;
+  try { remembered = !!once && localStorage.getItem("tz.botcard.once." + once) === "1"; } catch { /* a closed card may come back once */ }
+  const close = (p.closeWhen ? visible(p.closeWhen) : false) || remembered;
+  const ready = p.readyWhen ? visible(p.readyWhen) : true;
+  const done = p.doneWhen ? visible(p.doneWhen) : false;
+  const complete = () => {
+    if (life.completed) return;
+    life.completed = true;
+    const ref = n.on && n.on.onComplete;
+    if (ref) setTimeout(() => { void run(ref); }, 0);
+  };
+  if (life.phase === "gone") return "";
+  if (life.phase === "wait") {
+    if (close) { life.phase = "gone"; return ""; }
+    if (!ready) return "";
+    if (done) { complete(); life.phase = "gone"; return ""; }
+    life.phase = "open";
+  }
+  if (life.phase === "open" && close) {
+    life.phase = "closing";
+    if (once) { try { localStorage.setItem("tz.botcard.once." + once, "1"); } catch { /* best effort */ } }
+  }
+  const step = (n.children || []).findIndex((c) => !c.visibleIf || visible(c.visibleIf));
+  const fresh = life.step !== -1 && step !== life.step;
+  life.step = step;
+  const id = BT_PENDING.push({ kind: "card", p, n, key, life, done, fresh, complete }) - 1;
+  const overlay = !!p.overlay;
+  const stageH = Number(p.stageHeight) || 128;
+  const width = overlay ? Math.min(Number(p.width) || 340, 560) : 0;
+  const entered = life.entered;
+  const card = '<div class="tz-bc" data-bc="' + id + '"' + (p.label ? ' aria-label="' + esc(label(p.label)) + '"' : "") + ' style="' +
+    (overlay ? "width:" + width + "px;max-width:calc(100vw - 40px);box-shadow:0 18px 50px rgba(0,0,0,.12);" : "align-self:stretch;") +
+    "position:relative;box-sizing:border-box;border:1px solid #e6e6e6;border-radius:28px;background:#fff;overflow:hidden;" +
+    "transition:transform .42s cubic-bezier(.3,1.35,.5,1),opacity .26s ease-out;" +
+    (entered ? "" : "opacity:0;transform:scale(.94) translateY(10px)") + '">' +
+    '<div style="position:relative;height:' + stageH + 'px"><canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas></div>' +
+    '<div class="tz-bc-w" style="transition:opacity .26s ease-out,transform .26s ease-out;' + (fresh ? "opacity:0;transform:translateY(6px)" : "") + '">' + kids + "</div></div>";
+  if (!api) return overlay ? "" : card;
+  if (!overlay) return card;
+  return '<div class="tz-bc-veil" data-bcv="' + id + '" style="position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;' +
+    "background:rgba(255,255,255,.42);-webkit-backdrop-filter:blur(10px) saturate(1.05);backdrop-filter:blur(10px) saturate(1.05);transition:opacity .28s ease-out;" +
+    (entered ? "" : "opacity:0") + '">' + card + "</div>";
+}
+
+/** A canvas sized for the display, and the bot drawn into it. */
+function btPaint(cv, tile, w, h) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const W = Math.max(1, Math.round(w * dpr)), Hh = Math.max(1, Math.round(h * dpr));
+  if (cv.width !== W || cv.height !== Hh) { cv.width = W; cv.height = Hh; cv.style.width = w + "px"; cv.style.height = h + "px"; }
+  const g = cv.getContext("2d");
+  if (!g) return;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  tile.draw(g);
+}
+
+/** One loop for a set of tiles: steps and paints while `host` is on the page, in view, and the window is shown. */
+function btLoop(host, step, paint) {
+  let raf = 0, last = 0, seen = true;
+  const io = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => {
+    seen = es.some((e) => e.isIntersecting);
+    if (seen) wake();
+  }) : null;
+  if (io) io.observe(host);
+  const tick = () => {
+    raf = 0;
+    if (!host.isConnected) { if (io) io.disconnect(); document.removeEventListener("visibilitychange", wake); return; }
+    if (document.hidden || !seen) return;
+    const now = performance.now(), dt = last ? (now - last) / 1000 : 1 / 60;
+    last = now;
+    try { step(dt); paint(); } catch (e) { console.warn("[Tailzu][BotTiles] frame failed:", e); return; }
+    raf = requestAnimationFrame(tick);
+  };
+  function wake() { if (!raf && host.isConnected && !document.hidden && seen) { last = 0; raf = requestAnimationFrame(tick); } }
+  document.addEventListener("visibilitychange", wake);
+  wake();
+}
+
+function mountBotTiles(root) {
+  const api = window.TailzuBotTiles;
+  const reduced = prefers("(prefers-reduced-motion: reduce)");
+  // An overlay from the last paint goes; a new one is lifted out to the body (nothing it sits in may clip or fade it).
+  document.querySelectorAll("body > .tz-bc-veil").forEach((v) => v.remove());
+  root.querySelectorAll("[data-bt]").forEach((grid) => {
+    const cfg = BT_PENDING[Number(grid.getAttribute("data-bt"))];
+    if (!cfg || !api) return;
+    const specs = cfg.p.tiles || [];
+    const els = Array.from(grid.querySelectorAll(".tz-bt-tile"));
+    const world = new api.BotTilesWorld();
+    specs.forEach((t, i) => world.add(btLife(t, i)));
+    const sizes = [];
+    const layout = () => {
+      const g = grid.getBoundingClientRect();
+      els.forEach((el, i) => {
+        const r = el.getBoundingClientRect(), wr = el.querySelector(".tz-bt-w").getBoundingClientRect();
+        const w = el.clientWidth, h = el.clientHeight;
+        sizes[i] = [w, h];
+        world.place(i, r.left - g.left, r.top - g.top, w, h, wr.top - r.top - 3);
+      });
+    };
+    layout();
+    const paint = () => els.forEach((el, i) => { if (sizes[i]) btPaint(el.querySelector(".tz-bt-c"), world.tiles[i], sizes[i][0], sizes[i][1]); });
+    world.settle(reduced);
+    paint();
+    if (typeof ResizeObserver === "function") { const ro = new ResizeObserver(() => { if (!grid.isConnected) { ro.disconnect(); return; } layout(); if (reduced) { world.settle(true); paint(); } }); ro.observe(grid); }
+    let busy = false;
+    els.forEach((el, i) => {
+      const go = (x, y) => {
+        const action = specs[i] && specs[i].action;
+        if (!action || busy) return;
+        if (reduced) { void run(action); return; }
+        busy = true;
+        world.focus(i, x, y);
+        els.forEach((o, j) => { if (j !== i) o.querySelector(".tz-bt-w").style.opacity = String(api.TAP.fadeTo); });
+        el.style.transform = "scale(" + api.TAP.pressScale + ")";
+        setTimeout(() => { el.style.transform = ""; }, 140);
+        setTimeout(() => { void run(action); }, api.TAP.holdMs);
+        setTimeout(() => {
+          world.release(); busy = false;
+          els.forEach((o) => { o.querySelector(".tz-bt-w").style.opacity = "1"; });
+        }, api.TAP.holdMs + api.TAP.restoreMs);
+      };
+      el.addEventListener("click", (e) => { const r = el.getBoundingClientRect(); go(e.clientX - r.left, e.clientY - r.top); });
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(el.clientWidth / 2, el.clientHeight / 2); } });
+    });
+    if (!reduced) btLoop(grid, (dt) => world.step(dt), paint);
+  });
+  root.querySelectorAll("[data-bc]").forEach((card) => {
+    const cfg = BT_PENDING[Number(card.getAttribute("data-bc"))];
+    if (!cfg || !api) return;
+    const { p, key, life } = cfg;
+    let bot = BT_LIVES.get("card|" + key);
+    if (!bot) {
+      // Sized to the stage: the card has room for a bigger bot than a tile.
+      bot = new api.BotTile({ kind: p.kind || "custom", color: String(p.color || "#3d3d3d"), mood: "idle", seed: 29, size: Math.round((Number(p.stageHeight) || 128) * 0.4) });
+      BT_LIVES.set("card|" + key, bot);
+    }
+    const veil = root.querySelector('[data-bcv="' + card.getAttribute("data-bc") + '"]');
+    if (veil) document.body.appendChild(veil);
+    const cv = card.querySelector(".tz-bt-c"), stageH = Number(p.stageHeight) || 128;
+    const size = () => [card.clientWidth, stageH];
+    const [w0] = size();
+    bot.resize(w0, stageH, stageH - 12);
+    bot.settle(reduced);
+    const paint = () => { const [w] = size(); if (w > 0) btPaint(cv, bot, w, stageH); };
+    paint();
+    // Coming in: a soft scale and fade, once (a repaint keeps it where it is).
+    if (!life.entered) {
+      life.entered = true;
+      if (reduced) card.style.transition = "opacity .26s ease-out";
+      requestAnimationFrame(() => { card.style.opacity = "1"; card.style.transform = "none"; if (veil) veil.style.opacity = "1"; });
+    }
+    const words = card.querySelector(".tz-bc-w");
+    if (cfg.fresh && words) { if (!reduced) bot.cheer(); requestAnimationFrame(() => { words.style.opacity = "1"; words.style.transform = "none"; }); }
+    // Done: the happy moment, then on.onComplete.
+    if (cfg.done && !life.doneSeen && life.phase === "open") {
+      life.doneSeen = true;
+      bot.cheer();
+      setTimeout(cfg.complete, Number(p.doneDelayMs) || 1300);
+    }
+    // Going: the card and the blur fade out together, then they are gone.
+    if (life.phase === "closing") {
+      requestAnimationFrame(() => {
+        card.style.opacity = "0";
+        if (!reduced) card.style.transform = "scale(.96)";
+        if (veil) veil.style.opacity = "0";
+      });
+      setTimeout(() => { life.phase = "gone"; if (veil) veil.remove(); else card.remove(); }, 320);
+    }
+    if (!reduced) btLoop(card, (dt) => bot.step(dt), paint);
+  });
+}
+
 function bind(action) {
   if (!action) return "";
   const id = "h" + handlers.length;
@@ -1219,6 +1459,8 @@ function node(n) {
     case "BlipSpot": return blipSpotNode(p, s);
 
     case "DeskAskSetup": return askSetupNode(p, s);
+    case "BotTiles": return botTilesNode(p);
+    case "BotCard": return botCardNode(n, p, kids);
     case "DeskFolders": return foldersNode(p, s);
 
     case "WordMeter": return wordMeter(p);
@@ -3794,6 +4036,7 @@ function repaint(screen) {
   if (!sc) return;
   handlers = [];
   SUBMITS = [];
+  BT_PENDING = [];
   // Whatever was turning words over belongs to the DOM about to be replaced.
   stopFlips();
   IN_KIT = sc.look === "bots";
@@ -3856,6 +4099,8 @@ function repaint(screen) {
   wireChat(view, sc);
   wireMic(view, sc);
   wireField(view);
+  // Last: the living tiles and cards (an overlay card is lifted out to the body, after everything above is wired).
+  mountBotTiles(view);
   document.querySelectorAll("#tabs .tab, #mtabs .mtab").forEach((b) => {
     b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID && STACK.length <= 1));
   });

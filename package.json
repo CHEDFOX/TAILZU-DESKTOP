@@ -52,6 +52,7 @@
       "guide.html",
       "guide.js",
       "blip.js",
+      "botTiles.js",
       "screenRead.js",
       "notes.html",
       "notesRecorder.js",
