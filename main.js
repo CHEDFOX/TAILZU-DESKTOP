@@ -335,7 +335,11 @@ function refreshBoot() {
             // The same answer the window gets (sdui.js declares these too):
             // this copy's flags are the ones broadcast to every window and
             // the ones that decide where "out of words" opens.
-            components: ["DeskShell", "Keys"],
+            // BotsKit: the pill, the captions strip and the Ask card draw the
+            // Bots app's look when the switch is on for this account (flag
+            // bots.app; pill.js, overlay.js, guide.js), so this copy's flags,
+            // the ones they are sent, must say so as the window's do.
+            components: ["DeskShell", "Keys", "BotsKit"],
           },
           launchCount: Number(localState.launchCount) || 1,
         }),

@@ -269,6 +269,62 @@
     #steps li[data-s="doing"] i::after, #card[data-state="listening"] #lamp { animation:none; }
   }
 
+  /* THE BOTS LOOK (DeskAsk): with the Bots app switched on (bootstrap flag bots.app; guide.js puts .bots on the
+     root), the card is the app's own: white, a #e6e6e6 line, Geist, ink words and ink buttons, clay (Keybot's
+     colour) only for the open microphone, no red. Every state and every button is the same one, only drawn so.
+     Off, none of this applies. */
+  @font-face { font-family:"Tailzu Geist"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-400.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Medium"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-500.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist SemiBold"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-600.woff2) format("woff2"); }
+  :root.bots {
+    --ink:#ffffff; --ink-2:#f5f5f5; --pale:#0a0a0a; --pale-2:#3d3d3d; --pale-3:#5c5c5c;
+    --rule:#e6e6e6; --live:#A9573A; --err:#0a0a0a;
+    --sans:"Tailzu Geist","Noto Sans Devanagari",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --serif:var(--sans); --mono:var(--sans);
+    --w:340px; --r:18px;
+  }
+  :root.bots #card { box-shadow: inset 0 0 0 1px var(--rule), 0 18px 44px -14px rgba(0,0,0,.22), 0 3px 10px rgba(0,0,0,.06); }
+  :root.bots #card::before { display:none; }
+  :root.bots #inner { padding:16px; }
+  :root.bots header { height:28px; gap:10px; }
+  :root.bots #lamp { width:8px; height:8px; }
+  :root.bots #card[data-state="listening"] #lamp { animation:lampBots 1.8s ease-in-out infinite; }
+  @keyframes lampBots { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.5; transform:scale(.78); } }
+  :root.bots #card[data-state="thinking"] #lamp { background:var(--live); }
+  :root.bots #card[data-state="confirm"] #lamp, :root.bots #card[data-state="permission"] #lamp { background:var(--pale); }
+  :root.bots #card[data-state="done"] #lamp { background:transparent; box-shadow:inset 0 0 0 1.5px var(--pale); }
+  :root.bots #eyebrow { font:400 14px/1.2 "Tailzu Geist SemiBold", var(--sans); letter-spacing:-.1px; text-transform:none; color:var(--pale); }
+  :root.bots #card[data-state="confirm"] #eyebrow, :root.bots #card[data-state="permission"] #eyebrow,
+  :root.bots #card[data-state="error"] #eyebrow { color:var(--pale); }
+  :root.bots #app { font:400 12px/1.2 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #badge { font:400 11px/1 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-2); background:var(--ink-2); box-shadow:none; }
+  :root.bots #badge::before { box-shadow:inset 0 0 0 1px var(--pale-2); }
+  :root.bots #close { width:28px; height:28px; color:var(--pale-3); }
+  :root.bots #close:hover { background:var(--ink-2); color:var(--pale); }
+  :root.bots #heard { margin-top:10px; font:400 12.5px/1.4 var(--sans); color:var(--pale-3); }
+  :root.bots #say { font:400 15px/1.45 "Tailzu Geist Medium", var(--sans); letter-spacing:0; color:var(--pale); }
+  :root.bots #steps li { font:400 13.5px/1.35 var(--sans); }
+  :root.bots #steps li i { font:400 10px/1 var(--sans); }
+  :root.bots #steps li[data-s="failed"] i { border-color:var(--pale); color:var(--pale); }
+  :root.bots #ask .what { font:400 11px/1.3 "Tailzu Geist SemiBold", var(--sans); letter-spacing:.4px; color:var(--pale-3); }
+  :root.bots #ask blockquote, :root.bots #permitText { border-left:0; background:var(--ink-2); border-radius:12px; padding:9px 12px; font:400 14px/1.4 var(--sans); color:var(--pale); }
+  /* The pills: one ink primary, the rest outline, 44 tall (STYLE.md). */
+  :root.bots #ask button, :root.bots #permit button, :root.bots #offerBtn { font:400 14px/1 "Tailzu Geist Medium", var(--sans); height:44px; padding:0 18px; border-radius:22px; }
+  :root.bots #yes, :root.bots #once, :root.bots #offerBtn, :root.bots #card[data-risk="always"] #yes { background:#0a0a0a; color:#ffffff; }
+  :root.bots #yes:hover, :root.bots #once:hover, :root.bots #offerBtn:hover { background:#3d3d3d; }
+  :root.bots #edit, :root.bots #always { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px #d4d4d4; }
+  :root.bots #edit:hover, :root.bots #always:hover { background:var(--ink-2); }
+  :root.bots #no, :root.bots #notnow { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px #d4d4d4; }
+  :root.bots #no:hover, :root.bots #notnow:hover { background:var(--ink-2); color:var(--pale); }
+  :root.bots #ask .row, :root.bots #permit .row { gap:8px; flex-wrap:wrap; }
+  :root.bots #ask kbd { font:400 11px/1 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #note { font:400 12.5px/1.4 var(--sans); color:var(--pale-2); }
+  :root.bots #foot { font:400 11px/1.3 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #chip { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px var(--rule), 0 6px 18px rgba(0,0,0,.14);
+    font:400 12px/1 "Tailzu Geist Medium", var(--sans); letter-spacing:0; text-transform:none; }
+  :root.bots #chip::before { background:#0a0a0a; }
+  :root.bots #say, :root.bots #steps { scrollbar-color:rgba(10,10,10,.2) transparent; }
+
   /* THE REVIEW PAGE ONLY: an app to point at, and the pill under it all. */
   body.demo { background:#E9E5DE; }
   body.demo #mockpill { position:fixed; left:0; top:0; pointer-events:none; }

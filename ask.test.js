@@ -1716,6 +1716,8 @@ test("capsuleRect: the capsule centred across the pill window, bottomPad above i
   // The small pill's size without the capsule look (or without the split, which it needs).
   assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.capsule": false })), { x: 777, y: 868, w: 46, h: 14 });
   assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.split": false })), { x: 777, y: 868, w: 46, h: 14 });
+  // The Bots look (bots.app) is the small white pill, whatever the capsule knobs say.
+  assert.deepStrictEqual(capsuleRect(b, k({ "bots.app": true })), { x: 777, y: 868, w: 46, h: 14 });
   assert.deepStrictEqual(capsuleRect(b, k({ "desktop.pill.capsuleWidth": 50, "desktop.pill.capsuleHeight": 20, "desktop.pill.bottomPad": 10 })), { x: 775, y: 866, w: 50, h: 20 });
   assert.strictEqual(capsuleRect(null, PILL_KNOBS), null);
   assert.strictEqual(capsuleRect({ x: 0, y: 0, width: NaN, height: 10 }, PILL_KNOBS), null);

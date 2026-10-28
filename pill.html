@@ -46,17 +46,31 @@
     pill.html?demo=ask        only the question: rest, listening, thinking,
                               showing, closing, rest
     pill.html?demo&capture    the same on a virtual clock: window.__step(ms)
+    pill.html?demo&bots       the same in the Bots look
+
+  THE BOTS LOOK (DeskPill). With the Bots app switched on (bootstrap flag
+  bots.app, which the knobs carry), the pill is the app's: one white pill
+  with a #e6e6e6 line, no split, no capsule. Listening: a clay disc with
+  the microphone (Keybot's colour), clay bars your voice moves, the words
+  as they come (live captions on), the time, and a small ✕ at its end;
+  a press anywhere else finishes, as before. Writing: the disc's three dots
+  light in turn. Done and error: ink words (an error is a small ink ✕,
+  never red). Ask: the small white pill with the bead on its top edge, clay
+  while it listens. Off: the pill as it was, untouched.
 -->
 <html>
 <head>
 <meta charset="utf-8">
 <!-- Nothing runs but this app's own files (so the script is pill.js), and
      nothing is fetched. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'">
 <title>Tailzu</title>
 <style>
   html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; cursor: default; }
   canvas { position: fixed; left: 0; top: 0; }
+  /* The Bots look's faces (pill.js, bots.app): Geist, from this app's own files. */
+  @font-face { font-family: "Tailzu Geist"; font-weight: 100 900; src: url(assets/fonts/geist-400.woff2) format("woff2"); }
+  @font-face { font-family: "Tailzu Geist Medium"; font-weight: 100 900; src: url(assets/fonts/geist-500.woff2) format("woff2"); }
   /* The review page only: a document being written into, so the pill is seen
      where it lives. */
   body.demo { background: #DAD6CF; font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
