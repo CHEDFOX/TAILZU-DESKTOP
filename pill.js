@@ -170,6 +170,24 @@ function doneLabel() {
   return n === 1 ? K.txt("desktop.pill.doneOne", "1 word") : n > 0 ? K.txt("desktop.pill.done", "{n} words", { n }) : K.txt("desktop.pill.doneNone", "Done");
 }
 
+// ---- a route (main.js, routing.js) --------------------------------------------------
+// Where the words went, and the one other place they can go instead:
+// "Typed · Ask instead", "Sent to Plan bot · Type it instead". A press on the
+// pill chooses the alternative; main undoes the first and does the other.
+const SEP = " · ";
+function routedLabel() { return (S.data.label || "") + (S.data.alt ? SEP + S.data.alt : ""); }
+/** The label at (x, cy) in the current font: what was done in `main`, the
+ *  alternative in `alt`, underlined, as the thing to press. No amber: that is
+ *  only for what is live. */
+function drawRouted(x, cy, main, alt) {
+  const lead = (S.data.label || "") + (S.data.alt ? SEP : "");
+  ctx.fillStyle = main; ctx.fillText(lead, x, cy + .5);
+  if (!S.data.alt) return;
+  const ax = x + ctx.measureText(lead).width, aw = ctx.measureText(S.data.alt).width;
+  ctx.fillStyle = alt; ctx.fillText(S.data.alt, ax, cy + .5);
+  ctx.fillRect(ax, cy + 7, aw, 1);
+}
+
 /** The capsule's shape for a state: shut (two equal halves), or open around
  *  some words with the cream half a cap at the end. */
 function capsuleTargets(st) {
@@ -179,6 +197,7 @@ function capsuleTargets(st) {
     g.w = Math.round(K.num("desktop.pill.capsulePad", 14) + extra + textW(label) + 12 + g.cap);
   };
   if (st === "rest" && hovered && restShown && hint) open(hint, K.num("desktop.pill.hoverHeight", 28));
+  else if (st === "routed") open(routedLabel(), K.num("desktop.pill.labelHeight", 30));
   else if (st === "error" || st === "done") {
     open(st === "done" ? doneLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong")), K.num("desktop.pill.labelHeight", 30), st === "done" ? 18 : 0);
   } else {
@@ -225,7 +244,7 @@ function targets(t) {
     g.w = K.num("desktop.pill.writeWidth", 124); g.h = K.num("desktop.pill.writeHeight", 30);
     g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
   } else {
-    const label = st === "done" ? doneLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"));
+    const label = st === "done" ? doneLabel() : st === "routed" ? routedLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"));
     g.w = textW(label) + (st === "done" ? 46 : 38); g.h = K.num("desktop.pill.labelHeight", 30);
     g.solid = 1; g.buttons = 0; g.text = 1; g.show = 1;
   }
@@ -242,6 +261,8 @@ function frame() {
   const t = (now - S.at) / 1000;
   if (S.name === "done" && t * 1000 > K.num("desktop.pill.doneMs", 1300)) setState("rest");
   if (S.name === "error" && t * 1000 > K.num("desktop.pill.errorMs", 2400)) setState("rest");
+  // Main puts a route's label away itself; this only guards against a lost message.
+  if (S.name === "routed" && t * 1000 > K.num("desktop.pill.routedMs", 8000)) setState("rest");
   // Bands decay once the recorder goes quiet, so a dropped message never
   // freezes a bar mid-air.
   if (now - bandsAt > 250) for (let i = 0; i < bands.length; i++) bands[i] *= Math.exp(-dt * 10);
@@ -487,6 +508,7 @@ function frame() {
       ctx.fillStyle = rgba(C.pale(), S.name === "rest" ? .9 : 1);
       if (S.name === "rest") ctx.fillText(hint, tx0, cy + .5);
       else if (S.name === "error") ctx.fillText(S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"), tx0, cy + .5);
+      else if (S.name === "routed") drawRouted(tx0, cy, rgba(C.pale(), .72), C.pale());
     } else if (S.name === "rest") {
       ctx.fillStyle = rgba(C.pale(), .88); ctx.fillText(hint, x0 + 15 + 3 * sq + 12, cy + .5);
     } else if (S.name === "done") {
@@ -501,6 +523,8 @@ function frame() {
       else { ctx.lineTo(pts[1][0], pts[1][1]); const u = (len - L1) / L2; ctx.lineTo(pts[1][0] + (pts[2][0] - pts[1][0]) * u, pts[1][1] + (pts[2][1] - pts[1][1]) * u); }
       ctx.stroke();
       ctx.fillStyle = C.pale(); ctx.fillText(doneLabel(), x0 + 32, cy + .5);
+    } else if (S.name === "routed") {
+      drawRouted(x0 + 19, cy, rgba(C.pale(), .72), C.pale());
     } else if (S.name === "error") {
       ctx.fillStyle = C.rose(); ctx.beginPath(); ctx.arc(x0 + 17, cy, 3.2, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = C.pale(); ctx.fillText(S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong"), x0 + 27, cy + .5);
@@ -641,7 +665,7 @@ function bTextW(s, size, medium) { ctx.save(); ctx.font = bFont(size, medium); c
 const BOTS_BARS = 14;
 const bBars = new Float32Array(BOTS_BARS).fill(4);
 const bDisc = () => K.num("desktop.pill.botsDisc", 40);
-const bLabel = () => (S.name === "done" ? doneLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong")));
+const bLabel = () => (S.name === "done" ? doneLabel() : S.name === "routed" ? routedLabel() : (S.data.label || K.txt("desktop.pill.errorDefault", "Something went wrong")));
 const bWriting = () => K.txt("desktop.pill.botsWriting", "Writing");
 /** How long it has been listening, as a clock reads: "0:07". */
 function bTimer() { const s = Math.max(0, Math.floor((clock() - S.at) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -762,7 +786,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const ix = x0 + 12 + 6, s = 4.5;
     ctx.strokeStyle = B.ink(); ctx.lineWidth = 1.8; ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
-    if (st === "done") {
+    if (st === "done" || st === "routed") {
       const p = REDUCED() ? 1 : outCubic(t / 0.35);
       ctx.moveTo(ix - s, cy); ctx.lineTo(ix - s + (s * .7) * Math.min(1, p * 2), cy + s * .7 * Math.min(1, p * 2));
       if (p > .5) ctx.lineTo(ix - s * .3 + (s * 1.4) * (p - .5) * 2, cy + s * .7 - (s * 1.5) * (p - .5) * 2);
@@ -770,7 +794,9 @@ function drawBots(t, now, dt, x0, y0, cy) {
       ctx.moveTo(ix - s * .8, cy - s * .8); ctx.lineTo(ix + s * .8, cy + s * .8); ctx.moveTo(ix + s * .8, cy - s * .8); ctx.lineTo(ix - s * .8, cy + s * .8);
     }
     ctx.stroke();
-    ctx.font = bFont(13); ctx.fillStyle = B.ink(); ctx.fillText(bLabel(), x0 + 12 + 12 + 8, cy + .5);
+    ctx.font = bFont(13);
+    if (st === "routed") drawRouted(x0 + 12 + 12 + 8, cy, B.meta(), B.ink());
+    else { ctx.fillStyle = B.ink(); ctx.fillText(bLabel(), x0 + 12 + 12 + 8, cy + .5); }
   }
   ctx.restore();
   // Ask: the bead on the small pill's top edge, where the guide's thread leaves it. Clay while it listens.
@@ -825,7 +851,9 @@ window.addEventListener("mousedown", (e) => {
   const act = S.name === "rest" ? "start" : S.name === "listening" ? (onCancel(e.clientX, e.clientY) ? "cancel" : "finish")
     // A question up: a press puts it away, as Esc does. Closing, it is
     // already going.
-    : S.name === "ask" ? (S.data.phase === "closing" ? null : "askCancel") : null;
+    : S.name === "ask" ? (S.data.phase === "closing" ? null : "askCancel")
+    // A route's label: its alternative, when it has one.
+    : S.name === "routed" ? (S.data.alt ? "alt" : null) : null;
   if (act && bridge && bridge.pillAction) bridge.pillAction(act);
 });
 

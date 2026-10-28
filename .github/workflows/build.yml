@@ -100,6 +100,8 @@ jobs:
           npm run tzocr
           # Ask's accessibility helper (native/tzax.swift), same.
           npm run tzax
+          # The one key's Fn watcher (native/tzkey.swift, oneKey.js), same.
+          npm run tzkey
           # --publish never: at a repo root on CI, electron-builder infers a
           # GitHub release and demands GH_TOKEN. Publishing is the step below.
           # --universal: macos-latest runners are arm64; a plain build would ship

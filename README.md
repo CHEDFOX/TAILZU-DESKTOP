@@ -85,7 +85,8 @@ it would pin those values against anything the server later changes.
 | `pauseFlush` | `false` → a pause no longer writes out what was said so far (`desktop.pauseFlush.default`) |
 | `hold` | `true` → hold-to-talk on `holdKey` (`desktop.hold.default`; needs uiohook-napi) |
 | `holdKey` | key name for hold-to-talk, e.g. `F9` (`desktop.hold.key`) |
-| `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`) |
+| `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`); with the one key, `tap` is whether a quick tap keeps it listening |
+| `oneKey` | the one key (Mac/Windows): `fn`, `rightOption`, `rightCommand` / `rightCtrl`, `rightAlt` (default Fn on a Mac, Right Ctrl on Windows: `desktop.oneKey.default.mac` / `.windows`); `"off"` → the keys above. Set from Keybot's settings in the window |
 | `autoStart` | launch at login (`desktop.autoStart.default`; installed app; also in the tray menu) |
 | `runnerImage` | the Docker image for "Run in a container" (default `node:22-bookworm`; it needs `bash`) |
 | `runnerName` | the name this computer is listed under for the Code bot (default: the computer's name) |
@@ -103,8 +104,18 @@ Dictation needs an account, the same as on the phones — open the window from
 the tray and sign in. The hotkey answers a signed-out machine by opening that
 window rather than recording into a history no account owns.
 
-- **Toggle**: press the hotkey → speak → press again.
-- **Hold-to-talk** (`hold: true`): hold `holdKey` while speaking, release to finish.
+- **The one key** (Mac and Windows): hold it to talk, let go to finish; a quick
+  tap keeps it listening until it is tapped again. What was said goes where it
+  is meant (routing.js, router.js): typed into the text box in focus; Ask for
+  "Tailzu, …", a question about the screen, or a question with no text box in
+  front; meeting notes for "take notes" / "stop notes" (and "notes lo", "नोट्स
+  बंद करो"); a bot for a bot's task (the backend's `/v1/shell/route` picks which,
+  `/v1/shell/ask` sends it). The pill says where it went, with one tap for the
+  other choice ("Typed · Ask instead", "Sent to Plan bot · Type it instead").
+  Fn is watched by `native/tzkey.swift` (`npm run tzkey`); the others by the key
+  hook. A key that cannot be bound falls back to the toggle hotkey, said once.
+- **Toggle** (Linux, or `oneKey: "off"`): press the hotkey → speak → press again.
+- **Hold-to-talk** (`hold: true`, without the one key): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you
   talk; the final polished text pastes when you stop. Captions are display-only —
   partial text is never typed into your target app.

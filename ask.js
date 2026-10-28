@@ -498,7 +498,8 @@ function createAsk(ctx) {
       if (!ensureWindow(displayFor(r ? { x: r.x + r.w / 2, y: r.y + r.h / 2 } : anchor))) dock();
       showWindow();
       shown = true;
-      send({ type: "show", state, app: (data && data.app) || "", anchor: localPoint(anchor), key: str("desktop.agent.tapKey", "Alt") });
+      // The key that answers the card: the one key, tapped once, or Ask's own pair.
+      send({ type: "show", state, app: (data && data.app) || "", anchor: localPoint(anchor), key: oneKeyName() || str("desktop.agent.tapKey", "Alt"), once: !!oneKeyName() });
     },
     // listening / thinking / acting (with what it is doing) / done (with
     // what it has to say about it).
@@ -1142,7 +1143,9 @@ function createAsk(ctx) {
       if (audio || text) { void agent.heard(audio, { text, final: !!(said && said.final) }); return; }
       // Nothing said: the run that was waiting for it ends, and the card says so.
       agent.cancel("not heard");
-      cardError(txt("desktop.agent.notHeard", "I didn't catch that. Tap {key} twice and ask again.", { key: str("desktop.agent.tapKey", "Alt") }));
+      cardError(oneKeyName()
+        ? txt("desktop.agent.notHeardOneKey", "I didn't catch that. Hold {key} and ask again.", { key: oneKeyName() })
+        : txt("desktop.agent.notHeard", "I didn't catch that. Tap {key} twice and ask again.", { key: str("desktop.agent.tapKey", "Alt") }));
     };
     // A clip back before the run has begun (a short "undo", or Alt twice
     // again while the app was still being named) is held for it.
@@ -1162,7 +1165,9 @@ function createAsk(ctx) {
     naming = 0;
     if (!info) {
       dropListening();
-      cardError(txt("desktop.agent.unknownWindow", "I couldn't tell which window this is, so I didn't look. Tap {key} twice to try again.", { key: str("desktop.agent.tapKey", "Alt") }));
+      cardError(oneKeyName()
+        ? txt("desktop.agent.unknownWindowOneKey", "I couldn't tell which window this is, so I didn't look. Hold {key} and ask again.", { key: oneKeyName() })
+        : txt("desktop.agent.unknownWindow", "I couldn't tell which window this is, so I didn't look. Tap {key} twice to try again.", { key: str("desktop.agent.tapKey", "Alt") }));
       return;
     }
     begun = true;
@@ -1182,6 +1187,41 @@ function createAsk(ctx) {
     agent.cancel(reason);
     hide();
   }
+
+  /**
+   * A question already said: the one key's words, routed here (routing.js)
+   * when they were for Ask. The same run as tap()'s, without the microphone:
+   * the app in front is named, the run begins, and the words go in as the
+   * question's final caption. True when it took them; false when it could
+   * not (a dictation still has the microphone, signed out, the window could
+   * not be told, a private window or a bank: their cards say so).
+   */
+  async function askHeard(text) {
+    const words = String(text || "").replace(/\s+/g, " ").trim();
+    if (!words) return false;
+    if (ctx.dictating && ctx.dictating()) return false;
+    // Whatever was up (a finished answer's card, a question still out) gives way.
+    if (confirmWait || permitWait || listening || onAudio || naming || finalWait || agent.active() || shown) cancel("restart");
+    if (!ctx.requireAccount()) return false;
+    const mine = ++asking;
+    const pointer = pointerNow();
+    naming = mine;
+    let info = await front();
+    if (!info && mine === asking) info = await front();
+    if (mine !== asking) return false;
+    naming = 0;
+    if (!info) {
+      cardError(txt("desktop.agent.unknownWindowOneKey", "I couldn't tell which window this is, so I didn't look. Hold {key} and ask again.", { key: oneKeyName() }));
+      return false;
+    }
+    pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
+    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer });
+    if (!agent.active()) return false;     // refused: a private window, a bank
+    void agent.heard(null, { text: words, final: true });
+    return true;
+  }
+  /** The one key, as it is bound (main.js), or "" when the old keys are in use. */
+  function oneKeyName() { try { return (typeof ctx.oneKey === "function" && ctx.oneKey()) || ""; } catch { return ""; } }
 
   // ---- the peek, while a dictation records ----------------------------------------
   // Blip over the text box at the cursor (guide.js peek), in the guide's own
@@ -1270,6 +1310,7 @@ function createAsk(ctx) {
 
   return {
     tap,
+    askHeard,
     cancel,
     audioIn,
     textIn,
@@ -1564,6 +1605,7 @@ const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "pictur
 function createAskSetup(o) {
   const mac = o.platform === "darwin";
   const call = (f, fallback) => { try { return f(); } catch { return fallback; } };
+  let axPrompted = false;   // macOS asked to list Tailzu under Accessibility, this launch
 
   function state() {
     let read = "na", see = "na";
@@ -1592,6 +1634,17 @@ function createAskSetup(o) {
     if (p.kind === "openAccessibility" || p.kind === "openScreenRecording") {
       // A Mac's own settings pages; there is nothing to open elsewhere.
       if (!mac) return false;
+      // ON A FRESH MAC TAILZU IS NOT IN THE ACCESSIBILITY LIST until it has
+      // asked once, so the page opened on a list with nothing to switch on.
+      // Asked here, once a launch and only while it is still off: macOS adds
+      // Tailzu to the list (and shows its own prompt), then the page opens.
+      if (p.kind === "openAccessibility" && !axPrompted) {
+        const sp = o.systemPreferences || {};
+        if (call(() => sp.isTrustedAccessibilityClient(false), false) !== true) {
+          axPrompted = true;
+          call(() => sp.isTrustedAccessibilityClient(true));
+        }
+      }
       call(() => (p.kind === "openAccessibility" ? o.openAccessibility() : o.openScreenRecording()));
       return true;
     }

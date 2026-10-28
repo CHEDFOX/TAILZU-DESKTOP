@@ -468,8 +468,11 @@ function flushSegment(sid) {
 }
 
 // `join`: the server's word on a space before `text` (see transcribe).
-function emitSegment(sid, text, join, edges) { window.tailzu.segment({ session: sid, text: text, join: join, edges: edges }); }
-function emitResult(sid, text, join, edges) { window.tailzu.result({ session: sid, text: text, join: join, edges: edges }); }
+// `heard`: what the recogniser heard for the stretch (its raw transcript), which
+// the main process reads to decide where the words go (routing.js); only the
+// written `text` is ever pasted.
+function emitSegment(sid, text, join, edges, heard) { window.tailzu.segment({ session: sid, text: text, join: join, edges: edges, heard: heard || "" }); }
+function emitResult(sid, text, join, edges, heard) { window.tailzu.result({ session: sid, text: text, join: join, edges: edges, heard: heard || "" }); }
 /** A failure. `message` is the sentence the notification shows, and
  *  only ever words for a person; what actually went wrong travels in
  *  `extra.detail` to the main process's log, with the server's `code`
@@ -880,7 +883,8 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
     }
     const json = await res.json();
     const cleaned = (json.cleanedText || "").trim();
-    const heardWords = !json.noSpeech && !!(json.transcript || json.text || "").trim();
+    const heardText = json.noSpeech ? "" : String(json.transcript || json.text || "").trim().slice(0, 4000);
+    const heardWords = !!heardText;
     // Whether it joins what came before with a space, as the server read it
     // against the context sent — which, sent in turn, is exactly what was
     // written before it. An older server says nothing, and the main process
@@ -917,7 +921,10 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
       // recogniser turned into words, a stretch that was only an
       // instruction. The raw transcript used to be pasted in its place,
       // which put exactly those invented or unwritten words at the cursor.
-      if (text) deliver(sid, text, text === stop ? false : join, edges);
+      if (text) deliver(sid, text, text === stop ? false : join, edges, heardText);
+      // A stretch with words but nothing written ("Tailzu," on its own, an
+      // instruction): nothing to paste, but where the rest goes may turn on it.
+      else if (isSegment && heardWords) emitSegment(sid, "", undefined, undefined, heardText);
       else if (!isSegment) {
         // Nothing to write at the end. After stretches that were written,
         // or when words were heard and the writer chose to write none,
@@ -925,7 +932,7 @@ async function transcribe(sid, parts, type, isSegment, durationMs, sentAny) {
         // input device, muted mic, or OS permission): say so — but only
         // for a real stop. A silent segment is just a pause, and a toast
         // for every pause would be unusable.
-        if (sentAny || heardWords) emitResult(sid, "");
+        if (sentAny || heardWords) emitResult(sid, "", undefined, undefined, heardText);
         else emitError(sid, str("noSpeech"));
       }
     };
@@ -1202,7 +1209,7 @@ async function finishLive(sid) {
     const alternative = doneAlternative;
     await fieldRead(sid);
     const refined = await refineText(raw, alternative, wrote.get(sid), sid);
-    emitResult(sid, refined.text, refined.join, refined.edges);
+    emitResult(sid, refined.text, refined.join, refined.edges, raw);
   } catch (err) {
     // NOT THE RAW WORDS. A refine that failed (twice for a blip; a spent
     // token is renewed and resent first) used to paste the stream's own

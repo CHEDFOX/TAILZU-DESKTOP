@@ -101,6 +101,14 @@ if (which === "mac") {
   console.log(`the accessibility helper answers (trusted: ${trust.trusted}; snapshot: ${snap.ok ? snap.elements.length + " elements" : snap.error}; `
     + `look: ${look.ok ? look.lines.length + " lines, " + (look.image ? look.image.width + "x" + look.image.height + " picture" : "no picture") + " in " + look.ms + " ms" : look.error}; `
     + `caret: ${caret.ok ? JSON.stringify({ caret: caret.caret, field: caret.field, how: caret.how }) + " in " + caret.ms + " ms" : caret.error})`);
+  // The one key's Fn watcher (native/tzkey.swift, oneKey.js), built the same
+  // universal way. A CI Mac may not let it listen: it says "ready", or exits 3
+  // at once; either way it must exit when its stdin closes.
+  execFileSync("npm", ["run", "tzkey"], { stdio: "inherit", cwd: __dirname });
+  const key = require("child_process").spawnSync(path.join(__dirname, "build", "tzkey"), [], { input: "", encoding: "utf8", timeout: 15000 });
+  if (key.error || !(key.status === 0 || key.status === 3)) { console.error("tzkey did not answer as oneKey.js reads it:", key.error || key.status, key.signal || ""); process.exit(1); }
+  if (key.status === 0 && !/^ready$/m.test(key.stdout || "")) { console.error("tzkey listened without saying ready:", JSON.stringify(key.stdout)); process.exit(1); }
+  console.log(`the Fn watcher builds and answers (${key.status === 0 ? "ready" : "not allowed to listen here"})`);
 } else if (which === "win") {
   const ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
     "-EncodedCommand", Buffer.from(fa.PS, "utf16le").toString("base64")], { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });

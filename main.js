@@ -25,6 +25,9 @@ const fs = require("fs");
 const crypto = require("crypto");
 const os = require("os");
 const { createTapDetector } = require("./tapDetector.js");
+// The one key (hold to talk, tap for hands-free) and where its words go (oneKey.js, router.js, routing.js).
+const oneKey = require("./oneKey.js");
+const { createRouting, undoCommand } = require("./routing.js");
 const { joinStretch } = require("./pasteJoin.js");
 const updater = require("./updater.js");
 const frontApp = require("./frontApp.js");
@@ -34,6 +37,8 @@ const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } =
 const { createLocalFiles, createFolderSettings } = require("./localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for the Code bot (runner/).
 const { createRunner } = require("./runner/index.js");
+// Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
+const { setupLiveViews } = require("./liveViewMain.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("./knobs.js");
@@ -486,6 +491,14 @@ function loadConfig() {
     // Tailzu Code on this computer (README): the Docker image for "Run in a container", and the name this computer is listed under.
     runnerImage: typeof file.runnerImage === "string" ? file.runnerImage.trim() : "",
     runnerName: typeof file.runnerName === "string" ? file.runnerName.trim().slice(0, 80) : "",
+    // THE ONE KEY (oneKey.js): hold to talk, tap for hands-free, and the words
+    // go where they are meant (routing.js). Fn on a Mac, Right Ctrl on
+    // Windows, or the one picked in Settings; null on Linux, or with "off"
+    // here, or the server's switch off: the old keys, as they were.
+    oneKey: bool("desktop.oneKey.enabled", true)
+      ? oneKey.pickKey(process.platform, typeof file.oneKey === "string" ? file.oneKey
+        : process.platform === "darwin" ? str("desktop.oneKey.default.mac", "fn") : str("desktop.oneKey.default.windows", "rightCtrl"))
+      : null,
   };
 }
 let cfg = loadConfig();
@@ -494,7 +507,7 @@ let cfg = loadConfig();
  *  startup — the registered hotkey and the key hook's keys — stays as it was
  *  bound, or the tray would name keys that do not do anything until restart. */
 function reloadConfigFromKnobs() {
-  const wired = { hotkey: cfg.hotkey, notesHotkey: cfg.notesHotkey, hold: cfg.hold, holdKey: cfg.holdKey, tapKeys: cfg.tapKeys };
+  const wired = { hotkey: cfg.hotkey, notesHotkey: cfg.notesHotkey, hold: cfg.hold, holdKey: cfg.holdKey, tapKeys: cfg.tapKeys, oneKey: cfg.oneKey };
   cfg = Object.assign(loadConfig(), wired);
 }
 
@@ -902,6 +915,9 @@ let recording = false;
 let holdActive = false;
 let tapActive = false;
 let uiohookRef = null;
+// The one key as it is bound and working ("Fn", "Right Ctrl"), or "" while it
+// is not (the old keys, or the fallback chord after it could not be bound).
+let oneKeyBound = "";
 // Monotonic dictation-session id. Every start mints a new id; the renderer
 // echoes it in result/error/partial. State (recording flag, overlay) only
 // reacts to the CURRENT session's messages — a slow upload from a PREVIOUS
@@ -1008,14 +1024,16 @@ function openAppWindow(screenId) {
       : color("desktop.window.background", "#000000"),
     show: false,
     autoHideMenuBar: true,
-    webPreferences: webPrefs(),
+    // The app window alone may make a <webview>: a live page (liveView.js), each forced into the locked-down
+    // preferences and session of liveViewMain.js, whatever it asks for.
+    webPreferences: webPrefs({ webviewTag: true }),
   });
   appWin.once("ready-to-show", () => { if (appWin && !appWin.isDestroyed()) { appWin.show(); appWin.focus(); } });
   hardenWindow(appWin);
   // Ask's setup card re-reads what is allowed whenever the window comes
   // back to the front: the person is coming back from System Settings, and
   // a row they just turned on turns to "On" without a restart.
-  appWin.on("focus", () => { if (askOn()) askSetup.push(); });
+  appWin.on("focus", () => { if (askOn()) askSetup.push(); retryOneKey(); });
   // "hide" puts it away and keeps its boot (a tray app's close means that);
   // "close" really closes it, and the tray builds a fresh one next time.
   appWin.on("close", (e) => {
@@ -1049,6 +1067,9 @@ function fitToDisplay(width, height) {
   const h = Math.max(400, Math.min(height, wa.height - margin));
   return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - h) / 2) };
 }
+
+// Every webview is the app window's, and every one is locked down (liveViewMain.js).
+setupLiveViews({ app, session, path, isAppWindow: (c) => !!appWin && !appWin.isDestroyed() && c === appWin.webContents });
 
 /** Deny navigation + popups on our local windows — they only ever load our own
  *  files, so anything else is a bug or an injection attempt. */
@@ -1164,6 +1185,7 @@ function dictationTapKeys() {
 
 /** The way in, in words, for the keys this computer actually bound. */
 function pillHint() {
+  if (oneKeyBound) return txt("desktop.pill.hintOneKey", "Hold {key} to talk", { key: oneKeyBound });
   const keys = dictationTapKeys();
   if (cfg.tap && tapActive && keys.length) {
     return txt("desktop.pill.hintTap", "Tap {key} twice to talk", { key: keys[0] });
@@ -1326,6 +1348,9 @@ function pill(state, data) {
  */
 function pillAsk(phase, first) {
   if (!pillOn()) return null;
+  // The pill is saying where the words went ("Asked Tailzu · Type it
+  // instead"): the card grows from a seed of its own until that is put away.
+  if (pillState === "routed" && routing.holdsPill()) return null;
   const move = pillAskMove(phase, { state: pillState, recording, first: !!first });
   if (!move) return null;
   if (move === "rest") { pill("rest"); return null; }
@@ -1406,6 +1431,7 @@ function cancelDictation() {
   if (!recording) return;
   const sid = activeSession;
   remember(cancelled, sid);
+  routing.forget(sid);
   sendToRecorder("cancel-recording", { session: sid });
   if (peekWatch) peekWatch.end(sid);
   activeSession = 0;
@@ -1436,6 +1462,8 @@ ipcMain.on("pill:action", (e, a) => {
   else if (a === "cancel" && recording) cancelDictation();
   // A press on the pill while a question has it puts the question away.
   else if (a === "askCancel" && ask && pillState === "ask") ask.cancel("pill");
+  // A route's label: its alternative ("Ask instead", "Type it instead").
+  else if (a === "alt" && pillState === "routed" && !recording) void routing.alternative();
 });
 // The token for one request from the recorder. It was handed one token at
 // the start of a dictation and used it for every stretch, so a dictation
@@ -1618,7 +1646,10 @@ async function startNotes() {
   sendToNotes("notes:start", Object.assign({ id, baseUrl: cfg.baseUrl, language: cfg.language, knobs: knobsPayload(), systemAudio }, src));
   startNotesClock();
   refreshTray();
-  notify(fmt("notify.notesStarted", { key: prettyKey(cfg.notesHotkey) }));
+  // With the one key there is no notes chord: they stop it the way they started it.
+  notify(cfg.oneKey
+    ? txt("desktop.notify.notesStartedOneKey", "Taking notes. Nothing is typed anywhere. To stop, say “stop notes” with {key}.", { key: oneKeyBound || prettyKey(cfg.hotkey) })
+    : fmt("notify.notesStarted", { key: prettyKey(cfg.notesHotkey) }));
 }
 
 function stopNotes() {
@@ -1757,14 +1788,14 @@ function buildMenu() {
     // Says what the press will actually do. A plain "Dictate" on a signed-out
     // machine promises something the click cannot deliver.
     {
-      label: recording ? fmt("tray.listening", { key: prettyKey(cfg.hotkey) })
+      label: recording ? fmt("tray.listening", { key: oneKeyBound || prettyKey(cfg.hotkey) })
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
       click: toggleDictation,
     },
     // One microphone: while a dictation records it is the dictation's, and
     // a question started now would throw its words away.
     ...(askOn() ? [{
-      label: cfg.tap && tapActive ? txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() })
+      label: cfg.tap && tapActive && !cfg.oneKey ? txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() })
         : txt("desktop.tray.askNoTap", "Ask about this screen"),
       enabled: signedIn() && !recording,
       click: () => { if (!recording) void ask.tap({ menu: true }); },
@@ -1786,7 +1817,7 @@ function buildMenu() {
       ]),
     }] : []),
     {
-      label: !notes ? txt("desktop.tray.notesStart", "Take notes") + "  " + prettyKey(cfg.notesHotkey)
+      label: !notes ? txt("desktop.tray.notesStart", "Take notes") + (cfg.oneKey ? "" : "  " + prettyKey(cfg.notesHotkey))
         : notes.state === "recording" ? fmt("tray.notesStop", { time: elapsedLabel(notesElapsed()) })
         : notes.state === "saving" ? txt("desktop.tray.notesSaving", "Saving notes…")
         : txt("desktop.tray.notesStarting", "Starting notes…"),
@@ -1833,18 +1864,31 @@ function buildMenu() {
     // board, and whoever it gets in the way of needs to turn it off from here,
     // not from a config file.
     // It switches Ask's pair too, and says so: Ask's key does not dictate.
-    {
-      label: `${tapLabel()}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
-      type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
-      click: (item) => setLocal("tap", item.checked),
-    },
-    { label: `${t("tray.hotkey")}: ${prettyKey(cfg.hotkey)}`, enabled: false },
-    {
-      label: cfg.hold
-        ? `${t("tray.holdToTalk")} ${cfg.holdKey}${holdActive ? "" : ` (${t("tray.holdUnavailable")})`}`
-        : t("tray.holdOff"),
-      enabled: false,
-    },
+    // THE ONE KEY, when it is bound: the one way in, and its tap switch.
+    ...(oneKeyBound ? [
+      { label: txt("desktop.tray.oneKey", "Hold {key} to talk", { key: oneKeyBound }), enabled: false },
+      {
+        label: txt("desktop.tray.oneKeyTap", "Tap {key} to keep listening", { key: oneKeyBound }),
+        type: "checkbox", checked: cfg.tap !== false,
+        click: (item) => setLocal("tap", item.checked),
+      },
+    ] : cfg.oneKey ? [
+      // The key could not be bound: the chord stands in for it.
+      { label: txt("desktop.tray.oneKeyFallback", "{key} isn't available. Talk with {bound}", { key: oneKey.keyLabel(cfg.oneKey, process.platform), bound: prettyKey(cfg.hotkey) }), enabled: false },
+    ] : [
+      {
+        label: `${tapLabel()}${tapActive ? "" : ` (${t("tray.holdUnavailable")})`}`,
+        type: "checkbox", checked: cfg.tap && tapActive, enabled: tapActive,
+        click: (item) => setLocal("tap", item.checked),
+      },
+      { label: `${t("tray.hotkey")}: ${prettyKey(cfg.hotkey)}`, enabled: false },
+      {
+        label: cfg.hold
+          ? `${t("tray.holdToTalk")} ${cfg.holdKey}${holdActive ? "" : ` (${t("tray.holdUnavailable")})`}`
+          : t("tray.holdOff"),
+        enabled: false,
+      },
+    ]),
     { label: `${t("tray.backend")}: ${cfg.baseUrl}`, enabled: false },
     // Which credential is ACTUALLY in use — ends the "which token is it using"
     // guessing when auth fails. Signed in, that is the account; signed out
@@ -1887,6 +1931,8 @@ function setLocal(key, value) {
     else hidePill();
   }
   if (key === "tap") pillSend({ hint: pillHint() });
+  // Another key picked in Settings: bound now, no restart.
+  if (key === "oneKey") rebindOneKey();
 }
 
 // ---- Tailzu Code on this computer ---------------------------------------------
@@ -2058,6 +2104,24 @@ ipcMain.on("runner:openAudit", (e) => { if (fromRunnerWin(e) && runner) shell.op
 // path — a renderer that can write arbitrary paths is a renderer that can be
 // talked into writing arbitrary paths. And only the app window gets any of it.
 const fromApp = (e) => isFrom(e, appWin);
+/** The name this computer goes by: the Mac's own ("Aanya's MacBook Air"),
+ *  else its host name ("DESKTOP-4K2AB1", "aanya-thinkpad"; a Mac's
+ *  "Aanyas-MacBook-Air.local" made readable). Read once. */
+let COMPUTER_NAME = null;
+function computerName() {
+  if (COMPUTER_NAME !== null) return COMPUTER_NAME;
+  let name = "";
+  if (process.platform === "darwin") {
+    try { name = String(require("child_process").execFileSync("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 800, encoding: "utf8" })).trim(); } catch { name = ""; }
+  }
+  if (!name) {
+    try { name = os.hostname().replace(/\.local$/i, ""); } catch { name = ""; }
+    if (process.platform === "darwin") name = name.replace(/[-_]+/g, " ");
+  }
+  name = name.trim();
+  COMPUTER_NAME = name.slice(0, 64);
+  return COMPUTER_NAME;
+}
 ipcMain.handle("app:env", (e) => {
   if (!fromApp(e)) return null;
   const navigate = pendingScreen;
@@ -2069,7 +2133,7 @@ ipcMain.handle("app:env", (e) => {
     language: cfg.language,
     // The key that is actually bound, so the window can name it rather than
     // say "your hotkey" to someone whose first choice was taken.
-    hotkey: prettyKey(cfg.hotkey),
+    hotkey: oneKeyShown() || prettyKey(cfg.hotkey),
     // The note-taker is here (the window declares DeskNotes) and its key.
     notes: true,
     // A Mac can open the permission for the computer's sound from a note.
@@ -2081,6 +2145,10 @@ ipcMain.handle("app:env", (e) => {
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
+    // This computer's name, for "Sign in on <name>?" on the phone when it signs
+    // in by QR (linkSignIn.js). Only a label: the server cleans it and the
+    // person sees it before approving.
+    deviceName: computerName(),
     // What the window reports in its own bootstrap: the build (package.json's
     // version, which the page cannot read) and how many times this install
     // has launched, counted once per launch here so both surfaces agree.
@@ -2102,11 +2170,18 @@ ipcMain.handle("app:knobs", () => knobsPayload());
 /** This computer's settings, as the window's pages show them. The bound keys
  *  are the ones actually bound, which is not always what was asked for. */
 function localSettings() {
+  // THE ONE KEY, while it is bound (or still being bound): the one way in,
+  // so every key the window's pages used to name is it — "Hold Fn" where
+  // they said hold, the key where they said press. `oneKey` is the key
+  // asked for, also when it could not be bound and the chord stood in.
+  const one = oneKeyShown();
   return {
     pill: cfg.pill !== false, pauseFlush: cfg.pauseFlush !== false, autoStart: !!cfg.autoStart,
-    live: !!cfg.live, tap: !!cfg.tap && tapActive, tapKeys: cfg.tapKeys.slice(),
-    hotkey: prettyKey(cfg.hotkey), hold: !!cfg.hold && holdActive, holdKey: cfg.holdKey,
+    live: !!cfg.live, tap: one ? cfg.tap !== false : !!cfg.tap && tapActive, tapKeys: one ? [] : cfg.tapKeys.slice(),
+    hotkey: one || prettyKey(cfg.hotkey), hold: one ? true : !!cfg.hold && holdActive, holdKey: one || cfg.holdKey,
     notesHotkey: prettyKey(cfg.notesHotkey),
+    os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
+    oneKey: cfg.oneKey || "", oneKeyLabel: one, oneKeyOn: !!one,
   };
 }
 // What the window may change, and of what type. Nothing else is written.
@@ -2115,6 +2190,8 @@ ipcMain.handle("app:config", (e) => (fromApp(e) ? localSettings() : null));
 ipcMain.handle("app:setConfig", (e, key, value) => {
   if (!fromApp(e)) return null;
   if (Object.prototype.hasOwnProperty.call(SETTABLE, key) && typeof value === SETTABLE[key]) setLocal(key, value);
+  // The one key: only one of this system's own choices (oneKey.js).
+  else if (key === "oneKey" && typeof value === "string" && oneKey.choices(process.platform).some((c) => c.id === value)) setLocal(key, value);
   return localSettings();
 });
 ipcMain.handle("app:setSession", (e, v) => {
@@ -2135,6 +2212,33 @@ ipcMain.handle("app:session", async (e) => {
   await refreshSession();
   return forWindow(authSession);
 });
+// A screenshot for the Bots app's Attach (media.js): on a Mac, the system's own
+// picker (drag over an area, or Space and click a window; Esc is nothing). The
+// picture comes back as bytes and the file is gone at once. Where there is no
+// such picker, or Screen Recording is refused (the picture would be the
+// wallpaper), the window is told so and offers a picture file instead.
+let CAPTURING = false;
+ipcMain.handle("app:captureScreen", async (e) => {
+  if (!fromApp(e)) return null;
+  if (process.platform !== "darwin") return { unavailable: true };
+  let access = "unknown";
+  try { access = systemPreferences.getMediaAccessStatus("screen"); } catch { /* an old macOS */ }
+  if (access === "denied" || access === "restricted") return { unavailable: true, why: "screen" };
+  if (CAPTURING) return { cancelled: true };
+  CAPTURING = true;
+  const file = path.join(os.tmpdir(), `tz-shot-${process.pid}-${Date.now()}.png`);
+  try {
+    await new Promise((resolve) => execFile("/usr/sbin/screencapture", ["-i", "-x", "-t", "png", file], { timeout: 5 * 60 * 1000 }, () => resolve()));
+    const data = await fs.promises.readFile(file).catch(() => null);
+    if (!data || data.length < 64) return { cancelled: true };
+    const d = new Date();
+    const at = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} at ${String(d.getHours()).padStart(2, "0")}.${String(d.getMinutes()).padStart(2, "0")}`;
+    return { name: `Screenshot ${at}.png`, bytes: new Uint8Array(data) };
+  } finally {
+    CAPTURING = false;
+    fs.promises.unlink(file).catch(() => {});
+  }
+});
 // Whether the OS lets Tailzu use the microphone ("granted", "denied",
 // "not-determined", "restricted"), for the Bots app's microphone card. Read
 // here because only the main process can see it; "unknown" where the system
@@ -2145,6 +2249,15 @@ ipcMain.handle("app:micStatus", (e) => {
     return typeof systemPreferences.getMediaAccessStatus === "function" && process.platform !== "linux"
       ? systemPreferences.getMediaAccessStatus("microphone") : "unknown";
   } catch { return "unknown"; }
+});
+// Whether this Mac lets Tailzu type into other apps (Accessibility), for the
+// Bots app's arrival card: "granted" or "denied", read without prompting
+// (isTrustedAccessibilityClient(false)). Other systems have no such switch:
+// "unknown", which the window takes as nothing to ask for.
+ipcMain.handle("app:axStatus", (e) => {
+  if (!fromApp(e)) return null;
+  if (process.platform !== "darwin") return "unknown";
+  try { return systemPreferences.isTrustedAccessibilityClient(false) === true ? "granted" : "denied"; } catch { return "unknown"; }
 });
 ipcMain.on("app:openExternal", (e, url) => {
   // Only ever http(s). A renderer handing this a file:// or a shell scheme is
@@ -2326,6 +2439,8 @@ function toggleDictation() {
     const sid = activeSession;
     const focused = BrowserWindow.getFocusedWindow();
     const ours = !!focused && focused === appWin;
+    // Where its words go is decided on what it says (routing.js).
+    routing.start(sid, { ours });
     const named = ours ? Promise.resolve({ label: "Tailzu" }) : frontApp.frontInfo();
     named
       .then((info) => {
@@ -2351,7 +2466,7 @@ function toggleDictation() {
               if (sid !== activeSession) return;
               // No text field (or none readable): said so, so a short first
               // stretch is not held waiting for a selection that is not coming.
-              if (!field) { sendToRecorder("recording-field", { session: sid, field: null }); return; }
+              if (!field) { routing.field(sid, null); sendToRecorder("recording-field", { session: sid, field: null }); return; }
               // What is selected in it goes too: said with a selection, an
               // instruction ("make this bullet points") rewrites it.
               if (!bool("desktop.field.selection", true)) delete field.selection;
@@ -2359,6 +2474,7 @@ function toggleDictation() {
                 fieldText.set(sid, field.before);
                 if (fieldText.size > 32) fieldText.delete(fieldText.keys().next().value);
               }
+              routing.field(sid, field);
               sendToRecorder("recording-field", { session: sid, field });
             })
             .catch(() => { if (sid === activeSession) sendToRecorder("recording-field", { session: sid, field: null }); });
@@ -2446,13 +2562,179 @@ function tapCodes(name, UiohookKey) {
   return [exact, right].filter((c) => typeof c === "number");
 }
 
+/**
+ * The talk chord, and with `notes` the notes chord: what the keys were before
+ * the one key, and still are on Linux. Also the one key's stand-in when it
+ * cannot be bound (`quiet`: that says so itself). Answers the chord bound.
+ */
+function bindHotkeys(o) {
+  // A HOTKEY THAT DOES NOT REGISTER LEAVES NO APP AT ALL.
+  //
+  // There is no window here by design: the tray and the hotkey are the whole
+  // surface. So when Windows says another process already owns
+  // Ctrl+Shift+Space — an IME usually does — the app is running, invisible,
+  // and unusable, and the only thing it said about it was a notification that
+  // disappears in a few seconds telling you to edit a file you have never
+  // opened.
+  //
+  // So: try the fallbacks. Each is chosen to be unlikely to be owned, and
+  // whichever takes becomes the hotkey for this run and is written back to the
+  // config so the next run starts where this one ended up.
+  // Ctrl+Alt+Space is NOT on this list. Claude's desktop app takes it, and a
+  // fallback that lands on another assistant's prompt bar is worse than no
+  // fallback: the key appears to work and belongs to someone else.
+  const candidates = [cfg.hotkey].concat(list("desktop.hotkey.fallbacks", [
+    "CommandOrControl+Shift+F12", "CommandOrControl+Alt+Shift+Space", "CommandOrControl+Alt+D",
+  ]));
+  let bound = null;
+  for (const key of candidates) {
+    if (!key || typeof key !== "string") continue;
+    try {
+      if (globalShortcut.register(key, toggleDictation)) { bound = key; break; }
+    } catch { /* an unparseable accelerator is just another failed candidate */ }
+  }
+
+  if (bound && bound !== cfg.hotkey) {
+    const taken = cfg.hotkey;
+    cfg.hotkey = bound;
+    try { saveConfig({ hotkey: bound }); } catch { /* config we cannot write is not fatal */ }
+    refreshTray();
+    if (!o.quiet) notify(fmt("notify.hotkeyTaken", { taken: prettyKey(taken), bound: prettyKey(bound) }));
+  } else if (!bound && !o.quiet) {
+    // Nothing took. The tray is the only way in, so say that rather than
+    // naming a key that does not work.
+    notify(t("notify.noHotkey"));
+  }
+  if (!o.notes) return bound;
+
+  // The notes hotkey, with its own fallbacks. A taken chord is said once; the
+  // tray still starts notes either way.
+  let notesBound = null;
+  for (const key of [cfg.notesHotkey].concat(list("desktop.notes.hotkey.fallbacks", ["CommandOrControl+Alt+Shift+N"]))) {
+    if (!key || typeof key !== "string" || key === bound) continue;
+    try { if (globalShortcut.register(key, toggleNotes)) { notesBound = key; break; } } catch { /* next */ }
+  }
+  if (notesBound && notesBound !== cfg.notesHotkey) {
+    const taken = cfg.notesHotkey;
+    cfg.notesHotkey = notesBound;
+    try { saveConfig({ notesHotkey: notesBound }); } catch { /* not fatal */ }
+    notify(fmt("notify.notesHotkeyTaken", { taken: prettyKey(taken), bound: prettyKey(notesBound) }));
+  }
+  return bound;
+}
+
+// ---- The one key (oneKey.js) -------------------------------------------------------
+// Hold it to talk, tap it for hands-free; Ask and meeting notes are said, not
+// keyed (routing.js). Bound through the key hook (Right ⌥ / ⌘ / Ctrl / Alt)
+// or the Fn helper (native/tzkey.swift). Neither, and the talk chord stands
+// in, said once.
+let oneKeyWatch = null;      // oneKey.bindOneKey's handle
+let oneKeyMark = null;       // the binding now in force (see bindOneKeyNow)
+let oneKeyHook = null;       // { uIOhook, UiohookKey }, once the hook is running
+let oneKeyState = "off";     // off | binding | bound | fallback
+let oneKeyWhy = "";          // why the last binding fell back (oneKey.bindOneKey's reason)
+let fallbackKey = null;      // the chord registered while the one key cannot be
+const oneKeyGesture = oneKey.createHoldTap({
+  press: oneKeyPress,
+  finish: () => { if (recording) toggleDictation(); },
+  cancel: () => { if (recording) cancelDictation(); },
+  talking: () => recording,
+  tapOn: () => cfg.tap !== false,
+  armMs: () => num("desktop.oneKey.armMs", 200),
+  tapMs: () => num("desktop.oneKey.tapMs", 300),
+});
+/** The key went down alone: talk. A question up (its card's Do it, a reply it
+ *  listens for, a run at work) is answered instead, as Ask's pair did. */
+function oneKeyPress() {
+  if (ask && ask.active()) { void ask.tap(); return "other"; }
+  if (recording) return "talk";
+  toggleDictation();
+  return recording ? "talk" : "none";
+}
+/** The one key's name while it is bound or being bound; "" otherwise. */
+function oneKeyShown() {
+  return oneKeyBound || (oneKeyState === "binding" && cfg.oneKey ? oneKey.keyLabel(cfg.oneKey, process.platform) : "");
+}
+function tzkeyPath() {
+  return app.isPackaged ? path.join(process.resourcesPath, "tzkey") : path.join(__dirname, "build", "tzkey");
+}
+/** Bind cfg.oneKey (again): the last binding goes first. */
+function bindOneKeyNow() {
+  if (oneKeyWatch) { oneKeyWatch.stop(); oneKeyWatch = null; }
+  oneKeyGesture.reset();
+  oneKeyBound = "";
+  if (!cfg.oneKey) { oneKeyState = "off"; return; }
+  oneKeyState = "binding";
+  const key = cfg.oneKey, label = oneKey.keyLabel(key, process.platform);
+  // This binding's own mark: a key hook answers before bindOneKey returns, and
+  // an answer for a binding since replaced is not this one's.
+  const watch = oneKeyMark = {};
+  oneKeyWatch = oneKey.bindOneKey({
+    key, platform: process.platform, gesture: oneKeyGesture, hook: oneKeyHook,
+    helper: { path: tzkeyPath(), exists: (f) => fs.existsSync(f), spawn },
+    bound: () => {
+      if (oneKeyMark !== watch) return;
+      oneKeyState = "bound";
+      oneKeyBound = label;
+      // A chord that stood in for an earlier key goes: one key.
+      if (fallbackKey) { try { globalShortcut.unregister(fallbackKey); } catch { /* gone */ } fallbackKey = null; }
+      refreshKeys();
+    },
+    failed: (why) => {
+      if (oneKeyMark !== watch || oneKeyState === "fallback") return;
+      oneKeyState = "fallback";
+      oneKeyWhy = why;
+      oneKeyBound = "";
+      // Talking stays possible: the chord, with its fallbacks, as before.
+      const bound = fallbackKey || bindHotkeys({ notes: false, quiet: true });
+      if (bound) fallbackKey = bound;
+      // Said once for each key and reason, not on every launch.
+      const said = key + ":" + why;
+      if (localState.oneKeyWarned !== said) {
+        localState.oneKeyWarned = said;
+        saveLocalState();
+        notify(!bound ? txt("desktop.notify.oneKeyNone", "{key} can't be used here, and no other key was free. Use Dictate in the tray menu.", { key: label })
+          : why === "denied" ? txt("desktop.notify.oneKeyDenied", "Tailzu can't use {key} until it's allowed in Privacy & Security › Accessibility. Talk with {bound} for now.", { key: label, bound: prettyKey(bound) })
+          : txt("desktop.notify.oneKeyUnavailable", "{key} can't be used on this computer, so talk with {bound}. Pick another key in Settings.", { key: label, bound: prettyKey(bound) }));
+      }
+      refreshKeys();
+    },
+  });
+}
+function rebindOneKey() {
+  if (!app.isReady()) return;
+  bindOneKeyNow();
+  refreshKeys();
+}
+/** macOS said no to the key, and the person may have just allowed Tailzu
+ *  (they come back to the window from System Settings): tried again then. */
+function retryOneKey() {
+  if (oneKeyState !== "fallback" || oneKeyWhy !== "denied" || process.platform !== "darwin") return;
+  let trusted = false;
+  try { trusted = systemPreferences.isTrustedAccessibilityClient(false) === true; } catch { trusted = false; }
+  if (trusted) rebindOneKey();
+}
+/** Everything that names the keys, told again. */
+function refreshKeys() { refreshTray(); pillSend({ hint: pillHint() }); }
+
 function setupKeyHook() {
   let uIOhook, UiohookKey;
   try {
     ({ uIOhook, UiohookKey } = require("uiohook-napi"));
   } catch {
+    // The one key: Fn has a helper of its own; any other key falls back.
+    if (cfg.oneKey) { bindOneKeyNow(); return; }
     if (cfg.hold) notify(t("notify.holdUnavailable"));
     if (cfg.tap) notify(t("notify.tapUnavailable"));
+    return;
+  }
+
+  // THE ONE KEY, and nothing else: no hold key, no double-taps, no Ask pair.
+  if (cfg.oneKey) {
+    // Esc still stops a question, or what Ask is doing.
+    uIOhook.on("keydown", (e) => { if (e.keycode === UiohookKey.Escape && ask) ask.escape(); });
+    try { uIOhook.start(); uiohookRef = uIOhook; oneKeyHook = { uIOhook, UiohookKey }; } catch { oneKeyHook = null; }
+    bindOneKeyNow();
     return;
   }
 
@@ -2556,6 +2838,15 @@ function setupKeyHook() {
 // paste now waits for the keystroke before it, and a little after it for the
 // target app to read the clipboard.
 let pasting = Promise.resolve();
+/** Take back the last `times` pastes with the app's own undo (⌘Z, Ctrl+Z),
+ *  after any paste still going: the pill's "Ask instead" (routing.js). */
+function undoPastes(times) {
+  pasting = pasting.then(() => new Promise((done) => {
+    const [file, args] = undoCommand(process.platform, times);
+    execFile(file, args, { timeout: 10000, windowsHide: true }, () => setTimeout(done, num("desktop.paste.delayMs", 120)));
+  })).catch(() => { /* an undo that failed must not stop the pastes after it */ });
+  return pasting;
+}
 function paste(text) {
   const delay = num("desktop.paste.delayMs", 120);
   pasting = pasting.then(() => new Promise((done) => {
@@ -2724,6 +3015,8 @@ function setupAsk() {
     dictating: () => recording,
     // The names it answers to: its own, Blip, and theirs for it.
     names: () => ["Tailzu", "Blip", accountNickname].filter(Boolean),
+    // The one key as bound ("Fn"): what its cards tell the person to press.
+    oneKey: () => oneKeyBound,
     // The card's button when the Mac has not let Tailzu see the screen; none
     // elsewhere (a look on Windows needs no permission).
     screenSettings: process.platform === "darwin" ? openScreenRecordingSettings : null,
@@ -2797,6 +3090,47 @@ ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.pause
 // The live stream's final text for a question, after (or before) its clip.
 ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn(p); });
 
+// ---- Where the one key's words go (routing.js, router.js) ---------------------------
+// A text box in focus: typed as they come, as dictation always was. "Tailzu,
+// …", a question with no text box in front, "take notes", a task for a bot:
+// held until the key comes up, then handed to Ask, to notes or to the bot
+// (the backend's own pick, as "Ask any bot"), with the pill saying where they
+// went and one tap to have them typed instead. On wherever the one key is
+// (a Mac, Windows), the chord standing in for it included; off on Linux.
+const withinMs = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out")), ms))]);
+const routing = createRouting({
+  on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
+  signals: () => ({ names: ["Tailzu", "Blip", accountNickname].filter(Boolean), askOn: askOn(), notesOn: !!notes }),
+  type: (sid, chunks) => {
+    const written = chunks.filter((c) => c && c.text);
+    for (const c of written) paste(spaced(sid, c.text, c.join));
+    pastedIn.delete(sid);
+    if (written.length && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
+    return pasting;
+  },
+  undo: undoPastes,
+  ask: (message) => (ask && askOn() ? ask.askHeard(message) : false),
+  askCancel: () => { if (ask) ask.cancel("route"); },
+  notes: (start) => {
+    if (start && !notes) void startNotes();
+    else if (!start && notes && notes.state === "recording") stopNotes();
+  },
+  whichBot: (message, slug) => withinMs(apiJson("/v1/shell/route", {
+    method: "POST", body: JSON.stringify(Object.assign({ message: String(message).slice(0, 2000) }, slug ? { bot: slug } : {})),
+  }), num("desktop.route.whichMs", 4000)),
+  sendBot: (message, slug) => apiJson("/v1/shell/ask", {
+    method: "POST", body: JSON.stringify({ message: String(message).slice(0, 2000), bot: slug, device: "desktop", mode: "voice" }),
+  }).then((j) => (j && j.shell ? { name: (j.shell.bot && j.shell.bot.name) || "", text: String(j.shell.text || ""), needs: Number(j.shell.needs) || 0 } : null)),
+  // The bot's answer, said; a click opens it among the rest (Activity).
+  botAnswered: (r) => notify(r.text
+    ? txt("desktop.route.botAnswer", "{bot}: {text}", { bot: r.name, text: r.text.length > 180 ? r.text.slice(0, 179) + "…" : r.text })
+    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(bool("bots.app", false) ? "bots.activity" : undefined)),
+  pill: (state, data) => pill(state, data),
+  pillRest: () => { if (!recording && (pillState === "routed" || pillState === "writing" || pillState === "done")) pill("rest"); },
+  knobs: { num, bool, txt },
+  log: (m) => console.log("[route] " + m),
+});
+
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
 // A slow upload from a previous session finishing mid-recording must not flip
@@ -2809,6 +3143,9 @@ function settleSession(session) {
   hideOverlay();
   refreshTray();
 }
+
+/** What the recognizer heard for a stretch (its raw transcript), for routing. */
+function heardIn(p) { return p && typeof p.heard === "string" ? p.heard.slice(0, 4000) : ""; }
 
 /** A message from the recorder, and only from the recorder, with its text as
  *  a trimmed string whatever was sent; null for anything else. A rewrite of
@@ -2831,9 +3168,14 @@ ipcMain.on("dictation-result", (e, payload) => {
   if (cancelled.has(session)) { cancelled.delete(session); return; }
   const current = session === activeSession;
   settleSession(session);
+  // WHERE THE WORDS GO (routing.js): typed, as below, or held until now and
+  // handed to Ask, notes or a bot, which paste nothing here. "labelled": typed,
+  // and the pill says so with the other choice beside it.
+  const routed = routing.end(session, { text: t, heard: heardIn(p), join: p.join }, current);
+  if (routed === "routed") { if (peekWatch && current) peekWatch.end(session); return; }
   // Paste regardless of session age — late-arriving words are still the
   // user's words and belong at the cursor.
-  if (current) pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
+  if (current && routed !== "labelled") pill(t || pillWords ? "done" : "rest", { words: pillWords + (t ? countWords(t) : 0) });
   if (t && appWin && !appWin.isDestroyed()) appWin.webContents.send("app:dictated");
   if (t) paste(spaced(session, t, p.join));
   pastedIn.delete(session);
@@ -2856,6 +3198,9 @@ ipcMain.on("dictation-segment", (e, payload) => {
     notify(fmt("notify.dictationFailed", { message: txt("desktop.notify.segmentLost", "segment lost — still listening") }));
     return;
   }
+  // Held (routing.js): "Tailzu, …", a question with no text box: nothing is
+  // pasted until the key comes up and the words are routed.
+  if (routing.chunk(session, { text: t, heard: heardIn(p), join: p.join }) === "hold") return;
   if (!t) return;
   paste(spaced(session, t, p.join));
   if (session === activeSession) {
@@ -2881,6 +3226,7 @@ ipcMain.on("dictation-error", (e, payload) => {
   if (ask && ask.error(p)) return;
   const { session, code } = p, message = String(p.message || ""), detail = String(p.detail || "");
   if (cancelled.has(session)) { cancelled.delete(session); return; }
+  routing.forget(session);
   // Blip goes at once: there is nothing to watch land.
   if (peekWatch) peekWatch.end(session);
   // `message` is words for the person, and it is all the notification says.
@@ -3127,57 +3473,9 @@ app.whenReady().then(() => {
     } catch { /* a notification the OS refuses must not take the app down */ }
   }
 
-  // A HOTKEY THAT DOES NOT REGISTER LEAVES NO APP AT ALL.
-  //
-  // There is no window here by design: the tray and the hotkey are the whole
-  // surface. So when Windows says another process already owns
-  // Ctrl+Shift+Space — an IME usually does — the app is running, invisible,
-  // and unusable, and the only thing it said about it was a notification that
-  // disappears in a few seconds telling you to edit a file you have never
-  // opened.
-  //
-  // So: try the fallbacks. Each is chosen to be unlikely to be owned, and
-  // whichever takes becomes the hotkey for this run and is written back to the
-  // config so the next run starts where this one ended up.
-  // Ctrl+Alt+Space is NOT on this list. Claude's desktop app takes it, and a
-  // fallback that lands on another assistant's prompt bar is worse than no
-  // fallback: the key appears to work and belongs to someone else.
-  const candidates = [cfg.hotkey].concat(list("desktop.hotkey.fallbacks", [
-    "CommandOrControl+Shift+F12", "CommandOrControl+Alt+Shift+Space", "CommandOrControl+Alt+D",
-  ]));
-  let bound = null;
-  for (const key of candidates) {
-    if (!key || typeof key !== "string") continue;
-    try {
-      if (globalShortcut.register(key, toggleDictation)) { bound = key; break; }
-    } catch { /* an unparseable accelerator is just another failed candidate */ }
-  }
-
-  if (bound && bound !== cfg.hotkey) {
-    const taken = cfg.hotkey;
-    cfg.hotkey = bound;
-    try { saveConfig({ hotkey: bound }); } catch { /* config we cannot write is not fatal */ }
-    refreshTray();
-    notify(fmt("notify.hotkeyTaken", { taken: prettyKey(taken), bound: prettyKey(bound) }));
-  } else if (!bound) {
-    // Nothing took. The tray is the only way in, so say that rather than
-    // naming a key that does not work.
-    notify(t("notify.noHotkey"));
-  }
-
-  // The notes hotkey, with its own fallbacks. A taken chord is said once; the
-  // tray still starts notes either way.
-  let notesBound = null;
-  for (const key of [cfg.notesHotkey].concat(list("desktop.notes.hotkey.fallbacks", ["CommandOrControl+Alt+Shift+N"]))) {
-    if (!key || typeof key !== "string" || key === bound) continue;
-    try { if (globalShortcut.register(key, toggleNotes)) { notesBound = key; break; } } catch { /* next */ }
-  }
-  if (notesBound && notesBound !== cfg.notesHotkey) {
-    const taken = cfg.notesHotkey;
-    cfg.notesHotkey = notesBound;
-    try { saveConfig({ notesHotkey: notesBound }); } catch { /* not fatal */ }
-    notify(fmt("notify.notesHotkeyTaken", { taken: prettyKey(taken), bound: prettyKey(notesBound) }));
-  }
+  // THE ONE KEY binds itself (setupKeyHook): no chord, no notes chord, no
+  // Ask pair. Without it (Linux, or turned off), the chords as they were.
+  if (!cfg.oneKey) bindHotkeys({ notes: true });
   refreshTray();
 
   setupKeyHook();

@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 11bdf3b28d1cac497ce6916e450b10954f18d5700b4bbe28ed8bb45942b41cfe
-// body sha256 7316a8190de69f0da35aeaff90b545573c56e40076b4ef31964754e6bd94a545
+// core.ts sha256 bd5571e9085e823afa75642209545dff56d84c4f04878ee74147320ae9950112
+// body sha256 8824a45a8dc73b70338f1d00e6652f8b1435018f40c5c129b9a904f76471b697
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -43,7 +43,7 @@
   const TAU = Math.PI * 2;
   /** A built-in's play by its slug; anything else plays as anyone's own bot. */
   function kindOf(slug) {
-      return slug === "code" || slug === "keybot" || slug === "plan" || slug === "travel" || slug === "make" ? slug : "custom";
+      return slug === "code" || slug === "keybot" || slug === "plan" || slug === "travel" || slug === "notes" || slug === "make" ? slug : "custom";
   }
   /** mulberry32: small, fast, and the same everywhere. */
   function rng(seed) {
@@ -273,7 +273,16 @@
   const DUST = 128;
   const SPARKS = 16;
   // Prop kinds.
-  const P_ZERO = 1, P_ONE = 2, P_KEY = 3, P_DAY = 4, P_PLANE = 5, P_BALL = 6;
+  const P_ZERO = 1, P_ONE = 2, P_KEY = 3, P_DAY = 4, P_PLANE = 5, P_BALL = 6, P_PAD = 7;
+  /** A spark's kind (shome): 0 rises or falls, 1 flows into his head (reading), 2 a torn-off page that flutters down. */
+  const S_PAGE = 2;
+  /** The Notes bot's pad: lines to a page. */
+  const PAD_LINES = 4;
+  /** A number in [0, 1) from n: the same n, the same number (a scribbled line's length and wobble). */
+  const hash01 = (n) => {
+      const s = Math.sin(n * 12.9898 + 78.233) * 43758.5453;
+      return s - Math.floor(s);
+  };
   // Contact flags (per particle, per step).
   const C_FLOOR = 1, C_WALL = 2, C_CEIL = 4, C_SUPPORT = 8;
   // Acts.
@@ -439,7 +448,16 @@
           this.moment = "play";
           this.hintDir = 0;
           this.fixedS = 0;
+          /** The Notes bot's pad, its width and height (px). */
+          this.padW = 0;
+          this.padH = 0;
           this.sitWant = 0;
+          /** The Notes bot: when he next looks round while he listens, how long he listens, the page he watches fall, where his pencil writes. */
+          this.noteLook = 0;
+          this.listenFor = 0;
+          this.pageSpark = -1;
+          this.penX = NaN;
+          this.penY = NaN;
           this.lookNext = 0;
           this.flyT = 0;
           this.catchIt = false;
@@ -754,6 +772,12 @@
               }
               this.tx = w * 0.7;
           }
+          else if (this.kind === "notes") {
+              // A little pad, standing on the floor until he picks it up.
+              this.padW = 0.3 * S;
+              this.padH = 0.36 * S;
+              this.addPad(w * (0.62 + r() * 0.08), fl - this.padH / 2 - 0.5, this.padW, this.padH);
+          }
           else if (this.kind === "travel") {
               const L = 0.52 * S;
               const cx = w * 0.7, cy = fl - 0.08 * S;
@@ -798,6 +822,28 @@
           this.addC(a + 3, a, sz, 1, 1);
           this.addC(a, a + 2, sz * Math.SQRT2, 1, 1);
           this.addC(a + 1, a + 3, sz * Math.SQRT2, 1, 1);
+      }
+      /** The Notes bot's pad: a rigid rectangle of four particles (clockwise on screen: top left, top right, bottom right, bottom left). */
+      addPad(cx, cy, pw, ph) {
+          const p = this.np++;
+          this.pk[p] = P_PAD;
+          this.pr[p] = Math.max(pw, ph) / 2;
+          this.pn[p] = 4;
+          this.pa[p] = 0; // lines written on this page (the fraction is the line he is on)
+          this.ptime[p] = 0; // pages torn off so far
+          const hw = pw / 2, hh = ph / 2;
+          const a = this.addP(cx - hw, cy - hh, 0.3, 0.4, 0.998, 0.05, 0.85);
+          this.addP(cx + hw, cy - hh, 0.3, 0.4, 0.998, 0.05, 0.85);
+          this.addP(cx + hw, cy + hh, 0.3, 0.4, 0.998, 0.05, 0.85);
+          this.addP(cx - hw, cy + hh, 0.3, 0.4, 0.998, 0.05, 0.85);
+          this.p0[p] = a;
+          const dg = Math.hypot(pw, ph);
+          this.addC(a, a + 1, pw, 1, 1);
+          this.addC(a + 1, a + 2, ph, 1, 1);
+          this.addC(a + 2, a + 3, pw, 1, 1);
+          this.addC(a + 3, a, ph, 1, 1);
+          this.addC(a, a + 2, dg, 1, 1);
+          this.addC(a + 1, a + 3, dg, 1, 1);
       }
       // ------------------------------------------------------------------- stepping
       /** Advance by a frame's time (seconds). Fixed steps inside; a long pause is clamped, not caught up. */
@@ -887,6 +933,8 @@
               this.aero();
           if (this.kind === "keybot")
               this.keySprings();
+          if (this.kind === "notes")
+              this.padSprings();
       }
       supportY() {
           const a = this.hit[FOOT_L] & (C_FLOOR | C_SUPPORT) ? 1 : 0, b = this.hit[FOOT_R] & (C_FLOOR | C_SUPPORT) ? 1 : 0;
@@ -1027,6 +1075,28 @@
               const tx = x[j1] + ux * this.lAnt2, ty = y[j1] + uy * this.lAnt2;
               this.ax[j2] += (tx - x[j2]) * 380 - (this.vx(j2) - this.vx(j1)) * 5;
               this.ay[j2] += (ty - y[j2]) * 380 - (this.vy(j2) - this.vy(j1)) * 5;
+          }
+      }
+      /** The hand the Notes bot holds his pad in (the one behind him), and the one he writes with. */
+      padHand() { return this.face >= 0 ? HAND_L : HAND_R; }
+      penHand() { return this.face >= 0 ? HAND_R : HAND_L; }
+      /** The pad's top left corner as he holds it: out in front of him, its near edge in his holding hand, a little below the middle. */
+      padLeft() { return this.face >= 0 ? this.x[this.padHand()] : this.x[this.padHand()] - this.padW; }
+      padTop() { return this.y[this.padHand()] - this.padH * 0.62; }
+      /**
+       * The held pad: its corners pulled by springs to an upright rectangle on his holding hand (gravity carried by the
+       * grip). Let go, nothing holds it, and it falls where it is.
+       */
+      padSprings() {
+          if (this.held < 0 || this.pk[this.held] !== P_PAD)
+              return;
+          const a = this.p0[this.held], L = this.padLeft(), T = this.padTop(), hand = this.padHand();
+          const hvx = this.vx(hand), hvy = this.vy(hand);
+          for (let k = 0; k < 4; k++) {
+              const i = a + k;
+              const tx = L + (k === 1 || k === 2 ? this.padW : 0), ty = T + (k >= 2 ? this.padH : 0);
+              this.ax[i] += (tx - this.x[i]) * 700 - (this.vx(i) - hvx) * 30;
+              this.ay[i] += (ty - this.y[i]) * 700 - (this.vy(i) - hvy) * 30 - this.g;
           }
       }
       keySprings() {
@@ -1478,6 +1548,24 @@
           for (let i = 0; i < SPARKS; i++) {
               if (this.slife[i] <= 0)
                   continue;
+              if (this.shome[i] === S_PAGE) {
+                  // A torn-off page: paper. Light, a lot of air drag, rocked from side to side as it falls; it lands, and fades.
+                  const S = this.S, rest = this.floor - S * 0.03;
+                  if (this.sy[i] < rest) {
+                      this.svx[i] = this.svx[i] + (Math.sin(this.t * 5.5 + i * 1.7) * S * 9 - this.svx[i] * 3.2) * h;
+                      this.svy[i] = this.svy[i] + (this.g * 0.22 - this.svy[i] * 4.5) * h;
+                      this.slife[i] = this.slife[i] - h * 0.22;
+                  }
+                  else {
+                      this.sy[i] = rest;
+                      this.svy[i] = 0;
+                      this.svx[i] = this.svx[i] * (1 - Math.min(1, 8 * h));
+                      this.slife[i] = this.slife[i] - h * 0.7;
+                  }
+                  this.sx[i] = clamp(this.sx[i] + this.svx[i] * h, 3, this.w - 3);
+                  this.sy[i] = Math.min(rest, this.sy[i] + this.svy[i] * h);
+                  continue;
+              }
               if (this.shome[i]) {
                   // Into his head: a damped pull to it; it is gone when it arrives, and the antenna lights a little.
                   const dx = this.x[HEAD] - this.sx[i], dy = this.y[HEAD] - this.sy[i];
@@ -1646,6 +1734,7 @@
           this.armL = false;
           this.armR = false;
           this.armK = 0;
+          this.penX = NaN;
           this.speed = this.mood === "working" ? 1.3 : 0.85;
           this.lookOut = 0;
           this.lidTo = this.mood === "idle" ? 0.22 : 0.1;
@@ -1946,6 +2035,9 @@
                   break;
               case "travel":
                   this.fly(h);
+                  break;
+              case "notes":
+                  this.scribble(h);
                   break;
               case "make":
                   this.make(h);
@@ -2424,6 +2516,176 @@
               if (this.catchIt && this.flyT > 0.6 && this.grounded && dx < S * 0.5 && cy < this.y[HEAD] - S * 0.1 && cy > this.y[HEAD] - S * 1.4 && vy > -S) {
                   this.jump(clamp((cx - this.x[HIP]) * 4, -S * 4, S * 4), -Math.sqrt(2 * this.g * Math.max(S * 0.2, this.y[HEAD] - cy)));
               }
+          }
+      }
+      // ---- Notes: picks up his little pad, listens (a look round), scribbles a line, and another; a full page he tears
+      // off, and it flutters down to the floor. Busy (a meeting is being noted): he listens less and writes faster.
+      /** Where his pencil goes on line j of the page, `cur` of the way along it (a scribble: a quick wobble on the line). */
+      penAt(j, cur) {
+          const L = this.padLeft(), T = this.padTop(), pw = this.padW, ph = this.padH;
+          const len = 0.55 + 0.4 * hash01(this.ptime[0] * 7 + j);
+          this.penX = L + pw * (0.16 + 0.68 * len * cur);
+          this.penY = T + ph * (0.3 + 0.15 * j) + Math.sin(this.t * 41) * this.S * 0.014;
+      }
+      /** Reach one hand to (x, y). */
+      reach(hand, x, y) {
+          if (hand === HAND_L) {
+              this.armL = true;
+              this.armLx = x;
+              this.armLy = y;
+          }
+          else {
+              this.armR = true;
+              this.armRx = x;
+              this.armRy = y;
+          }
+      }
+      scribble(h) {
+          const S = this.S, busy = this.mood === "working", p = 0;
+          if (this.np < 1 || this.pk[p] !== P_PAD) {
+              this.goalX = NaN;
+              return;
+          }
+          const a = this.p0[p];
+          if (this.held !== p) {
+              // Go to the pad, crouch, and pick it up by its near top corner.
+              const cx = (this.x[a] + this.x[a + 1] + this.x[a + 2] + this.x[a + 3]) / 4;
+              const cy = (this.y[a] + this.y[a + 1] + this.y[a + 2] + this.y[a + 3]) / 4;
+              const side = this.x[HIP] < cx ? -1 : 1;
+              this.goalX = clamp(cx + side * (this.padW * 0.5 + S * 0.14), this.wallL + S * 0.2, this.wallR - S * 0.2);
+              this.lookX = cx;
+              this.lookY = cy;
+              if (Math.abs(this.x[HIP] - this.goalX) < S * 0.14 && this.grounded) {
+                  this.crouch = 0.6;
+                  const hand = this.padHand(), ci = side < 0 ? a : a + 1;
+                  this.reach(hand, this.x[ci], this.y[ci]);
+                  const d = Math.hypot(this.x[hand] - this.x[ci], this.y[hand] - this.y[ci]);
+                  if ((this.phaseT > 0.3 && d < S * 0.22) || this.phaseT > 1.4) {
+                      this.held = p;
+                      this.phase = 1;
+                      this.phaseT = 0;
+                      this.noteLook = this.actT;
+                      this.listenFor = 0.4;
+                      this.glowV += 3;
+                  }
+              }
+              else
+                  this.phaseT = 0;
+              if (this.actT > 8)
+                  this.next(true);
+              return;
+          }
+          // Held: the pad against his chest, its near edge in his holding hand; the pencil in the other.
+          const f = this.face >= 0 ? 1 : -1, pen = this.penHand();
+          this.goalX = NaN;
+          if (this.phase !== 5)
+              this.reach(this.padHand(), this.x[NECK] + f * 0.1 * S, this.y[NECK] + 0.2 * S);
+          if (this.phase === 0) {
+              this.phase = 1;
+              this.phaseT = 0;
+              this.noteLook = this.actT;
+              this.listenFor = busy ? 0.5 : 1.2;
+          }
+          if (this.phase === 1) {
+              // Listening: a look round (at whoever is talking), the antenna pulsing now and then.
+              this.lidTo = 0.12;
+              if (this.actT >= this.noteLook) {
+                  this.noteLook = this.actT + 0.45 + this.rand() * 0.7;
+                  if (this.rand() < 0.3) {
+                      this.lookX = NaN;
+                      this.lookOut = 1;
+                  }
+                  else {
+                      this.lookOut = 0;
+                      this.lookX = this.w * this.rand();
+                      this.lookY = this.floor * (0.15 + this.rand() * 0.5);
+                  }
+                  if (this.rand() < 0.4)
+                      this.glowV += 2.5;
+              }
+              if (this.lookX !== this.lookX)
+                  this.lookOut = 1;
+              if (this.phaseT > this.listenFor) {
+                  const done = this.count >= (busy ? 4 : 2) || this.actT > this.actDur * 2.5;
+                  this.phase = done ? 5 : 2;
+                  this.phaseT = 0;
+              }
+          }
+          else if (this.phase === 2) {
+              // Writing: head bent to the pad, the pencil running along the line.
+              const before = Math.floor(this.pa[p]);
+              this.pa[p] = Math.min(PAD_LINES, this.pa[p] + h * (busy ? 1.5 : 0.85));
+              const j = Math.floor(this.pa[p]);
+              if (j >= PAD_LINES) {
+                  this.phase = 3;
+                  this.phaseT = 0;
+                  return;
+              }
+              this.penAt(j, this.pa[p] - j);
+              this.reach(pen, this.penX, this.penY);
+              this.armK = 650;
+              this.lookOut = 0;
+              this.lookX = this.penX;
+              this.lookY = this.penY;
+              this.tilt = 0.12 * f;
+              this.lidTo = 0.38;
+              if (j > before) {
+                  // A line done: a little glow; now and then he stops to listen again.
+                  this.glowV += 2;
+                  if (this.rand() < (busy ? 0.25 : 0.45)) {
+                      this.phase = 1;
+                      this.phaseT = 0;
+                      this.listenFor = busy ? 0.45 + this.rand() * 0.4 : 0.9 + this.rand() * 1.1;
+                  }
+              }
+          }
+          else if (this.phase === 3) {
+              // The page is full: a hand to its far top corner, and a quick pull up and away.
+              const L = this.padLeft(), T = this.padTop();
+              const cx = f > 0 ? L + this.padW : L;
+              this.reach(pen, cx, T + S * 0.02);
+              this.armK = 600;
+              this.lookOut = 0;
+              this.lookX = cx;
+              this.lookY = T;
+              if (this.phaseT > (busy ? 0.18 : 0.3)) {
+                  const i = this.sNext;
+                  this.spark(L + this.padW * 0.5, T + this.padH * 0.4, f * S * (1.1 + this.rand() * 0.8), -S * (1.8 + this.rand() * 0.8), 0);
+                  this.shome[i] = S_PAGE;
+                  this.pageSpark = i;
+                  this.pa[p] = 0;
+                  this.ptime[p] = this.ptime[p] + 1;
+                  this.count++;
+                  this.glowV += 5;
+                  this.fabric.kick(L + this.padW * 0.5, T, 25, S);
+                  this.phase = 4;
+                  this.phaseT = 0;
+              }
+          }
+          else if (this.phase === 4) {
+              // Watch it go.
+              const i = this.pageSpark;
+              if (i >= 0 && this.slife[i] > 0) {
+                  this.lookOut = 0;
+                  this.lookX = this.sx[i];
+                  this.lookY = this.sy[i];
+              }
+              this.tilt = 0.15 * f;
+              if (this.phaseT > (busy ? 0.6 : 1.1)) {
+                  this.phase = 1;
+                  this.phaseT = 0;
+                  this.listenFor = busy ? 0.4 : 0.8;
+              }
+          }
+          else if (this.phase === 5) {
+              // Enough for now: a crouch, and he puts it down.
+              this.crouch = 0.6;
+              this.reach(this.padHand(), this.x[NECK] + f * 0.14 * S, this.y[NECK] + 0.27 * S);
+              this.lookOut = 0;
+              this.lookX = this.x[NECK] + f * S * 0.2;
+              this.lookY = this.floor;
+              if (this.phaseT > 0.45)
+                  this.next(true);
           }
       }
       // ---- Make a bot: dots on the floor put themselves together into a bot, live a moment, and fall apart.
@@ -2918,7 +3180,8 @@
           ctx.lineJoin = "round";
           for (let p = 0; p < this.np; p++) {
               const a = this.p0[p], kind = this.pk[p];
-              const up = kind === P_PLANE || ((kind === P_ZERO || kind === P_ONE || kind === P_BALL) && y[a] < this.floor - this.pr[p] * 2.2 - S * 0.12);
+              // The pad in his hands is in front of him.
+              const up = kind === P_PLANE || (kind === P_PAD && this.held === p) || ((kind === P_ZERO || kind === P_ONE || kind === P_BALL) && y[a] < this.floor - this.pr[p] * 2.2 - S * 0.12);
               if ((up ? 1 : 0) !== layer)
                   continue;
               // Behind the words: fainter.
@@ -3037,7 +3300,106 @@
                   ctx.lineTo(tx, ty);
                   ctx.stroke();
               }
+              else if (kind === P_PAD) {
+                  this.drawPad(ctx, alpha * low, p);
+              }
           }
+          // His pencil, and the hands on the pad, over it.
+          if (layer === 1 && this.kind === "notes" && this.held >= 0)
+              this.drawPencil(ctx, alpha);
+      }
+      /** A point on pad p's face, (u, v) of the way across and down it, into this.tmp. */
+      padAt(p, u, v) {
+          const a = this.p0[p], x = this.x, y = this.y, ox = x[a], oy = y[a];
+          this.tmp[0] = ox + (x[a + 1] - ox) * u + (x[a + 3] - ox) * v;
+          this.tmp[1] = oy + (y[a + 1] - oy) * u + (y[a + 3] - oy) * v;
+          return this.tmp;
+      }
+      /** The pad: paper, its edge and binding in his colour, faint rules, and the lines he has written on this page. */
+      drawPad(ctx, alpha, p) {
+          const x = this.x, y = this.y, S = this.S, a = this.p0[p], t = this.tmp;
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = PAPER;
+          ctx.beginPath();
+          ctx.moveTo(x[a], y[a]);
+          ctx.lineTo(x[a + 1], y[a + 1]);
+          ctx.lineTo(x[a + 2], y[a + 2]);
+          ctx.lineTo(x[a + 3], y[a + 3]);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = this.color;
+          ctx.globalAlpha = 0.07 * alpha;
+          ctx.fill();
+          ctx.globalAlpha = 0.62 * alpha;
+          ctx.lineWidth = S * 0.035;
+          ctx.stroke();
+          // The binding: three rings along the top.
+          ctx.globalAlpha = 0.75 * alpha;
+          ctx.beginPath();
+          for (let k = 0; k < 3; k++) {
+              this.padAt(p, 0.25 + 0.25 * k, 0);
+              ctx.moveTo(t[0] + S * 0.028, t[1]);
+              ctx.arc(t[0], t[1], S * 0.028, 0, TAU);
+          }
+          ctx.fill();
+          // The rules, faint.
+          ctx.globalAlpha = 0.14 * alpha;
+          ctx.lineWidth = S * 0.018;
+          ctx.beginPath();
+          for (let j = 0; j < PAD_LINES; j++) {
+              const v = 0.345 + 0.15 * j;
+              this.padAt(p, 0.1, v);
+              ctx.moveTo(t[0], t[1]);
+              this.padAt(p, 0.9, v);
+              ctx.lineTo(t[0], t[1]);
+          }
+          ctx.stroke();
+          // What he has written: whole lines, and the one he is on as far as he has got.
+          const done = this.pa[p], page = this.ptime[p];
+          if (done <= 0)
+              return;
+          ctx.globalAlpha = 0.78 * alpha;
+          ctx.lineWidth = S * 0.03;
+          ctx.beginPath();
+          for (let j = 0; j < PAD_LINES && j < done; j++) {
+              const len = 0.55 + 0.4 * hash01(page * 7 + j), cur = Math.min(1, done - j);
+              const v0 = 0.3 + 0.15 * j, u1 = 0.16 + 0.68 * len * cur;
+              for (let k = 0; k <= 6; k++) {
+                  this.padAt(p, 0.16 + ((u1 - 0.16) * k) / 6, v0 + (hash01(page * 31 + j * 5 + k) - 0.5) * 0.06);
+                  if (k === 0)
+                      ctx.moveTo(t[0], t[1]);
+                  else
+                      ctx.lineTo(t[0], t[1]);
+              }
+          }
+          ctx.stroke();
+      }
+      /** The pencil in his writing hand (on the line he writes, or resting, point up), and both hands drawn over the pad. */
+      drawPencil(ctx, alpha) {
+          const S = this.S, f = this.face >= 0 ? 1 : -1, pen = this.penHand(), grip = this.padHand();
+          const hx = this.x[pen], hy = this.y[pen];
+          let dx = f * 0.35, dy = -1, len = S * 0.11;
+          if (this.penX === this.penX) {
+              dx = this.penX - hx;
+              dy = this.penY - hy;
+              len = clamp(Math.sqrt(dx * dx + dy * dy), S * 0.06, S * 0.13);
+          }
+          const dl = Math.sqrt(dx * dx + dy * dy) + 1e-6;
+          ctx.strokeStyle = INK;
+          ctx.lineCap = "round";
+          ctx.globalAlpha = 0.72 * alpha;
+          ctx.lineWidth = S * 0.032;
+          ctx.beginPath();
+          ctx.moveTo(hx - (dx / dl) * S * 0.03, hy - (dy / dl) * S * 0.03);
+          ctx.lineTo(hx + (dx / dl) * len, hy + (dy / dl) * len);
+          ctx.stroke();
+          ctx.fillStyle = this.color;
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.arc(hx, hy, S * 0.042, 0, TAU);
+          ctx.moveTo(this.x[grip] + S * 0.042, this.y[grip]);
+          ctx.arc(this.x[grip], this.y[grip], S * 0.042, 0, TAU);
+          ctx.fill();
       }
       roundQuad(ctx, x0, y0, x1, y1, base, r) {
           ctx.beginPath();
@@ -3061,7 +3423,33 @@
               if (l <= 0)
                   continue;
               ctx.globalAlpha = alpha * clamp(l, 0, 1) * 0.7;
-              if (this.shome[i] && i % 2) {
+              if (this.shome[i] === S_PAGE) {
+                  // A page: a small sheet tipped by its drift, two scribbled lines on it.
+                  const ang = clamp(this.svx[i] / (S * 3), -0.7, 0.7), c = Math.cos(ang), s = Math.sin(ang);
+                  const hw = this.padW * 0.45, hh = this.padH * 0.38, px = this.sx[i], py = this.sy[i];
+                  const lift = py >= this.floor - S * 0.031 ? 0.25 : 1;
+                  ctx.beginPath();
+                  ctx.moveTo(px - c * hw + s * hh * lift, py - s * hw - c * hh * lift);
+                  ctx.lineTo(px + c * hw + s * hh * lift, py + s * hw - c * hh * lift);
+                  ctx.lineTo(px + c * hw - s * hh * lift, py + s * hw + c * hh * lift);
+                  ctx.lineTo(px - c * hw - s * hh * lift, py - s * hw + c * hh * lift);
+                  ctx.closePath();
+                  ctx.globalAlpha = alpha * clamp(l, 0, 1) * 0.16;
+                  ctx.fill();
+                  ctx.globalAlpha = alpha * clamp(l, 0, 1) * 0.6;
+                  ctx.stroke();
+                  if (lift === 1) {
+                      ctx.beginPath();
+                      for (let k = 0; k < 2; k++) {
+                          const v = (k ? 0.25 : -0.2) * hh, u0 = -0.6 * hw, u1 = (k ? 0.2 : 0.55) * hw;
+                          ctx.moveTo(px + c * u0 - s * v, py + s * u0 + c * v);
+                          ctx.lineTo(px + c * u1 - s * v, py + s * u1 + c * v);
+                      }
+                      ctx.stroke();
+                  }
+                  continue;
+              }
+              if (this.shome[i] === 1 && i % 2) {
                   // A short line along its way (what he reads: a line of code, a word).
                   const vx = this.svx[i], vy = this.svy[i], k = (S * 0.16) / (Math.sqrt(vx * vx + vy * vy) + 1e-6);
                   ctx.beginPath();

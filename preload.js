@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // holds the refresh token: two holders of one rotating token sign out.
   session: () => ipcRenderer.invoke("app:session"),
   openExternal: (url) => ipcRenderer.send("app:openExternal", url),
+  // A live page (liveView.js) wanted to leave: { guestId, url }. The window offers it only if the page's node allows.
+  onLiveOpen: (cb) => ipcRenderer.on("live:open", (_e, m) => cb(m)),
   dictate: () => ipcRenderer.send("app:dictate"),
   // Start or stop taking notes, as the notes hotkey does.
   toggleNotes: () => ipcRenderer.send("app:notes"),
@@ -86,6 +88,10 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // The main process checks each one and opens only its own fixed pages.
   // Whether this computer lets Tailzu use the microphone (the Bots app's card).
   micStatus: () => ipcRenderer.invoke("app:micStatus"),
+  // A screenshot for Attach (the Mac's own picker): { name, bytes }, { cancelled }, or { unavailable, why? }.
+  captureScreen: () => ipcRenderer.invoke("app:captureScreen"),
+  // Whether this Mac lets Tailzu type into other apps (Accessibility): the arrival card's second step.
+  axStatus: () => ipcRenderer.invoke("app:axStatus"),
   askSetup: () => ipcRenderer.invoke("app:askSetup"),
   onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
   askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),
