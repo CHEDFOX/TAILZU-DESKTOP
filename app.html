@@ -32,6 +32,24 @@
      they would see. They are local files, so blocking costs a few milliseconds. */
   @font-face { font-family:"Tailzu Grotesk"; font-weight:800; font-display:block; src:url(assets/fonts/bricolage-grotesque-latin-800-normal.woff2) format("woff2"); }
   @font-face { font-family:"Tailzu Hand"; font-weight:400; font-display:block; src:url(assets/fonts/kalam-latin-400-normal.woff2) format("woff2"); }
+  /* THE BOTS APP'S FACES: Geist and Geist Mono, one family per weight under the names the phones register them by
+     (the server's fontFamily values work on both unchanged). Any weight asked of a family matches its one file,
+     so the browser never thickens a semibold into a fake bold. */
+  @font-face { font-family:"Tailzu Geist"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-400.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Medium"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-500.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist SemiBold"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-600.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Bold"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-700.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Mono"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-mono-400.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Mono Medium"; font-weight:100 900; font-display:swap; src:url(assets/fonts/geist-mono-500.woff2) format("woff2"); }
+  /* THE BOTS APP'S THREE MOTIONS (SVG shapes, sdui.js svgShapes): a working bot breathes, a tab's icon pops in, the
+     You ring draws to the month's spend. Calm by default, and none of it under Reduce Motion. */
+  .tz-work { transform-box:fill-box; transform-origin:center; animation:tzBreathe 1.8s ease-in-out infinite; }
+  @keyframes tzBreathe { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.5; transform:scale(.78); } }
+  .tz-pop { transform-box:fill-box; transform-origin:center; animation:tzPop .42s cubic-bezier(.3,1.6,.5,1) both; }
+  @keyframes tzPop { from { transform:scale(0); } to { transform:scale(1); } }
+  .tz-draw { animation:tzDraw .7s ease-out both; }
+  @keyframes tzDraw { from { stroke-dasharray:0 var(--tz-c, 56.55); } }
+  @media (prefers-reduced-motion:reduce) { .tz-work, .tz-pop, .tz-draw { animation:none; } }
 
   /* THE DESK'S TOKENS. Paper and ink in light, ink and pale in dark, the
      site's own rooms for colour. The server can retune any of these

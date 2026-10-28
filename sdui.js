@@ -76,6 +76,12 @@ const COMPONENTS = [
   // that follows state). The server sends the new onboarding only to a build
   // that says both; an older installer is served the one it has always had.
   "OnboardStage", "BlipSpot",
+  // THE BOTS APP'S KIT (the server's shared/types/sdui.ts, "The Bots app's kit"): SVG `shapes` with the
+  // breathe / pop / draw motions (app.html's .tz-work / .tz-pop / .tz-draw, still under Reduce Motion), a Text
+  // bound to state, a TextField whose Enter runs on.onSubmit, navigate params read from state, and a Bots page
+  // (look "bots") where a border with a width is a solid one. The server boots the Bots app only for a build
+  // that says this.
+  "BotsKit",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;
@@ -615,7 +621,7 @@ function css(st) {
   // is a solid one. Said here for the onboarding, whose cards and chips lean
   // on it, and written first so an explicit borderStyle still wins. Nowhere
   // else: a screen drawn without borders for years does not grow them now.
-  if (IN_STAGE) {
+  if (IN_STAGE || IN_KIT) {
     for (const k of Object.keys(st)) {
       const m = /^border(Top|Right|Bottom|Left)?Width$/.exec(k);
       if (m && Number(styleValue(st[k])) > 0) out.push("border" + (m[1] ? "-" + m[1].toLowerCase() : "") + "-style:solid");
@@ -901,6 +907,35 @@ function foldersNode(p, s) {
     "</div></section>";
 }
 
+/**
+ * SVG `shapes` (the Bots kit): circles and paths, each with its own paint, and the kit's motions as app.html's
+ * classes: .tz-work (breathe, loops), .tz-pop (lands once), .tz-draw (a ring draws to its dash, once). A rotation
+ * goes on a group around the shape, so it never fights the motion's own transform. Reduce Motion stops them all.
+ */
+function svgShapes(p, s) {
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+  const shapes = p.shapes.filter((sh) => sh && typeof sh === "object").slice(0, 64).map((sh) => {
+    const cls = sh.motion === "breathe" ? "tz-work" : sh.motion === "pop" ? "tz-pop" : sh.motion === "draw" ? "tz-draw" : "";
+    const dash = typeof sh.dash === "string" && /^[0-9.\s,]+$/.test(sh.dash) ? sh.dash : "";
+    const full = dash ? Number(dash.split(/[\s,]+/)[1]) || 0 : 0;
+    const style = (sh.delayMs ? "animation-delay:" + num(sh.delayMs) + "ms;" : "") + (cls === "tz-draw" && full ? "--tz-c:" + full + ";" : "");
+    const attrs = (cls ? ' class="' + cls + '"' : "") + (style ? ' style="' + style + '"' : "") +
+      ' fill="' + esc(tok(sh.fill) || "none") + '"' +
+      (sh.stroke ? ' stroke="' + esc(tok(sh.stroke)) + '" stroke-width="' + num(sh.strokeWidth || 1.5) + '"' : "") +
+      (dash ? ' stroke-dasharray="' + dash + '"' : "") +
+      ' stroke-linecap="' + esc(sh.linecap || "round") + '" stroke-linejoin="' + esc(sh.linejoin || "round") + '"' +
+      (sh.opacity != null ? ' opacity="' + num(sh.opacity) + '"' : "");
+    const c = Array.isArray(sh.circle) ? sh.circle.map(num) : null;
+    const el = c ? '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + c[2] + '"' + attrs + "></circle>"
+      : '<path d="' + esc(sh.d || "") + '"' + attrs + "></path>";
+    if (!sh.rotate) return el;
+    const o = Array.isArray(sh.origin) ? sh.origin.map(num) : c ? [c[0], c[1]] : [12, 12];
+    return '<g transform="rotate(' + num(sh.rotate) + " " + o[0] + " " + o[1] + ')">' + el + "</g>";
+  }).join("");
+  const aria = p.accessibilityLabel ? ' role="img" aria-label="' + esc(label(p.accessibilityLabel)) + '"' : ' aria-hidden="true"';
+  return '<svg viewBox="' + esc(p.viewBox || "0 0 24 24") + '"' + aria + ' style="' + s + ';display:block;flex:none;overflow:visible">' + shapes + "</svg>";
+}
+
 function bind(action) {
   if (!action) return "";
   const id = "h" + handlers.length;
@@ -995,7 +1030,8 @@ function node(n) {
       // means. It also fixes the containing block: an absolutely-positioned
       // child now measures against its own parent, which is what it does on
       // the phones and not what it was doing here.
-      return '<div' + bind(press) + rolePress(press) + cls(p) + ' style="' +
+      return '<div' + bind(press) + rolePress(press) + cls(p) +
+        (p.accessibilityLabel ? ' aria-label="' + esc(label(p.accessibilityLabel)) + '"' : "") + ' style="' +
         (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
         (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
@@ -1051,10 +1087,15 @@ function node(n) {
       // In the onboarding a line can be drawn from state (a language's name, an
       // app's, the words the mic wrote), as the phones do; the server sends no
       // words for it, so it is never put through a translator.
-      const live = IN_STAGE && n.bind && n.bind.content ? stateAt(n.bind.content) : undefined;
+      // Bound to state (the Bots app's, and the onboarding's): the state's value when it has one.
+      const live = (IN_STAGE || IN_KIT) && n.bind && n.bind.content ? stateAt(n.bind.content) : undefined;
+      // Clipped to a number of lines, as the phones' numberOfLines does.
+      const lines = Number(p.numberOfLines) > 0 ? Math.floor(Number(p.numberOfLines)) : 0;
+      const clip = lines === 1 ? "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+        : lines > 1 ? "display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:" + lines + ";overflow:hidden;" : "";
       return '<span' + bind(press) + rolePress(press) + ' style="white-space:pre-wrap;' +
         role(p.variant || "body", "color:var(--text)") + ";" +
-        (press ? "cursor:pointer;" : "") + s + '">' + (live != null ? esc(String(live)) : txt) + "</span>";
+        (press ? "cursor:pointer;" : "") + s + (clip ? ";" + clip : "") + '">' + (live != null ? esc(String(live)) : txt) + "</span>";
 
     case "Badge": case "Chip":
       return '<span' + bind(press) + ' style="display:inline-block;border:1px solid var(--border);border-radius:999px;' +
@@ -1092,7 +1133,9 @@ function node(n) {
         return '<input value="' + esc(val) + '" data-bind="' + esc(path) + '"' + submit + cls(p) +
           ' placeholder="' + esc(label(p.placeholder) || "") + '" aria-label="' + esc(label(p.placeholder) || "") + '" style="' + s + '">';
       }
-      const common = ' data-bind="' + esc(path) + '" placeholder="' + esc(label(p.placeholder) || "") +
+      // Enter runs on.onSubmit (the Bots app's ask bar), as it does on a desk field.
+      const submit = n.on && n.on.onSubmit && !multi ? ' data-s="' + SUBMITS.push(n.on.onSubmit) + '"' : "";
+      const common = submit + ' data-bind="' + esc(path) + '" placeholder="' + esc(label(p.placeholder) || "") +
         '" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:13px;' +
         "padding:13px 14px;color:var(--text);font:inherit;outline:none;" + s + '"';
       return multi
@@ -1188,6 +1231,8 @@ function node(n) {
     // its one button missing.
 
     case "SVG": {
+      // The Bots kit's glyphs: several shapes and their motions.
+      if (Array.isArray(p.shapes)) return svgShapes(p, s);
       // One path, viewBox and all, straight through. Every chevron, arrow,
       // cross and tab glyph in the catalog is one of these.
       const vb = esc(p.viewBox || "0 0 24 24");
@@ -2184,6 +2229,8 @@ window.addEventListener("focus", () => {
  */
 const OB_STEP = {};       // the furthest step each stage has reached, by id
 let IN_STAGE = 0;         // above zero while a stage's step is being drawn
+/** True while a Bots app page (look "bots") is drawn: borders are solid, pressables are buttons to the keyboard. */
+let IN_KIT = false;
 const OBS = {
   walker: null,
   look: null,             // the stage's look (ground, bar, bubble, Blip's colours, glide)
@@ -2231,7 +2278,7 @@ function stageNode(n) {
 
 /** A pressable box in the onboarding is a button to the keyboard as well. */
 function rolePress(press) {
-  return press && IN_STAGE ? ' role="button" tabindex="0"' : "";
+  return press && (IN_STAGE || IN_KIT) ? ' role="button" tabindex="0"' : "";
 }
 
 /**
@@ -2991,7 +3038,8 @@ async function run(action, eventValue) {
   if (arguments.length > 1) EVENT = eventValue;
   if (typeof action === "string") return run((CURRENT_ACTIONS || {})[action], ...(arguments.length > 1 ? [eventValue] : []));
   switch (action.kind) {
-    case "navigate": go(action.screenId, action.params); return;
+    // Params can name state ("$state.asked.id"): the screen to open is sometimes one an answer named.
+    case "navigate": go(action.screenId, action.params ? deepResolve(action.params) : action.params); return;
     // TWO NAMES FOR ONE THING, and only one was answered. The catalog says
     // "navigateBack" — fifteen times, on every back control in the four inside
     // screens — and this understood only "back". So every one of those arrows
@@ -3689,8 +3737,15 @@ function repaint(screen) {
   SUBMITS = [];
   // Whatever was turning words over belongs to the DOM about to be replaced.
   stopFlips();
-  const html = sc.root ? node(sc.root) : '<div class="pad">' + (sc.blocks || []).map(node).join("") + "</div>";
+  IN_KIT = sc.look === "bots";
+  let html;
+  try { html = sc.root ? node(sc.root) : '<div class="pad">' + (sc.blocks || []).map(node).join("") + "</div>"; }
+  finally { IN_KIT = false; }
   const view = $("view");
+  // A page with its own ground (a Bots page is white) paints the view in it, so nothing dark shows around it
+  // while it fades in. Every other page keeps the view's own.
+  const ground = sc.theme && sc.theme.color && sc.theme.color.bg;
+  view.style.background = typeof ground === "string" && /^#[0-9a-f]{3,8}$/i.test(ground) ? ground : "";
   // A desk page sits on the desk's own ground. A phone screen pushed from one
   // (the paywall, a live training session) keeps its own dark room.
   view.dataset.look = DESK && sc.look === "desk" ? "desk" : "legacy";

@@ -6,6 +6,7 @@ Copyright 2017 IBM Corp. All rights reserved. IBMPlexMono-ThinItalic.ttf: Copyri
 Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans) InstrumentSans-Italic[wdth,wght].ttf: Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrument/instrument-sans)
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/devanagari)
 Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+Copyright (c) 2023 Vercel, in collaboration with basement.studio (Geist, Geist Mono: geist-*.woff2, the Bots app's faces)
 Copyright (c) 2014 Indian Type Foundry (info@indiantypefoundry.com) Kalam-Regular.ttf: Copyright (c) 2014 Indian Type Foundry (info@indiantypefoundry.com)
 
 PREAMBLE
