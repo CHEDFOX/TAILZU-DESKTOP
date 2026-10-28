@@ -86,6 +86,8 @@ const COMPONENTS = [
   // playing in each tile on a faint fabric, and BotCard, a card with one on top (the first-arrival permission
   // card, Keybot's). The physics is botTiles.js, generated from the phone's core so the two cannot differ.
   "BotsMotion", "BotTiles", "BotCard",
+  // A full-width strip under BotTiles' grid (Notes), its bot at the left, in the same world as the tiles.
+  "BotTilesStrip",
   // A bot's own tiny bot on its pages (a header, the Code bot's setup steps): BotBuddy, on the same core.
   "BotBuddy",
   // Home's header, alive: the line that writes itself (WriteOn), the living mark (LiveMark), the compact bar (HeadBar).
@@ -1016,7 +1018,29 @@ function botTilesNode(p) {
       '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
       '<div style="' + sub + ';font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
   }).join("");
-  return '<div data-bt="' + id + '" style="position:relative;display:grid;grid-template-columns:repeat(' + cols + ",minmax(0,1fr));gap:" + gap + 'px">' + body + "</div>";
+  return '<div data-bt="' + id + '" style="position:relative;display:grid;grid-template-columns:repeat(' + cols + ",minmax(0,1fr));gap:" + gap + 'px">' + body + btStrip(p, tiles.length, pad, f) + "</div>";
+}
+
+/**
+ * The strip under the grid (BotTilesProps.strip: Notes): the whole row, its bot on a stage of its own at the left, its
+ * name and line on the right. The same world as the tiles: the last of them, so a tap on it, or on a tile, is the same
+ * moment (the others look, their words fade).
+ */
+function btStrip(p, i, pad, f) {
+  const t = p.strip && typeof p.strip === "object" ? p.strip : null;
+  if (!t) return "";
+  const H = Number(p.stripHeight) || 112;
+  const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
+  const mark = t.state === "working" ? t.color : t.state === "needs" ? "#0a0a0a" : "";
+  const sub = t.state === "working" ? face(f.medium) + ";color:" + esc(t.color) : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a" : face(f.regular) + ";color:#5c5c5c";
+  return '<div class="tz-bt-tile" data-i="' + i + '" data-strip="1" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
+    "position:relative;grid-column:1/-1;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
+    'transition:transform .18s cubic-bezier(.3,1.5,.5,1);border:1px solid #e6e6e6">' +
+    '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
+    (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
+    '<div class="tz-bt-w" style="position:absolute;left:clamp(140px,34%,220px);right:' + (pad + (mark ? 16 : 0)) + 'px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center;gap:3px;transition:opacity .2s;pointer-events:none">' +
+    '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
+    '<div style="' + sub + ';font-size:13px;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.sub) + "</div></div></div>";
 }
 
 /** A BotBuddy's bot, by its life (the same life on the next screen is the same bot, where he was). */
@@ -1285,18 +1309,23 @@ function mountBotTiles(root) {
   root.querySelectorAll("[data-bt]").forEach((grid) => {
     const cfg = BT_PENDING[Number(grid.getAttribute("data-bt"))];
     if (!cfg || !api) return;
-    const specs = cfg.p.tiles || [];
+    const strip = cfg.p.strip && typeof cfg.p.strip === "object" ? cfg.p.strip : null;
+    const specs = (cfg.p.tiles || []).concat(strip ? [strip] : []);
     const els = Array.from(grid.querySelectorAll(".tz-bt-tile"));
     // Released as it is made: a look left from a tap before Home was left goes now.
     const world = api.gridWorld(specs.map(btLife));
     const sizes = [];
+    const pad = Number(cfg.p.padding) || 18;
     const layout = () => {
       const g = grid.getBoundingClientRect();
       els.forEach((el, i) => {
         const r = el.getBoundingClientRect(), wr = el.querySelector(".tz-bt-w").getBoundingClientRect();
-        const w = el.clientWidth, h = el.clientHeight;
+        const h = el.clientHeight;
+        // The strip's bot plays on the stage left of its words, standing near its foot; a tile's above its words.
+        const isStrip = strip && i === els.length - 1;
+        const w = isStrip ? Math.max(80, Math.round(wr.left - r.left)) : el.clientWidth;
         sizes[i] = [w, h];
-        world.place(i, r.left - g.left, r.top - g.top, w, h, wr.top - r.top - 3);
+        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 3);
       });
     };
     layout();
@@ -1319,7 +1348,7 @@ function mountBotTiles(root) {
         if (!action || busy) return;
         if (reduced) { void run(action); return; }
         busy = true;
-        world.focus(i, x, y);
+        world.focus(i, sizes[i] ? Math.min(x, sizes[i][0]) : x, y);
         els.forEach((o, j) => { if (j !== i) o.querySelector(".tz-bt-w").style.opacity = String(api.TAP.fadeTo); });
         el.style.transform = "scale(" + api.TAP.pressScale + ")";
         setTimeout(() => { el.style.transform = ""; }, 140);
