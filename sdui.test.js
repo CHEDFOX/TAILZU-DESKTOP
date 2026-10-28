@@ -960,3 +960,34 @@ test("a page that asks after the microphone gets the system's answer in $state.m
   await settle();
   assert.strictEqual(p.run("STATE.micGranted"), undefined);
 });
+
+test("the notes keys: the notes chord as keycaps; with the one key there is none, so it says to say it with that key", () => {
+  const p = page();
+  const keys = () => p.run('keysNode({ source: "notes" }, "")');
+  p.run('LOCAL = { notesHotkey: "Ctrl+Alt+N", hotkey: "Ctrl+Shift+Space" }');
+  assert.strictEqual(keys(), '<span class="d-keys" style=""><span class="d-keycap">Ctrl</span><span class="d-keycap">Alt</span><span class="d-keycap">N</span></span>');
+  // The one key (main.js binds no notes chord with it): its label, in the words, and no chord named.
+  p.run('LOCAL = { oneKey: "rightAlt", oneKeyLabel: "Right Alt", oneKeyOn: true, hotkey: "Right Alt", notesHotkey: "" }');
+  assert.strictEqual(keys(), '<span class="d-keys" style="">Say “take notes” / “stop notes” with <span class="d-keycap">Right Alt</span></span>');
+  // Asked for but not bound yet: the chord that stands in for it is the key to hold.
+  p.run('LOCAL = { oneKey: "rightAlt", oneKeyLabel: "", oneKeyOn: false, hotkey: "Ctrl+Shift+Space", notesHotkey: "" }');
+  assert.match(keys(), /with <span class="d-keycap">Ctrl\+Shift\+Space<\/span>/);
+  assert.doesNotMatch(keys(), /Alt\+N|>N</);
+  // The talk keys are untouched.
+  assert.match(p.run('keysNode({ source: "hotkey" }, "")'), /d-keycap">Ctrl</);
+});
+
+test("a link's screen comes with its parameters: a space's invite opens Spaces at joining, signed in or once signed in", () => {
+  const p = page();
+  p.run("paint = () => {}");
+  // Not signed in yet: kept, with its parameters, for when the first screen is laid down.
+  p.run('navigateTo({ screenId: "bots.spaces", params: { join: "QW3RT7YP" } })');
+  assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(PENDING_SCREEN)")), { screenId: "bots.spaces", params: { join: "QW3RT7YP" } });
+  // Signed in, on Home: on top of it, with the code.
+  p.run('PENDING_SCREEN = null; SESSION = { access_token: "t" }; STACK = [{ screenId: "bots.home" }]');
+  p.run('navigateTo({ screenId: "bots.spaces", params: { join: "QW3RT7YP" } })');
+  assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(STACK)")), [{ screenId: "bots.home" }, { screenId: "bots.spaces", params: { join: "QW3RT7YP" } }]);
+  // A plain id still goes as it did, and the screen on show is not opened twice.
+  p.run('navigateTo("paywall"); navigateTo("paywall")');
+  assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(STACK.map((s) => s.screenId))")), ["bots.home", "bots.spaces", "paywall"]);
+});

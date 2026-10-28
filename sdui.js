@@ -695,11 +695,18 @@ let SUBMITS = [];         // actions an Enter in a desk field runs, by 1-based i
  */
 function keysNode(p, s) {
   const d = LOCAL || {};
+  const small = /(^|\s)d-keys-small(\s|$)/.test(String(p.cls || "")) ? " d-keys-small" : "";
+  // THE ONE KEY has no notes chord (main.js binds none with it): notes start and stop by saying so with that key held.
+  if (p.source === "notes" && d.oneKey) {
+    const key = String(d.oneKeyLabel || d.hotkey || "");
+    const words = K.txt("desktop.notes.oneKeySay", "Say “take notes” / “stop notes” with {key}").split("{key}");
+    return '<span class="d-keys' + small + '" style="' + s + '">' + esc(words[0] || "") +
+      (key ? '<span class="d-keycap">' + esc(key) + "</span>" : "") + esc(words.slice(1).join("")) + "</span>";
+  }
   const tap = d.tap !== false && Array.isArray(d.tapKeys) && d.tapKeys.length;
   const keys = p.source === "notes" ? String(d.notesHotkey || "Ctrl+Alt+N").split("+").map((k) => k.trim()).filter(Boolean)
     : p.source !== "hotkey" && tap ? [d.tapKeys[0], d.tapKeys[0]]
     : String(d.hotkey || "Ctrl+Shift+Space").split("+").map((k) => k.trim()).filter(Boolean);
-  const small = /(^|\s)d-keys-small(\s|$)/.test(String(p.cls || "")) ? " d-keys-small" : "";
   return '<span class="d-keys' + small + '" style="' + s + '">' +
     keys.map((k) => '<span class="d-keycap">' + esc(k) + "</span>").join("") + "</span>";
 }
@@ -3849,15 +3856,18 @@ function go(screenId, params) {
  * copy of it.
  */
 let PENDING_SCREEN = null;
-function navigateTo(screenId) {
+function navigateTo(target) {
+  // A screen id, or { screenId, params }: a link's (main.js screenFromLink, a space's invite).
+  const params = target && typeof target === "object" && target.params && typeof target.params === "object" ? target.params : undefined;
+  const screenId = target && typeof target === "object" ? target.screenId : target;
   if (typeof screenId !== "string" || !screenId) return;
-  if (!SESSION || !STACK.length) { PENDING_SCREEN = screenId; return; }
+  if (!SESSION || !STACK.length) { PENDING_SCREEN = params ? { screenId, params } : screenId; return; }
   const top = STACK[STACK.length - 1];
-  if (top && top.screenId === screenId) return;
+  if (top && top.screenId === screenId && !params) return;
   // Coming back from connecting an app in the middle of onboarding: stay on
   // it, and read it again so the app shows as connected.
   if (top && top.screenId === "onboard") { paint(true); return; }
-  go(screenId);
+  go(screenId, params);
 }
 function back() {
   if (STACK.length > 1) { STACK.pop(); paint(); }
@@ -4723,7 +4733,8 @@ async function render() {
   if (landing.onboard) document.documentElement.dataset.onboard = "1";
   // A screen the main process asked for while this was booting goes on top
   // of the landing tab, so Back still leads somewhere.
-  if (PENDING_SCREEN && PENDING_SCREEN !== STACK[0].screenId) STACK.push({ screenId: PENDING_SCREEN });
+  const pending = PENDING_SCREEN && typeof PENDING_SCREEN === "object" ? PENDING_SCREEN : PENDING_SCREEN ? { screenId: PENDING_SCREEN } : null;
+  if (pending && (pending.params || pending.screenId !== STACK[0].screenId)) STACK.push(pending.params ? { screenId: pending.screenId, params: pending.params } : { screenId: pending.screenId });
   PENDING_SCREEN = null;
   // Shown now, in the look the server chose, with its first page on the way.
   $("shell").hidden = false;

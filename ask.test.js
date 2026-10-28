@@ -3049,7 +3049,7 @@ function mainProcess(o = {}) {
   }
   const img = { resize: () => img, setTemplateImage() {}, isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }) };
   const app = Object.assign(new EventEmitter(), {
-    isPackaged: true, getPath: () => dir, setPath() {}, getVersion: () => "0.4.0",
+    isPackaged: true, isReady: () => true, getPath: () => dir, setPath() {}, getVersion: () => "0.4.0",
     requestSingleInstanceLock: () => true, whenReady: () => Promise.resolve(),
     quit() {}, exit() {}, relaunch() {}, dock: { hide() {} }, setAppUserModelId() {},
     getLoginItemSettings: () => ({ wasOpenedAtLogin: false }), setLoginItemSettings() {},
@@ -3115,7 +3115,7 @@ function mainProcess(o = {}) {
   const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
   const from = (file) => ({ sender: win(file).webContents });
   return {
-    dictation, guide, carets, ipc, handles, windows, win, dir,
+    dictation, guide, carets, ipc, handles, windows, win, dir, app,
     /** The tray's menu as it is now: its template's items. */
     tray: () => (trayMenus.length ? trayMenus[trayMenus.length - 1].t : []),
     ready: () => sleep(20),
@@ -3551,4 +3551,23 @@ test("setup: Open Settings for Accessibility asks macOS first, once, so Tailzu i
   const win = setupCard({ trusted: false, platform: "win32" });
   win.act({ kind: "openAccessibility" });
   assert.deepStrictEqual(win.did, []);
+});
+
+test("main.js: a space's invite link opens the window at Spaces with the code, and nothing else from a link", async () => {
+  const m = mainProcess();
+  try {
+    await m.ready();
+    const open = async (url) => { m.app.emit("open-url", { preventDefault() {} }, url); await sleep(20); };
+    const navs = () => m.windows.filter((w) => w.file === "app.html").flatMap((w) => (w.appSent || []).filter(([ch]) => ch === "app:navigate").map(([, t]) => t));
+    await open("tulmi://screen/bots.spaces?join=qw3rt7yp&next=https://evil.example");
+    assert.deepStrictEqual(navs(), [{ screenId: "bots.spaces", params: { join: "QW3RT7YP" } }]);
+    // A code that isn't one, or a screen not on the list: the window comes up, on nothing in particular.
+    await open("tulmi://screen/bots.spaces?join=%3Cscript%3E");
+    await open("tulmi://screen/constructor");
+    await open("tulmi://screen/bots.you");
+    assert.strictEqual(navs().length, 1);
+    // The ones that were there before still go where they went.
+    await open("tulmi://screen/assistant_apps");
+    assert.deepStrictEqual(navs().at(-1), "desk_settings");
+  } finally { m.close(); }
 });
