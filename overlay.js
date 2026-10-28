@@ -6,19 +6,24 @@ let last = "";
 function style() {
   const box = document.getElementById("box").style;
   const dot = document.getElementById("dot").style;
+  // THE BOTS LOOK (bots.app, from the bootstrap's flags): the strip in the app's white and ink, Keybot's clay dot.
+  // overlay.html's .bots rules set the face; off, the strip as it was.
+  const bots = K.bool("bots.app", false);
+  document.documentElement.classList.toggle("bots", bots);
   box.margin = K.num("desktop.overlay.margin", 8) + "px";
   box.padding = K.num("desktop.overlay.paddingV", 12) + "px " + K.num("desktop.overlay.paddingH", 18) + "px";
   box.minHeight = K.num("desktop.overlay.minHeight", 44) + "px";
   box.maxHeight = K.num("desktop.overlay.maxHeight", 64) + "px";
   box.borderRadius = K.num("desktop.overlay.radius", 16) + "px";
-  box.background = K.color("desktop.overlay.background", "#151210");
-  box.color = K.color("desktop.overlay.text", "#F3E2C6");
+  box.background = bots ? K.color("desktop.overlay.botsBackground", "#ffffff") : K.color("desktop.overlay.background", "#151210");
+  box.color = bots ? K.color("desktop.overlay.botsText", "#0a0a0a") : K.color("desktop.overlay.text", "#F3E2C6");
   box.fontSize = K.num("desktop.overlay.fontSize", 15) + "px";
   box.fontWeight = String(K.num("desktop.overlay.fontWeight", 500));
-  box.boxShadow = K.str("desktop.overlay.shadow", "inset 0 0 0 1px rgba(243, 226, 198, 0.12), 0 18px 40px -12px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.25)");
+  box.boxShadow = bots ? K.str("desktop.overlay.botsShadow", "inset 0 0 0 1px #e6e6e6, 0 12px 30px -10px rgba(0, 0, 0, 0.22)")
+    : K.str("desktop.overlay.shadow", "inset 0 0 0 1px rgba(243, 226, 198, 0.12), 0 18px 40px -12px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.25)");
   const d = K.num("desktop.overlay.dotSize", 7) + "px";
   dot.width = d; dot.height = d;
-  dot.background = K.color("desktop.overlay.dot", "#E8A23C");
+  dot.background = bots ? K.color("desktop.overlay.botsDot", "#A9573A") : K.color("desktop.overlay.dot", "#E8A23C");
   dot.animationDuration = K.num("desktop.overlay.pulseMs", 1400) / 1000 + "s";
   document.getElementById("label").textContent = K.txt("desktop.overlay.label", "Live");
   paint(last);

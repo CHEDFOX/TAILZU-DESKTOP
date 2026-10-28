@@ -68,6 +68,16 @@
       #text span { direction: ltr; unicode-bidi: bidi-override; }
       #text.idle span { font: 400 italic 16px/1.4 "Newsreader", Georgia, serif; color: rgba(243, 226, 198, 0.62); }
       @media (prefers-reduced-motion: reduce) { #dot { animation: none; } }
+      /* The Bots look (overlay.js, bots.app): Geist, ink on white, no paper dots, a breathing clay dot. */
+      @font-face { font-family:"Tailzu Geist"; font-weight:100 900; src:url(assets/fonts/geist-400.woff2) format("woff2"); }
+      @font-face { font-family:"Tailzu Geist SemiBold"; font-weight:100 900; src:url(assets/fonts/geist-600.woff2) format("woff2"); }
+      :root.bots #box { font-family:"Tailzu Geist", "Noto Sans Devanagari", -apple-system, "Segoe UI", system-ui, sans-serif; font-weight:400 !important; }
+      :root.bots #box::before { display:none; }
+      :root.bots #dot { width:8px; height:8px; animation:breathe 1.8s ease-in-out infinite; }
+      @keyframes breathe { 0%, 100% { opacity:1; transform:scale(1); } 50% { opacity:.5; transform:scale(.78); } }
+      :root.bots #label { font:400 11px/1 "Tailzu Geist SemiBold", -apple-system, sans-serif; letter-spacing:.4px; color:#5c5c5c; }
+      :root.bots #text.idle span { font:400 15px/1.4 "Tailzu Geist", -apple-system, sans-serif; color:#5c5c5c; }
+      @media (prefers-reduced-motion: reduce) { :root.bots #dot { animation: none; } }
     </style>
   </head>
   <body>

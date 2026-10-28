@@ -33,6 +33,12 @@
   const card = $("card"), inner = $("inner"), fx = $("fx"), chip = $("chip"), wave = $("wave");
   const ctx = fx.getContext("2d");
   const wctx = wave.getContext("2d");
+  // THE BOTS LOOK (DeskAsk), behind the switch the window learns from its bootstrap (flag bots.app, which the
+  // knobs carry): a white card with an ink line, Geist, ink buttons, clay (Keybot's colour) for the open microphone,
+  // an ink ring and ink marks with a white edge. Off, or before the first bootstrap: the guide as it was. Only how it
+  // looks changes; what it does is the same. ?demo&bots shows it on the review page.
+  const BOTS = () => K.bool("bots.app", false) || (DEMO && params.has("bots"));
+  const look = () => document.documentElement.classList.toggle("bots", BOTS());
   const blip = window.TailzuBlip.createBlip({ height: K.num("desktop.guide.blipHeight", 112) });
 
   // ---- time -----------------------------------------------------------------------
@@ -462,7 +468,7 @@
     ctx.save();
     ctx.globalAlpha = a;
     roundRect(ctx, rc.left - .75, rc.top - .75, rc.width + 1.5, rc.height + 1.5, r + .75);
-    ctx.strokeStyle = "#F3E2C6"; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.strokeStyle = BOTS() ? "#d4d4d4" : "#F3E2C6"; ctx.lineWidth = 1.2; ctx.stroke();
     ctx.restore();
   }
   /** Folded away: what was on the card goes with it. */
@@ -606,8 +612,9 @@
     return [x, y + h - (d - 2 * w - h)];
   }
   function dot(g, x, y, r, fill) {
-    g.beginPath(); g.arc(x, y, r + .9, 0, TAU); g.fillStyle = "rgba(15,13,11,.62)"; g.fill();
-    g.beginPath(); g.arc(x, y, r, 0, TAU); g.fillStyle = fill || "#F3E2C6"; g.fill();
+    const bots = BOTS();
+    g.beginPath(); g.arc(x, y, r + .9, 0, TAU); g.fillStyle = bots ? "rgba(255,255,255,.85)" : "rgba(15,13,11,.62)"; g.fill();
+    g.beginPath(); g.arc(x, y, r, 0, TAU); g.fillStyle = fill || (bots ? "#0a0a0a" : "#F3E2C6"); g.fill();
   }
   function drawRing(t) {
     const R = S.ring; if (!R) return;
@@ -626,14 +633,20 @@
     if (rk > 0 && rk < 1 && !reduced) {
       const g = 10 * rk;
       roundRect(ctx, x - g, y - g, w + 2 * g, h + 2 * g, rad + g);
-      ctx.strokeStyle = `rgba(232,162,60,${.5 * (1 - rk)})`; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = BOTS() ? `rgba(10,10,10,${.35 * (1 - rk)})` : `rgba(232,162,60,${.5 * (1 - rk)})`; ctx.lineWidth = 2; ctx.stroke();
     }
     // The ring: amber, with its own glow, over an ink hairline that keeps it
     // visible on amber-ish backgrounds.
     roundRect(ctx, x, y, w, h, rad);
-    ctx.strokeStyle = "rgba(15,13,11,.35)"; ctx.lineWidth = 4; ctx.stroke();
-    ctx.shadowColor = "rgba(232,162,60,.65)"; ctx.shadowBlur = 14;
-    ctx.strokeStyle = K.color("desktop.guide.ring", "#E8A23C"); ctx.lineWidth = 2; ctx.stroke();
+    if (BOTS()) {
+      // The Bots look: an ink ring with a white edge, so it holds on a dark app too. No glow.
+      ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.lineWidth = 5; ctx.stroke();
+      ctx.strokeStyle = K.color("desktop.guide.botsRing", "#0a0a0a"); ctx.lineWidth = 2; ctx.stroke();
+    } else {
+      ctx.strokeStyle = "rgba(15,13,11,.35)"; ctx.lineWidth = 4; ctx.stroke();
+      ctx.shadowColor = "rgba(232,162,60,.65)"; ctx.shadowBlur = 14;
+      ctx.strokeStyle = K.color("desktop.guide.ring", "#E8A23C"); ctx.lineWidth = 2; ctx.stroke();
+    }
     ctx.shadowBlur = 0;
     // Dots marching round it, a step outside: the films' dots.
     const gapPx = 11, o = 6, P = 2 * (w + 2 * o + h + 2 * o);
@@ -666,8 +679,8 @@
     ctx.setLineDash([0, K.num("desktop.guide.hintGap", 6)]);
     ctx.lineDashOffset = reduced ? 0 : -t * 9;
     roundRect(ctx, x, y, w, h, rad);
-    ctx.strokeStyle = "rgba(15,13,11,.4)"; ctx.lineWidth = 3.8; ctx.stroke();
-    ctx.strokeStyle = K.color("desktop.guide.hint", "#E8A23C"); ctx.lineWidth = 2.6; ctx.stroke();
+    ctx.strokeStyle = BOTS() ? "rgba(255,255,255,.85)" : "rgba(15,13,11,.4)"; ctx.lineWidth = 3.8; ctx.stroke();
+    ctx.strokeStyle = BOTS() ? K.color("desktop.guide.botsRing", "#0a0a0a") : K.color("desktop.guide.hint", "#E8A23C"); ctx.lineWidth = 2.6; ctx.stroke();
     ctx.restore();
   }
   /** Tied to the pill, a ring lower than the card's top (a Dock icon,
@@ -780,14 +793,14 @@
     if (o.tether > .01 && o.tether < .995 && !reduced) {
       pointOn(reach);
       ctx.globalAlpha = o.fade;
-      dot(ctx, PT[0], PT[1], 2.4, mix > .5 ? K.color("desktop.guide.tetherLive", "#E8A23C") : "#F3E2C6");
+      dot(ctx, PT[0], PT[1], 2.4, mix > .5 ? (BOTS() ? K.color("desktop.guide.botsLive", "#A9573A") : K.color("desktop.guide.tetherLive", "#E8A23C")) : undefined);
     }
     // No pill on this display: the seed it rises from, drawn here.
     if (P.seed && o.seed > .01) {
       const r = SEED_R * o.seed;
       ctx.globalAlpha = o.fade;
-      ctx.beginPath(); ctx.arc(x0, y0, r + 1, 0, TAU); ctx.fillStyle = "rgba(15,13,11,.7)"; ctx.fill();
-      ctx.beginPath(); ctx.arc(x0, y0, r, 0, TAU); ctx.fillStyle = "#F3E2C6"; ctx.fill();
+      ctx.beginPath(); ctx.arc(x0, y0, r + 1, 0, TAU); ctx.fillStyle = BOTS() ? "rgba(255,255,255,.85)" : "rgba(15,13,11,.7)"; ctx.fill();
+      ctx.beginPath(); ctx.arc(x0, y0, r, 0, TAU); ctx.fillStyle = BOTS() ? "#0a0a0a" : "#F3E2C6"; ctx.fill();
     }
     ctx.restore();
   }
@@ -818,8 +831,8 @@
     };
     const tw = K.num("desktop.guide.tetherWidth", 1.6);
     ctx.lineCap = "round"; ctx.lineJoin = "round";
-    trace(); ctx.strokeStyle = "rgba(15,13,11,.3)"; ctx.lineWidth = tw + 1.6; ctx.stroke();
-    trace(); ctx.strokeStyle = K.color("desktop.guide.tetherLive", "#E8A23C"); ctx.lineWidth = tw; ctx.stroke();
+    trace(); ctx.strokeStyle = BOTS() ? "rgba(255,255,255,.8)" : "rgba(15,13,11,.3)"; ctx.lineWidth = tw + 1.6; ctx.stroke();
+    trace(); ctx.strokeStyle = BOTS() ? K.color("desktop.guide.botsLive", "#A9573A") : K.color("desktop.guide.tetherLive", "#E8A23C"); ctx.lineWidth = tw; ctx.stroke();
   }
   /** Not listening: cream dots, every 8 px, still. Thinking, a light runs up
    *  them from the pill to the card (the card's own row of dots does the
@@ -1495,8 +1508,9 @@
    *  with a faint glow. Their numbers and labels come later (drawPins). */
   function drawMarks(ms) {
     if (!marks.length) return;
-    const ink = K.color("desktop.guide.inkColor", "#E8A23C"), width = K.num("desktop.guide.inkWidth", 3);
-    const glow = rgba(ink, .55);
+    const bots = BOTS();
+    const ink = bots ? K.color("desktop.guide.botsInk", "#0a0a0a") : K.color("desktop.guide.inkColor", "#E8A23C"), width = K.num("desktop.guide.inkWidth", 3);
+    const glow = bots ? "transparent" : rgba(ink, .55);
     for (let i = marks.length - 1; i >= 0; i--) if (marks[i].fadeAt && ms - marks[i].fadeAt >= 200) marks.splice(i, 1);
     ctx.save();
     ctx.lineCap = "round"; ctx.lineJoin = "round";
@@ -1531,7 +1545,7 @@
         for (const st of m.strokes) { if (left <= 0) break; traceStroke(ctx, st, left); left -= st.len; }
       }
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(15,13,11,.38)"; ctx.lineWidth = width + 3;
+      ctx.strokeStyle = bots ? "rgba(255,255,255,.85)" : "rgba(15,13,11,.38)"; ctx.lineWidth = width + 3;
       if (path) ctx.stroke(path); else ctx.stroke();
       ctx.shadowColor = glow; ctx.shadowBlur = 6;
       ctx.strokeStyle = ink; ctx.lineWidth = width;
@@ -1550,8 +1564,9 @@
    */
   function drawPins(ms) {
     if (!marks.length) return;
-    const ink = K.color("desktop.guide.inkColor", "#E8A23C");
-    const glow = rgba(ink, .55);
+    const bots = BOTS();
+    const ink = bots ? "#ffffff" : K.color("desktop.guide.inkColor", "#E8A23C");
+    const glow = bots ? "transparent" : rgba(ink, .55);
     ctx.save();
     for (const m of marks) {
       if (!m.disc) continue;
@@ -1604,18 +1619,19 @@
     for (let i = 0; i < n; i++) {
       const x = step * (i + .5);
       const env = Math.sin(Math.PI * (i + .5) / n);
-      let y = mid, r = 1.6, col = "rgba(243,226,198,.28)";
+      const bots = BOTS();
+      let y = mid, r = 1.6, col = bots ? "rgba(10,10,10,.18)" : "rgba(243,226,198,.28)";
       if (S.state === "listening") {
         const a = (2 + S.level * 11) * env;
         y = mid + Math.sin(t * 7.5 + i * .55) * a * .9 + Math.sin(t * 3.1 + i * 1.3) * a * .35;
         r = 1.5 + S.level * 1.3 * env;
-        col = `rgba(232,162,60,${.5 + .5 * env})`;
+        col = bots ? `rgba(169,87,58,${.5 + .5 * env})` : `rgba(232,162,60,${.5 + .5 * env})`;
       } else {
         // Thinking: still dots and a light running along them.
         const head = ((t * .9) % 1.4) * n - n * .2;
         const glow = Math.exp(-Math.pow((i - head) / 2.2, 2));
         r = 1.5 + glow * 1.1;
-        col = `rgba(243,226,198,${.22 + .7 * glow})`;
+        col = bots ? `rgba(10,10,10,${.18 + .7 * glow})` : `rgba(243,226,198,${.22 + .7 * glow})`;
       }
       wctx.beginPath(); wctx.arc(x, y, r, 0, TAU); wctx.fillStyle = col; wctx.fill();
     }
@@ -1974,8 +1990,9 @@
     PTR.x = x; PTR.y = y; hitTest();
   };
 
-  if (bridge.knobs) bridge.knobs().then((k) => K.setKnobs(k)).catch(() => {});
-  if (bridge.onKnobs) bridge.onKnobs((k) => K.setKnobs(k));
+  if (bridge.knobs) bridge.knobs().then((k) => { K.setKnobs(k); look(); }).catch(() => {});
+  if (bridge.onKnobs) bridge.onKnobs((k) => { K.setKnobs(k); look(); });
+  look();
   // The faces the canvas writes in, asked for now: a label drawn before its
   // face has loaded would be measured in another.
   const faces = document.fonts ? Promise.all([labelFont(19), '600 12px "Instrument Sans"'].map((f) => document.fonts.load(f).catch(() => null))) : Promise.resolve();

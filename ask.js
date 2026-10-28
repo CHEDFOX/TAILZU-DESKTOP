@@ -77,11 +77,12 @@ function pillAskMove(phase, now) {
  * The pill's capsule in screen DIP, for a pill window whose bounds are `b`:
  * centred across it, its bottom desktop.pill.bottomPad above the window's,
  * exactly where pill.js draws it, from the same knobs pill.js reads. The
- * small pill's size when the capsule look is off.
+ * small pill's size when the capsule look is off, or the Bots look is on.
  */
 function capsuleRect(b, K) {
   if (!b || ![b.x, b.y, b.width, b.height].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
-  const capsule = K.bool("desktop.pill.split", true) && K.bool("desktop.pill.capsule", true);
+  // The Bots look (bots.app) has no capsule: the small white pill (pill.js botsTargets).
+  const capsule = !K.bool("bots.app", false) && K.bool("desktop.pill.split", true) && K.bool("desktop.pill.capsule", true);
   const w = capsule ? K.num("desktop.pill.capsuleWidth", 40) : K.num("desktop.pill.restWidth", 46);
   const h = capsule ? K.num("desktop.pill.capsuleHeight", 16) : K.num("desktop.pill.restHeight", 14);
   return { x: b.x + b.width / 2 - w / 2, y: b.y + b.height - K.num("desktop.pill.bottomPad", 14) - h, w, h };
