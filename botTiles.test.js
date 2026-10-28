@@ -59,7 +59,7 @@ function page() {
 test("the window says it draws them", () => {
   const p = page();
   const comps = p.run("COMPONENTS");
-  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy"]) assert.ok(comps.includes(c), c);
+  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy", "BotTilesStrip"]) assert.ok(comps.includes(c), c);
 });
 
 test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make tile dashed", () => {
@@ -171,6 +171,38 @@ test("BotTiles: after a tap, a return to Home and the window shown again let the
   p.run("mountBotTiles(__root)");
   assert.ok(lives.every((t) => t.focusX !== t.focusX && t.focusGoal !== t.focusGoal), "back on Home: every bot at its own again");
   assert.ok(again.els.every((e) => e.words.style.opacity === "1"));
+});
+
+test("BotTiles' strip (Notes): a full-width row under the grid, its bot on a stage at the left, in the same world as the tiles", () => {
+  const p = page();
+  p.ctx.document.hidden = false;
+  p.ctx.setTimeout = () => 0;
+  p.ctx.__n = { ...HOME, props: { ...HOME.props, stripHeight: 112,
+    strip: { slug: "notes", name: "Notes", sub: "Taking notes now", color: "#6E4A6B", kind: "notes", state: "working", action: { kind: "navigate", screenId: "bots.notes" } } } };
+  const html = p.run("node(__n)");
+  assert.strictEqual((html.match(/class="tz-bt-tile"/g) || []).length, 4, "three tiles and the strip");
+  assert.match(html, /data-i="3" data-strip="1"[^>]*aria-label="Notes\. Taking notes now"/);
+  assert.match(html, /grid-column:1\/-1;height:112px/);
+  assert.match(html, /left:clamp\(140px,34%,220px\)/, "its words on the right of its stage");
+  assert.match(html, /background:#6E4A6B/, "working: a dot in its colour");
+  // Mounted: the strip is the world's fourth bot, on its stage only (the part left of its words), near the stage's foot.
+  const g = fakeGrid(p, html);
+  const strip = g.els[3];
+  strip.getBoundingClientRect = () => ({ left: 0, top: 164, width: 900, height: 112 });
+  strip.clientWidth = 900; strip.clientHeight = 112;
+  strip.words.getBoundingClientRect = () => ({ left: 220, top: 164, width: 640, height: 112 });
+  p.ctx.__root = g.root;
+  p.run("mountBotTiles(__root)");
+  const notes = p.run('Array.from(BT_LIVES.entries()).find(([k]) => k.startsWith("notes|"))[1]');
+  assert.strictEqual(notes.kind, "notes");
+  assert.strictEqual(notes.w, 220, "the stage is the part left of the words");
+  assert.ok(notes.floor > 112 - 18, "standing near its foot");
+  // A tap on the strip (on its words): the others look at it, their words fade; its own press lands on its stage.
+  strip.on.click({ clientX: 600, clientY: 200 });
+  const code = p.run('Array.from(BT_LIVES.entries()).find(([k]) => k.startsWith("code|"))[1]');
+  assert.ok(code.focusY > 100, "a tile's bot looks down at the strip");
+  assert.strictEqual(g.els[0].words.style.opacity, "0.35");
+  assert.strictEqual(strip.words.style.opacity, "1");
 });
 
 test("BotBuddy: a stage of its own, sized; thinking while its condition holds; the page's moment otherwise", () => {
