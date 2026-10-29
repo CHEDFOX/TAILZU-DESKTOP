@@ -63,7 +63,7 @@ one is allowed by hash, written by gen-field.js).
 
 ```
 npm install
-npm run icon          # generate tray + app icons (one-time)
+npm run icon          # generate the tray icons (one-time; the app icons are committed, see gen-app-icon.py)
 cp config.example.json config.json   # optional — only baseUrl is needed
 npm start
 ```
