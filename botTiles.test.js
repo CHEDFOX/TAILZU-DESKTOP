@@ -59,7 +59,7 @@ function page() {
 test("the window says it draws them", () => {
   const p = page();
   const comps = p.run("COMPONENTS");
-  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy", "BotTilesStrip"]) assert.ok(comps.includes(c), c);
+  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy", "BotTilesStrip", "BotBuddyCarry"]) assert.ok(comps.includes(c), c);
 });
 
 test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make tile dashed", () => {
@@ -217,6 +217,55 @@ test("BotBuddy: a stage of its own, sized; thinking while its condition holds; t
   assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].act"), "play");
   p.run("STATE.sending = true; node(__n)");
   assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].act"), "think");
+});
+
+test("BotBuddy carrying: a full-width lane while the ask is out; folded once the answer is here and he has gone", () => {
+  const p = page();
+  p.run("STATE = { reply: null }");
+  p.ctx.__n = { type: "BotBuddy", props: { kind: "code", color: "#4F7A3A", life: "carry.code", height: 68, size: 44, state: "idle", act: "carry", doneWhen: { truthy: "reply.text" }, label: "Working on it…" } };
+  const html = p.run("node(__n)");
+  assert.match(html, /align-self:stretch;height:68px;overflow:hidden;transition:height/, "a lane: its row's width, its own height");
+  assert.match(html, /aria-label="Working on it…"/);
+  const cfg = p.run("BT_PENDING[BT_PENDING.length - 1]");
+  assert.strictEqual(cfg.act, "carry");
+  assert.strictEqual(cfg.done, false);
+  // The answer came before he was ever drawn: nothing to see, the lane is folded.
+  p.run('STATE.reply = { text: "Here" }');
+  assert.match(p.run("node(__n)"), /height:0px/);
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1]").done, true);
+  // The core, as the window loads it: a haul, then the delivery, then gone.
+  const api = require("./botTiles.js");
+  const t = new api.BotTile({ kind: "code", color: "#4F7A3A", seed: 2, size: 44 });
+  t.resize(600, 68, 66);
+  t.setAct("carry");
+  for (let f = 0; f < 60 * 4; f++) t.step(1 / 60);
+  assert.ok(t.x[2] < 600 && t.held === 0, "walking across with the bag");
+  t.deliver();
+  for (let f = 0; f < 60 * 8 && !t.carryDone(); f++) t.step(1 / 60);
+  assert.ok(t.carryDone() && t.finite());
+});
+
+test("an answer as it is written: pieces in order into state, the bound line changed in place; a gap stops it", () => {
+  const p = page();
+  p.run("STATE = { reply: null }");
+  const off = p.run('setStatePath("reply", { id: "x", text: "", step: "" }); askStreamListen("abcdefghijklmnop12", "reply")');
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 0, step: "Reading the project…" })');
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 1, text: "Hello " })');
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 1, text: "Hello " })');
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 2, text: "there." })');
+  assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(STATE.reply)")), { id: "x", text: "Hello there.", step: "Reading the project…" });
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 4, text: " lost" })');
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 5, text: " more" })');
+  assert.strictEqual(p.run("STATE.reply.text"), "Hello there.");
+  off();
+  p.run('askStreamTake("abcdefghijklmnop12", { n: 3, text: "x" })');
+  assert.strictEqual(p.run("STATE.reply.text"), "Hello there.");
+  assert.ok(p.run("COMPONENTS").includes("AskStream"));
+  // A bound line in a kit page carries its path, so it can be changed in place.
+  p.run("IN_KIT = true");
+  p.ctx.__n = { type: "Text", bind: { content: "reply.text" }, props: { content: "" } };
+  assert.match(p.run("node(__n)"), /data-tb="reply\.text"[^>]*>Hello there\.</);
+  p.run("IN_KIT = false");
 });
 
 test("Home's header alive: the line in words with Keybot's caret, the living mark as a button, the bar hidden until a scroll", () => {

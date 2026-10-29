@@ -90,6 +90,12 @@ const COMPONENTS = [
   "BotTilesStrip",
   // A bot's own tiny bot on its pages (a header, the Code bot's setup steps): BotBuddy, on the same core.
   "BotBuddy",
+  // BotBuddy's act "carry" and `doneWhen`: a lane under a message on its way, where he hauls it as a bag, heavier
+  // each trip, and sets it down when the answer is here (botBuddyNode). Without it the server sends "Asking…".
+  "BotBuddyCarry",
+  // callEndpoint's `stream`: an answer's words and what the bot is doing, written into state as they come over the live
+  // socket (live.js, topic ask:<id>), the line bound to them changed in place (askStreamTake).
+  "AskStream",
   // Home's header, alive: the line that writes itself (WriteOn), the living mark (LiveMark), the compact bar (HeadBar).
   "WriteOn", "LiveMark", "HeadBar",
 ];
@@ -1073,14 +1079,26 @@ function btBuddy(p) {
 /**
  * BotBuddy: a bot's own tiny bot on a stage of his own (a page's header, a setup step's top), never over words or
  * controls. His moment: thinking while `thinkWhen` holds, else the page's `act`. Static (an empty stage) without the core.
+ *
+ * Carrying (act "carry"): the stage is a lane under a message on its way, and he hauls it as a bag, heavier each trip.
+ * While `doneWhen` holds the answer is here: he sets the bag down and walks off, and the lane folds away once he has gone
+ * (drawn folded when he already has). Reduce Motion: still with the bag, and `label` written beside him.
  */
 function botBuddyNode(p) {
   const act = p.thinkWhen && visible(p.thinkWhen) ? "think" : p.act || "play";
-  const id = BT_PENDING.push({ kind: "buddy", p, act }) - 1;
+  const done = act === "carry" && !!p.doneWhen && visible(p.doneWhen);
+  const id = BT_PENDING.push({ kind: "buddy", p, act, done }) - 1;
   const H = Number(p.height) || 48, W = Number(p.width) || 0;
+  // Gone already (a repaint after he left, or an answer that came before he was in): folded.
+  const api = window.TailzuBotTiles;
+  const kept = act === "carry" && api ? BT_LIVES.get("buddy|" + String(p.life || p.kind || "buddy") + "|" + (p.kind || api.kindOf(String(p.life || ""))) + "|" + String(p.color || "#0a0a0a")) : null;
+  const folded = done && (!kept || kept.moment !== "carry" || kept.carryDone() || prefers("(prefers-reduced-motion: reduce)"));
+  const still = act === "carry" && p.label && prefers("(prefers-reduced-motion: reduce)")
+    ? '<span style="position:absolute;left:calc(30% + ' + Math.round((Number(p.size) || H * 0.6) * 0.75) + 'px);right:0;top:0;bottom:0;display:flex;align-items:center;font-size:13px;color:#5c5c5c;white-space:nowrap;overflow:hidden">' + esc(label(p.label)) + "</span>"
+    : "";
   return '<div data-bb="' + id + '"' + (p.label ? ' role="img" aria-label="' + esc(label(p.label)) + '"' : ' aria-hidden="true"') + ' style="position:relative;pointer-events:none;' +
-    (W ? "width:" + W + "px;flex-shrink:0;" : "align-self:stretch;") + "height:" + H + 'px">' +
-    '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas></div>';
+    (W ? "width:" + W + "px;flex-shrink:0;" : "align-self:stretch;") + "height:" + (folded ? 0 : H) + "px" + (act === "carry" ? ";overflow:hidden;transition:height .28s ease" : "") + '">' +
+    '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' + still + "</div>";
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,12 +1390,17 @@ function mountBotTiles(root) {
   root.querySelectorAll("[data-bb]").forEach((stage) => {
     const cfg = BT_PENDING[Number(stage.getAttribute("data-bb"))];
     if (!cfg || !api) return;
-    const { p, act } = cfg;
+    const { p, act, done } = cfg;
     const H = Number(p.height) || 48;
     const bot = btBuddy(p);
     bot.setLookTo(String(p.lookTo || ""));
     if (bot.mood !== (p.state || "idle")) bot.setMood(p.state || "idle");
-    if (bot.moment !== act) {
+    const carry = act === "carry";
+    if (carry) {
+      // A new ask after a delivery is a new haul; the answer here, he sets it down.
+      if (bot.moment !== "carry" || (!done && bot.delivered)) bot.setAct("carry");
+      if (done) bot.deliver();
+    } else if (bot.moment !== act) {
       const was = bot.moment;
       bot.setAct(act);
       // A new step: a little hop (not for thinking, which comes and goes with each answer).
@@ -1390,8 +1413,11 @@ function mountBotTiles(root) {
     bot.settle(reduced);
     const paint = () => { const w = width(); if (w > 0) btPaint(cv, bot, w, H); };
     paint();
+    // Carrying: once he has delivered and gone, the lane folds away.
+    const fold = () => { if (carry && bot.carryDone() && stage.style.height !== "0px") stage.style.height = "0px"; };
+    fold();
     if (typeof ResizeObserver === "function") { const ro = new ResizeObserver(() => { if (!stage.isConnected) { ro.disconnect(); return; } fit(); if (reduced) { bot.settle(true); paint(); } }); ro.observe(stage); }
-    if (!reduced) btLoop(stage, (dt) => bot.step(dt), paint);
+    if (!reduced) btLoop(stage, (dt) => { bot.step(dt); fold(); }, paint);
   });
   root.querySelectorAll("[data-bc]").forEach((card) => {
     const cfg = BT_PENDING[Number(card.getAttribute("data-bc"))];
@@ -1596,7 +1622,7 @@ function node(n) {
       const lines = Number(p.numberOfLines) > 0 ? Math.floor(Number(p.numberOfLines)) : 0;
       const clip = lines === 1 ? "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
         : lines > 1 ? "display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:" + lines + ";overflow:hidden;" : "";
-      return '<span' + bind(press) + rolePress(press) + ' style="white-space:pre-wrap;' +
+      return '<span' + bind(press) + rolePress(press) + ((IN_STAGE || IN_KIT) && n.bind && n.bind.content ? ' data-tb="' + esc(String(n.bind.content)) + '"' : "") + ' style="white-space:pre-wrap;' +
         role(p.variant || "body", "color:var(--text)") + ";" +
         (press ? "cursor:pointer;" : "") + s + (clip ? ";" + clip : "") + '">' + (live != null ? esc(String(live)) : txt) + "</span>";
 
@@ -3738,12 +3764,20 @@ async function run(action, eventValue) {
       for (const a of action.actions || []) await run(a);
       return;
     case "callEndpoint": {
+      // `stream`: the answer's words, written into state as they come over the live socket (askStreamTake).
+      let unlisten = null;
       try {
         const path = String(action.path || "").replace(/\$state\.[A-Za-z0-9_.]+/g, (m) => {
           const v = stateAt(m.slice(7));
           return v == null ? "" : encodeURIComponent(String(v));
         });
-        const body = action.body != null ? deepResolve(action.body) : undefined;
+        let body = action.body != null ? deepResolve(action.body) : undefined;
+        if (typeof action.stream === "string" && action.stream && body && typeof body === "object" && !Array.isArray(body)) {
+          const id = askStreamId();
+          setStatePath(action.stream, { id, text: "", step: "" });
+          unlisten = askStreamListen(id, action.stream);
+          body = Object.assign({}, body, { streamId: id });
+        }
         const res = await api(path, body, action.method || "POST");
         if (action.assignTo) { setStatePath(action.assignTo, res); repaint(); }
         await run(action.onSuccess);
@@ -3753,17 +3787,78 @@ async function run(action, eventValue) {
           try { window.tailzuApp.changed(); } catch { /* tray only */ }
           // The onboarding saves as it goes (a language, then the profile at
           // the end) and nothing it shows depends on the answer; a fetch here
-          // would rebuild the step under the person's hand.
-          if (!stageUp()) await paint(true);
+          // would rebuild the step under the person's hand. Nor while another
+          // call's answer is being written in (a Stop): it would wipe the words.
+          if (!stageUp() && ASK_TAPS.size <= (unlisten ? 1 : 0)) await paint(true);
         }
       } catch (err) {
         if (err && err.quota) { go(K.str("quota.screenId", "paywall")); return; }
         await run(action.onError);
+      } finally {
+        // A moment more: the last words can come over the socket just after the answer.
+        if (unlisten) setTimeout(unlisten, 600);
       }
       return;
     }
     default: return;
   }
+}
+
+// ---------------------------------------------------------------------------
+// An answer as it is written (shared/types/sdui.ts 3f; the phone's askStream.ts)
+// ---------------------------------------------------------------------------
+//
+// A call with `stream: "reply"` writes `{ id, text, step }` at `reply` and sends the id as `streamId`; while it is out, the live
+// socket (live.js) hands each `ask:<id>` event here. The words are appended to `reply.text` and the line bound to it is changed
+// in place (its data-tb), with no repaint: only when something appears or goes (the first words, the first step, a reset) is the
+// page painted again, holding the field being typed in where it was. Pieces are numbered; one missing stops the appending (the
+// answer, whole, comes with the call).
+
+const ASK_TAPS = new Map();
+
+function askStreamId() {
+  const a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < 22; i++) id += a[Math.floor(Math.random() * a.length) % a.length];
+  return id;
+}
+
+function askStreamListen(id, path) {
+  let next = 0, broken = false, done = false;
+  const take = (raw) => {
+    if (broken || done || !raw || typeof raw !== "object") return;
+    const n = typeof raw.n === "number" ? raw.n : -1;
+    if (n < next) return;
+    if (n > next) { broken = true; return; }
+    next++;
+    const was = stateAt(path) || {};
+    const before = { text: String(was.text || ""), step: String(was.step || "") };
+    let text = before.text, step = before.step;
+    if (raw.reset === true) text = "";
+    if (typeof raw.text === "string" && raw.text) text += raw.text;
+    if (typeof raw.step === "string" && raw.step) step = raw.step.slice(0, 80);
+    if (raw.end === true) done = true;
+    setStatePath(path + ".text", text);
+    setStatePath(path + ".step", step);
+    if (!!text !== !!before.text || !!step !== !!before.step) {
+      const live = window.TailzuLive, held = live && live.holdView ? live.holdView(document) : null;
+      repaint();
+      if (held) live.restoreView(document, held);
+      return;
+    }
+    const view = document.getElementById("view");
+    if (!view) return;
+    if (text !== before.text) view.querySelectorAll('[data-tb="' + path + '.text"]').forEach((el) => { el.textContent = text; });
+    if (step !== before.step) view.querySelectorAll('[data-tb="' + path + '.step"]').forEach((el) => { el.textContent = step; });
+  };
+  ASK_TAPS.set(id, take);
+  return () => { if (ASK_TAPS.get(id) === take) ASK_TAPS.delete(id); };
+}
+
+/** A live event of a stream (live.js): to the call listening for it, if one is. */
+function askStreamTake(id, data) {
+  const fn = ASK_TAPS.get(String(id));
+  if (fn) { try { fn(data); } catch (e) { console.warn("[Tailzu][stream] a piece failed:", e); } }
 }
 
 /**
