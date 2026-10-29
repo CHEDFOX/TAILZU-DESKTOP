@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // bound keys), and a request to change one. The main process checks both.
   config: () => ipcRenderer.invoke("app:config"),
   setConfig: (key, value) => ipcRenderer.invoke("app:setConfig", key, value),
+  // The clipboard's text, for Ask's Paste (the page itself may not read it).
+  readClipboard: () => ipcRenderer.invoke("app:readClipboard"),
   // Signed in or out: the main process keeps the session and answers with
   // the part the window holds (the access token and its expiry).
   setSession: (v) => ipcRenderer.invoke("app:setSession", v),

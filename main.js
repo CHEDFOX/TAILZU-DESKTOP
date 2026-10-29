@@ -2288,6 +2288,8 @@ function localSettings() {
 // What the window may change, and of what type. Nothing else is written.
 const SETTABLE = { pill: "boolean", pauseFlush: "boolean", autoStart: "boolean", live: "boolean", tap: "boolean" };
 ipcMain.handle("app:config", (e) => (fromApp(e) ? localSettings() : null));
+// Ask's Paste: the clipboard's text, to the app's own window only, and not without end.
+ipcMain.handle("app:readClipboard", (e) => (fromApp(e) ? clipboard.readText().slice(0, 20000) : ""));
 ipcMain.handle("app:setConfig", (e, key, value) => {
   if (!fromApp(e)) return null;
   if (Object.prototype.hasOwnProperty.call(SETTABLE, key) && typeof value === SETTABLE[key]) setLocal(key, value);

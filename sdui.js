@@ -3782,6 +3782,14 @@ async function run(action, eventValue) {
       catch { toast(K.txt("desktop.toast.copyFailed", "Couldn't copy that")); }
       return;
     }
+    // What is on the clipboard, into a field (Ask's Paste), as the phone does.
+    case "readClipboard": {
+      try {
+        const t = String((await window.tailzuApp.readClipboard()) ?? "");
+        if (t) { setStatePath(action.assignTo, t); repaint(); }
+      } catch { toast(K.txt("desktop.toast.pasteFailed", "Couldn't paste that")); }
+      return;
+    }
     // A setting that lives on this computer. The main process checks the key
     // and the value, writes its own file, and answers with every setting again.
     case "desktop.config": {
