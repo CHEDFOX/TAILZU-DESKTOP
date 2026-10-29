@@ -19,7 +19,7 @@ function rig(o = {}) {
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
   const r = createRouting({
     on: () => o.on !== false,
-    signals: () => ({ names: ["Tailzu", "Blip"], askOn: o.askOn !== false, notesOn: !!o.notesOn }),
+    signals: () => ({ names: ["X0", "Blip"], askOn: o.askOn !== false, notesOn: !!o.notesOn }),
     type: (sid, chunks) => { did.push(["type", sid, chunks.map((c) => c.text)]); return Promise.resolve(); },
     undo: (n) => { did.push(["undo", n]); return Promise.resolve(); },
     ask: (m) => { did.push(["ask", m]); return o.askTakes !== false; },
@@ -44,7 +44,7 @@ test("off (Linux, or the server's switch): every stretch typed, nothing held, no
   const h = rig({ on: false });
   h.r.start(1, {});
   h.r.field(1, null);
-  assert.strictEqual(h.r.chunk(1, { text: "What is this?", heard: "Tailzu what is this" }), "type");
+  assert.strictEqual(h.r.chunk(1, { text: "What is this?", heard: "X0 what is this" }), "type");
   assert.strictEqual(h.r.end(1, { text: "Done.", heard: "done" }, true), "type");
   assert.deepStrictEqual(h.did, []);
   assert.deepStrictEqual(h.pills, []);
@@ -66,19 +66,19 @@ test("a stretch with nothing in it decides nothing; the next one does", () => {
   h.r.start(1, {});
   h.r.field(1, BOX);
   assert.strictEqual(h.r.chunk(1, { text: "", heard: "" }), "type");
-  assert.strictEqual(h.r.chunk(1, { text: "", heard: "Tailzu" }), "hold", "the name alone, written as nothing: held");
+  assert.strictEqual(h.r.chunk(1, { text: "", heard: "X0" }), "hold", "the name alone, written as nothing: held");
   assert.strictEqual(h.r.chunk(1, { text: "What is this error?", heard: "what is this error" }), "hold");
 });
 
-test("Tailzu by name: held, then Ask with the name taken off; the pill says so, with Type it instead", async () => {
+test("X0 by name: held, then Ask with the name taken off; the pill says so, with Type it instead", async () => {
   const h = rig();
   h.r.start(1, {});
   h.r.field(1, BOX);
-  assert.strictEqual(h.r.chunk(1, { text: "", heard: "Tailzu," }), "hold");
+  assert.strictEqual(h.r.chunk(1, { text: "", heard: "X0," }), "hold");
   assert.strictEqual(h.r.end(1, { text: "What does this error mean?", heard: "what does this error mean" }, true), "routed");
   await settle();
   assert.deepStrictEqual(h.did, [["ask", "What does this error mean"]]);
-  assert.deepStrictEqual(h.pills[0], ["routed", { label: "Asked Tailzu", alt: "Type it instead" }]);
+  assert.deepStrictEqual(h.pills[0], ["routed", { label: "Asked X0", alt: "Type it instead" }]);
   assert.ok(h.r.holdsPill(), "Ask's card grows from its own seed meanwhile");
   // Type it instead: the question is put away, the written words typed.
   await h.r.alternative();
@@ -108,7 +108,7 @@ test("no text box and a sentence: typed after all, said so, and Ask instead take
   await h.r.alternative();
   assert.deepStrictEqual(h.did, [["undo", 2], ["ask", "hello there how are you"]]);
   // Asked now, and the pill offers to type it again.
-  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Asked Tailzu", alt: "Type it instead" }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Asked X0", alt: "Type it instead" }]);
   await h.r.alternative();
   assert.deepStrictEqual(h.did.slice(2), [["askCancel"], ["type", 1, ["Hello there,", "how are you"]]]);
 });
@@ -130,11 +130,11 @@ test("a late answer from an older session is pasted without a label", () => {
   assert.deepStrictEqual(h.pills, []);
 });
 
-test("held, and routed to typing after all (Tailzu, reply …): the held stretches pasted in order", async () => {
+test("held, and routed to typing after all (X0, reply …): the held stretches pasted in order", async () => {
   const h = rig();
   h.r.start(1, {});
   h.r.field(1, BOX);
-  assert.strictEqual(h.r.chunk(1, { text: "Sure,", heard: "Tailzu reply saying sure" }), "hold");
+  assert.strictEqual(h.r.chunk(1, { text: "Sure,", heard: "X0 reply saying sure" }), "hold");
   assert.strictEqual(h.r.end(1, { text: "see you at six.", heard: "see you at six" }, true), "routed");
   await settle();
   assert.deepStrictEqual(h.did[0], ["type", 1, ["Sure,", "see you at six."]]);
@@ -222,7 +222,7 @@ test("unclear (a command, no text box): the backend's pick when it is sure, else
   await settle();
   assert.deepStrictEqual(sure.did, [["whichBot", "open gmail", undefined]]);
   assert.deepStrictEqual(sure.lastPill()[1].label, "Sent to Travel bot");
-  for (const who of [{ slug: "travel", name: "Travel bot", confidence: 0.3 }, { slug: "tailzu", name: "Tailzu", confidence: 1 }, null, () => { throw new Error("offline"); }]) {
+  for (const who of [{ slug: "travel", name: "Travel bot", confidence: 0.3 }, { slug: "tailzu", name: "X0", confidence: 1 }, null, () => { throw new Error("offline"); }]) {
     const h = rig({ whichBot: typeof who === "function" ? who : () => who });
     h.r.start(1, {});
     h.r.field(1, null);

@@ -43,7 +43,7 @@ test("it draws the switch, the state, the projects with what to do about each, a
   const p = page(snap());
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(p.ids["#enabled"].checked, true);
-  assert.strictEqual(p.ids["#state"].textContent, "Online for Tailzu Code");
+  assert.strictEqual(p.ids["#state"].textContent, "Online for X0 Code");
   assert.strictEqual(p.ids["#workingRow"].hidden, true);
   const names = []; p.ids["#projects"].walk((e) => { if (e.className === "name") names.push(e.textContent); });
   assert.deepStrictEqual(names, ["acme/app", "<img src=x onerror=alert(1)>", "acme/no"], "a server's text is text");
@@ -57,7 +57,7 @@ test("it draws the switch, the state, the projects with what to do about each, a
 test("working shows what it works on, with Stop; paused says why; the container's Docker state is said", async () => {
   const p = page(snap({ status: { enabled: true, container: false, state: "working", pausedReason: "", project: "acme/app", working: true } }));
   await new Promise((r) => setImmediate(r));
-  assert.strictEqual(p.ids["#working"].textContent, "Tailzu is working on acme/app");
+  assert.strictEqual(p.ids["#working"].textContent, "X0 Bot is working on acme/app");
   assert.strictEqual(p.ids["#workingRow"].hidden, false);
   p.ids["#stop"].listeners.click();
   assert.deepStrictEqual(p.sent, [["stop"]]);

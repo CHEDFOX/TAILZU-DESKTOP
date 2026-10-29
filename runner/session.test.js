@@ -101,7 +101,7 @@ test("the staged edits are laid for the command, and taken away again for the ne
   assert.match(out, /EDITED\nNEW\n/);
   assert.match(out, /c\.test\.js/);
   assert.ok(!/b\.js/.test(out.split("\n").slice(-4).join("\n")), "the deleted file is gone for the command");
-  assert.match(out, /\[Tailzu: could not lay \.git\/config\]/);
+  assert.match(out, /\[X0 Bot: could not lay \.git\/config\]/);
   await r.exec("e-2", ["touch node_modules_like_cache.txt; echo installed > made-by-command.txt"]);
   const two = await r.exec("e-3", ["cat a.txt; ls made.txt 2>&1; cat src/b.js; ls made-by-command.txt"], { overlay: [] });
   const out2 = r.room.output("e-3");
@@ -136,7 +136,7 @@ test("a cancel for the running command stops it (130, and the process is gone); 
   r.room.send({ t: "cancel", id: "e-1" });
   const d = await r.room.waitFor((f) => f.t === "done" && f.id === "e-1");
   assert.strictEqual(d.exitCode, 130);
-  assert.match(r.room.output("e-1"), /\[Tailzu: stopped\]/);
+  assert.match(r.room.output("e-1"), /\[X0 Bot: stopped\]/);
   await until(() => !alive(pid), 3000, "the process to be gone");
 });
 
@@ -145,7 +145,7 @@ test("a command that runs out of time is 124 with timedOut, the message, and not
   const d = await r.exec("e-1", ["echo $$ > shell.pid; sleep 30 & echo $! > kid.pid; wait"], { timeoutSec: 1 });
   assert.strictEqual(d.exitCode, 124);
   assert.strictEqual(d.timedOut, true);
-  assert.match(r.room.output("e-1"), /\[Tailzu: stopped after 1 seconds, the time this step had\]/);
+  assert.match(r.room.output("e-1"), /\[X0 Bot: stopped after 1 seconds, the time this step had\]/);
   await until(() => !alive(Number(fs.readFileSync(path.join(r.ws, "shell.pid"), "utf8"))) && !alive(Number(fs.readFileSync(path.join(r.ws, "kid.pid"), "utf8"))), 3000, "all to be gone");
 });
 
@@ -166,7 +166,7 @@ test("EVERY GUARD-RAIL REFUSAL comes back as done 126 with the reason, and the c
     const d = await r.exec(id, [command]);
     assert.strictEqual(d.exitCode, 126, command);
     assert.match(d.note, new RegExp("refused \\(" + rule + "\\)"), command + " -> " + d.note);
-    assert.match(r.room.output(id), /\[Tailzu: not run on this computer: /, command);
+    assert.match(r.room.output(id), /\[X0 Bot: not run on this computer: /, command);
     assert.ok(!fs.existsSync(path.join(r.ws, "ran.txt")), "ran: " + command);
   }
   assert.strictEqual(r.events.refused.length, cases.length);

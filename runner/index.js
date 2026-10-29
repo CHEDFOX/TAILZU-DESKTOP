@@ -306,11 +306,11 @@ function createRunner(o) {
     try {
       await runJob(j);
       // Stopped by the person before anything began: the step is handed back with a word, not left to run out its lease.
-      if (!j.reported && !j.declined && j.aborted && j.aborted.report) await report(j, 1, "[Tailzu: " + j.aborted.reason + " before the step began]");
+      if (!j.reported && !j.declined && j.aborted && j.aborted.report) await report(j, 1, "[X0 Bot: " + j.aborted.reason + " before the step began]");
     } catch (err) {
       log("job " + j.id + " failed: " + String((err && err.stack) || err));
       audit.log({ event: "error", jobId: j.id, project: j.project, message: String((err && err.message) || err).slice(0, 300) });
-      if (!j.declined && !(j.aborted && !j.aborted.report)) await report(j, 1, "[Tailzu: this computer could not run the step: " + String((err && err.message) || err).slice(0, 200) + "]").catch(() => {});
+      if (!j.declined && !(j.aborted && !j.aborted.report)) await report(j, 1, "[X0 Bot: this computer could not run the step: " + String((err && err.message) || err).slice(0, 200) + "]").catch(() => {});
     } finally {
       stopLease(j);
       activity.settleRunning();
@@ -364,7 +364,7 @@ function createRunner(o) {
       const d = await dockerNow(true);
       if (!d.running) {
         decline(j, "docker_unavailable");
-        if (o.notify) o.notify(d.reason || "Docker is not available, so Tailzu Code did not run. Turn off \"Run in a container\" or start Docker.");
+        if (o.notify) o.notify(d.reason || "Docker is not available, so X0 Code did not run. Turn off \"Run in a container\" or start Docker.");
         return;
       }
     }
@@ -376,7 +376,7 @@ function createRunner(o) {
     if (j.aborted) return;
     if (!prep.ok) {
       audit.log({ event: "workspace_failed", jobId: j.id, project: j.project, message: prep.error });
-      await report(j, 1, "[Tailzu: this computer could not get the code: " + prep.error + "]");
+      await report(j, 1, "[X0 Bot: this computer could not get the code: " + prep.error + "]");
       return;
     }
 
@@ -404,21 +404,21 @@ function createRunner(o) {
       activity.settleRunning();
       audit.log({ event: "session_ended", jobId: j.id, project: j.project, reason: ended.reason, commands: ended.commands, exitCode: ended.exitCode });
       if (j.aborted && !j.aborted.report) return;
-      await report(j, j.aborted ? 1 : ended.exitCode, "[Tailzu: live session ended (" + (j.aborted ? j.aborted.reason : ended.reason) + "); " + ended.commands + " command(s) run]");
+      await report(j, j.aborted ? 1 : ended.exitCode, "[X0 Bot: live session ended (" + (j.aborted ? j.aborted.reason : ended.reason) + "); " + ended.commands + " command(s) run]");
       return;
     }
 
     // An ordinary step: the commands as given, with the staged edits laid over the checkout.
-    if (isSessionCommands(offer.commands)) { await report(j, 1, "[Tailzu: a live session was offered without a way into the room]"); return; }
+    if (isSessionCommands(offer.commands)) { await report(j, 1, "[X0 Bot: a live session was offered without a way into the room]"); return; }
     const hooks = hooksFor(j);
     const refused = firstRefusal(offer.commands, guard);
     if (refused) {
       hooks.onRefused(refused);
-      await report(j, 126, "$ " + refused.command + "\n[Tailzu: not run on this computer: " + refused.message + "]");
+      await report(j, 126, "$ " + refused.command + "\n[X0 Bot: not run on this computer: " + refused.message + "]");
       return;
     }
     const lay = await layOverlay(prep.dir, offer.overlay, new Set(), git, fs);
-    const note = lay.skipped.length ? "[Tailzu: could not lay " + lay.skipped.slice(0, 5).join(", ") + "]\n" : "";
+    const note = lay.skipped.length ? "[X0 Bot: could not lay " + lay.skipped.slice(0, 5).join(", ") + "]\n" : "";
     const ran = await runCommands(offer.commands, offer.timeoutSec, {
       cwd: prep.dir, env, signal: j.abort.signal, procs, spawnCommand, onStart: hooks.onStart, onEnd: hooks.onEnd,
     });
@@ -431,7 +431,7 @@ function createRunner(o) {
         changes = found.changes;
         extra = skippedNote(found.skipped);
       } catch (err) {
-        extra = "\n[Tailzu: could not work out what the commands changed: " + String((err && err.message) || err).slice(0, 200) + "]";
+        extra = "\n[X0 Bot: could not work out what the commands changed: " + String((err && err.message) || err).slice(0, 200) + "]";
       }
     }
     await report(j, j.aborted ? 1 : ran.exitCode, note + ran.output + extra, changes);
@@ -484,7 +484,7 @@ function createRunner(o) {
       settings.enabled = false;
       o.saveState();
       sync();
-      if (o.notify) o.notify("Tailzu Code stopped. This computer is off for Tailzu Code until you turn it on again.");
+      if (o.notify) o.notify("X0 Code stopped. This computer is off for X0 Code until you turn it on again.");
     },
     /** A project's answer, from the window: "allow", "deny" or "ask" (forget). */
     async setProject(id, name, action) {

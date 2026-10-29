@@ -117,7 +117,7 @@ function cappedSender(send, { headBytes = 1024 * 1024, tailBytes = 16 * 1024 } =
     /** Says what was left out and sends the end of it. */
     end() {
       if (omitted > 0) {
-        send("[Tailzu: " + omitted + " bytes of output left out; the last part follows]\n" + tail + (tail.endsWith("\n") ? "" : "\n"));
+        send("[X0 Bot: " + omitted + " bytes of output left out; the last part follows]\n" + tail + (tail.endsWith("\n") ? "" : "\n"));
         omitted = 0; tail = "";
       }
     },

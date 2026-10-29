@@ -544,7 +544,7 @@ function forceTeardownAll() {
 // A server-drawn sentence, handed over with the session. Falls back to
 // the built-in wording when a launch never reached the backend.
 const STRING_FALLBACKS = {
-  micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu",
+  micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → X0 Bot",
   micBlockedWindows: "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access",
   micMissing: "no microphone found — plug one in, then try again",
   micBusy: "microphone is in use by another app",

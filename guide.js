@@ -2225,7 +2225,7 @@
       screen: () => {
         send({ type: "show", state: "thinking", app: "Preview" });
         send({ type: "heard", text: "what does this graph show?" });
-        send({ type: "say", text: "I'd have to see the picture to answer that, and this Mac hasn't let Tailzu see the screen. Turn on Tailzu in System Settings, Privacy & Security, Screen Recording." });
+        send({ type: "say", text: "I'd have to see the picture to answer that, and this Mac hasn't let X0 Bot see the screen. Turn on X0 Bot in System Settings, Privacy & Security, Screen Recording." });
         send({ type: "offer", kind: "screenSettings", text: "Open Screen Recording settings" });
         send({ type: "state", state: "done" });
       },
@@ -2235,7 +2235,7 @@
         send({ type: "heard", text: "what's in this photo?" });
         send({ type: "permission", app: "Chrome: Gmail", always: false, text: "To answer that I need to see it." });
       },
-      error: () => { send({ type: "show", state: "thinking", app: "Keynote" }); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "error" }); send({ type: "say", text: "I can't read this window yet. Turn on Tailzu under Accessibility in System Settings." }); },
+      error: () => { send({ type: "show", state: "thinking", app: "Keynote" }); send({ type: "heard", text: "where's the export button?" }); send({ type: "state", state: "error" }); send({ type: "say", text: "I can't read this window yet. Turn on X0 Bot under Accessibility in System Settings." }); },
       // Everything at the longest agent.js lets it be: the card must still
       // fit, its buttons on screen.
       tall: () => {

@@ -66,7 +66,7 @@ function collectChanges(entries, read, limits) {
 function skippedNote(skipped) {
   if (!skipped.length) return "";
   const names = skipped.slice(0, 8).map((s) => s.path + " (" + s.why + ")").join(", ");
-  return "\n[Tailzu: " + skipped.length + " changed file" + (skipped.length === 1 ? " was" : "s were") + " not sent: " + names + (skipped.length > 8 ? ", and more" : "") + "]";
+  return "\n[X0 Bot: " + skipped.length + " changed file" + (skipped.length === 1 ? " was" : "s were") + " not sent: " + names + (skipped.length > 8 ? ", and more" : "") + "]";
 }
 
 function readFromTree(cwd, fs) {

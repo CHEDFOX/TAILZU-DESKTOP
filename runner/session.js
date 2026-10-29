@@ -118,7 +118,7 @@ function createSession(o) {
       // Every command is read before any is run: a refusal at the third must not leave the first two half done.
       const refused = firstRefusal(m.commands, o.guard);
       if (refused) {
-        const text = "[Tailzu: not run on this computer: " + refused.message + "]\n";
+        const text = "[X0 Bot: not run on this computer: " + refused.message + "]\n";
         send({ t: "out", id: m.id, data: "$ " + refused.command + "\n" + text });
         if (hooks.onRefused) hooks.onRefused({ command: refused.command, rule: refused.rule, message: refused.message, index: refused.index });
         commands += 1;
@@ -128,7 +128,7 @@ function createSession(o) {
       // The dev server runs on the branch plus the staged edits; a command takes the checkout back.
       if (preview.alive()) { const pid = preview.id(); preview.stop(); send({ t: "preview-ended", id: pid, reason: "a command took the checkout" }); }
       const lay = await layOverlay(o.dir, m.overlay, laid, o.git, o.fs);
-      if (lay.skipped.length) stream.write("[Tailzu: could not lay " + lay.skipped.slice(0, 5).join(", ") + "]\n");
+      if (lay.skipped.length) stream.write("[X0 Bot: could not lay " + lay.skipped.slice(0, 5).join(", ") + "]\n");
       const ran = await runCommands(m.commands, m.timeoutSec > 0 ? m.timeoutSec : 600, {
         cwd: o.dir, env: o.env, echo: (x) => stream.write(x), signal: abort.signal, procs: o.procs, spawnCommand: o.spawnCommand,
         onStart: hooks.onStart, onEnd: hooks.onEnd,

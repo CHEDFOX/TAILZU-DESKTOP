@@ -1,8 +1,8 @@
 {
   "name": "tailzu-desktop",
   "version": "0.4.4",
-  "description": "Tailzu desktop voice dictation — hotkey → record → clean → paste. Reuses the Tailzu backend.",
-  "author": "Tailzu <hello@x0bot.com>",
+  "description": "X0 Bot desktop voice dictation — hotkey → record → clean → paste. Reuses the X0 Bot backend.",
+  "author": "X0 Bot <hello@x0bot.com>",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -28,10 +28,10 @@
   },
   "build": {
     "appId": "space.tailzu.desktop",
-    "productName": "Tailzu",
+    "productName": "X0 Bot",
     "protocols": [
       {
-        "name": "Tailzu",
+        "name": "X0 Bot",
         "schemes": [
           "tulmi"
         ]
@@ -123,9 +123,9 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Tailzu records your voice to transcribe and clean it into text.",
-        "NSAudioCaptureUsageDescription": "Tailzu hears your computer's sound while you take notes, so a call's other voices are in the notes.",
-        "NSAppleEventsUsageDescription": "Tailzu pastes what you said into the app you are typing in.",
+        "NSMicrophoneUsageDescription": "X0 Bot records your voice to transcribe and clean it into text.",
+        "NSAudioCaptureUsageDescription": "X0 Bot hears your computer's sound while you take notes, so a call's other voices are in the notes.",
+        "NSAppleEventsUsageDescription": "X0 Bot pastes what you said into the app you are typing in.",
         "LSUIElement": true
       }
     },
@@ -143,7 +143,7 @@
     },
     "appx": {
       "applicationId": "Tailzu",
-      "displayName": "Tailzu",
+      "displayName": "X0 Bot",
       "backgroundColor": "#0F0D0B",
       "languages": [
         "en-US"

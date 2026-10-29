@@ -256,7 +256,7 @@ function userText(err, fallback) {
   }
   console.warn("[tailzu]", err);
   // fetch rejects with a TypeError when the network is not there at all.
-  if (err instanceof TypeError) return K.txt("error.network", "Couldn't reach Tailzu. Check your connection and try again.");
+  if (err instanceof TypeError) return K.txt("error.network", "Couldn't reach X0 Bot. Check your connection and try again.");
   return fallback;
 }
 
@@ -1206,7 +1206,7 @@ function writeOnNode(p) {
 function liveMarkNode(n, p) {
   const id = BT_PENDING.push({ kind: "liveMark", p, n }) - 1;
   const size = Number(p.size) || 56;
-  return '<div data-lm="' + id + '" role="button" tabindex="0" aria-label="' + esc(label(p.label || "Tailzu")) + '" style="position:relative;flex-shrink:0;cursor:pointer;width:' + size + "px;height:" + size + 'px">' +
+  return '<div data-lm="' + id + '" role="button" tabindex="0" aria-label="' + esc(label(p.label || "X0 Bot")) + '" style="position:relative;flex-shrink:0;cursor:pointer;width:' + size + "px;height:" + size + 'px">' +
     '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas></div>';
 }
 
@@ -4772,11 +4772,11 @@ function paintFirst() {
     const el = $(id);
     if (el && !CHROME_PAINTED.has(id) && typeof v === "string" && v.trim()) el.textContent = v;
   };
-  document.title = K.txt("desktop.window.title", "Tailzu");
-  put("gateTitle", K.txt("desktop.gate.title", "Tailzu"));
+  document.title = K.txt("desktop.window.title", "X0 Bot");
+  put("gateTitle", K.txt("desktop.gate.title", "X0 Bot"));
   put("gateSub", K.txt("desktop.gate.subtitle",
     "Sign in the same way you do on your phone — your voices, history and words come with you."));
-  put("railBrand", K.txt("desktop.rail.brand", "Tailzu"));
+  put("railBrand", K.txt("desktop.rail.brand", "X0 Bot"));
   put("dictate", K.txt("desktop.rail.dictate", "Dictate now"));
   put("settingsLink", K.txt("desktop.rail.settings", "Settings"));
   put("signOut", K.txt("desktop.rail.signOut", "Sign out"));
@@ -5381,6 +5381,6 @@ function refreshDisc(method) {
     // A failed bootstrap must not leave a blank window with no way out.
     $("gate").hidden = false;
     $("shell").hidden = true;
-    fail(userText(e, K.txt("desktop.gate.offline", "Couldn't reach Tailzu. Check your connection and try again.")));
+    fail(userText(e, K.txt("desktop.gate.offline", "Couldn't reach X0 Bot. Check your connection and try again.")));
   }
 })();

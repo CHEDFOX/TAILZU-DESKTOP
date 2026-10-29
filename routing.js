@@ -214,7 +214,7 @@ function createRouting(d) {
   function labelText(o) {
     switch (o.kind) {
       case "typed": return o.route.to === "rewrite" ? txt("desktop.route.rewrote", "Rewrote it") : txt("desktop.route.typed", "Typed");
-      case "asked": return txt("desktop.route.asked", "Asked Tailzu");
+      case "asked": return txt("desktop.route.asked", "Asked X0");
       case "notes": return o.route.to === "notesStart" ? txt("desktop.route.notesOn", "Taking notes") : txt("desktop.route.notesOff", "Notes stopped");
       case "bot": return txt("desktop.route.sent", "Sent to {bot}", { bot: o.bot });
       default: return "";

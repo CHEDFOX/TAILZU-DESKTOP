@@ -84,7 +84,7 @@ test("a command that runs past its time is killed with its whole group: exit 124
   assert.strictEqual(res.exitCode, 124);
   assert.strictEqual(res.timedOut, true);
   assert.ok(Date.now() - t0 < 5000, "stopped at the limit, not later");
-  assert.match(r.text(), /\[Tailzu: stopped after 1 seconds, the time this step had\]/);
+  assert.match(r.text(), /\[X0 Bot: stopped after 1 seconds, the time this step had\]/);
   const shellPid = Number(fs.readFileSync(path.join(r.ws, "shell.pid"), "utf8"));
   const childPid = Number(fs.readFileSync(path.join(r.ws, "child.pid"), "utf8"));
   await until(() => !alive(shellPid) && !alive(childPid), 3000, "the shell and its child to be gone");
@@ -110,7 +110,7 @@ test("a cancel stops the running command with exit 130, and the group is gone", 
   const res = await done;
   assert.strictEqual(res.exitCode, 130);
   assert.strictEqual(res.cancelled, true);
-  assert.match(r.text(), /\[Tailzu: stopped\]/);
+  assert.match(r.text(), /\[X0 Bot: stopped\]/);
   await until(() => !alive(pid), 3000, "the shell to be gone");
   r.remove();
 });
@@ -123,7 +123,7 @@ test("a background process does not hold the step up, and is killed when the ses
   assert.ok(Date.now() - t0 < 4000);
   const bg = Number(fs.readFileSync(path.join(r.ws, "bg.pid"), "utf8"));
   assert.ok(alive(bg), "it was left running");
-  assert.ok(r.procs.size > 0, "and Tailzu Code knows of it");
+  assert.ok(r.procs.size > 0, "and X0 Code knows of it");
   r.procs.killAll();
   await until(() => !alive(bg), 3000, "the background process to be killed");
   r.remove();

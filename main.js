@@ -180,7 +180,7 @@ const SHELL_DEFAULTS = {
     dictate: "Dictate",
     listening: "◉ Listening — {key} stops",
     signInToDictate: "Sign in to dictate…",
-    open: "Open Tailzu",
+    open: "Open X0 Bot",
     tone: "Tone",
     toneThisDevice: "this device",
     liveCaptions: "Live captions while dictating",
@@ -193,19 +193,19 @@ const SHELL_DEFAULTS = {
     backend: "Backend",
     signedIn: "Signed in — dictation lands on your account",
     editConfig: "Edit config…",
-    quit: "Quit Tailzu",
-    tooltipReady: "Tailzu — ready",
-    tooltipListening: "Tailzu — listening…",
-    tooltipSignIn: "Tailzu — sign in to dictate",
+    quit: "Quit X0 Bot",
+    tooltipReady: "X0 Bot — ready",
+    tooltipListening: "X0 Bot — listening…",
+    tooltipSignIn: "X0 Bot — sign in to dictate",
     notesStop: "◉ Taking notes {time} — click to stop",
-    notesTooltip: "Tailzu — taking notes, {time}",
+    notesTooltip: "X0 Bot — taking notes, {time}",
   },
   notify: {
-    title: "Tailzu",
+    title: "X0 Bot",
     signIn: "Sign in to dictate — your words belong to your account.",
     holdUnavailable: "Hold-to-talk unavailable (uiohook-napi didn't load) — using the toggle hotkey.",
     micBlockedWindows: "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access",
-    micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → Tailzu",
+    micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → X0 Bot",
     micMissing: "no microphone found — plug one in, then try again",
     micBusy: "microphone is in use by another app",
     noSpeech: "no speech detected — check your microphone",
@@ -284,7 +284,7 @@ function prettyKey(accel) {
 const clickable = new Set();   // held so a click handler is not collected before it fires
 function notify(body, onClick) {
   if (!body) return;
-  const n = new Notification({ title: t("notify.title") || txt("desktop.notify.title", "Tailzu"), body });
+  const n = new Notification({ title: t("notify.title") || txt("desktop.notify.title", "X0 Bot"), body });
   if (onClick) {
     clickable.add(n);
     n.on("click", () => { clickable.delete(n); onClick(); });
@@ -395,7 +395,7 @@ function checkForUpdate() {
     if (requiredAnnounced === min) return;
     requiredAnnounced = min;
     notify(txt("desktop.notify.updateRequired",
-      "This version of Tailzu ({current}) is no longer supported. Click to download the update.", vars), open);
+      "This version of X0 Bot ({current}) is no longer supported. Click to download the update.", vars), open);
     return;
   }
   // Gentler, and once per version: someone who has seen that 0.2.0 is out
@@ -404,8 +404,8 @@ function checkForUpdate() {
     localState.updateAnnounced = latest;
     saveLocalState();
     notify(inApp
-      ? txt("desktop.notify.updateReady", "Tailzu {latest} is ready. Click to update.", vars)
-      : txt("desktop.notify.updateAvailable", "Tailzu {latest} is available. Click to download it.", vars), open);
+      ? txt("desktop.notify.updateReady", "X0 Bot {latest} is ready. Click to update.", vars)
+      : txt("desktop.notify.updateAvailable", "X0 Bot {latest} is available. Click to download it.", vars), open);
   }
 }
 
@@ -693,7 +693,8 @@ async function refreshAccountTone() {
     // export?" was matched here with "jarvis" in it, and found nothing.
     const me = p && (p.personality || p);
     const nick = me && typeof me.assistantName === "string" ? me.assistantName.replace(/\s+/g, " ").trim().slice(0, 24) : "";
-    accountNickname = nick.toLowerCase() === "tailzu" ? "" : nick;
+    // X0 (or X0 Bot, or the old Tailzu) is already its name: not a second one.
+    accountNickname = ["x0", "x0 bot", "tailzu"].includes(nick.toLowerCase()) ? "" : nick;
   } catch { /* leave the last known value */ }
 }
 
@@ -784,12 +785,12 @@ const escHtml = (s) =>
 
 /** The page the browser shows once it has handed the code over. */
 function closePage() {
-  return "<!doctype html><meta charset=utf-8><title>" + escHtml(txt("desktop.oauth.pageTitle", "Tailzu")) + "</title>" +
+  return "<!doctype html><meta charset=utf-8><title>" + escHtml(txt("desktop.oauth.pageTitle", "X0 Bot")) + "</title>" +
     "<body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;" +
     "background:" + escHtml(color("desktop.oauth.pageBg", "#0b0b0f")) +
     ";color:" + escHtml(color("desktop.oauth.pageText", "rgba(255,255,255,.85)")) +
     ";font:15px -apple-system,Segoe UI,system-ui,sans-serif\">" +
-    "<p>" + escHtml(txt("desktop.oauth.pageBody", "Signed in. You can close this tab and go back to Tailzu.")) + "</p>";
+    "<p>" + escHtml(txt("desktop.oauth.pageBody", "Signed in. You can close this tab and go back to X0 Bot.")) + "</p>";
 }
 
 /**
@@ -1042,7 +1043,7 @@ function openAppWindow(screenId) {
     ...size,
     minWidth: Math.min(num("desktop.window.minWidth", 380), size.width),
     minHeight: Math.min(num("desktop.window.minHeight", 520), size.height),
-    title: txt("desktop.window.title", "Tailzu"),
+    title: txt("desktop.window.title", "X0 Bot"),
     // THE FIRST FRAME IS THE DESK'S, NOT A BLACK ONE. The window used to open
     // at once on black, then paint the old rail while the page asked the
     // server which look to use — a glimpse of the previous version on every
@@ -1799,7 +1800,7 @@ function refreshTray() {
   }
   tray.setToolTip(recording ? t("tray.tooltipListening")
     : notes ? fmt("tray.notesTooltip", { time: elapsedLabel(notesElapsed()) })
-    : codeWork && codeWork.working ? txt("desktop.tray.runnerWorking", "Tailzu is working on {project}", { project: codeWork.project })
+    : codeWork && codeWork.working ? txt("desktop.tray.runnerWorking", "X0 Bot is working on {project}", { project: codeWork.project })
     : signedIn() ? t("tray.tooltipReady") : t("tray.tooltipSignIn"));
   tray.setContextMenu(buildMenu());
 }
@@ -2006,13 +2007,13 @@ let runnerWin = null;
 /** The runner's one-line state, for under its switch in the tray. */
 function runnerStateLine(st) {
   switch (st.state) {
-    case "online": return txt("desktop.tray.runnerOnline", "Online for Tailzu Code");
+    case "online": return txt("desktop.tray.runnerOnline", "Online for X0 Code");
     case "paused": return st.pausedReason === "low_power_mode"
       ? txt("desktop.tray.runnerPausedLowPower", "Paused: Low Power Mode is on")
       : txt("desktop.tray.runnerPausedBattery", "Paused: battery is under 20%");
     case "signed_out": return txt("desktop.tray.runnerSignIn", "Sign in to use this computer");
-    case "live_off": return txt("desktop.tray.runnerLiveOff", "Tailzu Code is not on for your account yet");
-    case "replaced": return txt("desktop.tray.runnerReplaced", "Another copy of Tailzu has this computer");
+    case "live_off": return txt("desktop.tray.runnerLiveOff", "X0 Code is not on for your account yet");
+    case "replaced": return txt("desktop.tray.runnerReplaced", "Another copy of X0 Bot has this computer");
     case "connecting": case "backoff": return txt("desktop.tray.runnerConnecting", "Connecting…");
     default: return "";
   }
@@ -2023,24 +2024,24 @@ function runnerMenuItems() {
   const st = runner.status();
   const items = [{ type: "separator" }];
   if (st.working) {
-    items.push({ label: txt("desktop.tray.runnerWorking", "Tailzu is working on {project}", { project: st.project }), enabled: false });
+    items.push({ label: txt("desktop.tray.runnerWorking", "X0 Bot is working on {project}", { project: st.project }), enabled: false });
     // Ends what is running, and stands this computer down until the person turns it on again: a Stop that was offered the next job at
     // once would not be one.
     items.push({ label: txt("desktop.tray.runnerStop", "Stop"), click: () => runner.stopWork() });
   }
   items.push({
-    label: txt("desktop.tray.runnerUse", "Use this computer for Tailzu Code"),
+    label: txt("desktop.tray.runnerUse", "Use this computer for X0 Code"),
     type: "checkbox", checked: st.enabled, click: (item) => { void runnerSwitch(item.checked); },
   });
   const line = runnerStateLine(st);
   if (st.enabled && line && !st.working) items.push({ label: "    " + line, enabled: false });
-  items.push({ label: txt("desktop.tray.runnerActivity", "Tailzu Code activity…"), click: openRunnerPage });
+  items.push({ label: txt("desktop.tray.runnerActivity", "X0 Code activity…"), click: openRunnerPage });
   return items;
 }
 
 /** What turning it on means, in plain words: said the first time it is turned on from the tray, and written under the switch in its window. */
 const RUNNER_EXPLAIN = () => txt("desktop.runner.explain",
-  "When this is on, and only while Tailzu is open, Tailzu Code can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in Tailzu Code on this computer, and kept in a log here for 7 days. Turn it off any time.");
+  "When this is on, and only while X0 Bot is open, X0 Code can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in X0 Code on this computer, and kept in a log here for 7 days. Turn it off any time.");
 
 /** The switch. Turned on from the tray for the first time, it says what it does first; from its window the words are already on the page. */
 async function runnerSwitch(on) {
@@ -2051,8 +2052,8 @@ async function runnerSwitch(on) {
       try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
       const r = await dialog.showMessageBox({
         type: "question", noLink: true, defaultId: 1, cancelId: 1,
-        title: txt("desktop.runner.askTitle", "Tailzu Code"),
-        message: txt("desktop.runner.onMessage", "Use this computer for Tailzu Code?"),
+        title: txt("desktop.runner.askTitle", "X0 Code"),
+        message: txt("desktop.runner.onMessage", "Use this computer for X0 Code?"),
         detail: RUNNER_EXPLAIN(),
         buttons: [txt("desktop.runner.onYes", "Turn on"), txt("desktop.runner.onNo", "Not now")],
       });
@@ -2070,10 +2071,10 @@ async function askRunnerProject({ name }) {
   try {
     const r = await dialog.showMessageBox({
       type: "question", noLink: true, defaultId: 1, cancelId: 2,
-      title: txt("desktop.runner.askTitle", "Tailzu Code"),
-      message: txt("desktop.runner.askMessage", "Let Tailzu Code run {project} on this computer?", { project: name }),
+      title: txt("desktop.runner.askTitle", "X0 Code"),
+      message: txt("desktop.runner.askMessage", "Let X0 Code run {project} on this computer?", { project: name }),
       detail: txt("desktop.runner.askDetail",
-        "Tailzu Code wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in Tailzu Code on this computer."),
+        "X0 Code wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in X0 Code on this computer."),
       buttons: [
         txt("desktop.runner.askAllow", "Allow for this project"),
         txt("desktop.runner.askDeny", "Not on this computer"),
@@ -2114,7 +2115,7 @@ function openRunnerWindow() {
   if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); return; }
   const size = fitToDisplay(num("desktop.runner.width", 860), num("desktop.runner.height", 740));
   runnerWin = new BrowserWindow({
-    ...size, minWidth: 560, minHeight: 460, title: txt("desktop.runner.title", "Tailzu Code on this computer"),
+    ...size, minWidth: 560, minHeight: 460, title: txt("desktop.runner.title", "X0 Code on this computer"),
     backgroundColor: "#151210", show: false, autoHideMenuBar: true, webPreferences: webPrefs(),
   });
   runnerWin.once("ready-to-show", () => { if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); } });
@@ -2541,7 +2542,7 @@ function toggleDictation() {
     const ours = !!focused && focused === appWin;
     // Where its words go is decided on what it says (routing.js).
     routing.start(sid, { ours });
-    const named = ours ? Promise.resolve({ label: "Tailzu" }) : frontApp.frontInfo();
+    const named = ours ? Promise.resolve({ label: "X0 Bot" }) : frontApp.frontInfo();
     named
       .then((info) => {
         if (!info || sid !== activeSession) return;
@@ -2794,7 +2795,7 @@ function bindOneKeyNow() {
         localState.oneKeyWarned = said;
         saveLocalState();
         notify(!bound ? txt("desktop.notify.oneKeyNone", "{key} can't be used here, and no other key was free. Use Dictate in the tray menu.", { key: label })
-          : why === "denied" ? txt("desktop.notify.oneKeyDenied", "Tailzu can't use {key} until it's allowed in Privacy & Security › Accessibility. Talk with {bound} for now.", { key: label, bound: prettyKey(bound) })
+          : why === "denied" ? txt("desktop.notify.oneKeyDenied", "X0 Bot can't use {key} until it's allowed in Privacy & Security › Accessibility. Talk with {bound} for now.", { key: label, bound: prettyKey(bound) })
           : txt("desktop.notify.oneKeyUnavailable", "{key} can't be used on this computer, so talk with {bound}. Pick another key in Settings.", { key: label, bound: prettyKey(bound) }));
       }
       refreshKeys();
@@ -2980,9 +2981,9 @@ function notifyAccessibility() {
   if (warnedAccessibility) return;
   warnedAccessibility = true;
   new Notification({
-    title: txt("desktop.notify.accessibilityTitle", "Tailzu needs Accessibility"),
+    title: txt("desktop.notify.accessibilityTitle", "X0 Bot needs Accessibility"),
     body: txt("desktop.notify.accessibilityBody",
-      "Text was copied. To auto-paste, enable Tailzu under System Settings → Privacy & Security → Accessibility."),
+      "Text was copied. To auto-paste, enable X0 Bot under System Settings → Privacy & Security → Accessibility."),
   }).show();
 }
 
@@ -3094,8 +3095,8 @@ const askSetup = createAskSetup({
 
 /** The names it answers to: the server's (its own and the guide's), and theirs for it. */
 function wakeNames() {
-  const own = list("desktop.router.names", ["Tailzu", "Blip"]).filter((n) => typeof n === "string" && n.trim());
-  return (own.length ? own : ["Tailzu", "Blip"]).concat(accountNickname ? [accountNickname] : []);
+  const own = list("desktop.router.names", ["X0", "Blip", "Tailzu"]).filter((n) => typeof n === "string" && n.trim());
+  return (own.length ? own : ["X0", "Blip", "Tailzu"]).concat(accountNickname ? [accountNickname] : []);
 }
 
 function setupAsk() {
@@ -3586,7 +3587,7 @@ app.whenReady().then(() => {
 
   if (configError) {
     try {
-      new Notification({ title: txt("desktop.notify.configTitle", "Tailzu — config problem"), body: configError }).show();
+      new Notification({ title: txt("desktop.notify.configTitle", "X0 Bot — config problem"), body: configError }).show();
     } catch { /* a notification the OS refuses must not take the app down */ }
   }
 
