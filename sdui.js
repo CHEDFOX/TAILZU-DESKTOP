@@ -93,6 +93,10 @@ const COMPONENTS = [
   // BotBuddy's act "carry" and `doneWhen`: a lane under a message on its way, where he hauls it as a bag, heavier
   // each trip, and sets it down when the answer is here (botBuddyNode). Without it the server sends "Asking…".
   "BotBuddyCarry",
+  // THE BOTS' LOOKS AND MOMENTS (shared/types/sdui.ts, "Looks and moments"): avatars and moments from the server's
+  // catalog (botLooks.js is the starter, btLooks() keeps the newest), played by botTiles.js on BotTiles, BotBuddy and
+  // BotCard (`avatar`, `moment`, `momentMode`, `momentEndWhen`, BotTiles `surprises`). Without it: a moment's plain act.
+  "BotMoments",
   // callEndpoint's `stream`: an answer's words and what the bot is doing, written into state as they come over the live
   // socket (live.js, topic ask:<id>), the line bound to them changed in place (askStreamTake).
   "AskStream",
@@ -335,8 +339,11 @@ function capabilities() {
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
       ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
       // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.
-      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : []),
-    actions: typeof outboxRun === "function" ? ACTIONS.concat(["outbox"]) : ACTIONS,
+      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : [],
+      // Tailzu Code on this computer as a card on bots.computer (runnerCard.js, loaded after this file; main.js answers it).
+      typeof runnerOn === "function" && runnerOn() && ENV && ENV.runner ? ["DeskRunner"] : []),
+    actions: ACTIONS.concat(typeof outboxRun === "function" ? ["outbox"] : [],
+      typeof runnerOn === "function" && runnerOn() && ENV && ENV.runner ? ["runner.set", "runner.project", "runner.checkDocker", "runner.stop", "runner.openAudit"] : []),
     templates: [],
     device: {
       // WHAT THIS IS, as opposed to what it can draw.
@@ -363,7 +370,7 @@ function capabilities() {
 }
 
 async function api(path, body, method) {
-  // A path, never an address: "…tailzu.space" + ".evil.com/x" is another host,
+  // A path, never an address: "…x0bot.com" + ".evil.com/x" is another host,
   // and the account's token would go with it.
   if (typeof path !== "string" || path[0] !== "/") throw new Error("not an API path: " + path);
   const tok = await bearer();
@@ -399,6 +406,10 @@ function received(boot) {
   if (boot && typeof boot === "object") {
     K.setKnobs(boot);
     try { window.tailzuApp.boot({ labels: boot.labels || {}, flags: boot.flags || {} }); } catch { /* tray only */ }
+    // The faces the server supplies, beside the bundled ones (remoteFonts.js, loaded after this file).
+    if (typeof deskLoadFonts === "function") deskLoadFonts(boot.fonts);
+    // The bots' looks and moments: the server's catalog, when its version moved.
+    btLooksSync(boot.flags && boot.flags["bots.looks"]);
     paintFirst();
   }
   return boot;
@@ -993,6 +1004,64 @@ const BT_LIVES = new Map();
 const BT_CARDS = new Map();   // a BotCard's life across repaints: phase, step, completed, entered
 const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold" };
 
+// The bots' looks and moments (botTiles.js compileLooks; the server's catalog, shared/bots/looks.json): the window's
+// starter (botLooks.js, generated from the server's file at release), the last one the server sent (localStorage), and
+// the server's own when the bootstrap's flag "bots.looks" ({ v, url }) names another version, up or down. A catalog is
+// taken only when it compiles clean; the bots wear it from the next paint.
+const BT_LOOKS_KEY = "tz.botLooks.v1";
+let BT_LOOKS = null;
+let BT_LOOKS_FETCHING = 0;
+
+function btLooks() {
+  const api = window.TailzuBotTiles;
+  if (BT_LOOKS || !api) return BT_LOOKS;
+  BT_LOOKS = api.compileLooks(window.TailzuBotLooks || { v: 1 });
+  try {
+    const kept = localStorage.getItem(BT_LOOKS_KEY);
+    if (kept) {
+      const L = api.compileLooks(JSON.parse(kept));
+      if (!L.errors.length && L.v > BT_LOOKS.v) BT_LOOKS = L;
+    }
+  } catch { /* nothing kept: the starter */ }
+  return BT_LOOKS;
+}
+
+function btLooksSync(flag) {
+  const api = window.TailzuBotTiles, L = btLooks();
+  if (!api || !L || !flag || typeof flag !== "object" || !ENV) return;
+  const v = Number(flag.v), url = String(flag.url || "");
+  if (!(v >= 1) || !url.startsWith("/v1/") || v === L.v || v === BT_LOOKS_FETCHING) return;
+  BT_LOOKS_FETCHING = v;
+  fetch(String(ENV.baseUrl).replace(/\/$/, "") + url, { headers: { accept: "application/json" } })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((spec) => {
+      if (!spec || Number(spec.v) !== v) return;
+      const next = api.compileLooks(spec);
+      if (next.errors.length) return;
+      BT_LOOKS = next;
+      try { localStorage.setItem(BT_LOOKS_KEY, JSON.stringify(spec)); } catch { /* kept for this run only */ }
+    })
+    .catch(() => {})
+    .finally(() => { BT_LOOKS_FETCHING = 0; });
+}
+
+/** A bot's look: the node's (an id or a spec), else his kind's. */
+function btDress(bot, kind, avatar) {
+  const L = btLooks();
+  if (L) bot.setAvatar(L.avatar(kind, avatar));
+}
+
+/** A bot's moment from the catalog: started once per (id, mode), so a repaint does not start it again; none stops it. */
+function btMoment(bot, id, mode) {
+  const L = btLooks();
+  const m = id && L ? L.moment(String(id)) : null;
+  const key = m ? m.id + "|" + (mode || "") : "";
+  if (bot.__mkey === key) return;
+  bot.__mkey = key;
+  if (m) bot.playMoment(m, mode === "loop" || mode === "once" ? mode : undefined);
+  else if (bot.mo) bot.stopMoment();
+}
+
 function btLife(spec, i) {
   const api = window.TailzuBotTiles;
   const kind = spec.kind || api.kindOf(String(spec.slug || ""));
@@ -1006,6 +1075,7 @@ function btLife(spec, i) {
     BT_LIVES.set(key, b);
   }
   b.setMood(spec.state || "idle");
+  btDress(b, kind, spec.avatar);
   return b;
 }
 
@@ -1073,6 +1143,7 @@ function btBuddy(p) {
     if (BT_LIVES.size > 24) BT_LIVES.clear();
     BT_LIVES.set(key, b);
   }
+  btDress(b, kind, p.avatar);
   return b;
 }
 
@@ -1085,9 +1156,13 @@ function btBuddy(p) {
  * (drawn folded when he already has). Reduce Motion: still with the bag, and `label` written beside him.
  */
 function botBuddyNode(p) {
-  const act = p.thinkWhen && visible(p.thinkWhen) ? "think" : p.act || "play";
+  // A moment this build cannot play (an unknown id, a newer recipe) is the recipe's plain act.
+  const L = p.moment ? btLooks() : null;
+  const plain = L && !L.moment(String(p.moment)) && L.moments.has(String(p.moment)) ? L.fallback(String(p.moment)) : "";
+  const act = p.thinkWhen && visible(p.thinkWhen) ? "think" : plain || p.act || "play";
   const done = act === "carry" && !!p.doneWhen && visible(p.doneWhen);
-  const id = BT_PENDING.push({ kind: "buddy", p, act, done }) - 1;
+  const momentEnd = !!p.moment && !!p.momentEndWhen && visible(p.momentEndWhen);
+  const id = BT_PENDING.push({ kind: "buddy", p, act, done, momentEnd }) - 1;
   const H = Number(p.height) || 48, W = Number(p.width) || 0;
   // Gone already (a repaint after he left, or an answer that came before he was in): folded.
   const api = window.TailzuBotTiles;
@@ -1354,6 +1429,11 @@ function mountBotTiles(root) {
       });
     };
     layout();
+    // Each tile's moment (once placed; a repaint keeps it going), and Home's rare idle surprises.
+    specs.forEach((s, i) => { if (world.tiles[i]) btMoment(world.tiles[i], s.moment, s.momentMode); });
+    const sp = cfg.p.surprises && typeof cfg.p.surprises === "object" ? cfg.p.surprises : null;
+    const L = btLooks();
+    if (sp && L && Array.isArray(sp.moments)) world.surprise(sp.moments.map((m) => L.moment(String(m))).filter(Boolean), Number(sp.every) || 30, Number(sp.chance) || 0, 7);
     const paint = () => els.forEach((el, i) => { if (sizes[i]) btPaint(el.querySelector(".tz-bt-c"), world.tiles[i], sizes[i][0], sizes[i][1]); });
     world.settle(reduced);
     paint();
@@ -1390,7 +1470,7 @@ function mountBotTiles(root) {
   root.querySelectorAll("[data-bb]").forEach((stage) => {
     const cfg = BT_PENDING[Number(stage.getAttribute("data-bb"))];
     if (!cfg || !api) return;
-    const { p, act, done } = cfg;
+    const { p, act, done, momentEnd } = cfg;
     const H = Number(p.height) || 48;
     const bot = btBuddy(p);
     bot.setLookTo(String(p.lookTo || ""));
@@ -1410,6 +1490,9 @@ function mountBotTiles(root) {
     const width = () => stage.clientWidth || Number(p.width) || 0;
     const fit = () => { const w = width(); if (w > 0) bot.resize(w, H, H - 2); };
     fit();
+    // His moment (not while he thinks or carries), and its end when momentEndWhen holds.
+    if (bot.placed) btMoment(bot, act === "think" || carry ? "" : p.moment, p.momentMode);
+    if (momentEnd) bot.deliverMoment();
     bot.settle(reduced);
     const paint = () => { const w = width(); if (w > 0) btPaint(cv, bot, w, H); };
     paint();
@@ -1429,12 +1512,14 @@ function mountBotTiles(root) {
       bot = new api.BotTile({ kind: p.kind || "custom", color: String(p.color || "#3d3d3d"), mood: "idle", seed: 29, size: Math.round((Number(p.stageHeight) || 128) * 0.4) });
       BT_LIVES.set("card|" + key, bot);
     }
+    btDress(bot, p.kind || "custom", p.avatar);
     const veil = root.querySelector('[data-bcv="' + card.getAttribute("data-bc") + '"]');
     if (veil) document.body.appendChild(veil);
     const cv = card.querySelector(".tz-bt-c"), stageH = Number(p.stageHeight) || 128;
     const size = () => [card.clientWidth, stageH];
     const [w0] = size();
     bot.resize(w0, stageH, stageH - 12);
+    if (life.phase === "open" && bot.placed) btMoment(bot, p.moment, p.momentMode);
     bot.settle(reduced);
     const paint = () => { const [w] = size(); if (w > 0) btPaint(cv, bot, w, stageH); };
     paint();
@@ -1750,6 +1835,7 @@ function node(n) {
     case "LiveMark": return liveMarkNode(n, p);
     case "HeadBar": return headBarNode(p, kids);
     case "DeskFolders": return foldersNode(p, s);
+    case "DeskRunner": return typeof runnerNode === "function" ? runnerNode(p, s) : "";
 
     case "WordMeter": return wordMeter(p);
     case "PieChart": case "DonutChart": return pie(p);
@@ -3734,6 +3820,9 @@ async function run(action, eventValue) {
     case "ask.folderAdd": foldersAction("add"); return;
     case "ask.folderRemove": foldersAction("remove", Number(action.i)); return;
     case "ask.folderReset": foldersAction("reset"); return;
+    // Tailzu Code on this computer's card (runnerCard.js): the main process checks each, and asks itself before turning it on or allowing a project.
+    case "runner.set": case "runner.project": case "runner.checkDocker": case "runner.stop": case "runner.openAudit":
+      return typeof runnerRun === "function" ? runnerRun(action) : undefined;
     case "connector.connect": return connectApp(action);
     case "requestPermission":
       if (action.permission === "microphone") return askMic(action);

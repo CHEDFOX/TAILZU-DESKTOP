@@ -22,7 +22,7 @@ const PROPS = {
   on: "On", allow: "Allow", turnOff: "Turn off",
   restart: "Restart Tailzu to finish", restartButton: "Restart",
   foot: "Change these any time in Settings. How Ask uses what it sees:",
-  policyLabel: "Privacy policy", policyUrl: "https://tailzu.space/privacy",
+  policyLabel: "Privacy policy", policyUrl: "https://x0bot.com/privacy",
 };
 const MAC = { platform: "mac", read: "on", see: "off", pictures: "off" };
 const ALL_ON = { platform: "mac", read: "on", see: "on", pictures: "on" };
@@ -831,7 +831,7 @@ test("the held mic is a disc of the node's size with its own glyph, and says whe
 const FOLDER_PROPS = {
   title: "Folders Ask can use", lede: "Only inside these.", usual: "The usual three", add: "Add a folder", remove: "Remove",
   reset: "Back to the usual three", none: "No folders yet.", refused: "Ask can't use that folder.", foot: "How Ask uses your files:",
-  policyLabel: "Privacy policy", policyUrl: "https://tailzu.space/privacy",
+  policyLabel: "Privacy policy", policyUrl: "https://x0bot.com/privacy",
 };
 const USUAL = { custom: false, error: "", folders: [{ label: "Downloads", path: "~/Downloads" }, { label: "Desktop", path: "~/Desktop" }, { label: "Documents", path: "~/Documents" }] };
 const folderRow = (p) => { p.ctx.__n = { type: "DeskFolders", props: FOLDER_PROPS }; return p.run("node(__n)"); };

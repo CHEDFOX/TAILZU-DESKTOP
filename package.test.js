@@ -2,7 +2,7 @@
 // file at a time. A module required from main.js but missing from that list
 // runs fine from the checkout (`electron .`) and crashes every installer at
 // launch with "Cannot find module" — which is how 0.3.3 reached the Store and
-// tailzu.space without frontApp.js. This walks every file the app loads,
+// x0bot.com without frontApp.js. This walks every file the app loads,
 // starting from main.js and the windows' HTML, and fails on the first one the
 // list leaves out.
 const test = require("node:test");

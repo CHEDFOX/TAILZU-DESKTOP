@@ -77,7 +77,7 @@ it would pin those values against anything the server later changes.
 
 | key | meaning |
 | --- | --- |
-| `baseUrl` | your backend, e.g. `https://api.tailzu.space` — https, or http to `localhost` only: the account's token rides on every request |
+| `baseUrl` | your backend, e.g. `https://api.x0bot.com` (a config that still says `https://api.tailzu.space`, the old default, is read as this) — https, or http to `localhost` only: the account's token rides on every request |
 | `language` | `auto` or a code like `en` / `hi` / `es` (`desktop.language.default`) |
 | `hotkey` | toggle accelerator (`desktop.hotkey.default`, `CommandOrControl+Shift+Space`); if it is taken, `desktop.hotkey.fallbacks` are tried in order |
 | `tone` | `none` / `formal` / `casual` / `very-casual` / `excited` (`desktop.tone.default`): only what the tray shows signed out. Dictation writes in the account's voice; the tray's Tone menu changes the account's tone |

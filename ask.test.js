@@ -3479,7 +3479,7 @@ test("a hand-off opens each link of the contract a computer can finish, and no n
   const open = h.deps().open;
   const good = [
     "https://wa.me/919876543210?text=Running%2010%20minutes%20late", "https://wa.me/?text=Hi",
-    "https://api.whatsapp.com/send?phone=919876543210&text=Hi", "https://t.me/share/url?url=https%3A%2F%2Ftailzu.space&text=Look",
+    "https://api.whatsapp.com/send?phone=919876543210&text=Hi", "https://t.me/share/url?url=https%3A%2F%2Fx0bot.com&text=Look",
     "https://t.me/rahul_k?text=Hi", "https://www.google.com/maps/dir/?api=1&destination=Indiranagar%2C%20Bengaluru",
     "https://www.google.com/maps/search/?api=1&query=filter%20coffee", "https://m.uber.com/ul/?action=setPickup&pickup=my_location",
     "https://www.amazon.in/s?k=usb%20c%20cable", "https://www.flipkart.com/search?q=running%20shoes",

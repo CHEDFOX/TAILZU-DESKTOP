@@ -26,10 +26,15 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  /** The share-in screen's limits (bots.share-in in the backend) and the file door's (50 MB). */
+  /** The share-in screen's limits (bots.share-in in the backend) and the file door's (50 MB): the most a drop
+   *  ever takes. The server may set lower ones (share.maxFiles, media.maxBytes, share.maxText), never higher. */
   const MAX_FILES = 5;
   const MAX_BYTES = 50 * 1024 * 1024;
   const MAX_TEXT = 2000;
+  const within = (v, most) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) && n >= 1 ? Math.min(n, most) : most;
+  };
   const WEB = /^https?:\/\/\S+$/i;
 
   /** A drag worth showing "Drop to send" for: files, a link or text. */
@@ -39,9 +44,11 @@
   }
 
   /** What a drop carries, as the share-in screen takes it: up to five files, one link, the words. */
-  function planDrop(dt) {
+  function planDrop(dt, limits) {
+    const L = limits || {};
+    const maxFiles = within(L.files, MAX_FILES), maxBytes = within(L.bytes, MAX_BYTES), maxText = within(L.text, MAX_TEXT);
     const all = Array.from((dt && dt.files) || []);
-    const files = all.slice(0, MAX_FILES);
+    const files = all.slice(0, maxFiles);
     let skipped = all.length - files.length;
     const get = (type) => { try { return String((dt && dt.getData && dt.getData(type)) || ""); } catch { return ""; } };
     // A file dragged from a file manager can also carry its own path as a file:// address or plain text: not a link, not words.
@@ -51,9 +58,9 @@
     let url = links[0] || "";
     if (!url && WEB.test(text)) { url = text; text = ""; }
     if (text === url) text = "";
-    const big = files.filter((f) => Number(f.size) > MAX_BYTES);
+    const big = files.filter((f) => Number(f.size) > maxBytes);
     skipped += big.length;
-    return { files: files.filter((f) => big.indexOf(f) === -1), text: text.slice(0, MAX_TEXT), url: url.slice(0, MAX_TEXT), skipped, tooBig: big.length > 0 };
+    return { files: files.filter((f) => big.indexOf(f) === -1), text: text.slice(0, maxText), url: url.slice(0, maxText), skipped, tooBig: big.length > 0 };
   }
 
   /** The share-in screen's params: `file` (the first id), `files` (all, when more than one), `text`, `url`. */
@@ -157,12 +164,17 @@
    */
   function install(host) {
     const win = host.window, doc = host.document;
-    const w = (k, d) => host.txt("desktop.share." + k, d);
+    // Each key written out whole, so the knob manifest finds it and the console lists it.
+    const limits = () => (typeof host.limits === "function" ? host.limits() : {});
     const words = () => ({
-      drop: w("drop", "Drop to send"), esc: w("esc", "to cancel"), after: w("after", "Let go, then pick the bot to send it to."),
-      file: w("file", "A file"), files: w("files", "{n} files"), link: w("link", "A link"), text: w("text", "Some text"),
-      adding: w("adding", "Adding it…"), failed: w("failed", "Couldn't add that. Try again."),
-      partly: w("partly", "Some of it couldn't be added."), tooBig: w("tooBig", "That file is over 50 MB, which is the most Tailzu takes."),
+      drop: host.txt("desktop.share.drop", "Drop to send"), esc: host.txt("desktop.share.esc", "to cancel"),
+      after: host.txt("desktop.share.after", "Let go, then pick the bot to send it to."),
+      file: host.txt("desktop.share.file", "A file"), files: host.txt("desktop.share.files", "{n} files"),
+      link: host.txt("desktop.share.link", "A link"), text: host.txt("desktop.share.text", "Some text"),
+      adding: host.txt("desktop.share.adding", "Adding it…"), failed: host.txt("desktop.share.failed", "Couldn't add that. Try again."),
+      partly: host.txt("desktop.share.partly", "Some of it couldn't be added."),
+      tooBig: host.txt("desktop.share.tooBig", "That file is over {mb} MB, which is the most Tailzu takes.")
+        .replace("{mb}", String(Math.round(within(limits().bytes, MAX_BYTES) / 1024 / 1024))),
     });
 
     const style = doc.createElement("style");
@@ -239,7 +251,7 @@
       if (!ours(e) && !was) return;
       e.preventDefault();
       inner = false;
-      const plan = planDrop(e.dataTransfer);
+      const plan = planDrop(e.dataTransfer, limits());
       if (!plan.files.length && !plan.text && !plan.url) {
         hide();
         if (plan.tooBig) host.toast(words().tooBig);
@@ -283,5 +295,7 @@ if (typeof module === "undefined" && typeof window !== "undefined" && typeof go 
     },
     toast: (m) => toast(m),
     txt: (k, d) => K.txt(k, d),
+    // How much one drop takes: the server's, never more than MAX_FILES, MAX_BYTES and MAX_TEXT.
+    limits: () => ({ files: K.num("share.maxFiles", 5), bytes: K.num("media.maxBytes", 52428800), text: K.num("share.maxText", 2000) }),
   });
 }

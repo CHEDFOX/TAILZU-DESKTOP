@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 52ff3796d0f83d9d9faf630c579f04245ddcca53d43cdbb71d3b521639284604
-// body sha256 ac4e213968ad365a27416ad9d951915bc62f2f3bf2f1d9a3804109afc8d0d22e
+// core.ts sha256 5937b9d3c8cd77b4bb83bf8a4c04554bf2587e5b94a4b7f654cac235656891b3
+// body sha256 8433a0bc94ff76c0d0bfa8150a968515fcc3029407f8fe654c6839da604d8007
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -78,6 +78,1297 @@
       };
   }
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  // ===================================================================== looks and moments: data from the server
+  /*
+   * WHAT A BOT LOOKS LIKE AND WHAT HE DOES, AS DATA (the server's catalog: TAILZU-BACKEND tulmi/src/experience/bots/looks,
+   * docs/bots-app.md "Looks and moments"). The apps carry a starter copy (starter.ts, generated from it) and keep the
+   * server's newest.
+   *
+   *   Avatar   a bot's look from parts: his head's shape and size, his eyes, mouth, antennae, ears, the dots through him,
+   *            his colours, and what he wears (small vector parts on an anchor). Today's kinds are avatars too (each kind
+   *            wears the catalog's own, all of them Blip's look now), so a new look for any of them is a push.
+   *   Moment   what he does, as tracks over time (a recipe): goals for his body (walk, hop, sit, crouch, lean, spin,
+   *            shake, a kick), targets for his hands, where he looks, his eyes and mouth, props on him, particles he
+   *            throws off, ripples in the fabric, what the bots near him do, named sounds. One interpreter plays every
+   *            recipe through the same physics as the rest: a track sets a goal or a force, never a pose.
+   *   Part     a small drawing (paths and circles, in bot heights) that avatars wear and moments throw.
+   *
+   * compileLooks() turns the catalog into these once (expressions into bytecode, paths into numbers): a frame never
+   * parses or allocates. What this core does not know makes that avatar or moment unusable (the default look, or the
+   * moment's plain act), never a crash.
+   */
+  /** The looks format this core draws and plays; a catalog or a recipe that says a higher one is not played. */
+  const LOOKS_FORMAT = 1;
+  // ---- the expression language (the mic program's, motionLang.ts on the server: same grammar, numbers only)
+  /** The names an expression may read. t: seconds into the track; u: 0 to 1 through it; T: seconds into the moment; D: the track's length; beat: beats (bpm); k: loops so far; side: 1 facing right, -1 left; rnd, rnd2: random per play; W: the stage's width; x: his hips from its left; px: the other bot ahead of him (bot heights, 0: none). */
+  const MOMENT_VARS = ["t", "u", "T", "D", "beat", "k", "side", "rnd", "rnd2", "W", "x", "px"];
+  const XCONST = { pi: Math.PI, tau: TAU, e: Math.E };
+  /** Built-ins: [id, fewest arguments, most]. motionLang's, and sign, tri (a triangle wave, period 1), hash (0 to 1 from n). */
+  const XFUNC = {
+      sin: [0, 1, 1], cos: [1, 1, 1], tan: [2, 1, 1], abs: [3, 1, 1], sqrt: [4, 1, 1], floor: [5, 1, 1], ceil: [6, 1, 1], round: [7, 1, 1],
+      exp: [8, 1, 1], log: [9, 1, 1], atan2: [10, 2, 2], min: [11, 1, 8], max: [12, 1, 8], pow: [13, 2, 2], hypot: [14, 1, 8],
+      clamp: [15, 3, 3], smooth: [16, 3, 3], lerp: [17, 3, 3], crest: [18, 1, 1], ramp: [19, 3, 4], run: [20, 5, 5], noise: [21, 1, 1],
+      sign: [22, 1, 1], tri: [23, 1, 1], hash: [24, 1, 1],
+  };
+  const MOMENT_FUNCS = Object.keys(XFUNC);
+  const XBIN = ["+", "-", "*", "/", "%", "^", "<", "<=", ">", ">=", "==", "!=", "&&", "||"];
+  const XO_NUM = 1, XO_VAR = 2, XO_NEG = 3, XO_NOT = 4, XO_BIN = 5, XO_TERN = 6, XO_CALL = 7;
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const XP0 = { c: 0, code: null };
+  /** Expression text into bytecode (a constant when it reads no name). Throws on anything it does not know. */
+  function xcompile(src) {
+      const toks = [];
+      for (let i = 0; i < src.length;) {
+          const ch = src.charCodeAt(i);
+          if (ch === 32 || ch === 9 || ch === 10 || ch === 13) {
+              i++;
+              continue;
+          }
+          const dig = (k) => { const c = src.charCodeAt(k); return c >= 48 && c <= 57; };
+          if (dig(i)) {
+              let j = i;
+              while (j < src.length && dig(j))
+                  j++;
+              if (src[j] === ".") {
+                  j++;
+                  while (j < src.length && dig(j))
+                      j++;
+              }
+              if (src[j] === "e" || src[j] === "E") {
+                  let k = j + 1;
+                  if (src[k] === "+" || src[k] === "-")
+                      k++;
+                  if (dig(k)) {
+                      j = k;
+                      while (j < src.length && dig(j))
+                          j++;
+                  }
+              }
+              toks.push({ t: 0, v: "", n: parseFloat(src.slice(i, j)) });
+              i = j;
+              continue;
+          }
+          if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch === 95) {
+              let j = i + 1;
+              while (j < src.length && /[A-Za-z0-9_.]/.test(src[j]))
+                  j++;
+              toks.push({ t: 1, v: src.slice(i, j), n: 0 });
+              i = j;
+              continue;
+          }
+          const two = src.slice(i, i + 2);
+          if (two === "||" || two === "&&" || two === "==" || two === "!=" || two === "<=" || two === ">=") {
+              toks.push({ t: 2, v: two, n: 0 });
+              i += 2;
+              continue;
+          }
+          if ("-+*/%^<>!?:(),".indexOf(src[i]) >= 0) {
+              toks.push({ t: 2, v: src[i], n: 0 });
+              i++;
+              continue;
+          }
+          throw new Error(`bad character "${src[i]}"`);
+      }
+      const code = [];
+      let pos = 0, depth = 0, deepest = 0, reads = false;
+      const push = () => { depth++; if (depth > deepest)
+          deepest = depth; };
+      const isOp = (v) => pos < toks.length && toks[pos].t === 2 && toks[pos].v === v;
+      const take = (v) => { if (!isOp(v))
+          throw new Error(`expected "${v}"`); pos++; };
+      const bin = (op) => { code.push(XO_BIN, XBIN.indexOf(op)); depth--; };
+      const ternary = () => { or(); if (isOp("?")) {
+          pos++;
+          ternary();
+          take(":");
+          ternary();
+          code.push(XO_TERN);
+          depth -= 2;
+      } };
+      const or = () => { and(); while (isOp("||")) {
+          pos++;
+          and();
+          bin("||");
+      } };
+      const and = () => { eq(); while (isOp("&&")) {
+          pos++;
+          eq();
+          bin("&&");
+      } };
+      const eq = () => { rel(); while (isOp("==") || isOp("!=")) {
+          const o = toks[pos++].v;
+          rel();
+          bin(o);
+      } };
+      const rel = () => { add(); while (isOp("<") || isOp("<=") || isOp(">") || isOp(">=")) {
+          const o = toks[pos++].v;
+          add();
+          bin(o);
+      } };
+      const add = () => { mul(); while (isOp("+") || isOp("-")) {
+          const o = toks[pos++].v;
+          mul();
+          bin(o);
+      } };
+      const mul = () => { unary(); while (isOp("*") || isOp("/") || isOp("%")) {
+          const o = toks[pos++].v;
+          unary();
+          bin(o);
+      } };
+      const unary = () => {
+          if (isOp("-")) {
+              pos++;
+              unary();
+              code.push(XO_NEG);
+              return;
+          }
+          if (isOp("!")) {
+              pos++;
+              unary();
+              code.push(XO_NOT);
+              return;
+          }
+          power();
+      };
+      const power = () => { primary(); if (isOp("^")) {
+          pos++;
+          unary();
+          bin("^");
+      } };
+      const primary = () => {
+          const k = toks[pos];
+          if (!k)
+              throw new Error("unexpected end");
+          if (k.t === 0) {
+              pos++;
+              code.push(XO_NUM, k.n);
+              push();
+              return;
+          }
+          if (k.t === 1) {
+              pos++;
+              if (isOp("(")) {
+                  pos++;
+                  const f = own(XFUNC, k.v) ? XFUNC[k.v] : null;
+                  if (!f)
+                      throw new Error(`unknown function ${k.v}`);
+                  let n = 0;
+                  if (!isOp(")")) {
+                      ternary();
+                      n++;
+                      while (isOp(",")) {
+                          pos++;
+                          ternary();
+                          n++;
+                      }
+                  }
+                  take(")");
+                  if (n < f[1] || n > f[2])
+                      throw new Error(`${k.v} takes ${f[1] === f[2] ? f[1] : `${f[1]} to ${f[2]}`} arguments`);
+                  code.push(XO_CALL, f[0], n);
+                  depth -= n - 1;
+                  return;
+              }
+              if (own(XCONST, k.v)) {
+                  code.push(XO_NUM, XCONST[k.v]);
+                  push();
+                  return;
+              }
+              const vi = MOMENT_VARS.indexOf(k.v);
+              if (vi < 0)
+                  throw new Error(`unknown name ${k.v}`);
+              code.push(XO_VAR, vi);
+              reads = true;
+              push();
+              return;
+          }
+          if (isOp("(")) {
+              pos++;
+              ternary();
+              take(")");
+              return;
+          }
+          throw new Error(`unexpected "${k.v}"`);
+      };
+      ternary();
+      if (pos < toks.length)
+          throw new Error(`unexpected "${toks[pos].v}"`);
+      if (deepest > 48)
+          throw new Error("too deep");
+      const bc = Float64Array.from(code);
+      return reads ? { c: 0, code: bc } : { c: xrun(bc, XVARS0), code: null };
+  }
+  const XSTACK = new Float64Array(64);
+  const XVARS0 = new Float64Array(MOMENT_VARS.length);
+  function xbin(op, a, b) {
+      switch (op) {
+          case 0: return a + b;
+          case 1: return a - b;
+          case 2: return a * b;
+          case 3: return b === 0 ? 0 : a / b;
+          case 4: return b === 0 ? 0 : a - Math.floor(a / b) * b;
+          case 5: return Math.pow(a, b);
+          case 6: return a < b ? 1 : 0;
+          case 7: return a <= b ? 1 : 0;
+          case 8: return a > b ? 1 : 0;
+          case 9: return a >= b ? 1 : 0;
+          case 10: return a === b ? 1 : 0;
+          case 11: return a !== b ? 1 : 0;
+          case 12: return a && b ? 1 : 0;
+          default: return a || b ? 1 : 0;
+      }
+  }
+  function xcall(f, s, at, n) {
+      const a = s[at], b = s[at + 1], c = s[at + 2];
+      switch (f) {
+          case 0: return Math.sin(a);
+          case 1: return Math.cos(a);
+          case 2: return Math.tan(a);
+          case 3: return Math.abs(a);
+          case 4: return a < 0 ? 0 : Math.sqrt(a);
+          case 5: return Math.floor(a);
+          case 6: return Math.ceil(a);
+          case 7: return Math.round(a);
+          case 8: return Math.exp(a);
+          case 9: return a > 0 ? Math.log(a) : 0;
+          case 10: return Math.atan2(a, b);
+          case 11: {
+              let m = a;
+              for (let i = 1; i < n; i++)
+                  if (s[at + i] < m)
+                      m = s[at + i];
+              return m;
+          }
+          case 12: {
+              let m = a;
+              for (let i = 1; i < n; i++)
+                  if (s[at + i] > m)
+                      m = s[at + i];
+              return m;
+          }
+          case 13: return a < 0 && b !== Math.floor(b) ? 0 : Math.pow(a, b);
+          case 14: {
+              let q = 0;
+              for (let i = 0; i < n; i++)
+                  q += s[at + i] * s[at + i];
+              return Math.sqrt(q);
+          }
+          case 15: return a < b ? b : a > c ? c : a;
+          case 16: {
+              const w = b === a ? (c >= b ? 1 : 0) : Math.min(1, Math.max(0, (c - a) / (b - a)));
+              return w * w * (3 - 2 * w);
+          }
+          case 17: return a + (b - a) * c;
+          case 18: {
+              const q = Math.sin(a);
+              return q > 0 ? Math.pow(q, 1.6) : 0;
+          }
+          case 19: {
+              const e = (n > 3 ? s[at + 3] : 0) || 0.06;
+              return a < b ? 0 : a < b + e ? (a - b) / e : a < b + c ? 1 : a < b + c + e ? 1 - (a - b - c) / e : 0;
+          }
+          case 20: {
+              const w = s[at + 4], u = (b - c) / s[at + 3];
+              if (!(u >= 0 && u <= 1))
+                  return 0;
+              const half = w / 2, mid = u * (1 + w) - half, q = Math.abs(a - mid) / half;
+              return q >= 1 ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * q);
+          }
+          case 21: return Math.sin(a * 1.7) * Math.sin(a * 0.61 + 2.1);
+          case 22: return a > 0 ? 1 : a < 0 ? -1 : 0;
+          case 23: {
+              const q = a - Math.floor(a);
+              return q < 0.25 ? 4 * q : q < 0.75 ? 2 - 4 * q : 4 * q - 4;
+          }
+          default: return hash01(a);
+      }
+  }
+  /** Run bytecode on the names (MOMENT_VARS order). Anything not finite is 0. No allocation. */
+  function xrun(code, vars) {
+      const s = XSTACK, n = code.length;
+      let sp = 0, i = 0;
+      while (i < n) {
+          const op = code[i];
+          if (op === XO_NUM) {
+              s[sp++] = code[i + 1];
+              i += 2;
+          }
+          else if (op === XO_VAR) {
+              s[sp++] = vars[code[i + 1]];
+              i += 2;
+          }
+          else if (op === XO_BIN) {
+              const b = s[--sp];
+              s[sp - 1] = xbin(code[i + 1], s[sp - 1], b);
+              i += 2;
+          }
+          else if (op === XO_NEG) {
+              s[sp - 1] = -s[sp - 1];
+              i++;
+          }
+          else if (op === XO_NOT) {
+              s[sp - 1] = s[sp - 1] ? 0 : 1;
+              i++;
+          }
+          else if (op === XO_TERN) {
+              const b = s[--sp], a = s[--sp];
+              s[sp - 1] = s[sp - 1] ? a : b;
+              i++;
+          }
+          else {
+              const argc = code[i + 2];
+              sp -= argc;
+              s[sp] = xcall(code[i + 1], s, sp, argc);
+              sp++;
+              i += 3;
+          }
+          if (s[sp - 1] - s[sp - 1] !== 0)
+              s[sp - 1] = 0;
+      }
+      return s[0];
+  }
+  /** Check an expression the way a recipe's would be compiled (the server's checks and tests use this). */
+  function checkExpression(src) {
+      try {
+          xcompile(src);
+          return "";
+      }
+      catch (e) {
+          return e.message;
+      }
+  }
+  // ---- parts: small drawings in bot heights
+  const PO_SHAPE = 1, PO_M = 2, PO_L = 3, PO_Q = 4, PO_Z = 5, PO_O = 6, PO_END = 7;
+  /** A part, compiled: its drawing as numbers, and the paints it names. */
+  class Part {
+      constructor(id, ops, paints) { this.id = id; this.ops = ops; this.paints = paints; }
+  }
+  const PAINT_RE = /^#[0-9a-fA-F]{6}$/;
+  const okPaint = (p, any = false) => typeof p === "string" && (PAINT_RE.test(p) || p === "$color" || p === "$paint" || p === "ink" || p === "paper" || (any && p === "$any"));
+  function compilePart(id, spec, errs) {
+      const at = `parts.${id}`;
+      const sp = spec;
+      if (!sp || typeof sp !== "object" || !Array.isArray(sp.draw) || !sp.draw.length || sp.draw.length > 12) {
+          errs.push(`${at}: draw is a list of 1 to 12 shapes`);
+          return null;
+      }
+      for (const k of Object.keys(sp))
+          if (k !== "draw" && k !== "note") {
+              errs.push(`${at}: unknown field ${k}`);
+              return null;
+          }
+      const ops = [], paints = [];
+      const pi = (p, where) => {
+          if (p == null)
+              return -1;
+          if (!okPaint(p)) {
+              errs.push(`${where}: bad paint ${String(p)}`);
+              return -1;
+          }
+          let i = paints.indexOf(p);
+          if (i < 0) {
+              paints.push(p);
+              i = paints.length - 1;
+          }
+          return i;
+      };
+      const n0 = errs.length;
+      sp.draw.forEach((sh, si) => {
+          const w = `${at}.draw[${si}]`;
+          if (!sh || typeof sh !== "object" || typeof sh.d !== "string") {
+              errs.push(`${w}: d is the path`);
+              return;
+          }
+          for (const k of Object.keys(sh))
+              if (!["d", "fill", "stroke", "width", "alpha"].includes(k))
+                  errs.push(`${w}: unknown field ${k}`);
+          if (sh.fill == null && sh.stroke == null)
+              errs.push(`${w}: a fill or a stroke`);
+          const width = sh.width ?? 0.03, alpha = sh.alpha ?? 1;
+          if (typeof width !== "number" || !(width > 0 && width <= 0.3))
+              errs.push(`${w}: width in (0, 0.3]`);
+          if (typeof alpha !== "number" || !(alpha >= 0 && alpha <= 1))
+              errs.push(`${w}: alpha in [0, 1]`);
+          ops.push(PO_SHAPE, pi(sh.fill, w), pi(sh.stroke, w), Number(width) || 0.03, Number(alpha));
+          const toks = sh.d.replace(/([MLQZO])/g, " $1 ").trim().split(/[\s,]+/).filter((x) => x !== "");
+          let i = 0;
+          const num = () => {
+              const v = Number(toks[i++]);
+              if (!Number.isFinite(v) || Math.abs(v) > 3) {
+                  errs.push(`${w}: a number in [-3, 3] at "${toks[i - 1] ?? "end"}"`);
+                  return 0;
+              }
+              return v;
+          };
+          let first = true;
+          while (i < toks.length) {
+              const c = toks[i++];
+              if (c === "M")
+                  ops.push(PO_M, num(), num());
+              else if (c === "L" && !first)
+                  ops.push(PO_L, num(), num());
+              else if (c === "Q" && !first)
+                  ops.push(PO_Q, num(), num(), num(), num());
+              else if (c === "Z" && !first)
+                  ops.push(PO_Z);
+              else if (c === "O")
+                  ops.push(PO_O, num(), num(), num());
+              else {
+                  errs.push(`${w}: "${c}" (paths are M, L, Q, Z and O, starting with M or O)`);
+                  break;
+              }
+              first = false;
+          }
+          ops.push(PO_END);
+      });
+      if (ops.length > 900)
+          errs.push(`${at}: too big`);
+      return errs.length > n0 ? null : new Part(id, Float64Array.from(ops), paints);
+  }
+  // ---- avatars
+  const HEAD_SHAPES = ["round", "oval", "square"];
+  const EYE_STYLES = ["one", "two", "dots", "visor", "none"];
+  const MOUTH_STYLES = ["none", "line", "smile", "o", "open"];
+  const EAR_STYLES = ["none", "round", "bolt", "point"];
+  const DOT_PATTERNS = ["hex", "grid", "none"];
+  const TIP_KINDS = ["none", "ball", "light", "star"];
+  const ANCHORS = ["head", "crown", "face", "mouth", "neck", "body", "hip", "hand_l", "hand_r", "hand_front", "hand_back", "foot_l", "foot_r", "ground"];
+  const AN_HEAD = 0, AN_CROWN = 1, AN_FACE = 2, AN_MOUTH = 3, AN_NECK = 4, AN_BODY = 5, AN_HIP = 6, AN_HAND_L = 7, AN_HAND_R = 8, AN_HAND_F = 9, AN_HAND_B = 10, AN_FOOT_L = 11, AN_FOOT_R = 12, AN_GROUND = 13;
+  /** Something worn: a part on an anchor (offset forward and down in bot heights, scaled, turned), in front or behind him. */
+  class Wear {
+      constructor(part, on, x, y, scale, rot, paint, back) {
+          this.part = part;
+          this.on = on;
+          this.x = x;
+          this.y = y;
+          this.scale = scale;
+          this.rot = rot;
+          this.paint = paint;
+          this.back = back;
+      }
+  }
+  /** A look, compiled. Every default is Blip's, exactly as he was drawn before looks were data. */
+  class Avatar {
+      constructor() {
+          this.id = "blip";
+          this.label = "";
+          this.head = 0;
+          this.headR = 0.2;
+          this.headW = 1;
+          this.headH = 1;
+          this.headRound = 0.35;
+          this.eyes = 0;
+          this.eyeR = 0.46;
+          this.eyeGap = 0.36;
+          this.pupil = 0.5;
+          this.eyeY = 0.02;
+          this.mouth = 0;
+          this.mouthW = 0.3;
+          this.mouthY = -0.6;
+          this.antN = 2;
+          this.antAt = [-0.4, 0.42];
+          this.antUp = [0.9, 0.9];
+          this.antLean = [-0.14, 0.32];
+          this.antLen = [0.12, 0.12];
+          this.antTipLen = [0.09, 0.09];
+          this.antBend = [0, 0.95];
+          this.antTip = [1, 2];
+          this.antTipR = [0.04, 0.048];
+          this.ears = 0;
+          this.earR = 0.28;
+          this.dots = 0;
+          this.dotSp = 0.062;
+          this.dotR = 0.021;
+          this.dotA = 0.5;
+          this.bodyTop = 0.135;
+          this.bodyBottom = 0.165;
+          this.bodyRound = 0.05;
+          this.arm = 0.065;
+          this.leg = 0.075;
+          this.neck = 0.08;
+          this.hand = 0.042;
+          this.antW = 0.042;
+          /** The carrying hand's size over the hand's (1 for Blip: S * 0.045). */
+          this.handK = 1;
+          this.pBody = "$color";
+          this.pDots = "paper";
+          this.pEye = "paper";
+          this.pPupil = "$color";
+          this.pMouth = "paper";
+          this.pLight = "$color";
+          this.pEars = "$color";
+          this.wear = [];
+          this.wearBack = false;
+          this.wearFront = false;
+          /** Which antenna carries the light (-1: none). */
+          this.light = 1;
+      }
+  }
+  /** Blip, as every bot looked before looks were data: what a tile wears when nothing says otherwise. */
+  const BLIP = new Avatar();
+  const isRec = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  /** An avatar from its spec (already merged with what it extends); `errs` collects what is wrong with it. */
+  function buildAvatar(id, sp, parts, errs) {
+      const a = new Avatar();
+      a.id = id;
+      const at = `avatars.${id}`;
+      const known = ["extends", "label", "note", "head", "eyes", "mouth", "antennae", "ears", "dots", "body", "limbs", "paint", "wear"];
+      for (const k of Object.keys(sp))
+          if (!known.includes(k))
+              errs.push(`${at}: unknown field ${k}`);
+      const sub = (k, fields) => {
+          const v = sp[k];
+          if (v == null)
+              return {};
+          if (!isRec(v)) {
+              errs.push(`${at}.${k}: an object`);
+              return {};
+          }
+          for (const f of Object.keys(v))
+              if (!fields.includes(f))
+                  errs.push(`${at}.${k}: unknown field ${f}`);
+          return v;
+      };
+      const num = (o, k, lo, hi, def, where) => {
+          const v = o[k];
+          if (v == null)
+              return def;
+          if (typeof v !== "number" || !(v >= lo && v <= hi)) {
+              errs.push(`${where}.${k}: a number in [${lo}, ${hi}]`);
+              return def;
+          }
+          return v;
+      };
+      const pick = (o, k, list, def, where) => {
+          const v = o[k];
+          if (v == null)
+              return def;
+          const i = list.indexOf(String(v));
+          if (i < 0) {
+              errs.push(`${where}.${k}: one of ${list.join(", ")}`);
+              return def;
+          }
+          return i;
+      };
+      if (sp.label != null)
+          a.label = String(sp.label);
+      const h = sub("head", ["shape", "size", "w", "h", "round"]);
+      a.head = pick(h, "shape", HEAD_SHAPES, 0, `${at}.head`);
+      a.headR = num(h, "size", 0.12, 0.3, 0.2, `${at}.head`);
+      a.headW = num(h, "w", 0.6, 1.5, 1, `${at}.head`);
+      a.headH = num(h, "h", 0.6, 1.5, 1, `${at}.head`);
+      a.headRound = num(h, "round", 0, 1, 0.35, `${at}.head`);
+      const e = sub("eyes", ["style", "size", "gap", "pupil", "y"]);
+      a.eyes = pick(e, "style", EYE_STYLES, 0, `${at}.eyes`);
+      a.eyeR = num(e, "size", 0.1, 0.6, a.eyes === 0 ? 0.46 : a.eyes === 1 ? 0.3 : a.eyes === 2 ? 0.14 : 0.3, `${at}.eyes`);
+      a.eyeGap = num(e, "gap", 0, 0.7, 0.36, `${at}.eyes`);
+      a.pupil = num(e, "pupil", 0, 0.9, 0.5, `${at}.eyes`);
+      a.eyeY = num(e, "y", -0.5, 0.5, 0.02, `${at}.eyes`);
+      const m = sub("mouth", ["style", "size", "y"]);
+      a.mouth = pick(m, "style", MOUTH_STYLES, 0, `${at}.mouth`);
+      a.mouthW = num(m, "size", 0.1, 0.8, 0.3, `${at}.mouth`);
+      a.mouthY = num(m, "y", -0.95, -0.1, -0.6, `${at}.mouth`);
+      if (sp.antennae != null) {
+          if (!Array.isArray(sp.antennae) || sp.antennae.length > 2)
+              errs.push(`${at}.antennae: a list of at most 2`);
+          else {
+              const list = sp.antennae;
+              a.antN = list.length;
+              for (let i = 0; i < 2; i++) {
+                  const s = isRec(list[i]) ? list[i] : {};
+                  if (i < list.length && !isRec(list[i]))
+                      errs.push(`${at}.antennae[${i}]: an object`);
+                  for (const f of Object.keys(s))
+                      if (!["at", "up", "lean", "len", "tipLen", "bend", "tip", "tipSize"].includes(f))
+                          errs.push(`${at}.antennae[${i}]: unknown field ${f}`);
+                  const w = `${at}.antennae[${i}]`;
+                  a.antAt[i] = num(s, "at", -0.95, 0.95, a.antAt[i], w);
+                  a.antUp[i] = num(s, "up", 0, 1.5, a.antUp[i], w);
+                  a.antLean[i] = num(s, "lean", -1.6, 1.6, a.antLean[i], w);
+                  a.antLen[i] = num(s, "len", 0.02, 0.3, a.antLen[i], w);
+                  a.antTipLen[i] = num(s, "tipLen", 0.02, 0.25, a.antTipLen[i], w);
+                  a.antBend[i] = num(s, "bend", -2.5, 2.5, a.antBend[i], w);
+                  a.antTip[i] = pick(s, "tip", TIP_KINDS, a.antTip[i], w);
+                  a.antTipR[i] = num(s, "tipSize", 0, 0.12, a.antTipR[i], w);
+              }
+          }
+      }
+      a.light = a.antN > 1 && a.antTip[1] === 2 ? 1 : a.antN > 0 && a.antTip[0] === 2 ? 0 : -1;
+      const ea = sub("ears", ["style", "size"]);
+      a.ears = pick(ea, "style", EAR_STYLES, 0, `${at}.ears`);
+      a.earR = num(ea, "size", 0.1, 0.6, 0.28, `${at}.ears`);
+      const d = sub("dots", ["pattern", "spacing", "size", "alpha"]);
+      a.dots = pick(d, "pattern", DOT_PATTERNS, 0, `${at}.dots`);
+      a.dotSp = num(d, "spacing", 0.04, 0.12, 0.062, `${at}.dots`);
+      a.dotR = num(d, "size", 0.005, 0.05, 0.021, `${at}.dots`);
+      a.dotA = num(d, "alpha", 0, 1, 0.5, `${at}.dots`);
+      const b = sub("body", ["top", "bottom", "round"]);
+      a.bodyTop = num(b, "top", 0.06, 0.25, 0.135, `${at}.body`);
+      a.bodyBottom = num(b, "bottom", 0.06, 0.28, 0.165, `${at}.body`);
+      a.bodyRound = num(b, "round", 0, 0.12, 0.05, `${at}.body`);
+      const l = sub("limbs", ["arm", "leg", "neck", "hand", "antenna"]);
+      a.arm = num(l, "arm", 0.02, 0.12, 0.065, `${at}.limbs`);
+      a.leg = num(l, "leg", 0.02, 0.12, 0.075, `${at}.limbs`);
+      a.neck = num(l, "neck", 0.02, 0.14, 0.08, `${at}.limbs`);
+      a.hand = num(l, "hand", 0.015, 0.08, 0.042, `${at}.limbs`);
+      a.antW = num(l, "antenna", 0.01, 0.08, 0.042, `${at}.limbs`);
+      a.handK = a.hand / 0.042;
+      const p = sub("paint", ["body", "dots", "eye", "pupil", "mouth", "light", "ears"]);
+      const paint = (k, def) => {
+          const v = p[k];
+          if (v == null)
+              return def;
+          if (!okPaint(v) || v === "$paint") {
+              errs.push(`${at}.paint.${k}: a colour`);
+              return def;
+          }
+          return v;
+      };
+      a.pBody = paint("body", "$color");
+      a.pDots = paint("dots", "paper");
+      a.pEye = paint("eye", "paper");
+      a.pPupil = paint("pupil", "$color");
+      a.pMouth = paint("mouth", "paper");
+      a.pLight = paint("light", "$color");
+      a.pEars = paint("ears", a.pBody);
+      if (sp.wear != null) {
+          if (!Array.isArray(sp.wear) || sp.wear.length > 6)
+              errs.push(`${at}.wear: a list of at most 6`);
+          else
+              sp.wear.forEach((wr, i) => {
+                  const w = `${at}.wear[${i}]`;
+                  if (!isRec(wr)) {
+                      errs.push(`${w}: an object`);
+                      return;
+                  }
+                  for (const f of Object.keys(wr))
+                      if (!["part", "on", "x", "y", "scale", "rot", "paint", "back"].includes(f))
+                          errs.push(`${w}: unknown field ${f}`);
+                  const part = parts.get(String(wr.part));
+                  if (!part) {
+                      errs.push(`${w}: no part "${String(wr.part)}"`);
+                      return;
+                  }
+                  const on = wr.on == null ? AN_HEAD : ANCHORS.indexOf(String(wr.on));
+                  if (on < 0) {
+                      errs.push(`${w}.on: one of ${ANCHORS.join(", ")}`);
+                      return;
+                  }
+                  if (wr.paint != null && (!okPaint(wr.paint) || wr.paint === "$paint"))
+                      errs.push(`${w}.paint: a colour`);
+                  const back = wr.back === true;
+                  a.wear.push(new Wear(part, on, num(wr, "x", -1, 1, 0, w), num(wr, "y", -1, 1, 0, w), num(wr, "scale", 0.2, 3, 1, w), num(wr, "rot", -3.2, 3.2, 0, w), String(wr.paint ?? "$color"), back));
+                  if (back)
+                      a.wearBack = true;
+                  else
+                      a.wearFront = true;
+              });
+      }
+      return a;
+  }
+  /** One spec over another: its own parts of the look win; lists (antennae, wear) are whole. */
+  function mergeAvatar(base, over) {
+      const out = { ...base };
+      for (const [k, v] of Object.entries(over)) {
+          if (k === "extends")
+              continue;
+          out[k] = isRec(v) && isRec(out[k]) ? { ...out[k], ...v } : v;
+      }
+      return out;
+  }
+  // ---- moments: recipes
+  const TRACK_KINDS = {
+      walk: 1, crouch: 2, sit: 3, lean: 4, tilt: 5, arm: 6, look: 7, eyes: 8, mouth: 9, lid: 10, spin: 11, shake: 12, act: 13, prop: 14, emit: 15, face: 16,
+      hop: 20, kick: 21, fabric: 22, glow: 23, sound: 24, others: 25, event: 26, blink: 27,
+  };
+  const TK_WALK = 1, TK_CROUCH = 2, TK_SIT = 3, TK_LEAN = 4, TK_TILT = 5, TK_ARM = 6, TK_LOOK = 7, TK_EYES = 8, TK_MOUTH = 9, TK_LID = 10, TK_SPIN = 11, TK_SHAKE = 12, TK_ACT = 13, TK_PROP = 14, TK_EMIT = 15, TK_FACE = 16;
+  const TK_HOP = 20, TK_KICK = 21, TK_FABRIC = 22, TK_GLOW = 23, TK_SOUND = 24, TK_OTHERS = 25, TK_EVENT = 26, TK_BLINK = 27;
+  /** Each track's own fields (besides do, at, to, after, if, chance, note). x: an expression allowed. */
+  const TRACK_FIELDS = {
+      walk: { x: "x", dx: "x", toward: "walk", gap: "x", speed: "x" },
+      crouch: { v: "x" }, sit: { v: "x" }, lean: { v: "x" }, tilt: { v: "x" }, lid: { v: "x" },
+      arm: { hand: "hand", x: "x", y: "x", from: "from", k: "x", over: "bool" },
+      look: { target: "look", x: "x", y: "x", rate: "n" },
+      eyes: { state: "eyes" }, mouth: { state: "mouth", v: "x" },
+      spin: { rate: "x" }, shake: { amp: "x", freq: "x", part: "shake" }, act: { act: "act" },
+      prop: { part: "part", on: "anchor", x: "x", y: "x", scale: "x", rot: "x", paint: "paint", pop: "bool" },
+      emit: {
+          part: "part", parts: "parts", from: "anchor", x: "x", y: "x", n: "n", every: "n", vx: "x", vy: "x", spread: "n", g: "n", drag: "n", life: "n",
+          size: "x", grow: "n", spin: "n", paint: "paint", alpha: "n", floor: "bool", aim: "anchor", flight: "n", alt: "bool", miss: "n", onMiss: "name",
+          pause: "n", orbit: "n", orbitRate: "n",
+      },
+      face: { target: "face" },
+      hop: { h: "x", dx: "x" }, kick: { part: "kick", vx: "x", vy: "x" }, fabric: { from: "anchor", x: "x", y: "x", v: "x", r: "x" },
+      glow: { v: "x" }, sound: { name: "name" }, others: { play: "moment", n: "n", near: "n" }, event: { name: "name" }, blink: {},
+  };
+  const TRACK_ENUMS = {
+      hand: ["front", "back", "l", "r", "both"],
+      from: ["neck", "head", "hip", "crown", "face", "body"],
+      look: ["screen", "peer", "away", "point", "around", "down", "up", "ahead", "drop", "last", "hand"],
+      eyes: ["rest", "open", "closed", "half", "squint", "wide", "x", "happy", "spiral"],
+      mouth: ["rest", "none", "line", "smile", "open", "o", "wide", "wavy"],
+      shake: ["body", "head", "all"],
+      act: ["play", "wave", "survey", "read", "settle", "think", "stretch"],
+      face: ["screen", "peer", "away", "left", "right", "forward", "back"],
+      kick: ["head", "body", "all", "hands", "feet", "hand_front", "hand_back"],
+      walk: ["peer", "center", "left", "right", "start", "away"],
+  };
+  const FROM_ANCHOR = [AN_NECK, AN_HEAD, AN_HIP, AN_CROWN, AN_FACE, AN_BODY];
+  const EYE_REST = 0, EYE_OPEN = 1, EYE_CLOSED = 2, EYE_HALF = 3, EYE_SQUINT = 4, EYE_WIDE = 5, EYE_X = 6, EYE_HAPPY = 7, EYE_SPIRAL = 8;
+  const MO_REST = 0, MO_NONE = 1, MO_LINE = 2, MO_SMILE = 3, MO_OPEN = 4, MO_O = 5, MO_WIDE = 6, MO_WAVY = 7;
+  const LK_SCREEN = 0, LK_PEER = 1, LK_AWAY = 2, LK_POINT = 3, LK_AROUND = 4, LK_DOWN = 5, LK_UP = 6, LK_AHEAD = 7, LK_DROP = 8, LK_LAST = 9, LK_HAND = 10;
+  /** The most tracks a recipe (or its end) may have, and events it may name. */
+  const MOMENT_LIMITS = { tracks: 40, events: 8, dur: 60, props: 4 };
+  /** A track, compiled. Which fields mean what depends on its kind (k). */
+  class Track {
+      constructor() {
+          this.k = 0;
+          this.at = 0;
+          this.to = 0;
+          this.inst = false;
+          this.after = -1;
+          this.cond = 0;
+          this.chance = 1;
+          /** Its numbers (expressions or constants): by kind, see Moment's interpreter. */
+          this.a = XP0;
+          this.b = XP0;
+          this.c = XP0;
+          this.d = XP0;
+          this.e = XP0;
+          /** Its choices: a hand, an anchor, a target, a state… */
+          this.m = 0;
+          this.m2 = -1;
+          this.part = null;
+          this.parts = null;
+          this.paint = "$color";
+          this.name = "";
+          this.ref = null;
+          this.ev = -1;
+          // An emitter's own numbers.
+          this.n = 1;
+          this.every = 0;
+          this.life = 1;
+          this.g = 1;
+          this.drag = 0;
+          this.spread = 0;
+          this.spin = 0;
+          this.grow = 1;
+          this.alpha = 1;
+          this.flight = 0.5;
+          this.miss = 0;
+          this.pause = 0;
+          this.orbit = 0;
+          this.orbitW = 0;
+          /** others: how near (bot heights) another bot is to answer. */
+          this.near = 10;
+          this.floor = false;
+          this.alt = false;
+          this.pop = false;
+      }
+  }
+  /** A recipe, compiled. `ok` false: it cannot be played here (the reason in `why`); play its `fallback` instead. */
+  class Moment {
+      constructor(id) {
+          this.ok = true;
+          this.why = "";
+          this.label = "";
+          this.dur = 1;
+          this.loop = false;
+          this.loopFrom = 0;
+          this.bpm = 0;
+          this.still = 0;
+          this.fallback = "play";
+          this.react = false;
+          this.tracks = [];
+          this.end = [];
+          this.endDur = 0;
+          this.events = [];
+          this.id = id;
+      }
+  }
+  /** Compile one recipe's tracks; refs to other moments resolve through `all` (filled before). */
+  function buildMoment(mo, spec, parts, all, errs) {
+      const at = `moments.${mo.id}`;
+      const n0 = errs.length;
+      const fail = (msg) => { errs.push(`${at}${msg}`); };
+      if (!isRec(spec)) {
+          fail(": an object");
+          mo.ok = false;
+          mo.why = "not an object";
+          return;
+      }
+      const sp = spec;
+      for (const k of Object.keys(sp))
+          if (!["label", "note", "format", "dur", "mode", "loopFrom", "bpm", "still", "fallback", "react", "tracks", "end"].includes(k))
+              fail(`: unknown field ${k}`);
+      if ((sp.format ?? 1) > LOOKS_FORMAT) {
+          mo.ok = false;
+          mo.why = `format ${sp.format}`;
+          return;
+      }
+      if (typeof sp.dur !== "number" || !(sp.dur > 0 && sp.dur <= MOMENT_LIMITS.dur))
+          fail(`.dur: seconds in (0, ${MOMENT_LIMITS.dur}]`);
+      mo.dur = Number(sp.dur) || 1;
+      mo.label = String(sp.label ?? "");
+      if (sp.mode != null && sp.mode !== "once" && sp.mode !== "loop")
+          fail(".mode: once or loop");
+      mo.loop = sp.mode === "loop";
+      mo.loopFrom = typeof sp.loopFrom === "number" && sp.loopFrom >= 0 && sp.loopFrom < mo.dur ? sp.loopFrom : 0;
+      if (sp.loopFrom != null && mo.loopFrom !== sp.loopFrom)
+          fail(".loopFrom: seconds in [0, dur)");
+      mo.bpm = typeof sp.bpm === "number" && sp.bpm > 0 && sp.bpm <= 300 ? sp.bpm : 0;
+      if (sp.bpm != null && mo.bpm !== sp.bpm)
+          fail(".bpm: in (0, 300]");
+      mo.still = typeof sp.still === "number" && sp.still >= 0 && sp.still <= mo.dur ? sp.still : 0;
+      if (sp.still != null && mo.still !== sp.still)
+          fail(".still: seconds in [0, dur]");
+      const acts = ["play", "wave", "survey", "read", "settle", "think", "carry"];
+      if (sp.fallback != null && !acts.includes(sp.fallback))
+          fail(`.fallback: one of ${acts.join(", ")}`);
+      mo.fallback = acts.includes(String(sp.fallback)) ? sp.fallback : "play";
+      mo.react = sp.react === true;
+      // Event names: those fired (event tracks, emitters' onMiss) and those followed (after).
+      const evOf = (name, where) => {
+          if (typeof name !== "string" || !/^[a-z][a-z0-9_.-]{0,23}$/.test(name)) {
+              errs.push(`${where}: an event name`);
+              return -1;
+          }
+          let i = mo.events.indexOf(name);
+          if (i < 0) {
+              if (mo.events.length >= MOMENT_LIMITS.events) {
+                  errs.push(`${where}: at most ${MOMENT_LIMITS.events} events`);
+                  return -1;
+              }
+              mo.events.push(name);
+              i = mo.events.length - 1;
+          }
+          return i;
+      };
+      const fired = new Set(), followed = [];
+      const list = (tracks, dur, where) => {
+          if (!Array.isArray(tracks) || tracks.length > MOMENT_LIMITS.tracks) {
+              errs.push(`${where}: a list of at most ${MOMENT_LIMITS.tracks} tracks`);
+              return [];
+          }
+          let props = 0;
+          return tracks.map((raw, ti) => {
+              const w = `${where}[${ti}]`;
+              const tr = new Track();
+              if (!isRec(raw)) {
+                  errs.push(`${w}: an object`);
+                  return tr;
+              }
+              const kind = String(raw.do);
+              const fields = own(TRACK_FIELDS, kind) ? TRACK_FIELDS[kind] : null;
+              if (!fields) {
+                  errs.push(`${w}: do "${kind}" is not one this build plays`);
+                  return tr;
+              }
+              tr.k = TRACK_KINDS[kind];
+              for (const f of Object.keys(raw))
+                  if (!["do", "at", "to", "after", "if", "chance", "note"].includes(f) && !own(fields, f))
+                      errs.push(`${w}: ${kind} has no field ${f}`);
+              const tnum = (k, def, lo, hi) => {
+                  const v = raw[k];
+                  if (v == null)
+                      return def;
+                  if (typeof v !== "number" || !(v >= lo && v <= hi)) {
+                      errs.push(`${w}.${k}: a number in [${lo}, ${hi}]`);
+                      return def;
+                  }
+                  return v;
+              };
+              tr.at = tnum("at", 0, 0, dur);
+              tr.inst = tr.k >= 20 || (tr.k === TK_EMIT && !(typeof raw.every === "number" && raw.every > 0));
+              tr.to = tnum("to", tr.k === TK_HOP ? Math.min(dur, tr.at + 0.35) : tr.inst ? tr.at : dur, tr.at, dur);
+              if (raw.to != null && tr.inst && tr.k !== TK_HOP)
+                  errs.push(`${w}.to: ${kind} happens once, at "at"`);
+              if (!tr.inst && raw.to != null && !(tr.to > tr.at))
+                  errs.push(`${w}.to: after "at"`);
+              tr.chance = tnum("chance", 1, 0, 1);
+              if (raw.if != null) {
+                  tr.cond = raw.if === "alone" ? 1 : raw.if === "paired" ? 2 : 0;
+                  if (!tr.cond)
+                      errs.push(`${w}.if: alone or paired`);
+              }
+              if (raw.after != null) {
+                  tr.after = evOf(raw.after, `${w}.after`);
+                  followed.push([tr.after, `${w}.after`]);
+              }
+              const x = (k, def) => {
+                  const v = raw[k];
+                  if (v == null)
+                      return def === 0 ? XP0 : { c: def, code: null };
+                  if (typeof v === "number") {
+                      if (!Number.isFinite(v))
+                          errs.push(`${w}.${k}: a number`);
+                      return { c: v, code: null };
+                  }
+                  if (typeof v !== "string") {
+                      errs.push(`${w}.${k}: a number or an expression`);
+                      return XP0;
+                  }
+                  try {
+                      return xcompile(v);
+                  }
+                  catch (e) {
+                      errs.push(`${w}.${k}: ${e.message}`);
+                      return XP0;
+                  }
+              };
+              const en = (k, list, def) => {
+                  const v = raw[k];
+                  if (v == null)
+                      return def;
+                  const i = list.indexOf(String(v));
+                  if (i < 0)
+                      errs.push(`${w}.${k}: one of ${list.join(", ")}`);
+                  return i < 0 ? def : i;
+              };
+              const anchor = (k, def) => en(k, ANCHORS, def);
+              const part = (k) => {
+                  const v = raw[k];
+                  if (v == null)
+                      return null;
+                  const p = parts.get(String(v));
+                  if (!p)
+                      errs.push(`${w}.${k}: no part "${String(v)}"`);
+                  return p ?? null;
+              };
+              const paint = (any) => {
+                  const v = raw.paint;
+                  if (v == null)
+                      return "$color";
+                  if (!okPaint(v, any) || v === "$paint")
+                      errs.push(`${w}.paint: a colour`);
+                  return String(v);
+              };
+              const name = (k) => {
+                  const v = raw[k];
+                  if (typeof v !== "string" || !/^[a-z][a-z0-9_.-]{0,31}$/.test(v)) {
+                      errs.push(`${w}.${k}: a name (lower case)`);
+                      return "";
+                  }
+                  return v;
+              };
+              switch (tr.k) {
+                  case TK_WALK:
+                      tr.m = en("toward", TRACK_ENUMS.walk, -1) + 1; // 0: by x / dx; else 1 + the place
+                      tr.a = x("x", NaN);
+                      tr.b = x("dx", 0);
+                      tr.c = x("gap", 0.3);
+                      tr.d = x("speed", 1);
+                      tr.m2 = raw.x != null ? 1 : raw.dx != null ? 2 : 0;
+                      if (!tr.m && !tr.m2)
+                          errs.push(`${w}: walk where (x, dx or toward)`);
+                      break;
+                  case TK_CROUCH:
+                  case TK_LEAN:
+                  case TK_TILT:
+                  case TK_LID:
+                  case TK_GLOW:
+                      tr.a = x("v", 0);
+                      break;
+                  case TK_SIT:
+                      tr.a = x("v", 1);
+                      break;
+                  case TK_ARM: {
+                      tr.m = en("hand", TRACK_ENUMS.hand, 0);
+                      tr.m2 = FROM_ANCHOR[en("from", TRACK_ENUMS.from, 0)];
+                      tr.a = x("x", 0.2);
+                      tr.b = x("y", -0.2);
+                      tr.c = x("k", 520);
+                      // A hand at his face is drawn in front of his head (`over`; by default when it goes to the head, crown or face).
+                      tr.pop = raw.over != null ? raw.over === true : tr.m2 === AN_HEAD || tr.m2 === AN_CROWN || tr.m2 === AN_FACE;
+                      break;
+                  }
+                  case TK_LOOK:
+                      tr.m = en("target", TRACK_ENUMS.look, 0);
+                      tr.a = x("x", NaN);
+                      tr.b = x("y", NaN);
+                      tr.n = tnum("rate", 1.5, 0.1, 10);
+                      break;
+                  case TK_EYES:
+                      tr.m = en("state", TRACK_ENUMS.eyes, 0);
+                      break;
+                  case TK_MOUTH:
+                      tr.m = en("state", TRACK_ENUMS.mouth, 0);
+                      tr.a = x("v", 1);
+                      break;
+                  case TK_SPIN:
+                      tr.a = x("rate", 2);
+                      break;
+                  case TK_SHAKE:
+                      tr.a = x("amp", 0.03);
+                      tr.b = x("freq", 14);
+                      tr.m = en("part", TRACK_ENUMS.shake, 0);
+                      break;
+                  case TK_ACT:
+                      tr.m = en("act", TRACK_ENUMS.act, 0);
+                      break;
+                  case TK_FACE:
+                      tr.m = en("target", TRACK_ENUMS.face, 0);
+                      break;
+                  case TK_PROP:
+                      tr.part = part("part");
+                      if (!tr.part)
+                          errs.push(`${w}: a part`);
+                      tr.m = anchor("on", AN_CROWN);
+                      tr.a = x("x", 0);
+                      tr.b = x("y", 0);
+                      tr.c = x("scale", 1);
+                      tr.d = x("rot", 0);
+                      tr.paint = paint(false);
+                      tr.pop = raw.pop !== false;
+                      if (++props > MOMENT_LIMITS.props)
+                          errs.push(`${w}: at most ${MOMENT_LIMITS.props} props in a recipe`);
+                      break;
+                  case TK_EMIT: {
+                      tr.part = part("part");
+                      if (Array.isArray(raw.parts)) {
+                          tr.parts = [];
+                          for (const id of raw.parts) {
+                              const p = parts.get(String(id));
+                              if (p)
+                                  tr.parts.push(p);
+                              else
+                                  errs.push(`${w}.parts: no part "${String(id)}"`);
+                          }
+                          if (!tr.parts.length || tr.parts.length > 6)
+                              errs.push(`${w}.parts: 1 to 6 parts`);
+                      }
+                      else if (raw.parts != null)
+                          errs.push(`${w}.parts: a list`);
+                      if (!tr.part && !tr.parts)
+                          errs.push(`${w}: a part (or parts)`);
+                      tr.m = anchor("from", AN_HEAD);
+                      tr.m2 = raw.aim != null ? anchor("aim", -1) : -1;
+                      tr.a = x("x", 0);
+                      tr.b = x("y", 0);
+                      tr.c = x("vx", 0);
+                      tr.d = x("vy", 0);
+                      tr.e = x("size", 1);
+                      tr.n = tnum("n", 1, 1, 24);
+                      tr.every = tnum("every", 0, 0, 10);
+                      tr.spread = tnum("spread", 0, 0, 3);
+                      tr.g = tnum("g", 1, -3, 3);
+                      tr.drag = tnum("drag", 0, 0, 20);
+                      tr.life = tnum("life", 1, 0.05, 10);
+                      tr.grow = tnum("grow", 1, 0, 6);
+                      tr.spin = tnum("spin", 0, 0, 30);
+                      tr.alpha = tnum("alpha", 1, 0, 1);
+                      tr.flight = tnum("flight", 0.5, 0.1, 3);
+                      tr.miss = tnum("miss", 0, 0, 1);
+                      tr.pause = tnum("pause", 0, 0, 10);
+                      tr.orbit = tnum("orbit", 0, 0, 2);
+                      tr.orbitW = tnum("orbitRate", 3, -20, 20);
+                      tr.paint = paint(true);
+                      tr.floor = raw.floor === true;
+                      tr.alt = raw.alt === true;
+                      if (raw.onMiss != null) {
+                          tr.ev = evOf(raw.onMiss, `${w}.onMiss`);
+                          fired.add(tr.ev);
+                      }
+                      break;
+                  }
+                  case TK_HOP:
+                      tr.a = x("h", 0.3);
+                      tr.b = x("dx", 0);
+                      break;
+                  case TK_KICK:
+                      tr.m = en("part", TRACK_ENUMS.kick, 2);
+                      tr.a = x("vx", 0);
+                      tr.b = x("vy", 0);
+                      break;
+                  case TK_FABRIC:
+                      tr.m = anchor("from", AN_HIP);
+                      tr.a = x("x", 0);
+                      tr.b = x("y", 0);
+                      tr.c = x("v", 50);
+                      tr.d = x("r", 1.6);
+                      break;
+                  case TK_SOUND:
+                      tr.name = name("name");
+                      break;
+                  case TK_OTHERS: {
+                      const id = String(raw.play);
+                      tr.ref = all.get(id) ?? null;
+                      if (!tr.ref)
+                          errs.push(`${w}.play: no moment "${id}"`);
+                      tr.n = tnum("n", 2, 1, 8);
+                      tr.near = tnum("near", 10, 1, 40);
+                      break;
+                  }
+                  case TK_EVENT:
+                      tr.ev = evOf(raw.name, `${w}.name`);
+                      fired.add(tr.ev);
+                      break;
+                  default: break;
+              }
+              return tr;
+          });
+      };
+      mo.tracks = list(sp.tracks, mo.dur, `${at}.tracks`);
+      if (sp.end != null) {
+          if (!isRec(sp.end) || typeof sp.end.dur !== "number" || !(sp.end.dur > 0 && sp.end.dur <= 20))
+              fail(".end: { dur (0, 20], tracks }");
+          else {
+              mo.endDur = sp.end.dur;
+              mo.end = list(sp.end.tracks, mo.endDur, `${at}.end.tracks`);
+          }
+      }
+      for (const [ev, w] of followed)
+          if (ev >= 0 && !fired.has(ev))
+              errs.push(`${w}: nothing fires "${mo.events[ev]}"`);
+      if (errs.length > n0) {
+          mo.ok = false;
+          mo.why = errs[n0];
+      }
+  }
+  /** The catalog, compiled: its parts, avatars and moments by id, which avatar each kind wears, and what was wrong. */
+  class Looks {
+      constructor() {
+          this.v = 0;
+          this.version = "";
+          this.parts = new Map();
+          this.avatars = new Map();
+          this.moments = new Map();
+          this.kinds = {};
+          this.errors = [];
+          /** Inline avatars (a node's own spec), compiled once each. */
+          this.inline = new Map();
+          /** The avatars' specs, merged (inline avatars extend them). */
+          this.specs = new Map();
+      }
+      /** The look for a node: its avatar (an id, or a spec of its own over Blip), else the one its kind wears, else Blip. */
+      avatar(kind, ref) {
+          if (typeof ref === "string" && ref) {
+              const a = this.avatars.get(ref);
+              if (a)
+                  return a;
+          }
+          else if (isRec(ref)) {
+              const key = JSON.stringify(ref);
+              let a = this.inline.get(key);
+              if (!a) {
+                  const errs = [];
+                  const base = typeof ref.extends === "string" ? this.specs.get(ref.extends) : undefined;
+                  a = buildAvatar("inline", mergeAvatar(base ?? {}, ref), this.parts, errs);
+                  if (errs.length)
+                      a = this.avatar(kind);
+                  if (this.inline.size > 32)
+                      this.inline.clear();
+                  this.inline.set(key, a);
+              }
+              return a;
+          }
+          return this.avatars.get(this.kinds[kind] ?? "") ?? BLIP;
+      }
+      /** A recipe by id, when this build can play it (else null: play its fallback). */
+      moment(id) {
+          const m = this.moments.get(id);
+          return m && m.ok ? m : null;
+      }
+      /** What a build that cannot play `id` does instead. */
+      fallback(id) {
+          return this.moments.get(id)?.fallback ?? "play";
+      }
+  }
+  /**
+   * The server's catalog (LooksSpec), compiled once: parts, then avatars (each over what it extends), then moments (two
+   * passes, so one may name another). Errors are collected, never thrown: what is broken is left out (an avatar) or
+   * marked unplayable (a moment), and the rest works.
+   */
+  function compileLooks(spec) {
+      const L = new Looks();
+      const errs = L.errors;
+      if (!isRec(spec)) {
+          errs.push("the catalog is an object");
+          return L;
+      }
+      const sp = spec;
+      for (const k of Object.keys(sp))
+          if (!["v", "format", "note", "parts", "avatars", "moments", "kinds", "idle"].includes(k))
+              errs.push(`unknown field ${k}`);
+      if (typeof sp.v !== "number" || !(sp.v >= 1) || Math.floor(sp.v) !== sp.v)
+          errs.push("v: a whole number from 1");
+      L.v = Number(sp.v) || 0;
+      if ((sp.format ?? 1) > LOOKS_FORMAT) {
+          errs.push(`format ${sp.format}: newer than this build`);
+          return L;
+      }
+      for (const [id, p] of Object.entries(isRec(sp.parts) ? sp.parts : {})) {
+          const part = compilePart(id, p, errs);
+          if (part)
+              L.parts.set(id, part);
+      }
+      const raw = isRec(sp.avatars) ? sp.avatars : {};
+      const merged = (id, seen) => {
+          const s = raw[id];
+          if (!isRec(s))
+              return null;
+          if (seen.includes(id)) {
+              errs.push(`avatars.${id}: extends itself`);
+              return null;
+          }
+          if (s.extends == null)
+              return s;
+          const base = merged(String(s.extends), [...seen, id]);
+          if (!base) {
+              errs.push(`avatars.${id}: extends "${String(s.extends)}", which is not there`);
+              return null;
+          }
+          return mergeAvatar(base, s);
+      };
+      for (const id of Object.keys(raw)) {
+          const s = merged(id, []);
+          if (!s) {
+              if (!isRec(raw[id]))
+                  errs.push(`avatars.${id}: an object`);
+              continue;
+          }
+          const n0 = errs.length;
+          const a = buildAvatar(id, s, L.parts, errs);
+          L.specs.set(id, s);
+          if (errs.length === n0)
+              L.avatars.set(id, a);
+      }
+      const moms = isRec(sp.moments) ? sp.moments : {};
+      for (const id of Object.keys(moms))
+          L.moments.set(id, new Moment(id));
+      for (const id of Object.keys(moms))
+          buildMoment(L.moments.get(id), moms[id], L.parts, L.moments, errs);
+      if (sp.kinds != null) {
+          if (!isRec(sp.kinds))
+              errs.push("kinds: an object");
+          else
+              for (const [k, a] of Object.entries(sp.kinds)) {
+                  if (!L.avatars.has(String(a)))
+                      errs.push(`kinds.${k}: no avatar "${String(a)}"`);
+                  else
+                      L.kinds[k] = String(a);
+              }
+      }
+      if (sp.idle != null) {
+          const i = sp.idle;
+          if (!isRec(i))
+              errs.push("idle: an object");
+          else {
+              for (const k of Object.keys(i))
+                  if (!["every", "chance", "moments"].includes(k))
+                      errs.push(`idle: unknown field ${k}`);
+              if (i.moments != null && (!Array.isArray(i.moments) || i.moments.some((m) => !L.moments.has(String(m)))))
+                  errs.push("idle.moments: moments in this catalog");
+          }
+      }
+      L.version = `${L.v}`;
+      return L;
+  }
+  /** An avatar spec on its own (a node's inline look), over Blip. */
+  function compileAvatar(spec, looks) {
+      return (looks ?? EMPTY_LOOKS).avatar("custom", spec);
+  }
+  const EMPTY_LOOKS = new Looks();
   // ===================================================================== the fabric
   /**
    * A woven sheet behind the bot: 14 x 9 points, each held to its place by a soft spring and to its four neighbours
@@ -291,8 +1582,15 @@
   const NBOT = 13;
   const CAP = 40;
   const CCAP = 64;
-  const DUST = 128;
+  const DUST = 192;
   const SPARKS = 16;
+  /** A moment's particles (pooled), the props it puts on him at once, the tracks and events a recipe may have. */
+  const QCAP = 32;
+  const WSLOTS = 4;
+  const MO_TRACKS = 48;
+  const MO_EVENTS = 8;
+  /** A moment's particle: on the floor it bounces; thrown to a hand; dropped (a miss); circling an anchor; its miss still to be told. */
+  const Q_FLOOR = 1, Q_AIM = 2, Q_MISS = 4, Q_ORBIT = 8, Q_EVENT = 16;
   // Prop kinds.
   const P_ZERO = 1, P_ONE = 2, P_KEY = 3, P_DAY = 4, P_PLANE = 5, P_BALL = 6, P_PAD = 7, P_BAG = 8;
   /** A spark's kind (shome): 0 rises or falls, 1 flows into his head (reading), 2 a torn-off page that flutters down, 3 a sweat drop. */
@@ -311,6 +1609,69 @@
   // Acts.
   const A_STAND = 0, A_WANDER = 1, A_SIT = 2, A_STRETCH = 3, A_PEEK = 4, A_LOOK = 5, A_PLAY = 6, A_NEEDS = 7;
   const A_WAVE = 8, A_SURVEY = 9, A_READ = 10, A_THINK = 11, A_CARRY = 12;
+  /** A paint, resolved: the bot's colour, ink, paper, or a colour as given. */
+  const paintOf = (p, col) => (p === "$color" ? col : p === "ink" ? INK : p === "paper" ? PAPER : p);
+  /**
+   * A part drawn at (ox, oy): its x along (fx, fy) and its y along (dx, dy), both unit vectors, `sc` px to a unit. Its own
+   * "$paint" is `paint` (a wearer's or an emitter's), "$color" the bot's.
+   */
+  function drawPart(ctx, p, ox, oy, fx, fy, dx, dy, sc, col, paint, alpha) {
+      const o = p.ops, n = o.length;
+      let fill = -1, stroke = -1, lw = 0.03, a = 1;
+      for (let i = 0; i < n;) {
+          const op = o[i];
+          if (op === PO_SHAPE) {
+              fill = o[i + 1];
+              stroke = o[i + 2];
+              lw = o[i + 3];
+              a = o[i + 4];
+              ctx.beginPath();
+              i += 5;
+          }
+          else if (op === PO_M || op === PO_L) {
+              const u = o[i + 1], v = o[i + 2], X = ox + (fx * u + dx * v) * sc, Y = oy + (fy * u + dy * v) * sc;
+              if (op === PO_M)
+                  ctx.moveTo(X, Y);
+              else
+                  ctx.lineTo(X, Y);
+              i += 3;
+          }
+          else if (op === PO_Q) {
+              const cu = o[i + 1], cv = o[i + 2], u = o[i + 3], v = o[i + 4];
+              ctx.quadraticCurveTo(ox + (fx * cu + dx * cv) * sc, oy + (fy * cu + dy * cv) * sc, ox + (fx * u + dx * v) * sc, oy + (fy * u + dy * v) * sc);
+              i += 5;
+          }
+          else if (op === PO_Z) {
+              ctx.closePath();
+              i++;
+          }
+          else if (op === PO_O) {
+              const u = o[i + 1], v = o[i + 2], r = o[i + 3] * Math.abs(sc), X = ox + (fx * u + dx * v) * sc, Y = oy + (fy * u + dy * v) * sc;
+              ctx.moveTo(X + r, Y);
+              ctx.arc(X, Y, r, 0, TAU);
+              i += 4;
+          }
+          else {
+              const own = paint === "$paint" ? "$color" : paint;
+              if (fill >= 0) {
+                  const q = p.paints[fill];
+                  ctx.fillStyle = paintOf(q === "$paint" ? own : q, col);
+                  ctx.globalAlpha = alpha * a;
+                  ctx.fill();
+              }
+              if (stroke >= 0) {
+                  const q = p.paints[stroke];
+                  ctx.strokeStyle = paintOf(q === "$paint" ? own : q, col);
+                  ctx.globalAlpha = alpha * a;
+                  ctx.lineWidth = lw * Math.abs(sc);
+                  ctx.lineCap = "round";
+                  ctx.lineJoin = "round";
+                  ctx.stroke();
+              }
+              i++;
+          }
+      }
+  }
   class BotTile {
       constructor(o) {
           // The tile.
@@ -378,12 +1739,15 @@
           this.lArm = 4;
           this.lAnt1 = 4;
           this.lAnt2 = 3;
-          this.baseA_u = 0;
-          this.baseA_w = 0;
-          this.baseB_u = 0;
-          this.baseB_w = 0;
+          /** Per antenna (A, B): its base across and up the crown, its first and second lengths (px; from his look). */
+          this.antW0 = new Float64Array(2);
+          this.antU0 = new Float64Array(2);
+          this.antL1 = new Float64Array(2);
+          this.antL2 = new Float64Array(2);
           this.rAntA1 = 0;
           this.rAntB1 = 0;
+          /** The first of the antennae's four constraints. */
+          this.cAnt = 0;
           this.upperMass = 5;
           this.ant = new Float64Array(2);
           this.box = new Float64Array(2);
@@ -494,6 +1858,101 @@
           this.gaitGap = 0.1;
           this.gaitRest = 0.075;
           this.gaitLift = 1;
+          /** His look (an Avatar from the catalog; Blip unless told). */
+          this.av = BLIP;
+          /**
+           * A MOMENT (a recipe from the catalog) he is playing, or null: how (a loop or once), where in it (s), how many loops,
+           * whether its end is playing (after deliver), whether one has just finished; where he stood and faced at its start;
+           * its random numbers for this play. Per track: fired yet (instants), on this play (chance), the next burst or glance
+           * (track time), its prop's slot, its throws. When each event last fired (moment time; NaN: not yet).
+           */
+          this.mo = null;
+          this.moLoop = false;
+          this.moT = 0;
+          this.moK = 0;
+          this.moEnding = false;
+          this.moDone = false;
+          this.moX0 = 0;
+          this.moSide = 1;
+          this.moRnd = 0;
+          this.moRnd2 = 0;
+          this.moStamp = 0;
+          this.moFired = new Uint8Array(MO_TRACKS);
+          this.moOn = new Uint8Array(MO_TRACKS);
+          this.moNext = new Float64Array(MO_TRACKS);
+          this.moSlot = new Int8Array(MO_TRACKS);
+          this.moThrow = new Uint16Array(MO_TRACKS);
+          this.moEv = new Float64Array(MO_EVENTS);
+          this.moVars = new Float64Array(MOMENT_VARS.length);
+          /** The other bot a moment is with (his head, in this tile's space; NaN: none), and its index in the world. */
+          this.peerX = NaN;
+          this.peerY = NaN;
+          this.partner = -1;
+          /** A moment asked the bots near him to play something (the world hands it on): what, how many, how near. */
+          this.outPlay = null;
+          this.outN = 0;
+          this.outNear = 0;
+          /** A recipe's sound, by name (the app plays it, if it has it). */
+          this.onSound = null;
+          /** Set by a moment each step: his facing held (NaN: free), a shake (amplitude in bot heights, Hz, where), his eyes and mouth. */
+          this.faceWant = NaN;
+          this.shakeA = 0;
+          this.shakeF = 0;
+          this.shakeP = 0;
+          this.eyeState = 0;
+          this.mouthState = 0;
+          this.mouthOpen = 1;
+          /** Which way he faces for a moment's sake (1 right, -1 left), kept while he faces the person (face near 0 does not flip it). */
+          this.faceSign = 1;
+          /** A moment's hands over his face (1 the left, 2 the right): drawn in front of his head. */
+          this.handOver = 0;
+          /** The eye's size over his look's (a spring: wide eyes grow). */
+          this.eyeK = 1;
+          this.eyeKV = 0;
+          /** A moment's particles: a pool, the next to use, how many live, the last thrown and the last dropped. */
+          this.qx = new Float64Array(QCAP);
+          this.qy = new Float64Array(QCAP);
+          this.qvx = new Float64Array(QCAP);
+          this.qvy = new Float64Array(QCAP);
+          this.qlife = new Float64Array(QCAP);
+          this.qmax = new Float64Array(QCAP);
+          this.qt = new Float64Array(QCAP);
+          this.qrot = new Float64Array(QCAP);
+          this.qspin = new Float64Array(QCAP);
+          this.qsize = new Float64Array(QCAP);
+          this.qgrow = new Float64Array(QCAP);
+          this.qg = new Float64Array(QCAP);
+          this.qdrag = new Float64Array(QCAP);
+          this.qalpha = new Float64Array(QCAP);
+          this.qang = new Float64Array(QCAP);
+          this.qorbR = new Float64Array(QCAP);
+          this.qorbW = new Float64Array(QCAP);
+          this.qflight = new Float64Array(QCAP);
+          this.qflags = new Uint8Array(QCAP);
+          this.qanc = new Int8Array(QCAP);
+          this.qev = new Int8Array(QCAP);
+          this.qpart = new Array(QCAP).fill(null);
+          this.qpaint = new Array(QCAP).fill("");
+          this.qNext = 0;
+          this.qLive = 0;
+          this.qLast = -1;
+          this.qMiss = -1;
+          /** Props a moment puts on him (party hat, bag): the part, where, how, and its pop (a spring to 1 while it lasts, to 0 after). */
+          this.wparts = new Array(WSLOTS).fill(null);
+          this.wanc = new Int8Array(WSLOTS);
+          this.wx = new Float64Array(WSLOTS);
+          this.wy = new Float64Array(WSLOTS);
+          this.wsc = new Float64Array(WSLOTS);
+          this.wrot = new Float64Array(WSLOTS);
+          this.wpop = new Float64Array(WSLOTS);
+          this.wpopV = new Float64Array(WSLOTS);
+          this.wlive = new Uint8Array(WSLOTS);
+          this.wseen = new Float64Array(WSLOTS);
+          this.wtrack = new Int8Array(WSLOTS);
+          this.wpaint = new Array(WSLOTS).fill("$color");
+          this.wUsed = 0;
+          /** An anchor's frame, filled by anchor(): its point, forward and down (unit vectors, mirrored by his facing). */
+          this.af = new Float64Array(6);
           this.fixedS = 0;
           /** The Notes bot's pad, its width and height (px). */
           this.padW = 0;
@@ -509,6 +1968,10 @@
           this.flyT = 0;
           this.catchIt = false;
           this.tmp = new Float64Array(2);
+          /** Reduce Motion's pose is being taken: only the tracks that hold a pose count. */
+          this.posing = false;
+          /** The fill the face last set (so a light in the same paint needs no new one). */
+          this.fillNow = "";
           this.kind = o.kind;
           this.color = o.color || INK;
           this.mood = o.mood ?? "idle";
@@ -518,6 +1981,10 @@
           this.fixedS = o.size ?? 0;
           this.skin = { a: new Int8Array(DUST), b: new Int8Array(DUST), t: new Float32Array(DUST), u: new Float32Array(DUST), w: new Float32Array(DUST), head: new Uint8Array(DUST), lift: new Float32Array(DUST), n: 0 };
           this.on.fill(-1);
+          this.av = o.avatar ?? BLIP;
+          this.mrand = rng(this.seed ^ 0x2545f491);
+          this.moSlot.fill(-1);
+          this.wtrack.fill(-1);
       }
       // ------------------------------------------------------------------- layout
       /**
@@ -598,6 +2065,11 @@
        * gone) he is simply gone. Nothing for any other act.
        */
       deliver() {
+          // A moment playing (and not carrying): its end, or its stop.
+          if (this.mo && this.moment !== "carry") {
+              this.deliverMoment();
+              return;
+          }
           if (this.moment !== "carry" || this.delivered)
               return;
           this.delivered = true;
@@ -631,8 +2103,8 @@
       }
       /** A small happy moment: a hop with both arms up, and the antenna lights. */
       cheer() {
-          // Carrying, his hands are full.
-          if (this.act === A_CARRY)
+          // Carrying, his hands are full; in a moment, he is busy with it.
+          if (this.act === A_CARRY || this.mo)
               return;
           this.cheerT = 0;
           this.glowV += 9;
@@ -669,14 +2141,13 @@
           this.S = S;
           this.g = 26 * S;
           // Blip's proportions (the hello pose, tulmi/blip/bots): a big round head on a short neck, a sack of a body,
-          // short legs and big feet, noodle arms, two antennae (one bent over).
-          this.rH = 0.2 * S;
+          // short legs and big feet, noodle arms, two antennae (one bent over). His head and antennae are his look's.
           this.lNeck = 0.255 * S;
           this.lTorso = 0.25 * S;
           this.lLeg = 0.15 * S;
           this.lArm = 0.14 * S;
-          this.lAnt1 = 0.12 * S;
-          this.lAnt2 = 0.09 * S;
+          this.rH = this.av.headR * S;
+          this.antennaGeometry();
           this.wallL = 3;
           this.wallR = w - 3;
           this.n = 0;
@@ -696,19 +2167,15 @@
           this.addP(bx - 0.08 * S2, neckY + 2 * this.lArm, 0.25, 0.035 * S2, 0.985, 0, 0.5); // HAND_L
           this.addP(bx + 0.06 * S2, neckY + this.lArm, 0.25, 0.02 * S2, 0.985, 0, 0.5); // ELB_R
           this.addP(bx + 0.08 * S2, neckY + 2 * this.lArm, 0.25, 0.035 * S2, 0.985, 0, 0.5); // HAND_R
-          // Antennae: A straight, B bent; each base sits on the head's crown.
-          this.baseA_u = 0.9 * r;
-          this.baseA_w = -0.4 * r;
-          this.baseB_u = 0.9 * r;
-          this.baseB_w = 0.42 * r;
+          // Antennae (Blip's: A straight, B bent); each base sits on the head's crown, where his look puts it.
           let t = this.antTarget(bx, headY, 0, 0, 1);
           const a1x = t[0], a1y = t[1];
           this.addP(a1x, a1y, 0.12, 0.01, 0.97, 0, 0); // ANT_A1
-          this.addP(a1x, a1y - this.lAnt2, 0.1, 0.01, 0.97, 0, 0); // ANT_A2
+          this.addP(a1x, a1y - this.antL2[0], 0.1, 0.01, 0.97, 0, 0); // ANT_A2
           t = this.antTarget(bx, headY, 0, 1, 1);
           const b1x = t[0], b1y = t[1];
           this.addP(b1x, b1y, 0.12, 0.01, 0.97, 0, 0); // ANT_B1
-          this.addP(b1x + this.lAnt2 * 0.7, b1y - this.lAnt2 * 0.7, 0.1, 0.01, 0.97, 0, 0); // ANT_B2
+          this.addP(b1x + this.antL2[1] * 0.7, b1y - this.antL2[1] * 0.7, 0.1, 0.01, 0.97, 0, 0); // ANT_B2
           this.addC(HEAD, NECK, this.lNeck, 1, 1);
           this.addC(NECK, HIP, this.lTorso, 1, 1);
           this.addC(HIP, FOOT_L, this.lLeg, 1, 2);
@@ -724,10 +2191,11 @@
           for (let i = 0; i < NBOT; i++)
               if (i !== FOOT_L && i !== FOOT_R)
                   this.upperMass += 1 / this.im[i];
+          this.cAnt = this.nc;
           this.addC(HEAD, ANT_A1, this.rAntA1, 0.7, 1);
-          this.addC(ANT_A1, ANT_A2, this.lAnt2, 0.8, 1);
+          this.addC(ANT_A1, ANT_A2, this.antL2[0], 0.8, 1);
           this.addC(HEAD, ANT_B1, this.rAntB1, 0.7, 1);
-          this.addC(ANT_B1, ANT_B2, this.lAnt2, 0.8, 1);
+          this.addC(ANT_B1, ANT_B2, this.antL2[1], 0.8, 1);
           this.holdL = this.addC(HAND_L, HAND_L, 0, 0, 0);
           this.holdR = this.addC(HAND_R, HAND_R, 0, 0, 0);
           this.nBotC = this.nc;
@@ -738,15 +2206,27 @@
           this.blinkAt = 1 + this.rand() * 3;
           this.next(true);
       }
+      /** His antennae from his look: where each sits on the crown, and how long (px). */
+      antennaGeometry() {
+          const av = this.av, r = this.rH, S = this.S;
+          for (let s = 0; s < 2; s++) {
+              this.antU0[s] = av.antUp[s] * r;
+              this.antW0[s] = av.antAt[s] * r;
+              this.antL1[s] = av.antLen[s] * S;
+              this.antL2[s] = av.antTipLen[s] * S;
+          }
+          this.lAnt1 = this.antL1[0];
+          this.lAnt2 = this.antL2[0];
+      }
       /** Where an antenna's first joint wants to be: on the crown, out along its own angle (head at hx, hy, turned by `ang`). */
       antTarget(hx, hy, ang, which, face) {
           const f = face < 0 ? -1 : 1, c = Math.cos(ang), s = Math.sin(ang);
-          const bu = which ? this.baseB_u : this.baseA_u, bw = (which ? this.baseB_w : this.baseA_w) * f;
+          const bu = this.antU0[which], bw = this.antW0[which] * f;
           // head space to the screen: across (c, s), up (s, -c)
           const ox = hx + c * bw + s * bu, oy = hy + s * bw - c * bu;
-          const da = ang + (which ? 0.32 : -0.14) * f;
-          this.ant[0] = ox + Math.sin(da) * this.lAnt1;
-          this.ant[1] = oy - Math.cos(da) * this.lAnt1;
+          const da = ang + this.av.antLean[which] * f;
+          this.ant[0] = ox + Math.sin(da) * this.antL1[which];
+          this.ant[1] = oy - Math.cos(da) * this.antL1[which];
           return this.ant;
       }
       /**
@@ -769,25 +2249,30 @@
               k.lift[n] = lift;
               n++;
           };
-          const sp = 0.062 * S, rim = 0.055 * S;
-          // The head: a disc on a hex lattice. kind 1: inside (a perforation), 3: on the rim (Make a bot only).
-          for (let row = -5; row <= 5; row++) {
-              const u = row * sp * 0.866, off = row % 2 ? sp / 2 : 0;
-              for (let col = -5; col <= 5; col++) {
-                  const w = col * sp + off, d = Math.sqrt(u * u + w * w);
+          // His look's lattice: hex (Blip's) or square, never so fine that the dots would not fit.
+          const av = this.av, hexed = av.dots !== 1;
+          const area = Math.PI * av.headR * av.headW * av.headR * av.headH;
+          const sp = Math.max(av.dotSp, Math.sqrt(area / (110 * 0.866))) * S, rim = 0.055 * S, rs = hexed ? sp * 0.866 : sp;
+          const round = av.head !== 2 && av.headW === 1 && av.headH === 1;
+          // The head: a disc on a hex lattice (or his head's own shape). kind 1: inside (a perforation), 3: on the rim (Make a bot only).
+          const N = Math.max(5, Math.ceil((r * Math.max(av.headW, av.headH)) / rs));
+          for (let row = -N; row <= N; row++) {
+              const u = hexed ? row * sp * 0.866 : row * sp, off = hexed && row % 2 ? sp / 2 : 0;
+              for (let col = -N; col <= N; col++) {
+                  const w = col * sp + off, d = round ? Math.sqrt(u * u + w * w) : this.headDist(u, w);
                   if (d > r - 0.02 * S)
                       continue;
                   put(NECK, HEAD, 1, u, w, d > r - rim ? 3 : 1, 0.66 + (u / r) * 0.25);
               }
           }
           // The body, from the hips up: wider at the bottom.
-          const L = this.lTorso;
+          const L = this.lTorso, M = Math.max(4, Math.ceil((av.bodyBottom * S) / sp) + 1);
           for (let row = 0;; row++) {
-              const u = 0.025 * S + row * sp * 0.866;
+              const u = 0.025 * S + (hexed ? row * sp * 0.866 : row * sp);
               if (u > L - 0.01 * S)
                   break;
-              const hw = 0.165 * S + (0.135 * S - 0.165 * S) * (u / L) - 0.015 * S, off = row % 2 ? sp / 2 : 0;
-              for (let col = -4; col <= 4; col++) {
+              const hw = av.bodyBottom * S + (av.bodyTop * S - av.bodyBottom * S) * (u / L) - 0.015 * S, off = hexed && row % 2 ? sp / 2 : 0;
+              for (let col = -M; col <= M; col++) {
                   const w = col * sp + off;
                   if (Math.abs(w) > hw)
                       continue;
@@ -816,6 +2301,17 @@
           put(HEAD, ANT_B1, 0.85, 0, 0, 0, 0.95);
           put(ANT_B1, ANT_B2, 1, 0, 0, 0, 1);
           k.n = n;
+      }
+      /**
+       * How far (u up, w across, head space) is from the middle of his head, as a radius: a round head's distance, an oval's
+       * scaled to it, a square's (rounded) corner as far as its side.
+       */
+      headDist(u, w) {
+          const av = this.av, a = w / av.headW, b = u / av.headH;
+          if (av.head !== 2)
+              return Math.sqrt(a * a + b * b);
+          const p = 2 + 8 * (1 - av.headRound), q = Math.pow(Math.abs(a), p) + Math.pow(Math.abs(b), p);
+          return Math.pow(q, 1 / p);
       }
       /** Each bot's toys. */
       props() {
@@ -1036,6 +2532,8 @@
           this.contacts(h);
           this.faceStep(h);
           this.sparksStep(h);
+          if (this.qLive > 0 || this.wUsed > 0)
+              this.thingsStep(h);
           if (this.kind === "make")
               this.dustStep(h);
           this.feedFabric(h);
@@ -1102,6 +2600,8 @@
               this.padSprings();
           if (this.stageCarry)
               this.bagSprings();
+          if (this.shakeA > 0 && live > 0)
+              this.shakeForces(live);
       }
       /** The bag put down: it sits, its tie standing up a little slumped (a spring on the knot), not lying flat. */
       bagSprings() {
@@ -1242,16 +2742,17 @@
               const k = 520 * (0.3 + 0.7 * live);
               this.ax[j1] += (t[0] - x[j1]) * k - (this.vx(j1) - this.vx(HEAD)) * 7;
               this.ay[j1] += (t[1] - y[j1]) * k - (this.vy(j1) - this.vy(HEAD)) * 7;
-              // The tip: straight on for A, bent over for B.
+              // The tip: straight on, or bent over (Blip's A and B).
               const dx = x[j1] - hx, dy = y[j1] - hy, d = Math.sqrt(dx * dx + dy * dy) + 1e-6;
               let ux = dx / d, uy = dy / d;
-              if (s) {
-                  const b = 0.95 * f, c = Math.cos(b), sn = Math.sin(b);
+              const bend = this.av.antBend[s];
+              if (bend !== 0) {
+                  const b = bend * f, c = Math.cos(b), sn = Math.sin(b);
                   const rx = ux * c - uy * sn, ry = ux * sn + uy * c;
                   ux = rx;
                   uy = ry;
               }
-              const tx = x[j1] + ux * this.lAnt2, ty = y[j1] + uy * this.lAnt2;
+              const tx = x[j1] + ux * this.antL2[s], ty = y[j1] + uy * this.antL2[s];
               this.ax[j2] += (tx - x[j2]) * 380 - (this.vx(j2) - this.vx(j1)) * 5;
               this.ay[j2] += (ty - y[j2]) * 380 - (this.vy(j2) - this.vy(j1)) * 5;
           }
@@ -1665,8 +3166,15 @@
               if (Math.abs(v) > S * 0.8)
                   this.faceTo = v > 0 ? 1 : -1;
           }
+          // A moment holding his facing (a spin, a turn to the other bot).
+          if (this.faceWant === this.faceWant)
+              this.faceTo = this.faceWant;
           this.faceV += ((this.faceTo - this.face) * 70 - this.faceV * 13) * h;
           this.face = clamp(this.face + this.faceV * h, -1, 1);
+          if (this.face > 0.25)
+              this.faceSign = 1;
+          else if (this.face < -0.25)
+              this.faceSign = -1;
           const tw = this.face * 0.22 * r + gw * 0.2 * r, tu = 0.02 * r + gu * 0.18 * r;
           this.ewV += ((tw - this.ew) * 420 - this.ewV * 26) * h;
           this.euV += ((tu - this.eu) * 420 - this.euV * 26) * h;
@@ -1689,6 +3197,15 @@
           this.lid = clamp(this.lid + this.lidV * h, 0, 1);
           this.glowV += (-this.glow * 60 - this.glowV * 9) * h;
           this.glow += this.glowV * h;
+          // Wide eyes grow (a spring, so they pop).
+          if (this.eyeState === EYE_WIDE || this.eyeK !== 1) {
+              this.eyeKV += (((this.eyeState === EYE_WIDE ? 1.32 : 1) - this.eyeK) * 900 - this.eyeKV * 34) * h;
+              this.eyeK += this.eyeKV * h;
+              if (this.eyeState !== EYE_WIDE && Math.abs(this.eyeK - 1) < 1e-3 && Math.abs(this.eyeKV) < 0.01) {
+                  this.eyeK = 1;
+                  this.eyeKV = 0;
+              }
+          }
       }
       /** Each body part drags the threads near it along. */
       feedFabric(h) {
@@ -1928,6 +3445,12 @@
           this.lidTo = this.mood === "idle" ? 0.22 : 0.1;
           this.wallL = 3;
           this.wallR = this.w - 3;
+          this.faceWant = NaN;
+          this.shakeA = 0;
+          this.handOver = 0;
+          this.eyeState = EYE_REST;
+          this.mouthState = MO_REST;
+          this.mouthOpen = 1;
           // Carrying, he comes in and goes out past the stage's edges.
           if (this.act === A_CARRY) {
               this.wallL = -S * 1.4;
@@ -1947,6 +3470,12 @@
               this.lean = clamp(dx / (Math.abs(dx) + S * 3), -0.3, 0.3);
               this.lidTo = 0;
               this.sitTo(0, h);
+              return;
+          }
+          // A moment (a recipe) holds him while it plays: a tap's look still wins, and carrying wins over it.
+          if (this.mo && this.act !== A_CARRY) {
+              this.runMoment(h);
+              this.sitTo(this.sitWant, h);
               return;
           }
           if (this.cheerT >= 0) {
@@ -3243,17 +4772,828 @@
           this.x[ANT_A1] = t[0];
           this.y[ANT_A1] = t[1];
           this.x[ANT_A2] = t[0];
-          this.y[ANT_A2] = t[1] - this.lAnt2;
+          this.y[ANT_A2] = t[1] - this.antL2[0];
           t = this.antTarget(bx, this.y[HEAD], 0, 1, f);
           this.x[ANT_B1] = t[0];
           this.y[ANT_B1] = t[1];
-          this.x[ANT_B2] = t[0] + f * this.lAnt2 * 0.7;
-          this.y[ANT_B2] = t[1] - this.lAnt2 * 0.7;
+          this.x[ANT_B2] = t[0] + f * this.antL2[1] * 0.7;
+          this.y[ANT_B2] = t[1] - this.antL2[1] * 0.7;
           for (let i = 0; i < NBOT; i++) {
               this.px[i] = this.x[i];
               this.py[i] = this.y[i];
           }
           this.grounded = 2;
+      }
+      // ------------------------------------------------------------------- looks and moments
+      /** Wear a look (null: Blip). Where he is stays; his head, antennae and dots take the new look at once. */
+      setAvatar(av) {
+          const a = av ?? BLIP;
+          if (a === this.av)
+              return;
+          this.av = a;
+          if (!this.placed)
+              return;
+          const S = this.S, before = this.skin.n;
+          this.rH = a.headR * S;
+          this.rad[HEAD] = this.rH;
+          this.antennaGeometry();
+          let t = this.antTarget(0, 0, 0, 0, 1);
+          this.rAntA1 = Math.hypot(t[0], t[1]);
+          t = this.antTarget(0, 0, 0, 1, 1);
+          this.rAntB1 = Math.hypot(t[0], t[1]);
+          const c = this.cAnt;
+          this.cr[c] = this.rAntA1;
+          this.cr[c + 1] = this.antL2[0];
+          this.cr[c + 2] = this.rAntB1;
+          this.cr[c + 3] = this.antL2[1];
+          const ang = this.headAngle(), f = this.faceSign;
+          for (let s = 0; s < 2; s++) {
+              const j1 = s ? ANT_B1 : ANT_A1, j2 = s ? ANT_B2 : ANT_A2;
+              t = this.antTarget(this.x[HEAD], this.y[HEAD], ang, s, f);
+              const tx = t[0], ty = t[1];
+              this.x[j1] = tx;
+              this.y[j1] = ty;
+              this.px[j1] = tx;
+              this.py[j1] = ty;
+              this.x[j2] = tx;
+              this.y[j2] = ty - this.antL2[s];
+              this.px[j2] = tx;
+              this.py[j2] = this.y[j2];
+          }
+          this.buildSkin();
+          // Make a bot: the dots his new look has more of start where they belong.
+          for (let i = before; i < this.skin.n; i++) {
+              this.dustPos(i, this.tmp);
+              this.dx[i] = this.tmp[0];
+              this.dy[i] = this.tmp[1];
+              this.dvx[i] = 0;
+              this.dvy[i] = 0;
+              this.dk[i] = this.dk[0];
+          }
+      }
+      /**
+       * Play a moment (a compiled recipe): "once" (then back to his own play) or "loop" (until stopMoment or deliver); none
+       * given, the recipe's own. `react`: another bot's moment asked for it, and it never cuts into his own. False: it cannot
+       * be played here (a broken recipe, a newer format, Make a bot); play the recipe's fallback act instead.
+       */
+      playMoment(m, mode, react = false) {
+          if (!m || !m.ok || this.kind === "make")
+              return false;
+          if (react && this.mo && !this.mo.react)
+              return false;
+          this.mo = m;
+          this.moLoop = mode === "loop" || (mode !== "once" && m.loop);
+          this.moDone = false;
+          this.moEnding = false;
+          this.moT = 0;
+          this.moK = 0;
+          this.moRnd = this.mrand();
+          this.moRnd2 = this.mrand();
+          this.moX0 = this.placed ? this.x[HIP] : this.w / 2;
+          this.moSide = this.faceSign;
+          if (!react)
+              this.partner = -1;
+          this.moReset(m.tracks);
+          this.moEv.fill(NaN);
+          this.cheerT = -1;
+          this.release();
+          return true;
+      }
+      /** Stop the moment now (its end is not played): back to his own play. */
+      stopMoment() { if (this.mo)
+          this.moFinish(); }
+      /** A moment's end (deliver(), or a screen's momentEndWhen): its `end` plays, then it is over; none, over now. */
+      deliverMoment() {
+          const m = this.mo;
+          if (!m)
+              return;
+          if (!m.end.length) {
+              this.moFinish();
+              return;
+          }
+          if (this.moEnding)
+              return;
+          this.moEnding = true;
+          this.moT = 0;
+          this.moReset(m.end);
+          this.moEv.fill(NaN);
+      }
+      /** The id of the moment he is playing ("": none). */
+      momentId() { return this.mo ? this.mo.id : ""; }
+      /** A moment he played once (or was delivered) has finished, until the next one starts. */
+      momentDone() { return this.moDone; }
+      moReset(tracks) {
+          for (let i = 0; i < MO_TRACKS; i++) {
+              this.moFired[i] = 0;
+              this.moNext[i] = 0;
+              this.moThrow[i] = 0;
+              this.moSlot[i] = -1;
+              const tr = tracks[i];
+              this.moOn[i] = tr && (tr.chance >= 1 || this.mrand() < tr.chance) ? 1 : 0;
+          }
+          for (let s = 0; s < WSLOTS; s++) {
+              this.wlive[s] = 0;
+              this.wtrack[s] = -1;
+          }
+      }
+      moFinish() {
+          this.mo = null;
+          this.moDone = true;
+          this.moEnding = false;
+          this.partner = -1;
+          this.peerX = NaN;
+          this.peerY = NaN;
+          for (let s = 0; s < WSLOTS; s++) {
+              this.wlive[s] = 0;
+              this.wtrack[s] = -1;
+          }
+          if (this.placed)
+              this.next(true);
+      }
+      /** A compiled number, now. */
+      xv(x) { return x.code ? xrun(x.code, this.moVars) : x.c; }
+      /** One step of the moment: its clock (a loop goes round again from loopFrom), then every track that is on now. */
+      runMoment(h) {
+          const m = this.mo, S = this.S;
+          this.moT += h;
+          const dur = this.moEnding ? m.endDur : m.dur;
+          if (this.moT >= dur) {
+              if (this.moEnding || !this.moLoop) {
+                  this.moFinish();
+                  return;
+              }
+              // Round again: what lies before loopFrom played once; events and bursts keep their spacing.
+              const back = dur - m.loopFrom;
+              this.moT -= back;
+              this.moK++;
+              for (let i = 0; i < m.tracks.length; i++) {
+                  const tr = m.tracks[i];
+                  if (tr.after >= 0)
+                      continue;
+                  if (tr.at >= m.loopFrom) {
+                      this.moFired[i] = 0;
+                      this.moNext[i] = 0;
+                      this.moThrow[i] = 0;
+                      this.moOn[i] = tr.chance >= 1 || this.mrand() < tr.chance ? 1 : 0;
+                  }
+                  else
+                      this.moNext[i] = this.moNext[i] - back;
+              }
+              for (let e = 0; e < MO_EVENTS; e++)
+                  this.moEv[e] = this.moEv[e] - back;
+          }
+          this.momentVars();
+          this.goalX = NaN;
+          const tracks = this.moEnding ? m.end : m.tracks;
+          this.moStamp++;
+          for (let i = 0; i < tracks.length; i++)
+              this.momentTrack(tracks[i], i, h);
+          // A prop whose track is over pops away.
+          for (let s = 0; s < WSLOTS; s++)
+              if (this.wparts[s] && this.wlive[s] && this.wseen[s] !== this.moStamp) {
+                  this.wlive[s] = 0;
+                  this.wtrack[s] = -1;
+              }
+          if (this.wallL < 3)
+              this.wallL = 3;
+          if (this.wallR > this.w - 3)
+              this.wallR = this.w - 3;
+          void S;
+      }
+      /** The names expressions read (MOMENT_VARS), but for the track's own (t, u, D). */
+      momentVars() {
+          const m = this.mo, V = this.moVars, S = this.S, f = this.faceSign;
+          V[2] = this.moT;
+          V[4] = m.bpm > 0 ? (this.moT * m.bpm) / 60 : 0;
+          V[5] = this.moK;
+          V[6] = f;
+          V[7] = this.moRnd;
+          V[8] = this.moRnd2;
+          V[9] = this.w / S;
+          V[10] = this.x[HIP] / S;
+          V[11] = this.peerX === this.peerX ? ((this.peerX - this.x[HEAD]) * f) / S : 0;
+      }
+      momentTrack(tr, i, h) {
+          if (!this.moOn[i])
+              return;
+          let base = 0;
+          if (tr.after >= 0) {
+              base = this.moEv[tr.after];
+              if (base !== base)
+                  return;
+          }
+          const lt = this.moT - base - tr.at;
+          if (lt < 0)
+              return;
+          if (tr.cond === 1 ? this.peerX === this.peerX : tr.cond === 2 ? this.peerX !== this.peerX : false)
+              return;
+          const V = this.moVars;
+          if (tr.inst) {
+              if (this.moFired[i] || this.posing)
+                  return;
+              V[0] = lt;
+              V[1] = 1;
+              V[3] = 0;
+              if (tr.k === TK_HOP && !this.grounded) {
+                  if (lt > tr.to - tr.at)
+                      this.moFired[i] = 1;
+                  return;
+              }
+              this.moFired[i] = 1;
+              this.momentFire(tr, i);
+              return;
+          }
+          const span = tr.to - tr.at;
+          if (lt > span)
+              return;
+          if (this.posing && (tr.k === TK_WALK || tr.k === TK_SPIN || tr.k === TK_SHAKE || tr.k === TK_EMIT || tr.k === TK_ACT))
+              return;
+          V[0] = lt;
+          V[1] = span > 0 ? lt / span : 1;
+          V[3] = span;
+          const S = this.S, f = this.faceSign;
+          switch (tr.k) {
+              case TK_WALK: {
+                  let gx = NaN;
+                  if (tr.m2 === 1)
+                      gx = this.xv(tr.a) * this.w;
+                  else if (tr.m2 === 2)
+                      gx = this.moX0 + this.xv(tr.b) * S * this.moSide;
+                  else if (tr.m === 1) {
+                      if (this.peerX === this.peerX)
+                          gx = this.peerX - (this.peerX > this.x[HIP] ? 1 : -1) * this.xv(tr.c) * S;
+                  }
+                  else if (tr.m === 2)
+                      gx = this.w / 2;
+                  else if (tr.m === 3)
+                      gx = 0;
+                  else if (tr.m === 4)
+                      gx = this.w;
+                  else if (tr.m === 5)
+                      gx = this.moX0;
+                  else if (tr.m === 6) {
+                      if (this.peerX === this.peerX)
+                          gx = this.moX0 - (this.peerX > this.moX0 ? 1 : -1) * this.xv(tr.c) * S;
+                  }
+                  if (gx === gx)
+                      this.goalX = clamp(gx, this.wallL + S * 0.3, this.wallR - S * 0.3);
+                  this.speed = this.xv(tr.d);
+                  break;
+              }
+              case TK_CROUCH:
+                  this.crouch += this.xv(tr.a);
+                  break;
+              case TK_SIT: {
+                  const v = this.xv(tr.a);
+                  if (v > this.sitWant)
+                      this.sitWant = clamp(v, 0, 1);
+                  break;
+              }
+              case TK_LEAN:
+                  this.lean += this.xv(tr.a) * f;
+                  break;
+              case TK_TILT:
+                  this.tilt += this.xv(tr.a) * f;
+                  break;
+              case TK_LID:
+                  this.lidTo = clamp(this.xv(tr.a), 0, 1);
+                  break;
+              case TK_ARM:
+                  this.momentArm(tr);
+                  break;
+              case TK_LOOK:
+                  this.momentLook(tr, i, lt);
+                  break;
+              case TK_EYES:
+                  this.eyeState = tr.m;
+                  if (tr.m === EYE_OPEN || tr.m === EYE_WIDE)
+                      this.lidTo = 0;
+                  else if (tr.m === EYE_CLOSED)
+                      this.lidTo = 1;
+                  else if (tr.m === EYE_HALF)
+                      this.lidTo = 0.45;
+                  else if (tr.m === EYE_SQUINT)
+                      this.lidTo = 0.64;
+                  break;
+              case TK_MOUTH:
+                  this.mouthState = tr.m;
+                  this.mouthOpen = clamp(this.xv(tr.a), 0, 1.5);
+                  break;
+              case TK_SPIN: {
+                  // Turns a second: his facing flips each half turn, the first away from where he faced.
+                  const turn = Math.floor(lt * Math.max(0, this.xv(tr.a)) * 2);
+                  this.faceWant = turn % 2 === 0 ? -this.moSide : this.moSide;
+                  this.lookX = NaN;
+                  this.lookOut = 0;
+                  break;
+              }
+              case TK_SHAKE:
+                  this.shakeA = Math.max(0, this.xv(tr.a));
+                  this.shakeF = this.xv(tr.b);
+                  this.shakeP = tr.m;
+                  break;
+              case TK_ACT:
+                  this.momentAct(tr.m, lt, h);
+                  break;
+              case TK_FACE: {
+                  let fw = NaN;
+                  if (tr.m === 0)
+                      fw = 0;
+                  else if (tr.m === 1 || tr.m === 2) {
+                      if (this.peerX === this.peerX) {
+                          const d = this.peerX > this.x[HEAD] ? 1 : -1;
+                          fw = tr.m === 1 ? d : -d;
+                      }
+                  }
+                  else
+                      fw = tr.m === 3 ? -1 : tr.m === 4 ? 1 : tr.m === 5 ? this.moSide : -this.moSide;
+                  if (fw === fw) {
+                      this.faceWant = fw;
+                      if (fw === 0) {
+                          this.lookOut = 1;
+                          this.lookX = NaN;
+                      }
+                  }
+                  break;
+              }
+              case TK_PROP:
+                  this.momentProp(tr, i);
+                  break;
+              case TK_EMIT:
+                  if (lt >= this.moNext[i])
+                      this.moNext[i] = lt + tr.every + (this.emit(tr, i) ? tr.pause : 0);
+                  break;
+              default: break;
+          }
+      }
+      /** An arm track: a hand (or both, mirrored) to a point near an anchor, forward and down in bot heights. */
+      momentArm(tr) {
+          const S = this.S, f = this.faceSign, ax = this.xv(tr.a) * S, ay = this.xv(tr.b) * S, an = this.anchor(tr.m2);
+          const ox = an[0], oy = an[1], rightFront = f > 0, hand = tr.m;
+          if (hand === 4) {
+              const fx = ox + f * ax, bx = ox - f * ax;
+              this.armR = true;
+              this.armL = true;
+              this.armRx = rightFront ? fx : bx;
+              this.armLx = rightFront ? bx : fx;
+              this.armRy = oy + ay;
+              this.armLy = oy + ay;
+          }
+          else {
+              const right = hand === 3 || (hand === 0 && rightFront) || (hand === 1 && !rightFront);
+              if (right) {
+                  this.armR = true;
+                  this.armRx = ox + f * ax;
+                  this.armRy = oy + ay;
+              }
+              else {
+                  this.armL = true;
+                  this.armLx = ox + f * ax;
+                  this.armLy = oy + ay;
+              }
+              if (tr.pop)
+                  this.handOver |= right ? 2 : 1;
+          }
+          this.armK = this.xv(tr.c);
+      }
+      /** A look track: where his eyes (and head) go. Offsets are forward (the way he faced as it began) and down, in bot heights. */
+      momentLook(tr, i, lt) {
+          const S = this.S, sd = this.moSide, hx = this.x[HEAD], hy = this.y[HEAD];
+          const ox = tr.a.code || tr.a.c === tr.a.c ? this.xv(tr.a) : NaN, oy = tr.b.code || tr.b.c === tr.b.c ? this.xv(tr.b) : NaN;
+          this.lookOut = 0;
+          switch (tr.m) {
+              case LK_SCREEN:
+                  this.lookOut = 1;
+                  this.lookX = NaN;
+                  return;
+              case LK_PEER:
+              case LK_AWAY:
+                  if (this.peerX !== this.peerX) {
+                      this.lookOut = 1;
+                      this.lookX = NaN;
+                      return;
+                  }
+                  this.lookX = tr.m === LK_PEER ? this.peerX : 2 * hx - this.peerX;
+                  this.lookY = this.peerY;
+                  break;
+              case LK_POINT:
+                  this.lookX = (ox === ox ? ox : 0.5) * this.w;
+                  this.lookY = (oy === oy ? oy : 0.5) * this.floor;
+                  return;
+              case LK_AROUND:
+                  if (lt >= this.moNext[i]) {
+                      this.moNext[i] = lt + (0.6 + 0.8 * this.mrand()) / tr.n;
+                      this.lookX = this.w * this.mrand();
+                      this.lookY = this.floor * (0.1 + 0.8 * this.mrand());
+                  }
+                  return;
+              case LK_DOWN:
+                  this.lookX = hx + sd * S * 0.6;
+                  this.lookY = this.floor + S * 2;
+                  break;
+              case LK_UP:
+                  this.lookX = hx + sd * S * 0.4;
+                  this.lookY = hy - S * 2.2;
+                  break;
+              case LK_AHEAD:
+                  this.lookX = hx + sd * S * 3;
+                  this.lookY = hy;
+                  break;
+              case LK_DROP:
+              case LK_LAST: {
+                  const q = tr.m === LK_DROP ? this.qMiss : this.qLast;
+                  if (q >= 0 && this.qlife[q] > 0) {
+                      this.lookX = this.qx[q];
+                      this.lookY = this.qy[q];
+                  }
+                  else {
+                      this.lookX = hx + sd * S;
+                      this.lookY = this.floor;
+                  }
+                  break;
+              }
+              default: {
+                  const hd = sd > 0 ? HAND_R : HAND_L;
+                  this.lookX = this.x[hd];
+                  this.lookY = this.y[hd];
+                  break;
+              }
+          }
+          if (ox === ox)
+              this.lookX += sd * ox * S;
+          if (oy === oy)
+              this.lookY += oy * S;
+      }
+      /** One of today's acts, inside a recipe, for as long as its track lasts. */
+      momentAct(a, lt, h) {
+          switch (a) {
+              case 0:
+                  this.play(h);
+                  break;
+              case 1:
+                  this.actT = lt;
+                  this.waving();
+                  break;
+              case 2:
+                  this.survey();
+                  break;
+              case 3:
+                  this.reading();
+                  break;
+              case 4:
+                  this.goalX = NaN;
+                  this.sitWant = 1;
+                  this.lidTo = 0.4;
+                  this.idleLook(h, 0.4);
+                  break;
+              case 5:
+                  this.thinking();
+                  break;
+              default:
+                  this.actT = lt;
+                  this.stretch();
+                  break;
+          }
+      }
+      /** A prop track: a part on him while it lasts (a slot of its own; it pops in, and out after). */
+      momentProp(tr, i) {
+          let s = this.moSlot[i];
+          if (s < 0 || this.wtrack[s] !== i) {
+              s = -1;
+              for (let k = 0; k < WSLOTS; k++)
+                  if (!this.wparts[k]) {
+                      s = k;
+                      break;
+                  }
+              if (s < 0)
+                  for (let k = 0; k < WSLOTS; k++)
+                      if (!this.wlive[k]) {
+                          s = k;
+                          break;
+                      }
+              if (s < 0)
+                  return;
+              this.moSlot[i] = s;
+              this.wparts[s] = tr.part;
+              this.wanc[s] = tr.m;
+              this.wpaint[s] = tr.paint;
+              this.wtrack[s] = i;
+              this.wpop[s] = tr.pop ? 0 : 1;
+              this.wpopV[s] = 0;
+              this.wUsed = Math.max(1, this.wUsed);
+          }
+          this.wlive[s] = 1;
+          this.wseen[s] = this.moStamp;
+          this.wx[s] = this.xv(tr.a);
+          this.wy[s] = this.xv(tr.b);
+          this.wsc[s] = this.xv(tr.c);
+          this.wrot[s] = this.xv(tr.d);
+      }
+      /** An instant track, once: a hop, a kick, a ripple, a glow, a sound, a word to the bots near him, an event, a burst. */
+      momentFire(tr, i) {
+          const S = this.S, f = this.faceSign;
+          switch (tr.k) {
+              case TK_HOP: {
+                  const hh = Math.max(0.01, this.xv(tr.a)) * S, vy = -Math.sqrt(2 * this.g * hh), tf = (-2 * vy) / this.g;
+                  this.jump((this.xv(tr.b) * S * this.moSide) / tf, vy);
+                  break;
+              }
+              case TK_KICK: {
+                  const vx = this.xv(tr.a) * S * f, vy = this.xv(tr.b) * S, p = tr.m, front = f > 0 ? HAND_R : HAND_L, back = f > 0 ? HAND_L : HAND_R;
+                  for (let j = 0; j < NBOT; j++) {
+                      const hit = p === 2 || (p === 0 && (j === HEAD || j >= ANT_A1)) || (p === 1 && (j === NECK || j === HIP)) ||
+                          (p === 3 && (j === HAND_L || j === HAND_R || j === ELB_L || j === ELB_R)) || (p === 4 && (j === FOOT_L || j === FOOT_R)) ||
+                          (p === 5 && j === front) || (p === 6 && j === back);
+                      if (hit)
+                          this.addV(j, vx, vy);
+                  }
+                  break;
+              }
+              case TK_FABRIC: {
+                  const a = this.anchor(tr.m), ox = this.xv(tr.a) * S, oy = this.xv(tr.b) * S;
+                  this.fabric.kick(a[0] + a[2] * ox + a[4] * oy, a[1] + a[3] * ox + a[5] * oy, this.xv(tr.c), Math.max(1, this.xv(tr.d) * S));
+                  break;
+              }
+              case TK_GLOW:
+                  this.glowV += this.xv(tr.a);
+                  break;
+              case TK_SOUND:
+                  if (this.onSound)
+                      this.onSound(tr.name);
+                  break;
+              case TK_OTHERS:
+                  this.outPlay = tr.ref;
+                  this.outN = tr.n;
+                  this.outNear = tr.near;
+                  break;
+              case TK_EVENT:
+                  this.moFireEvent(tr.ev);
+                  break;
+              case TK_BLINK:
+                  this.blinkT = 0.13;
+                  break;
+              case TK_EMIT:
+                  this.emit(tr, i);
+                  break;
+              default: break;
+          }
+      }
+      /** An event fired: the tracks that follow it start (again) from now. */
+      moFireEvent(e) {
+          const m = this.mo;
+          if (!m || e < 0)
+              return;
+          this.moEv[e] = this.moT;
+          const tracks = this.moEnding ? m.end : m.tracks;
+          for (let i = 0; i < tracks.length; i++)
+              if (tracks[i].after === e) {
+                  this.moFired[i] = 0;
+                  this.moNext[i] = 0;
+                  this.moThrow[i] = 0;
+              }
+      }
+      /**
+       * An anchor's frame now, into this.af: its point, then forward and down (unit vectors; forward is the way he faces).
+       * The head's turn with his head, the body's with his body; hands, feet and the ground stand upright.
+       */
+      anchor(code) {
+          const a = this.af, x = this.x, y = this.y, f = this.faceSign;
+          if (code <= AN_MOUTH) {
+              const ang = this.headAngle(), c = Math.cos(ang), s = Math.sin(ang);
+              let ox = x[HEAD], oy = y[HEAD];
+              if (code === AN_CROWN) {
+                  const u = this.rH * this.av.headH;
+                  ox += s * u;
+                  oy -= c * u;
+              }
+              else if (code === AN_FACE) {
+                  ox += c * this.ew + s * this.eu;
+                  oy += s * this.ew - c * this.eu;
+              }
+              else if (code === AN_MOUTH) {
+                  const mw = this.ew * 0.8, mu = this.av.mouthY * this.rH + this.eu * 0.25;
+                  ox += c * mw + s * mu;
+                  oy += s * mw - c * mu;
+              }
+              a[0] = ox;
+              a[1] = oy;
+              a[2] = c * f;
+              a[3] = s * f;
+              a[4] = -s;
+              a[5] = c;
+          }
+          else if (code <= AN_HIP) {
+              let ux = x[NECK] - x[HIP], uy = y[NECK] - y[HIP];
+              const ul = Math.sqrt(ux * ux + uy * uy) + 1e-6;
+              ux /= ul;
+              uy /= ul;
+              a[0] = code === AN_NECK ? x[NECK] : code === AN_HIP ? x[HIP] : (x[NECK] + x[HIP]) / 2;
+              a[1] = code === AN_NECK ? y[NECK] : code === AN_HIP ? y[HIP] : (y[NECK] + y[HIP]) / 2;
+              a[2] = -uy * f;
+              a[3] = ux * f;
+              a[4] = -ux;
+              a[5] = -uy;
+          }
+          else {
+              const p = code === AN_HAND_L ? HAND_L : code === AN_HAND_R ? HAND_R : code === AN_HAND_F ? (f > 0 ? HAND_R : HAND_L)
+                  : code === AN_HAND_B ? (f > 0 ? HAND_L : HAND_R) : code === AN_FOOT_L ? FOOT_L : code === AN_FOOT_R ? FOOT_R : HIP;
+              a[0] = x[p];
+              a[1] = code === AN_GROUND ? this.floor : y[p];
+              a[2] = f;
+              a[3] = 0;
+              a[4] = 0;
+              a[5] = 1;
+          }
+          return a;
+      }
+      /** An emit track's burst (one throw). True: a miss was thrown (it will be dropped). */
+      emit(tr, i) {
+          const S = this.S, f = this.faceSign, k = this.moThrow[i];
+          this.moThrow[i] = (k + 1) & 0xffff;
+          let from = tr.m, aim = tr.m2;
+          if (tr.alt && aim >= 0 && k & 1) {
+              const q = from;
+              from = aim;
+              aim = q;
+          }
+          const a = this.anchor(from), ox = this.xv(tr.a) * S, oy = this.xv(tr.b) * S;
+          const sx = a[0] + a[2] * ox + a[4] * oy, sy = a[1] + a[3] * ox + a[5] * oy;
+          let tx = 0, ty = 0, missed = false;
+          if (aim >= 0) {
+              const b = this.anchor(aim);
+              tx = b[0];
+              ty = b[1];
+          }
+          for (let n = 0; n < tr.n; n++) {
+              const q = this.qNext;
+              this.qNext = (q + 1) % QCAP;
+              this.qpart[q] = tr.parts ? tr.parts[(k * tr.n + n) % tr.parts.length] : tr.part;
+              this.qpaint[q] = tr.paint === "$any" ? PALETTE[Math.floor(this.mrand() * PALETTE.length)] : tr.paint;
+              let vx = this.xv(tr.c) * S * f, vy = this.xv(tr.d) * S, flags = tr.floor ? Q_FLOOR : 0, life = tr.life, px = sx, py = sy;
+              if (tr.orbit > 0) {
+                  flags |= Q_ORBIT;
+                  this.qang[q] = (TAU * n) / tr.n + k * 0.9;
+                  this.qorbR[q] = tr.orbit * S;
+                  this.qorbW[q] = tr.orbitW;
+                  this.qanc[q] = from;
+                  vx = 0;
+                  vy = 0;
+              }
+              else if (aim >= 0) {
+                  // Thrown to the other hand: the arc that gets there in `flight`.
+                  const T = tr.flight, G = this.g * tr.g;
+                  vx = (tx - sx) / T;
+                  vy = (ty - sy - 0.5 * G * T * T) / T;
+                  flags |= Q_AIM;
+                  if (tr.miss > 0 && this.mrand() < tr.miss) {
+                      // A miss: a little long and high, past the hand; it lands, and (onMiss) he sees it.
+                      vx *= 1.4;
+                      vy *= 1.12;
+                      flags |= Q_MISS | Q_FLOOR;
+                      life = Math.max(life, 2.6);
+                      missed = true;
+                      if (tr.ev >= 0)
+                          flags |= Q_EVENT;
+                  }
+              }
+              if (tr.spread > 0 && !(flags & (Q_AIM | Q_ORBIT))) {
+                  const ang = (this.mrand() - 0.5) * tr.spread, c = Math.cos(ang), s = Math.sin(ang), m = 1 + (this.mrand() - 0.5) * tr.spread * 0.4;
+                  const rx = (vx * c - vy * s) * m, ry = (vx * s + vy * c) * m;
+                  vx = rx;
+                  vy = ry;
+                  px += (this.mrand() - 0.5) * tr.spread * S * 0.08;
+                  py += (this.mrand() - 0.5) * tr.spread * S * 0.08;
+              }
+              this.qx[q] = px;
+              this.qy[q] = py;
+              this.qvx[q] = vx;
+              this.qvy[q] = vy;
+              this.qlife[q] = life;
+              this.qmax[q] = life;
+              this.qt[q] = 0;
+              this.qrot[q] = tr.spin > 0 ? (this.mrand() - 0.5) * 1.2 : 0;
+              this.qspin[q] = tr.spin > 0 ? (this.mrand() - 0.5) * 2 * tr.spin : 0;
+              this.qsize[q] = this.xv(tr.e);
+              this.qgrow[q] = tr.grow;
+              this.qg[q] = tr.g;
+              this.qdrag[q] = tr.drag;
+              this.qalpha[q] = tr.alpha;
+              this.qflight[q] = tr.flight;
+              this.qflags[q] = flags;
+              this.qev[q] = tr.ev;
+              this.qanc[q] = from;
+              this.qLast = q;
+          }
+          this.qLive = Math.max(1, this.qLive);
+          return missed;
+      }
+      /** The moment's particles (falling, rising, thrown, circling, bouncing) and its props' pop, one step. */
+      thingsStep(h) {
+          const S = this.S, fl = this.floor;
+          let live = 0;
+          for (let q = 0; q < QCAP; q++) {
+              if (this.qlife[q] <= 0)
+                  continue;
+              this.qt[q] = this.qt[q] + h;
+              this.qlife[q] = this.qlife[q] - h;
+              if (this.qlife[q] <= 0)
+                  continue;
+              const fq = this.qflags[q];
+              this.qrot[q] = this.qrot[q] + this.qspin[q] * h;
+              if (fq & Q_ORBIT) {
+                  this.qang[q] = this.qang[q] + this.qorbW[q] * h;
+                  const a = this.anchor(this.qanc[q]), R = this.qorbR[q], an = this.qang[q];
+                  this.qx[q] = a[0] + Math.cos(an) * R;
+                  this.qy[q] = a[1] - S * 0.12 + Math.sin(an) * R * 0.32;
+                  live++;
+                  continue;
+              }
+              const dr = 1 / (1 + this.qdrag[q] * h);
+              this.qvy[q] = (this.qvy[q] + this.g * this.qg[q] * h) * dr;
+              this.qvx[q] = this.qvx[q] * dr;
+              this.qx[q] = this.qx[q] + this.qvx[q] * h;
+              this.qy[q] = this.qy[q] + this.qvy[q] * h;
+              // Caught: the other hand has it.
+              if (fq & Q_AIM && !(fq & Q_MISS) && this.qt[q] >= this.qflight[q]) {
+                  this.qlife[q] = 0;
+                  this.glowV += 0.6;
+                  continue;
+              }
+              if (fq & Q_EVENT && this.qt[q] >= this.qflight[q]) {
+                  this.qflags[q] = fq & ~Q_EVENT;
+                  this.qMiss = q;
+                  this.moFireEvent(this.qev[q]);
+              }
+              if (fq & Q_FLOOR) {
+                  const r = S * 0.05 * this.qsize[q];
+                  if (this.qy[q] > fl - r) {
+                      this.qy[q] = fl - r;
+                      if (this.qvy[q] > 0) {
+                          if (this.qvy[q] > S * 2)
+                              this.fabric.kick(this.qx[q], fl, Math.min(40, this.qvy[q] * 0.2), S);
+                          this.qvy[q] = -this.qvy[q] * 0.42;
+                      }
+                      this.qvx[q] = this.qvx[q] * 0.8;
+                      this.qspin[q] = this.qspin[q] * 0.7;
+                  }
+              }
+              live++;
+          }
+          this.qLive = live;
+          let used = 0;
+          for (let s = 0; s < WSLOTS; s++) {
+              if (!this.wparts[s])
+                  continue;
+              const to = this.wlive[s] ? 1 : 0;
+              this.wpopV[s] = this.wpopV[s] + ((to - this.wpop[s]) * 520 - this.wpopV[s] * 19) * h;
+              this.wpop[s] = this.wpop[s] + this.wpopV[s] * h;
+              if (!to && this.wpop[s] < 0.03) {
+                  this.wparts[s] = null;
+                  this.wtrack[s] = -1;
+                  continue;
+              }
+              used++;
+          }
+          this.wUsed = used;
+      }
+      /** A shake track: a quick back-and-forth force on his body, his head or all of him (not his feet). */
+      shakeForces(live) {
+          const w = TAU * this.shakeF, a = this.shakeA * this.S * w * w * Math.sin(w * this.t) * live, p = this.shakeP;
+          for (let i = 0; i < NBOT; i++) {
+              if (i === FOOT_L || i === FOOT_R)
+                  continue;
+              if (p === 1 ? i !== HEAD : p === 0 ? i === HEAD || i >= ANT_A1 : false)
+                  continue;
+              this.ax[i] += a;
+          }
+      }
+      /** Reduce Motion in a moment: the pose its tracks hold at its `still` time (no hop, throw, walk or spin). */
+      momentPose() {
+          const m = this.mo, T = this.moT;
+          this.goalX = NaN;
+          this.crouch = 0;
+          this.sitWant = 0;
+          this.lean = 0;
+          this.tilt = 0;
+          this.armL = false;
+          this.armR = false;
+          this.armK = 0;
+          this.lookOut = 1;
+          this.lookX = NaN;
+          this.lidTo = 0.08;
+          this.faceWant = NaN;
+          this.shakeA = 0;
+          this.eyeState = EYE_REST;
+          this.mouthState = MO_REST;
+          this.mouthOpen = 1;
+          this.moT = m.still;
+          this.momentVars();
+          this.posing = true;
+          this.moStamp++;
+          for (let i = 0; i < m.tracks.length; i++)
+              this.momentTrack(m.tracks[i], i, STEP);
+          this.posing = false;
+          this.moT = T;
       }
       // ------------------------------------------------------------------- Reduce Motion
       /**
@@ -3298,19 +5638,28 @@
               this.y[HAND_R] = this.armRy;
               this.hangBag();
           }
+          // In a moment: the pose it holds at its still time.
+          const posed = !carry && this.mo !== null;
           for (let i = 0; i < 160; i++) {
               this.t += STEP;
-              this.goalX = NaN;
-              this.crouch = 0;
-              this.sitTo(this.act === A_SIT ? 1 : 0, STEP);
-              this.lookOut = 1;
-              this.lean = 0;
-              this.tilt = 0;
-              this.armL = this.armR = false;
-              if (carry)
-                  this.carryGrip(1);
+              if (posed) {
+                  this.momentPose();
+                  this.sitTo(this.sitWant, STEP);
+              }
+              else {
+                  this.goalX = NaN;
+                  this.crouch = 0;
+                  this.sitTo(this.act === A_SIT ? 1 : 0, STEP);
+                  this.lookOut = 1;
+                  this.lean = 0;
+                  this.tilt = 0;
+                  this.armL = this.armR = false;
+                  if (carry)
+                      this.carryGrip(1);
+              }
               this.blinkAt = 9;
-              this.lidTo = this.act === A_SIT ? 0.35 : 0.08;
+              if (!posed)
+                  this.lidTo = this.act === A_SIT ? 0.35 : 0.08;
               this.forces(STEP);
               this.integrate(STEP);
               this.hit.fill(0, 0, this.n);
@@ -3336,6 +5685,17 @@
                   this.dvy[i] = 0;
               }
           this.sparksClear();
+          this.qlife.fill(0);
+          this.qLive = 0;
+          for (let s = 0; s < WSLOTS; s++)
+              if (this.wparts[s]) {
+                  if (this.wlive[s]) {
+                      this.wpop[s] = 1;
+                      this.wpopV[s] = 0;
+                  }
+                  else
+                      this.wparts[s] = null;
+              }
           this.focusX = keepFocus;
           this.still = true;
       }
@@ -3391,21 +5751,24 @@
           if (this.stageCarry && this.held === 0)
               this.drawCarryArms(ctx, alpha);
           this.drawSparks(ctx, alpha);
+          // A moment's particles, over everything.
+          if (this.qLive > 0)
+              this.drawThings(ctx, alpha);
           ctx.globalAlpha = 1;
       }
       /** Carrying: the arm (heavy, both) that holds the bag, drawn over him and the bag, so the hold reads. */
       drawCarryArms(ctx, alpha) {
-          const x = this.x, y = this.y, S = this.S;
+          const x = this.x, y = this.y, S = this.S, av = this.av, pb = paintOf(av.pBody, this.color);
           let ux = x[NECK] - x[HIP], uy = y[NECK] - y[HIP];
           const ul = Math.sqrt(ux * ux + uy * uy) + 1e-6;
           ux /= ul;
           uy /= ul;
           const wx = -uy, wy = ux, two = this.load >= 0.5;
           ctx.globalAlpha = alpha;
-          ctx.strokeStyle = this.color;
-          ctx.fillStyle = this.color;
+          ctx.strokeStyle = pb;
+          ctx.fillStyle = pb;
           ctx.lineCap = "round";
-          ctx.lineWidth = S * 0.065;
+          ctx.lineWidth = S * av.arm;
           ctx.beginPath();
           for (let s = two ? 0 : 1; s < 2; s++) {
               const side = s ? 1 : -1, elb = s ? ELB_R : ELB_L, hand = s ? HAND_R : HAND_L;
@@ -3416,18 +5779,19 @@
           ctx.beginPath();
           for (let s = two ? 0 : 1; s < 2; s++) {
               const hand = s ? HAND_R : HAND_L;
-              ctx.moveTo(x[hand] + S * 0.045, y[hand]);
-              ctx.arc(x[hand], y[hand], S * 0.045, 0, TAU);
+              ctx.moveTo(x[hand] + S * 0.045 * av.handK, y[hand]);
+              ctx.arc(x[hand], y[hand], S * 0.045 * av.handK, 0, TAU);
           }
           ctx.fill();
       }
       /**
        * Dots of the skin, in one path: from the skeleton (kinds a and b only), or where each loose dot is (free, all).
+       * The head's are left out where his eyes are.
        */
       dots(ctx, free, ka, kb) {
-          const k = this.skin, S = this.S, out = this.tmp;
-          const rd = free ? S * 0.03 : S * 0.021;
-          const eyeR = this.rH * 0.46 + rd * 1.6, e2 = eyeR * eyeR, f = this.face >= 0 ? 1 : -1;
+          const k = this.skin, S = this.S, out = this.tmp, av = this.av;
+          const rd = free ? S * 0.03 : S * av.dotR;
+          const eyeR = this.rH * av.eyeR * this.eyeK + rd * 1.6, e2 = eyeR * eyeR, f = this.face >= 0 ? 1 : -1, gap = av.eyeGap * this.rH;
           ctx.beginPath();
           for (let i = 0; i < k.n; i++) {
               let px, py;
@@ -3439,9 +5803,17 @@
               else {
                   if (kind !== ka && kind !== kb)
                       continue;
-                  if (kind === 1) {
+                  if (kind === 1 && av.eyes !== 4) {
                       const du = k.u[i] - this.eu, dw = k.w[i] * f - this.ew;
-                      if (du * du + dw * dw < e2)
+                      if (av.eyes === 0) {
+                          if (du * du + dw * dw < e2)
+                              continue;
+                      }
+                      else if (av.eyes === 3) {
+                          if (Math.abs(du) < eyeR * 0.8 && Math.abs(dw) < gap + eyeR)
+                              continue;
+                      }
+                      else if (du * du + (dw - gap) * (dw - gap) < e2 || du * du + (dw + gap) * (dw + gap) < e2)
                           continue;
                   }
                   this.dustPos(i, out);
@@ -3453,49 +5825,298 @@
           }
           ctx.fill();
       }
-      /** The one great eye under its heavy lid, and the light on the bent antenna. */
+      /** His eyes (or their moment's glyphs), his mouth when it shows, and the light on his antenna. */
       drawFace(ctx, alpha, col) {
-          const x = this.x, y = this.y, S = this.S, r = this.rH;
+          const av = this.av, x = this.x, y = this.y, S = this.S, r = this.rH;
           const ang = this.headAngle(), c = Math.cos(ang), s = Math.sin(ang);
           // head space to the screen: across (c, s), up (s, -c)
-          const ew = this.ew, eu = this.eu;
-          const ex = x[HEAD] + c * ew + s * eu, ey = y[HEAD] + s * ew - c * eu;
-          const re = r * 0.46;
+          const ew = this.ew, eu = this.eu, hx = x[HEAD], hy = y[HEAD];
           ctx.globalAlpha = alpha;
-          ctx.fillStyle = PAPER;
-          ctx.beginPath();
-          ctx.arc(ex, ey, re, 0, TAU);
-          ctx.fill();
-          // The pupil, toward where he looks.
-          ctx.fillStyle = col;
-          const pw = (this.ew - this.face * 0.22 * r) * 1.1, pu = (this.eu - 0.02 * r) * 1.1;
-          ctx.beginPath();
-          ctx.arc(ex + c * pw + s * pu, ey + s * pw - c * pu, re * 0.5, 0, TAU);
-          ctx.fill();
-          // The heavy lid: a chord across the top of the eye, as low as the lid is shut.
-          if (this.lid > 0.02) {
-              const yc = -re + 2 * re * this.lid;
-              const phi = Math.asin(clamp(yc / re, -1, 1));
-              ctx.beginPath();
-              ctx.arc(ex, ey, re * 1.06, Math.PI - phi + ang, TAU + phi + ang);
-              ctx.closePath();
-              ctx.fill();
+          if (av.eyes === 0) {
+              this.drawEye(ctx, hx + c * ew + s * eu, hy + s * ew - c * eu, r * av.eyeR * this.eyeK, col, ang, c, s);
           }
-          // The light on the bent antenna's tip: brighter when something happens, and while he works.
+          else if (av.eyes === 1 || av.eyes === 2) {
+              for (let k = -1; k <= 1; k += 2) {
+                  const w = ew + k * av.eyeGap * r;
+                  const ex = hx + c * w + s * eu, ey = hy + s * w - c * eu, re = r * av.eyeR * this.eyeK;
+                  if (av.eyes === 1)
+                      this.drawEye(ctx, ex, ey, re, col, ang, c, s);
+                  else
+                      this.drawDotEye(ctx, ex, ey, re, col, c, s);
+              }
+          }
+          else if (av.eyes === 3)
+              this.drawVisor(ctx, hx, hy, col, c, s);
+          if (this.mouthState !== MO_REST ? this.mouthState !== MO_NONE : av.mouth !== 0)
+              this.drawMouth(ctx, alpha, col, c, s);
+          // The light on an antenna's tip: brighter when something happens, and while he works.
+          if (av.light < 0)
+              return;
+          const pl = paintOf(av.pLight, col);
+          if (pl !== this.fillNow)
+              ctx.fillStyle = pl;
           const g = clamp(this.glow, 0, 1.5);
-          const tipX = x[ANT_B2], tipY = y[ANT_B2];
+          const tip = av.light ? ANT_B2 : ANT_A2, tipX = x[tip], tipY = y[tip];
           ctx.globalAlpha = alpha * (0.12 + 0.24 * g + (this.mood === "working" ? 0.1 : 0));
           ctx.beginPath();
           ctx.arc(tipX, tipY, S * (0.09 + 0.06 * g), 0, TAU);
           ctx.fill();
           ctx.globalAlpha = alpha;
           ctx.beginPath();
-          ctx.arc(tipX, tipY, S * 0.048, 0, TAU);
+          ctx.arc(tipX, tipY, S * av.antTipR[av.light], 0, TAU);
           ctx.fill();
       }
-      /** The bot: his solid figure in his colour, perforated with light dots, and his one great eye. */
+      /** One great eye (or one of two) at (ex, ey), radius re: white, the pupil toward where he looks, the heavy lid. */
+      drawEye(ctx, ex, ey, re, col, ang, c, s) {
+          const av = this.av, r = this.rH, st = this.eyeState;
+          const pe = paintOf(av.pEye, col), pp = paintOf(av.pPupil, col);
+          if (st >= EYE_X) {
+              this.eyeGlyph(ctx, ex, ey, re, pe, c, s);
+              return;
+          }
+          ctx.fillStyle = pe;
+          ctx.beginPath();
+          ctx.arc(ex, ey, re, 0, TAU);
+          ctx.fill();
+          // The pupil, toward where he looks.
+          ctx.fillStyle = pp;
+          this.fillNow = pp;
+          const pw = (this.ew - this.face * 0.22 * r) * 1.1, pu = (this.eu - av.eyeY * r) * 1.1;
+          ctx.beginPath();
+          ctx.arc(ex + c * pw + s * pu, ey + s * pw - c * pu, re * av.pupil, 0, TAU);
+          ctx.fill();
+          // The heavy lid: a chord across the top of the eye, as low as the lid is shut.
+          if (this.lid > 0.02) {
+              const pl = paintOf(av.pBody, col);
+              if (pl !== pp) {
+                  ctx.fillStyle = pl;
+                  this.fillNow = pl;
+              }
+              const yc = -re + 2 * re * this.lid;
+              const phi = Math.asin(clamp(yc / re, -1, 1));
+              ctx.beginPath();
+              ctx.arc(ex, ey, re * 1.06, Math.PI - phi + ang, TAU + phi + ang);
+              ctx.closePath();
+              ctx.fill();
+              // Shut (a moment's "closed"): the lid's line, so he reads as asleep, not eyeless.
+              if (st === EYE_CLOSED && this.lid > 0.8) {
+                  ctx.strokeStyle = pe;
+                  ctx.lineWidth = Math.max(re * 0.26, this.S * 0.016);
+                  ctx.lineCap = "round";
+                  ctx.beginPath();
+                  this.hsMove(ctx, ex, ey, c, s, -re * 0.72, -re * 0.1);
+                  this.hsQuad(ctx, ex, ey, c, s, 0, -re * 0.62, re * 0.72, -re * 0.1);
+                  ctx.stroke();
+              }
+          }
+      }
+      /** A small solid eye (style "dots"): squashed as the lid closes. */
+      drawDotEye(ctx, ex, ey, re, col, c, s) {
+          const pe = paintOf(this.av.pEye, col);
+          if (this.eyeState >= EYE_X) {
+              this.eyeGlyph(ctx, ex, ey, re * 1.5, pe, c, s);
+              return;
+          }
+          ctx.fillStyle = pe;
+          this.fillNow = pe;
+          ctx.beginPath();
+          this.oval(ctx, ex, ey, re, Math.max(re * 0.14, re * (1 - 0.86 * this.lid)), c, s);
+          ctx.fill();
+      }
+      /** A visor (style "visor"): a light band across his face, and a pupil gliding along it. */
+      drawVisor(ctx, hx, hy, col, c, s) {
+          const av = this.av, r = this.rH, re = r * av.eyeR * this.eyeK, hw = av.eyeGap * r + re;
+          const w0 = this.ew * 0.6, u0 = this.eu, ex = hx + c * w0 + s * u0, ey = hy + s * w0 - c * u0;
+          const pe = paintOf(av.pEye, col), pp = paintOf(av.pPupil, col);
+          if (this.eyeState >= EYE_X) {
+              for (let k = -1; k <= 1; k += 2)
+                  this.eyeGlyph(ctx, ex + c * k * av.eyeGap * r, ey + s * k * av.eyeGap * r, re, pe, c, s);
+              return;
+          }
+          const hh = Math.max(re * 0.18, re * (1 - 0.85 * this.lid));
+          ctx.fillStyle = pe;
+          ctx.beginPath();
+          this.roundBox(ctx, ex, ey, hw, hh, Math.min(hw, hh) * 0.9, c, s);
+          ctx.fill();
+          ctx.fillStyle = pp;
+          this.fillNow = pp;
+          const pw = (this.ew - this.face * 0.22 * r) * 2.2, pu = (this.eu - av.eyeY * r) * 0.6, k = Math.min(hh * 0.8, re * av.pupil);
+          ctx.beginPath();
+          ctx.arc(ex + c * pw + s * pu, ey + s * pw - c * pu, k, 0, TAU);
+          ctx.fill();
+      }
+      /** A moment's eye: an x, a happy arc, or a dizzy spiral, in the eye's paint. */
+      eyeGlyph(ctx, ex, ey, re, pe, c, s) {
+          const st = this.eyeState;
+          ctx.strokeStyle = pe;
+          ctx.lineWidth = Math.max(re * 0.34, this.S * 0.02);
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          ctx.beginPath();
+          if (st === EYE_X) {
+              const k = re * 0.7;
+              this.hsMove(ctx, ex, ey, c, s, -k, k);
+              this.hsLine(ctx, ex, ey, c, s, k, -k);
+              this.hsMove(ctx, ex, ey, c, s, -k, -k);
+              this.hsLine(ctx, ex, ey, c, s, k, k);
+          }
+          else if (st === EYE_HAPPY) {
+              this.hsMove(ctx, ex, ey, c, s, -re * 0.85, -re * 0.3);
+              this.hsQuad(ctx, ex, ey, c, s, 0, re * 1.05, re * 0.85, -re * 0.3);
+          }
+          else {
+              const turn = this.t * 7;
+              for (let j = 0; j <= 14; j++) {
+                  const a = turn + j * 0.78, rr = re * (0.1 + 0.064 * j), w = Math.cos(a) * rr, u = Math.sin(a) * rr;
+                  if (j === 0)
+                      this.hsMove(ctx, ex, ey, c, s, w, u);
+                  else
+                      this.hsLine(ctx, ex, ey, c, s, w, u);
+              }
+          }
+          ctx.stroke();
+      }
+      /** His mouth (his look's at rest, or the moment's), in the mouth's paint, below his eye. */
+      drawMouth(ctx, alpha, col, c, s) {
+          const av = this.av, r = this.rH, st0 = this.mouthState;
+          const st = st0 !== MO_REST ? st0 : av.mouth === 1 ? MO_LINE : av.mouth === 2 ? MO_SMILE : av.mouth === 3 ? MO_O : MO_OPEN;
+          const v = st0 !== MO_REST ? this.mouthOpen : 1;
+          const mw = this.ew * 0.8, mu = av.mouthY * r + this.eu * 0.25;
+          const mx = this.x[HEAD] + c * mw + s * mu, my = this.y[HEAD] + s * mw - c * mu;
+          const hw = av.mouthW * r, pm = paintOf(av.pMouth, col);
+          ctx.globalAlpha = alpha;
+          if (st === MO_LINE || st === MO_SMILE || st === MO_WAVY) {
+              ctx.strokeStyle = pm;
+              ctx.lineWidth = Math.max(r * 0.15, this.S * 0.02);
+              ctx.lineCap = "round";
+              ctx.lineJoin = "round";
+              ctx.beginPath();
+              if (st === MO_LINE) {
+                  this.hsMove(ctx, mx, my, c, s, -hw, 0);
+                  this.hsLine(ctx, mx, my, c, s, hw, 0);
+              }
+              else if (st === MO_SMILE) {
+                  this.hsMove(ctx, mx, my, c, s, -hw, hw * 0.3);
+                  this.hsQuad(ctx, mx, my, c, s, 0, -hw * (0.6 + 0.6 * v), hw, hw * 0.3);
+              }
+              else {
+                  this.hsMove(ctx, mx, my, c, s, -hw, 0);
+                  for (let j = 1; j <= 4; j++)
+                      this.hsLine(ctx, mx, my, c, s, -hw + (j * hw) / 2, (j % 2 ? 1 : -1) * hw * 0.32 * v);
+              }
+              ctx.stroke();
+              return;
+          }
+          ctx.fillStyle = pm;
+          this.fillNow = pm;
+          ctx.beginPath();
+          if (st === MO_OPEN)
+              this.oval(ctx, mx, my, hw * 0.78, Math.max(hw * 0.12, hw * 0.55 * v), c, s);
+          else if (st === MO_O) {
+              const k = Math.max(0.35, v);
+              this.oval(ctx, mx, my, hw * 0.6 * k, hw * 0.7 * k, c, s);
+          }
+          else {
+              const d = hw * 1.25 * Math.max(0.2, v);
+              this.hsMove(ctx, mx, my, c, s, -hw * 1.05, hw * 0.25);
+              this.hsLine(ctx, mx, my, c, s, hw * 1.05, hw * 0.25);
+              this.hsQuad(ctx, mx, my, c, s, hw * 0.95, -d * 1.4, 0, -d);
+              this.hsQuad(ctx, mx, my, c, s, -hw * 0.95, -d * 1.4, -hw * 1.05, hw * 0.25);
+              ctx.closePath();
+          }
+          ctx.fill();
+      }
+      /** Head space (w across, u up, from ox, oy; the head turned by c, s) to the screen: a move, a line, a curve. */
+      hsMove(ctx, ox, oy, c, s, w, u) { ctx.moveTo(ox + c * w + s * u, oy + s * w - c * u); }
+      hsLine(ctx, ox, oy, c, s, w, u) { ctx.lineTo(ox + c * w + s * u, oy + s * w - c * u); }
+      hsQuad(ctx, ox, oy, c, s, cw, cu, w, u) {
+          ctx.quadraticCurveTo(ox + c * cw + s * cu, oy + s * cw - c * cu, ox + c * w + s * u, oy + s * w - c * u);
+      }
+      /** An oval (rx across, ry up) in head space, as eight curves (the drawing vocabulary has no ellipse). */
+      oval(ctx, ox, oy, rx, ry, c, s) {
+          const k = 1 / Math.cos(Math.PI / 8);
+          this.hsMove(ctx, ox, oy, c, s, rx, 0);
+          for (let j = 1; j <= 8; j++) {
+              const a = (j * TAU) / 8, am = a - Math.PI / 8;
+              this.hsQuad(ctx, ox, oy, c, s, Math.cos(am) * rx * k, Math.sin(am) * ry * k, Math.cos(a) * rx, Math.sin(a) * ry);
+          }
+          ctx.closePath();
+      }
+      /** A box (half sizes hw across, hh up, corners rounded by rc) in head space. */
+      roundBox(ctx, ox, oy, hw, hh, rc, c, s) {
+          this.hsMove(ctx, ox, oy, c, s, -hw + rc, hh);
+          this.hsLine(ctx, ox, oy, c, s, hw - rc, hh);
+          this.hsQuad(ctx, ox, oy, c, s, hw, hh, hw, hh - rc);
+          this.hsLine(ctx, ox, oy, c, s, hw, -hh + rc);
+          this.hsQuad(ctx, ox, oy, c, s, hw, -hh, hw - rc, -hh);
+          this.hsLine(ctx, ox, oy, c, s, -hw + rc, -hh);
+          this.hsQuad(ctx, ox, oy, c, s, -hw, -hh, -hw, -hh + rc);
+          this.hsLine(ctx, ox, oy, c, s, -hw, hh - rc);
+          this.hsQuad(ctx, ox, oy, c, s, -hw, hh, -hw + rc, hh);
+          ctx.closePath();
+      }
+      /** His ears (his look's), behind his head, in their paint. */
+      drawEars(ctx, hx, hy, c, s) {
+          const av = this.av, r = this.rH, er = av.earR * r, side = r * av.headW;
+          ctx.beginPath();
+          for (let k = -1; k <= 1; k += 2) {
+              if (av.ears === 1) {
+                  const w = k * side * 0.96, ox = hx + c * w + s * r * 0.05, oy = hy + s * w - c * r * 0.05;
+                  ctx.moveTo(ox + er, oy);
+                  ctx.arc(ox, oy, er, 0, TAU);
+              }
+              else if (av.ears === 2) {
+                  this.roundBox(ctx, hx + c * k * (side + er * 0.3), hy + s * k * (side + er * 0.3), er * 0.45, er * 0.75, er * 0.2, c, s);
+              }
+              else {
+                  const bw = k * side * 0.42, bu = r * av.headH * 0.8;
+                  this.hsMove(ctx, hx, hy, c, s, bw - k * er * 0.55, bu);
+                  this.hsLine(ctx, hx, hy, c, s, k * side * 0.7, r * av.headH + er);
+                  this.hsLine(ctx, hx, hy, c, s, bw + k * er * 0.75, bu - er * 0.2);
+                  ctx.closePath();
+              }
+          }
+          ctx.fill();
+      }
+      /** What he wears (his look's), behind him or in front; in front, a moment's props too. */
+      drawWear(ctx, alpha, col, back) {
+          const list = this.av.wear;
+          for (let i = 0; i < list.length; i++) {
+              const w = list[i];
+              if (w.back === back)
+                  this.drawOn(ctx, w.part, w.on, w.x, w.y, w.scale, w.rot, w.paint, col, alpha);
+          }
+          if (back)
+              return;
+          for (let s = 0; s < WSLOTS; s++) {
+              const p = this.wparts[s];
+              if (p && this.wpop[s] > 0.01)
+                  this.drawOn(ctx, p, this.wanc[s], this.wx[s], this.wy[s], this.wsc[s] * this.wpop[s], this.wrot[s], this.wpaint[s], col, alpha);
+          }
+      }
+      /** A part on an anchor: offset forward and down (bot heights), scaled, turned. */
+      drawOn(ctx, part, on, ox, oy, sc, rot, paint, col, alpha) {
+          const a = this.anchor(on), S = this.S;
+          const px = a[0] + (a[2] * ox + a[4] * oy) * S, py = a[1] + (a[3] * ox + a[5] * oy) * S;
+          const c = Math.cos(rot), s = Math.sin(rot);
+          drawPart(ctx, part, px, py, a[2] * c + a[4] * s, a[3] * c + a[5] * s, a[4] * c - a[2] * s, a[5] * c - a[3] * s, S * sc, col, paint, alpha);
+      }
+      /** A moment's particles: each its part, turned, grown and faded with its life. */
+      drawThings(ctx, alpha) {
+          const S = this.S, col = this.kind === "make" ? this.makeColor : this.color;
+          for (let q = 0; q < QCAP; q++) {
+              const l = this.qlife[q], p = this.qpart[q];
+              if (l <= 0 || !p)
+                  continue;
+              const t = this.qt[q], k = clamp(l / 0.35, 0, 1) * clamp(t / 0.06, 0, 1);
+              const g = this.qsize[q] * (1 + (this.qgrow[q] - 1) * clamp(t / this.qmax[q], 0, 1));
+              const a = this.qrot[q], c = Math.cos(a), s = Math.sin(a);
+              drawPart(ctx, p, this.qx[q], this.qy[q], c, s, -s, c, S * g, col, this.qpaint[q], alpha * this.qalpha[q] * k);
+          }
+      }
+      /** The bot: his solid figure in his colour, perforated with light dots, his face, and what he wears (all his look's). */
       drawBot(ctx, alpha, col) {
-          const x = this.x, y = this.y, S = this.S, r = this.rH;
+          const av = this.av, x = this.x, y = this.y, S = this.S, r = this.rH;
           const f = this.face >= 0 ? 1 : -1;
           // The body's frame: up from the hips, and across.
           let ux = x[NECK] - x[HIP], uy = y[NECK] - y[HIP];
@@ -3503,13 +6124,16 @@
           ux /= ul;
           uy /= ul;
           const wx = -uy, wy = ux;
+          if (av.wearBack)
+              this.drawWear(ctx, alpha, col, true);
+          const pb = paintOf(av.pBody, col);
           ctx.globalAlpha = alpha;
-          ctx.fillStyle = col;
-          ctx.strokeStyle = col;
+          ctx.fillStyle = pb;
+          ctx.strokeStyle = pb;
           ctx.lineCap = "round";
           ctx.lineJoin = "round";
           // Arms (behind the body): shoulder, elbow, hand.
-          ctx.lineWidth = S * 0.065;
+          ctx.lineWidth = S * av.arm;
           ctx.beginPath();
           for (let s = 0; s < 2; s++) {
               const side = s ? 1 : -1, elb = s ? ELB_R : ELB_L, hand = s ? HAND_R : HAND_L;
@@ -3519,7 +6143,7 @@
           }
           ctx.stroke();
           // Legs and feet.
-          ctx.lineWidth = S * 0.075;
+          ctx.lineWidth = S * av.leg;
           ctx.beginPath();
           for (let s = 0; s < 2; s++) {
               const side = s ? 1 : -1, foot = s ? FOOT_R : FOOT_L;
@@ -3530,31 +6154,54 @@
           }
           ctx.stroke();
           // The neck, and the antennae.
-          ctx.lineWidth = S * 0.08;
+          ctx.lineWidth = S * av.neck;
           ctx.beginPath();
           ctx.moveTo(x[NECK], y[NECK]);
           ctx.lineTo(x[HEAD], y[HEAD]);
           ctx.stroke();
-          ctx.lineWidth = S * 0.042;
-          ctx.beginPath();
           const ang = this.headAngle(), c = Math.cos(ang), sn = Math.sin(ang);
-          for (let s = 0; s < 2; s++) {
-              const j1 = s ? ANT_B1 : ANT_A1, j2 = s ? ANT_B2 : ANT_A2;
-              const bu = s ? this.baseB_u : this.baseA_u, bw = (s ? this.baseB_w : this.baseA_w) * f;
-              ctx.moveTo(x[HEAD] + c * bw + sn * bu * 0.85, y[HEAD] + sn * bw - c * bu * 0.85);
-              ctx.lineTo(x[j1], y[j1]);
-              ctx.lineTo(x[j2], y[j2]);
+          if (av.antN > 0) {
+              ctx.lineWidth = S * av.antW;
+              ctx.beginPath();
+              for (let s = 0; s < av.antN; s++) {
+                  const j1 = s ? ANT_B1 : ANT_A1, j2 = s ? ANT_B2 : ANT_A2;
+                  const bu = this.antU0[s], bw = this.antW0[s] * f;
+                  ctx.moveTo(x[HEAD] + c * bw + sn * bu * 0.85, y[HEAD] + sn * bw - c * bu * 0.85);
+                  ctx.lineTo(x[j1], y[j1]);
+                  ctx.lineTo(x[j2], y[j2]);
+              }
+              ctx.stroke();
           }
-          ctx.stroke();
+          // The antennae's tips (a ball, a star), and his hands.
           ctx.beginPath();
-          ctx.arc(x[ANT_A2], y[ANT_A2], S * 0.04, 0, TAU);
-          ctx.moveTo(x[HAND_L] + S * 0.042, y[HAND_L]);
-          ctx.arc(x[HAND_L], y[HAND_L], S * 0.042, 0, TAU);
-          ctx.moveTo(x[HAND_R] + S * 0.042, y[HAND_R]);
-          ctx.arc(x[HAND_R], y[HAND_R], S * 0.042, 0, TAU);
+          let first = true;
+          for (let s = 0; s < av.antN; s++) {
+              const tip = av.antTip[s], j2 = s ? ANT_B2 : ANT_A2, tr = S * av.antTipR[s], tx = x[j2], ty = y[j2];
+              if (tip === 1) {
+                  if (!first)
+                      ctx.moveTo(tx + tr, ty);
+                  ctx.arc(tx, ty, tr, 0, TAU);
+                  first = false;
+              }
+              else if (tip === 3) {
+                  for (let k = 0; k <= 10; k++) {
+                      const a = -Math.PI / 2 + (k * Math.PI) / 5, rr = k % 2 ? tr * 0.45 : tr * 1.15;
+                      if (k === 0)
+                          ctx.moveTo(tx + Math.cos(a) * rr, ty + Math.sin(a) * rr);
+                      else
+                          ctx.lineTo(tx + Math.cos(a) * rr, ty + Math.sin(a) * rr);
+                  }
+                  ctx.closePath();
+                  first = false;
+              }
+          }
+          ctx.moveTo(x[HAND_L] + S * av.hand, y[HAND_L]);
+          ctx.arc(x[HAND_L], y[HAND_L], S * av.hand, 0, TAU);
+          ctx.moveTo(x[HAND_R] + S * av.hand, y[HAND_R]);
+          ctx.arc(x[HAND_R], y[HAND_R], S * av.hand, 0, TAU);
           ctx.fill();
           // The body: a sack, wider at the bottom, its corners rounded.
-          const tl = 0.135 * S, bl = 0.165 * S, rr = 0.05 * S;
+          const tl = av.bodyTop * S, bl = av.bodyBottom * S, rr = av.bodyRound * S;
           const ax = x[HIP] - wx * bl, ay = y[HIP] - wy * bl, bx = x[HIP] + wx * bl, by = y[HIP] + wy * bl;
           const cx = x[NECK] + wx * tl, cy = y[NECK] + wy * tl, dx = x[NECK] - wx * tl, dy = y[NECK] - wy * tl;
           ctx.beginPath();
@@ -3569,15 +6216,71 @@
           ctx.quadraticCurveTo(ax, ay, ax + wx * rr, ay + wy * rr);
           ctx.closePath();
           ctx.fill();
+          // His ears, behind his head.
+          if (av.ears) {
+              const pe = paintOf(av.pEars, col);
+              if (pe !== pb)
+                  ctx.fillStyle = pe;
+              this.drawEars(ctx, x[HEAD], y[HEAD], c, sn);
+              if (pe !== pb)
+                  ctx.fillStyle = pb;
+          }
           // The head.
           ctx.beginPath();
-          ctx.arc(x[HEAD], y[HEAD], r, 0, TAU);
+          if (av.head === 0 && av.headW === 1 && av.headH === 1)
+              ctx.arc(x[HEAD], y[HEAD], r, 0, TAU);
+          else if (av.head === 2)
+              this.roundBox(ctx, x[HEAD], y[HEAD], r * av.headW, r * av.headH, r * av.headRound * Math.min(av.headW, av.headH), c, sn);
+          else
+              this.oval(ctx, x[HEAD], y[HEAD], r * av.headW, r * av.headH, c, sn);
           ctx.fill();
+          this.fillNow = pb;
           // The perforations: light dots through the head and the body.
-          ctx.fillStyle = PAPER;
-          ctx.globalAlpha = alpha * 0.5;
-          this.dots(ctx, null, 1, 2);
+          if (av.dots !== 2) {
+              const pd = paintOf(av.pDots, col);
+              ctx.fillStyle = pd;
+              this.fillNow = pd;
+              ctx.globalAlpha = alpha * av.dotA;
+              this.dots(ctx, null, 1, 2);
+          }
           this.drawFace(ctx, alpha, col);
+          if (av.wearFront || this.wUsed > 0)
+              this.drawWear(ctx, alpha, col, false);
+          if (this.handOver)
+              this.drawArmsOver(ctx, alpha, pb, this.handOver);
+      }
+      /**
+       * A moment's hand at his face (1 the left, 2 the right): the forearm and hand drawn again, over his head, edged in
+       * paper so a hand in his own colour reads on his face.
+       */
+      drawArmsOver(ctx, alpha, pb, which) {
+          const x = this.x, y = this.y, S = this.S, av = this.av, edge = S * 0.018;
+          ctx.globalAlpha = alpha;
+          ctx.lineCap = "round";
+          for (let pass = 0; pass < 2; pass++) {
+              const col = pass ? pb : PAPER, grow = pass ? 0 : edge;
+              ctx.strokeStyle = col;
+              ctx.fillStyle = col;
+              ctx.lineWidth = S * av.arm + 2 * grow;
+              ctx.beginPath();
+              for (let s = 0; s < 2; s++) {
+                  if (!(which & (s ? 2 : 1)))
+                      continue;
+                  const elb = s ? ELB_R : ELB_L, hand = s ? HAND_R : HAND_L;
+                  ctx.moveTo(x[elb], y[elb]);
+                  ctx.lineTo(x[hand], y[hand]);
+              }
+              ctx.stroke();
+              ctx.beginPath();
+              for (let s = 0; s < 2; s++) {
+                  if (!(which & (s ? 2 : 1)))
+                      continue;
+                  const hand = s ? HAND_R : HAND_L, r = S * av.hand * 1.2 + grow;
+                  ctx.moveTo(x[hand] + r, y[hand]);
+                  ctx.arc(x[hand], y[hand], r, 0, TAU);
+              }
+              ctx.fill();
+          }
       }
       /** Make a bot: loose dots (ink), or put together (his new colour), the solid figure fading in once he is whole. */
       drawDust(ctx, alpha) {
@@ -3956,7 +6659,9 @@
   // ===================================================================== the grid
   /**
    * The tiles of one grid, in one space (the grid's own coordinates), so that a tap on one makes every other bot turn
-   * its head to it.
+   * its head to it. Moments reach across it too: a bot's moment may ask the bots near him to play one (the others lean
+   * away from a fart, look at a sneeze, come and high-five), each with him as its partner; and Home's rare idle
+   * surprises (surprise()) are dealt from here, with the world's own random numbers.
    */
   class BotTilesWorld {
       constructor() {
@@ -3966,6 +6671,14 @@
           this.rw = [];
           this.rh = [];
           this.focused = -1;
+          /** Idle surprises: the moments, how often a chance comes (s), the chance; the clock, its random numbers. */
+          this.sList = [];
+          this.sEvery = 0;
+          this.sChance = 0;
+          this.sT = 0;
+          this.sRand = rng(0x51ed27);
+          /** Tiles already asked in one dispatch (no allocation per moment). */
+          this.asked = new Uint8Array(0);
       }
       add(tile) {
           this.tiles.push(tile);
@@ -4004,10 +6717,117 @@
       step(dt) {
           for (const t of this.tiles)
               t.step(dt);
+          this.moments(dt);
       }
       settle(on = true) {
           for (const t of this.tiles)
               t.settle(on);
+      }
+      /**
+       * Home's rare idle surprises: every `every` seconds, with `chance`, one bot at his own idle play (not tapped, not
+       * busy, not Make a bot) plays one of `list` once. Empty `list`: none.
+       */
+      surprise(list, every, chance, seed = 1) {
+          this.sList = list.filter((m) => m && m.ok);
+          this.sEvery = Math.max(1, every || 0);
+          this.sChance = clamp(chance || 0, 0, 1);
+          this.sRand = rng((seed ^ 0x51ed27) >>> 0);
+          this.sT = 0;
+      }
+      /** Where tile j's head is, in tile i's space, into out[0], out[1]. */
+      headIn(i, j, out) {
+          const t = this.tiles[j];
+          out[0] = t.x[0] + this.rx[j] - this.rx[i];
+          out[1] = t.y[0] + this.ry[j] - this.ry[i];
+      }
+      /** After a step: what moments asked of the others, where each bot's partner is now, and the idle surprises. */
+      moments(dt) {
+          const n = this.tiles.length;
+          for (let i = 0; i < n; i++) {
+              const t = this.tiles[i];
+              if (t.outPlay) {
+                  this.dispatch(i, t.outPlay, t.outN, t.outNear);
+                  t.outPlay = null;
+              }
+          }
+          for (let i = 0; i < n; i++) {
+              const t = this.tiles[i];
+              if (!t.mo)
+                  continue;
+              const j = t.partner;
+              if (j >= 0 && j < n && j !== i && this.tiles[j].placed) {
+                  this.headIn(i, j, t.tmp);
+                  t.peerX = t.tmp[0];
+                  t.peerY = t.tmp[1];
+              }
+              else {
+                  t.peerX = NaN;
+                  t.peerY = NaN;
+              }
+          }
+          if (!this.sList.length || this.focused >= 0)
+              return;
+          this.sT += clamp(dt, 0, MAX_FRAME);
+          if (this.sT < this.sEvery)
+              return;
+          this.sT = 0;
+          if (this.sRand() >= this.sChance)
+              return;
+          let free = 0;
+          for (const t of this.tiles)
+              if (this.idle(t))
+                  free++;
+          if (!free)
+              return;
+          let k = Math.floor(this.sRand() * free);
+          const m = this.sList[Math.floor(this.sRand() * this.sList.length)];
+          for (const t of this.tiles)
+              if (this.idle(t) && k-- === 0) {
+                  t.playMoment(m, "once");
+                  break;
+              }
+      }
+      /** A bot free for a surprise: placed and moving, at his own idle play, nothing asked of him. */
+      idle(t) {
+          return t.placed && !t.still && !t.mo && t.kind !== "make" && t.mood === "idle" && t.moment === "play" && t.focusX !== t.focusX && t.cheerT < 0;
+      }
+      /** A moment asked the nearest `n` bots within `near` of tile i (his bot heights) to play `m`, with him as their partner. */
+      dispatch(i, m, n, near) {
+          const src = this.tiles[i], N = this.tiles.length, lim = near * src.S;
+          if (this.asked.length < N)
+              this.asked = new Uint8Array(N);
+          this.asked.fill(0);
+          const p = src.tmp;
+          for (let got = 0; got < n; got++) {
+              let best = -1, bd = lim;
+              for (let j = 0; j < N; j++) {
+                  const t = this.tiles[j];
+                  if (j === i || this.asked[j] || !t.placed || t.still || t.kind === "make" || (t.mo && !t.mo.react) || t.focusX === t.focusX)
+                      continue;
+                  this.headIn(i, j, p);
+                  const d = Math.hypot(p[0] - src.x[0], p[1] - src.y[0]);
+                  if (d < bd) {
+                      bd = d;
+                      best = j;
+                  }
+              }
+              if (best < 0)
+                  break;
+              this.asked[best] = 1;
+              const t = this.tiles[best];
+              if (!t.playMoment(m, "once", true))
+                  continue;
+              t.partner = i;
+              this.headIn(best, i, t.tmp);
+              t.peerX = t.tmp[0];
+              t.peerY = t.tmp[1];
+              if (src.partner < 0) {
+                  src.partner = best;
+                  this.headIn(i, best, p);
+                  src.peerX = p[0];
+                  src.peerY = p[1];
+              }
+          }
       }
   }
   /**
@@ -4199,5 +7019,5 @@
       }
       return out;
   }
-  return { CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, Fabric, BotTile, BotTilesWorld, gridWorld, LiveMark, writeOnTimes };
+  return { CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, checkExpression, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, BotTile, BotTilesWorld, gridWorld, LiveMark, writeOnTimes };
 });

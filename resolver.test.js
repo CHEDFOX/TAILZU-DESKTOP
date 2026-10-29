@@ -226,3 +226,21 @@ test("isVisualQuestion: how to do something to a picture is about the app, not t
     assert.strictEqual(isVisualQuestion(q), true, q);
   }
 });
+
+test("the server's grammar replaces the rules here, rule by rule; one that does not compile keeps today's", () => {
+  const knobs = require("./knobs.js");
+  const res = require("./resolver.js");
+  try {
+    knobs.setKnobs({ labels: {}, flags: { "desktop.agent.grammar": {
+      headFiller: { source: "^(?:um+|accha|so)\\b[\\s,]*", flags: "" },
+      pointAsk: { source: "(", flags: "" },
+      roleWords: { knob: ["slider"] },
+    } } });
+    assert.strictEqual(res.commandText("accha scroll down"), "scroll down");
+    assert.deepStrictEqual(res.resolverAsk("where's export"), { verb: "point", target: "export", roleHint: undefined });
+    assert.strictEqual(res.resolverAsk("where's the volume knob").roleHint, "knob");
+  } finally {
+    knobs.setKnobs({ labels: {}, flags: {} });
+  }
+  assert.strictEqual(res.commandText("accha scroll down"), "accha scroll down");
+});

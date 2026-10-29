@@ -161,8 +161,10 @@ async function mediaUpload(a) {
     return run(a.onError, K.txt("media.pickFailed", "Couldn't open your files. Try again."));
   }
   if (!file) return run(a.onCancel);
-  const max = Math.min(Number(a.maxBytes) || MEDIA_MAX, MEDIA_MAX);
-  if (file.size > max) return run(a.onError, "That file is over " + Math.round(max / 1024 / 1024) + " MB, the most Tailzu takes.");
+  // The cap: the action's, else the server's (media.maxBytes), and never over the upload route's own.
+  const cap = Math.min(K.num("media.maxBytes", 52428800), MEDIA_MAX) || MEDIA_MAX;
+  const max = Math.min(Number(a.maxBytes) || cap, cap);
+  if (file.size > max) return run(a.onError, K.txt("media.tooBig", "That file is over {mb} MB, the most Tailzu takes.").replace("{mb}", String(Math.round(max / 1024 / 1024))));
   const path = a.path || "/v1/files";
   if (!mediaIsPath(path)) return run(a.onError, failed);
   if (MEDIA_SENDING) { MEDIA_SENDING.stopped = true; try { MEDIA_SENDING.xhr.abort(); } catch {} }

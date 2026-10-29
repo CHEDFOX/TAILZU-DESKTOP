@@ -102,6 +102,16 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   folders: () => ipcRenderer.invoke("app:folders"),
   onFolders: (cb) => ipcRenderer.on("ask-folders", (_e, s) => cb(s)),
   foldersAction: (kind, i) => ipcRenderer.send("app:foldersAction", { kind: String(kind || ""), i: Number.isInteger(i) ? i : -1 }),
+  // Tailzu Code on this computer as a card on the server's bots.computer (runnerCard.js): the runner's state, told
+  // again when it changes, and the card's buttons. The main process checks each one, and asks in its own words
+  // before turning it on or allowing a project.
+  runner: () => ipcRenderer.invoke("runner:state"),
+  onRunner: (cb) => ipcRenderer.on("runner:update", (_e, s) => cb(s)),
+  runnerSet: (key, value) => ipcRenderer.invoke("runner:set", String(key || ""), !!value),
+  runnerProject: (id, name, action) => ipcRenderer.invoke("runner:project", String(id || ""), String(name || ""), String(action || "")),
+  runnerCheckDocker: () => ipcRenderer.invoke("runner:checkDocker"),
+  runnerStop: () => ipcRenderer.send("runner:stop"),
+  runnerOpenAudit: () => ipcRenderer.send("runner:openAudit"),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
   changed: () => ipcRenderer.send("app:changed"),

@@ -62,7 +62,7 @@ const settle = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 const until = async (f, ms = 3000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error("timed out"); await settle(5); } };
 const PROPS = { title: "Scan with your phone", sub: "Already use Tailzu there? No code to type.", steps: ["One", "Two", "Three"], typed: "Or type {code}", changesIn: "Code changes in {t}", renew: "Show a new code", denied: "Not approved on your phone." };
 const draw = (p) => { p.ctx.__n = { type: "DeskLinkSignIn", props: PROPS }; return p.run("node(__n)"); };
-const made = (o = {}) => ({ status: 200, json: { token: TOKEN, secret: SECRET, code: "K7Q4-2MXP", url: "https://app.tailzu.space/s/bots.link?l=" + TOKEN, qr: QR, expiresAt: 0, ttlMs: 300000, pollMs: 500, ...o } });
+const made = (o = {}) => ({ status: 200, json: { token: TOKEN, secret: SECRET, code: "K7Q4-2MXP", url: "https://app.x0bot.com/s/bots.link?l=" + TOKEN, qr: QR, expiresAt: 0, ttlMs: 300000, pollMs: 500, ...o } });
 const isCreate = (url) => url === "https://api.test/v1/auth/link";
 const isPoll = (url) => url === "https://api.test/v1/auth/link/poll";
 

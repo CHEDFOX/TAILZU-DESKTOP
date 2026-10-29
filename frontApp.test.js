@@ -357,3 +357,28 @@ test("the wait is bounded, ends on an empty answer, and only the first request w
   assert.ok(Date.now() - t0 < 500);
   assert.strictEqual(r.posts.length, 1);
 });
+
+test("the server may add to the lists of apps, never take from them", () => {
+  const knobs = require("./knobs.js");
+  const f = require("./frontApp.js");
+  try {
+    knobs.setKnobs({ labels: {}, flags: {
+      "desktop.apps.browsers": ["Comet"],
+      "desktop.apps.shortNames": { comet: "Comet" },
+      "desktop.apps.privateTerms": ["secret tab"],
+      "desktop.apps.sensitiveTerms": ["groww"],
+    } });
+    assert.strictEqual(f.pictureKey("Comet", "Comet: Mail"), null, "an added browser is a browser");
+    assert.strictEqual(f.pictureKey("Google Chrome", "Chrome"), null, "and the built-in ones still are");
+    assert.ok(f.isPrivate("Secret Tab - Comet"));
+    assert.ok(f.isPrivate("New Incognito Tab"));
+    assert.ok(f.looksSensitive("Groww"));
+    assert.ok(f.looksSensitive("HDFC Bank"));
+    // A list that tries to take one away takes nothing away.
+    knobs.setKnobs({ labels: {}, flags: { "desktop.apps.sensitiveTerms": [], "desktop.apps.browsers": "chrome" } });
+    assert.ok(f.looksSensitive("HDFC Bank"));
+    assert.strictEqual(f.pictureKey("Google Chrome", "Chrome"), null);
+  } finally {
+    knobs.setKnobs({ labels: {}, flags: {} });
+  }
+});

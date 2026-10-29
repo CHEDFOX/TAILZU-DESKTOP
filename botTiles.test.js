@@ -52,14 +52,14 @@ function page() {
   };
   g.window = g;
   const ctx = vm.createContext(g);
-  for (const f of ["knobs.js", "botTiles.js", "sdui.js"]) vm.runInContext(fs.readFileSync(path.join(__dirname, f), "utf8"), ctx, { filename: f });
+  for (const f of ["knobs.js", "botTiles.js", "botLooks.js", "sdui.js"]) vm.runInContext(fs.readFileSync(path.join(__dirname, f), "utf8"), ctx, { filename: f });
   return { ctx, run: (code) => vm.runInContext(code, ctx) };
 }
 
 test("the window says it draws them", () => {
   const p = page();
   const comps = p.run("COMPONENTS");
-  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy", "BotTilesStrip", "BotBuddyCarry"]) assert.ok(comps.includes(c), c);
+  for (const c of ["BotsMotion", "BotTiles", "BotCard", "BotBuddy", "BotTilesStrip", "BotBuddyCarry", "BotMoments"]) assert.ok(comps.includes(c), c);
 });
 
 test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make tile dashed", () => {
@@ -293,3 +293,74 @@ test("Home's header alive: the line in words with Keybot's caret, the living mar
   assert.ok(m.finite());
   assert.strictEqual(api.writeOnTimes(["a", "b"], 1).length, 2);
 });
+
+// ---------------------------------------------------------------- the bots' looks and moments
+
+test("botLooks.js is the generated starter pack, untouched, and the server's catalog when the backend is beside", () => {
+  const text = fs.readFileSync(path.join(__dirname, "botLooks.js"), "utf8");
+  const src = /looks\.json sha256 ([0-9a-f]{64})/.exec(text), body = /body sha256 ([0-9a-f]{64})/.exec(text);
+  assert.ok(src && body, "the header names the source and the body");
+  const at = text.indexOf("\n// --\n");
+  assert.ok(at > 0);
+  assert.strictEqual(sha(text.slice(at + 7)), body[1], "botLooks.js was edited by hand: run `node src/botTiles/genStarter.mjs` in TAILZU-FRONTEND/app");
+  const server = path.resolve(__dirname, "../TAILZU-BACKEND/shared/bots/looks.json");
+  if (fs.existsSync(server)) {
+    const json = fs.readFileSync(server, "utf8");
+    assert.strictEqual(sha(json), src[1], "the server's looks.json changed: regenerate botLooks.js");
+    assert.deepStrictEqual(require("./botLooks.js"), JSON.parse(json));
+  }
+});
+
+test("the window plays the catalog: it compiles clean, every moment plays finite and inside, every look draws", () => {
+  const api = require("./botTiles.js");
+  const L = api.compileLooks(require("./botLooks.js"));
+  assert.deepStrictEqual(L.errors, []);
+  for (const k of ["code", "keybot", "plan", "travel", "notes", "make", "custom"]) assert.ok(L.avatars.has(L.kinds[k]), k);
+  for (const [id, m] of L.moments) {
+    if (m.react) continue;
+    const t = new api.BotTile({ kind: "custom", color: "#3E6E8E", mood: "idle", seed: 4, avatar: L.avatar("custom", "pip") });
+    t.resize(209, 150, 92);
+    assert.ok(t.playMoment(m, "once"), id);
+    for (let f = 0; f < (m.dur + 0.5) * 60; f++) t.step(1 / 60);
+    assert.ok(t.finite() && t.inside(), id);
+    assert.ok(t.momentDone(), id + " once: over");
+  }
+});
+
+test("the window's nodes: a tile's look and moment, Home's surprises, a BotBuddy's moment and its end, and the plain act for one it cannot play", () => {
+  const p = page();
+  p.ctx.document.hidden = false;
+  p.ctx.setTimeout = () => 0;
+  p.ctx.__n = { ...HOME, props: { ...HOME.props, surprises: { every: 30, chance: 0.2, moments: ["fart", "sneeze", "nothing"] },
+    tiles: HOME.props.tiles.map((t, i) => (i === 0 ? { ...t, avatar: "scout", moment: "dance", momentMode: "loop" } : t)) } };
+  const g = fakeGrid(p, p.run("node(__n)"));
+  p.ctx.__root = g.root;
+  p.run("mountBotTiles(__root)");
+  const code = p.run('Array.from(BT_LIVES.entries()).find(([k]) => k.startsWith("code|"))[1]');
+  assert.strictEqual(code.av.id, "scout", "its own look");
+  assert.strictEqual(code.momentId(), "dance", "its moment, once placed");
+  const plan = p.run('Array.from(BT_LIVES.entries()).find(([k]) => k.startsWith("plan|"))[1]');
+  assert.strictEqual(plan.av.id, "plan", "his kind's look");
+  // Painted again: the moment is not started over.
+  const t0 = code.moT;
+  code.step(0.5);
+  p.run("mountBotTiles(__root)");
+  assert.ok(code.moT > t0, "a repaint keeps it going");
+  // BotBuddy: a moment, its end when the condition holds; one this build cannot play is its plain act.
+  p.run("STATE = { done: false }");
+  p.ctx.__b = { type: "BotBuddy", props: { kind: "code", color: "#4F7A3A", life: "page.code", width: 150, height: 56, size: 34, state: "idle", moment: "sweat", momentEndWhen: { truthy: "done" } } };
+  const html = p.run("node(__b)");
+  assert.match(html, /data-bb=/);
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].act"), "play");
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].momentEnd"), false, "not yet");
+  p.ctx.__u = { type: "BotBuddy", props: { kind: "code", color: "#4F7A3A", life: "page.x", width: 150, height: 56, state: "idle", moment: "teleport", act: "wave" } };
+  p.run("node(__u)");
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].act"), "wave", "a moment the catalog does not have: the page's own act");
+  p.ctx.__f = { type: "BotBuddy", props: { kind: "code", color: "#4F7A3A", life: "page.y", width: 150, height: 56, state: "idle", moment: "sneeze" } };
+  p.run("BT_LOOKS.moments.get('sneeze').ok = false; node(__f)");
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].act"), "settle", "one it cannot play: the recipe's plain act");
+  p.run("BT_LOOKS.moments.get('sneeze').ok = true");
+  p.run("STATE.done = true; node(__b)");
+  assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].momentEnd"), true);
+});
+
