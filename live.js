@@ -288,7 +288,7 @@
 
   /**
    * Wire the window. host: { window, document, enabled(), signedIn(), token(), baseUrl(), path(), screen(), target(),
-   * fetch(screenId, params), state(), paintSeq(), apply(next, patch), busy() }
+   * fetch(screenId, params), state(), paintSeq(), apply(next, patch), busy(), stream(id, data) }
    */
   function install(host) {
     const win = host.window, doc = host.document;
@@ -324,7 +324,11 @@
       open: (url) => new win.WebSocket(url),
       url: () => { const b = host.baseUrl(); return b ? wsUrlOf(b, host.path()) : null; },
       token: () => (host.signedIn() ? host.token() : null),
-      onEvent: (topic) => { if (hears(listening(), topic)) scheduler.poke(); },
+      // An answer's words as they come (topic ask:<id>) are for the call that asked (host.stream), never a reload.
+      onEvent: (topic, m) => {
+        if (String(topic).indexOf("ask:") === 0) { if (host.stream) host.stream(String(topic).slice(4), m && m.data); return; }
+        if (hears(listening(), topic)) scheduler.poke();
+      },
       onResume: () => { const t = listening(); if (t && t.length) scheduler.poke(); },
     });
     // Open while signed in, switched on and in view; looked at again whenever that may have changed, and every few seconds
@@ -348,7 +352,7 @@
 });
 
 // In the window: wire it to the app (sdui.js, loaded first, holds the session, the stack, the state and the painting).
-/* global SESSION, STACK, ENV, K, STATE, CURRENT_SCREEN, CURRENT_ACTIONS, paint, repaint, bearer, fetchScreen, setStatePath, gateUp */
+/* global SESSION, STACK, ENV, K, STATE, CURRENT_SCREEN, CURRENT_ACTIONS, paint, repaint, bearer, fetchScreen, setStatePath, gateUp, askStreamTake */
 if (typeof module === "undefined" && typeof window !== "undefined" && typeof repaint === "function" && window.TailzuLive) {
   window.TailzuLiveWindow = window.TailzuLive.install({
     window,
@@ -366,6 +370,8 @@ if (typeof module === "undefined" && typeof window !== "undefined" && typeof rep
     paintSeq: () => paint._seq || 0,
     // The sign-in gate is up: its screen is not one of these.
     busy: () => (typeof gateUp === "function" && gateUp()),
+    // An answer's words as they come: to the call listening (sdui.js askStreamTake).
+    stream: (id, data) => { if (typeof askStreamTake === "function") askStreamTake(id, data); },
     apply: (next, patch) => {
       for (const [path, value] of patch) setStatePath(path, value);
       CURRENT_ACTIONS = next.actions || {};

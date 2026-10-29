@@ -246,6 +246,24 @@ test("a quiet reload stands down when another screen came up while it fetched", 
   live.stop();
 });
 
+test("an answer's words as they come (topic ask:<id>) go to the call that asked, never to a reload", async () => {
+  const got = [];
+  const made = [];
+  class Sock extends FakeSocket { constructor(u) { super(u); made.push(this); } }
+  const h = host({ signedIn: () => true, stream: (id, d) => got.push([id, d]) });
+  h.window.WebSocket = Sock;
+  h.current.liveTopics = ["ask:*", "home"];
+  const live = L.install(h);
+  await new Promise((r) => setTimeout(r, 5));
+  made[0].open();
+  made[0].say({ type: "ready", heartbeatMs: 25000 });
+  made[0].say({ type: "event", topic: "ask:abcdefghijklmnop12", data: { n: 0, text: "नमस्ते " } });
+  assert.deepEqual(got, [["abcdefghijklmnop12", { n: 0, text: "नमस्ते " }]]);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.deepEqual(h.applied, [], "no reload for a stream's words");
+  live.stop();
+});
+
 test("in the window: wired to sdui.js's own session, stack, state and painting", () => {
   const fs = require("node:fs");
   const path = require("node:path");
