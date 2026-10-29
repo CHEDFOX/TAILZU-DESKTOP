@@ -82,18 +82,18 @@ function createWorkspaces({ root, git, fs = nodeFs, urlPolicy = defaultUrlPolicy
   /** An App project: a read-only token for the repository, and the commit. */
   async function prepareApp(dir, repo, known) {
     const sha = repo.headSha.toLowerCase();
-    if (!(await initIfNeeded(dir))) return { ok: false, error: "Tailzu could not set up the workspace folder." };
+    if (!(await initIfNeeded(dir))) return { ok: false, error: "X0 Bot could not set up the workspace folder." };
     let how = "cached";
     const have = await git.run(["cat-file", "-e", sha + "^{commit}"], { cwd: dir, timeoutMs: 30000 });
     if (have.code !== 0) {
       const local = !/^https:/i.test(repo.cloneUrl) ? ["-c", "protocol.file.allow=always"] : [];
       // The commit alone, with no history: and, of that, only the objects this workspace does not have.
       const f = await git.run(local.concat(["fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", repo.cloneUrl, sha]), { cwd: dir, token: repo.readToken, timeoutMs: 600000 });
-      if (f.code !== 0) return { ok: false, error: "Tailzu could not fetch the code: " + (f.error || friendly(f.stderr || f.stdout, known)), corrupt: /not a git repository|bad object|corrupt|loose object|unable to read|index file/i.test(f.stderr) };
+      if (f.code !== 0) return { ok: false, error: "X0 Bot could not fetch the code: " + (f.error || friendly(f.stderr || f.stdout, known)), corrupt: /not a git repository|bad object|corrupt|loose object|unable to read|index file/i.test(f.stderr) };
       how = "fetch";
     }
     const c = await checkout(dir, repo.branch, sha);
-    if (c.code !== 0) return { ok: false, error: "Tailzu could not check out the branch: " + friendly(c.stderr || c.stdout, known), corrupt: /bad object|corrupt|unable to read|index file/i.test(c.stderr) };
+    if (c.code !== 0) return { ok: false, error: "X0 Bot could not check out the branch: " + friendly(c.stderr || c.stdout, known), corrupt: /bad object|corrupt|unable to read|index file/i.test(c.stderr) };
     if (!(await headIs(dir, sha))) return { ok: false, error: "The checkout is not at the commit the job named." };
     return { ok: true, dir, sha, how };
   }
@@ -101,7 +101,7 @@ function createWorkspaces({ root, git, fs = nodeFs, urlPolicy = defaultUrlPolicy
   /** A sign-in project: a one-time link to the tarball of the commit. Made into a one-commit repository, so the rest works as for an App project. */
   async function prepareTarball(dir, repo, known) {
     const sha = repo.headSha.toLowerCase();
-    if (!(await initIfNeeded(dir))) return { ok: false, error: "Tailzu could not set up the workspace folder." };
+    if (!(await initIfNeeded(dir))) return { ok: false, error: "X0 Bot could not set up the workspace folder." };
     const marker = nodePath.join(dir, ".git", "tailzu-snapshot");
     let snapshot = "";
     try { snapshot = fs.readFileSync(marker, "utf8").trim(); } catch { /* the first time */ }
@@ -119,23 +119,23 @@ function createWorkspaces({ root, git, fs = nodeFs, urlPolicy = defaultUrlPolicy
         const body = Readable.fromWeb(res.body);
         body.on("data", (b) => { size += b.length; if (size > TARBALL_MAX_BYTES) body.destroy(new Error("The download is too big.")); });
         await pipeline(body, fs.createWriteStream(file));
-        if (!(await tar(file, tmp))) return { ok: false, error: "Tailzu could not unpack the download." };
+        if (!(await tar(file, tmp))) return { ok: false, error: "X0 Bot could not unpack the download." };
         // The tree of the unpacked folder, as a commit of its own: exactly what the tarball held, tracked or not by .gitignore.
         const gitDir = nodePath.join(dir, ".git");
-        const env = { GIT_DIR: gitDir, GIT_WORK_TREE: tmp, GIT_INDEX_FILE: nodePath.join(gitDir, "tailzu-index"), GIT_AUTHOR_NAME: "Tailzu", GIT_AUTHOR_EMAIL: "runner@tailzu.invalid", GIT_COMMITTER_NAME: "Tailzu", GIT_COMMITTER_EMAIL: "runner@tailzu.invalid" };
+        const env = { GIT_DIR: gitDir, GIT_WORK_TREE: tmp, GIT_INDEX_FILE: nodePath.join(gitDir, "tailzu-index"), GIT_AUTHOR_NAME: "X0 Bot", GIT_AUTHOR_EMAIL: "runner@tailzu.invalid", GIT_COMMITTER_NAME: "X0 Bot", GIT_COMMITTER_EMAIL: "runner@tailzu.invalid" };
         const added = await git.run(["add", "-A", "-f"], { cwd: tmp, extraEnv: env, timeoutMs: 300000 });
         const wrote = added.code === 0 ? await git.run(["write-tree"], { cwd: tmp, extraEnv: env, timeoutMs: 300000 }) : added;
-        if (wrote.code !== 0) return { ok: false, error: "Tailzu could not read the download: " + friendly(wrote.stderr, known) };
-        const commit = await git.run(["commit-tree", wrote.stdout.trim(), "-m", "Tailzu snapshot " + sha], { cwd: tmp, extraEnv: env, timeoutMs: 60000 });
-        if (commit.code !== 0) return { ok: false, error: "Tailzu could not record the download." };
+        if (wrote.code !== 0) return { ok: false, error: "X0 Bot could not read the download: " + friendly(wrote.stderr, known) };
+        const commit = await git.run(["commit-tree", wrote.stdout.trim(), "-m", "X0 Bot snapshot " + sha], { cwd: tmp, extraEnv: env, timeoutMs: 60000 });
+        if (commit.code !== 0) return { ok: false, error: "X0 Bot could not record the download." };
         const id = commit.stdout.trim();
         await git.run(["update-ref", refName, id], { cwd: dir, timeoutMs: 30000 });
         const c = await checkout(dir, repo.branch, id);
-        if (c.code !== 0) return { ok: false, error: "Tailzu could not check out the download: " + friendly(c.stderr, known) };
+        if (c.code !== 0) return { ok: false, error: "X0 Bot could not check out the download: " + friendly(c.stderr, known) };
         fs.writeFileSync(marker, sha);
         how = "tarball";
       } catch (err) {
-        return { ok: false, error: "Tailzu could not download the code: " + friendly(err && err.message, known) };
+        return { ok: false, error: "X0 Bot could not download the code: " + friendly(err && err.message, known) };
       } finally {
         try { fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(file, { force: true }); fs.rmSync(nodePath.join(dir, ".git", "tailzu-index"), { force: true }); } catch { /* the next run removes it */ }
       }
@@ -143,7 +143,7 @@ function createWorkspaces({ root, git, fs = nodeFs, urlPolicy = defaultUrlPolicy
       const snap = await git.run(["rev-parse", refName], { cwd: dir, timeoutMs: 30000 });
       if (snap.code !== 0) { try { fs.rmSync(marker, { force: true }); } catch { /* */ } return prepareTarball(dir, repo, known); }
       const c = await checkout(dir, repo.branch, snap.stdout.trim());
-      if (c.code !== 0) return { ok: false, error: "Tailzu could not check out the download: " + friendly(c.stderr, known) };
+      if (c.code !== 0) return { ok: false, error: "X0 Bot could not check out the download: " + friendly(c.stderr, known) };
     }
     return { ok: true, dir, sha, how };
   }

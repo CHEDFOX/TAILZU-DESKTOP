@@ -1025,7 +1025,7 @@ function createAsk(ctx) {
     driver,
     guide,
     post: agentCore.makePost({ baseUrl: ctx.baseUrl, token: ctx.token, fetch: ctx.fetch || ((...a) => fetch(...a)) }),
-    approveElsewhere: () => txt("desktop.agent.approveElsewhere", "I need your OK in Tailzu first."),
+    approveElsewhere: () => txt("desktop.agent.approveElsewhere", "I need your OK in X0 Bot first."),
     // "This computer": the person's own files, done here by localfiles.js and
     // only inside the folders they allowed (main.js hands it in).
     device: ctx.device,

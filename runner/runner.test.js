@@ -128,7 +128,7 @@ withTimeout("a LIVE SESSION, end to end: asked once, the code fetched, the room 
   assert.strictEqual(require("./testkit.js").sh("git rev-parse HEAD", ws), r.remote.shas[1]);
   assert.strictEqual(require("./testkit.js").sh("git branch --show-current", ws), "tailzu/fix");
   assert.deepStrictEqual(r.runner.status().state, "working");
-  assert.strictEqual(r.runner.status().project, "acme/app", "the tray says: Tailzu is working on acme/app");
+  assert.strictEqual(r.runner.status().project, "acme/app", "the tray says: X0 Bot is working on acme/app");
 
   room.send({ t: "exec", id: "e-1", commands: ["cat a.txt", "echo $HOME"], timeoutSec: 30, overlay: [{ path: "o.txt", content: "overlaid\n" }], discard: true });
   const done = await room.waitFor((f) => f.t === "done" && f.id === "e-1");
@@ -142,7 +142,7 @@ withTimeout("a LIVE SESSION, end to end: asked once, the code fetched, the room 
   await until(() => r.cloud.api.results.length === 1, 8000, "the result");
   const res = r.cloud.api.results[0];
   assert.deepStrictEqual([res.jobId, res.stepIdx, res.epoch, res.exitCode], ["job-1", 5, 3, 0]);
-  assert.strictEqual(res.outputTail, "[Tailzu: live session ended (idle); 1 command(s) run]");
+  assert.strictEqual(res.outputTail, "[X0 Bot: live session ended (idle); 1 command(s) run]");
   assert.deepStrictEqual(res.changes, []);
   assert.ok(typeof res.minutes === "number" && res.minutes >= 0 && res.minutes < 1);
   await dev.waitFor((f) => f.t === "state" && f.busy === false);
@@ -332,7 +332,7 @@ withTimeout("a step the code cannot be fetched for is reported failed with a sen
   dev.send({ t: "offer", offer: r.offer("job-1", { repo: { headSha: "f".repeat(40) } }) });
   await until(() => r.cloud.api.results.length === 1, 15000, "the result");
   assert.strictEqual(r.cloud.api.results[0].exitCode, 1);
-  assert.match(r.cloud.api.results[0].outputTail, /could not get the code: Tailzu could not fetch the code/);
+  assert.match(r.cloud.api.results[0].outputTail, /could not get the code: X0 Bot could not fetch the code/);
   const expired = r.offer("job-1", { repo: { readTokenExpiresAt: Date.now() - 1000 } });
   await until(() => r.runner.status().state === "online", 4000);
   dev.send({ t: "offer", offer: expired });

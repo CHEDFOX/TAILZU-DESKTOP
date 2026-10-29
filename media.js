@@ -145,7 +145,7 @@ async function mediaScreenshot() {
   const cap = window.tailzuApp && typeof window.tailzuApp.captureScreen === "function" ? await window.tailzuApp.captureScreen() : null;
   if (cap && cap.bytes) return new File([cap.bytes], mediaName(cap.name, "Screenshot.png"), { type: "image/png" });
   if (cap && cap.cancelled) return null;
-  if (cap && cap.why === "screen") toast(K.txt("desktop.media.shotOff", "Screen Recording is off for Tailzu, so pick a picture instead."));
+  if (cap && cap.why === "screen") toast(K.txt("desktop.media.shotOff", "Screen Recording is off for X0 Bot, so pick a picture instead."));
   return mediaChoose("screenshot");
 }
 
@@ -164,7 +164,7 @@ async function mediaUpload(a) {
   // The cap: the action's, else the server's (media.maxBytes), and never over the upload route's own.
   const cap = Math.min(K.num("media.maxBytes", 52428800), MEDIA_MAX) || MEDIA_MAX;
   const max = Math.min(Number(a.maxBytes) || cap, cap);
-  if (file.size > max) return run(a.onError, K.txt("media.tooBig", "That file is over {mb} MB, the most Tailzu takes.").replace("{mb}", String(Math.round(max / 1024 / 1024))));
+  if (file.size > max) return run(a.onError, K.txt("media.tooBig", "That file is over {mb} MB, the most X0 Bot takes.").replace("{mb}", String(Math.round(max / 1024 / 1024))));
   const path = a.path || "/v1/files";
   if (!mediaIsPath(path)) return run(a.onError, failed);
   if (MEDIA_SENDING) { MEDIA_SENDING.stopped = true; try { MEDIA_SENDING.xhr.abort(); } catch {} }
@@ -202,7 +202,7 @@ async function mediaUpload(a) {
   mediaSet(a.progressTo, undefined);
   if (res.status === 0) {
     mediaPaint();
-    return run(a.onError, K.txt("error.network", "Couldn't reach Tailzu. Check your connection and try again."));
+    return run(a.onError, K.txt("error.network", "Couldn't reach X0 Bot. Check your connection and try again."));
   }
   if (res.status < 200 || res.status >= 300) {
     mediaPaint();

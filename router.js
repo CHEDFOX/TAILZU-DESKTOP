@@ -62,12 +62,19 @@ const alt = (list) => list.slice().sort((a, b) => b.length - a.length).map(esc).
 // ---- today's lists: the fallback ---------------------------------------------------
 const DAYS = "day|week|weekend|morning|afternoon|evening|night|saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|today|schedule|calendar|month";
 const LISTS = {
-  // "Tailzu, what's this error?", "hey Blip …", "Jarvis kya hai yeh", "… Tailzu?"
+  // "X0, what's this error?", "hey Blip …", "Jarvis kya hai yeh", "… ex zero?"
   // The recogniser does not always spell the name: the ways it hears it go too.
   heardAs: [
+    { name: "x0", heard: ["x0", "xo", "x o", "x 0", "x zero", "x oh", "ex zero", "ex oh", "ex o", "exo", "ex 0", "eks zero", "eks o", "zo",
+      "zero bot", "x0 bot", "xo bot", "x o bot", "x 0 bot", "x zero bot", "ex zero bot", "ex oh bot", "x0bot", "xobot",
+      "एक्स ज़ीरो", "एक्स जीरो", "एक्स ओ", "एक्सो", "एक्स0"] },
+    // Its old name, so a habit keeps working.
     { name: "tailzu", heard: ["tailzu", "tail zu", "tailzoo", "tail zoo", "tell zu", "tell zoo", "telzu", "tel zu", "taylzu", "tailsu", "tailzoo", "टेलज़ू", "टेलजू", "टेल्ज़ू", "टेल ज़ू"] },
     { name: "blip", heard: ["blip", "blipp", "ब्लिप"] },
   ],
+  // Ways of hearing a name that are ordinary words too: "love you, xo" signs a
+  // message off. They are the name at the start of what was said, never at the end.
+  frontOnly: ["xo", "x o", "zo"],
   greetings: ["hey", "hi", "hello", "ok", "okay", "o", "oye", "oi", "arre", "are", "arey", "suno", "listen", "yo",
     "हे", "अरे", "सुनो", "ओ", "ओके", "हाय", "हेलो"],
   // Meeting notes: the whole sentence is the command ("take notes", "stop
@@ -166,6 +173,7 @@ const LISTS = {
 function served() {
   return [
     knobs.list("desktop.router.heardAs", LISTS.heardAs),
+    knobs.list("desktop.router.frontOnly", LISTS.frontOnly),
     knobs.list("desktop.router.greetings", LISTS.greetings),
     knobs.list("desktop.router.notesPre", LISTS.notesPre),
     knobs.list("desktop.router.notesSuffix", LISTS.notesSuffix),
@@ -189,7 +197,7 @@ function served() {
     knobs.list("desktop.router.tasks", LISTS.tasks),
   ];
 }
-const KEYS = ["heardAs", "greetings", "notesPre", "notesSuffix", "notesStart", "notesStartHi", "notesStartDeva", "notesStop", "notesStopHi",
+const KEYS = ["heardAs", "frontOnly", "greetings", "notesPre", "notesSuffix", "notesStart", "notesStartHi", "notesStartDeva", "notesStop", "notesStopHi",
   "notesStopDeva", "questionStart", "questionEnd", "commandVerbs", "commandEnd", "screenThings", "screenStrong", "explain", "explainAnywhere",
   "writeStart", "writeEnd", "bots", "tasks"];
 
@@ -248,6 +256,7 @@ function compile(raw) {
   }
   return {
     heardAs,
+    FRONT_ONLY: new Set(w("frontOnly").map(norm).filter(Boolean)),
     G: alt(w("greetings")),
     NOTES_START: whole(START), NOTES_STOP: whole(STOP), NOTES_TOGGLE: whole(TOGGLE),
     Q_START: new RegExp(`^(?:${alt(w("questionStart"))})(?: |$)`, "u"),
@@ -296,10 +305,13 @@ function nameForms(names) {
 function address(words, names) {
   const forms = nameForms(names);
   if (!forms.length || !words) return { addressed: false, rest: words };
-  const N = alt(forms), G = rules().G;
+  const R = rules();
+  const N = alt(forms), G = R.G;
   const front = new RegExp(`^(?:(?:${G}) )?(?:${N})(?: ji)?(?: |$)`, "u").exec(words);
   if (front) return { addressed: true, rest: words.slice(front[0].length).trim() };
-  const back = new RegExp(`(?:^| )(?:(?:${G}) )?(?:${N})(?: ji)?$`, "u").exec(words);
+  // At the end, only a form that is never an ordinary word: "see you soon xo" is a message.
+  const late = forms.filter((f) => !R.FRONT_ONLY.has(f));
+  const back = late.length ? new RegExp(`(?:^| )(?:(?:${G}) )?(?:${alt(late)})(?: ji)?$`, "u").exec(words) : null;
   if (back && back.index > 0) return { addressed: true, rest: words.slice(0, back.index).trim() };
   return { addressed: false, rest: words };
 }

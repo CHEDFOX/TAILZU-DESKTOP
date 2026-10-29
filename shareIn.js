@@ -173,7 +173,7 @@
       link: host.txt("desktop.share.link", "A link"), text: host.txt("desktop.share.text", "Some text"),
       adding: host.txt("desktop.share.adding", "Adding it…"), failed: host.txt("desktop.share.failed", "Couldn't add that. Try again."),
       partly: host.txt("desktop.share.partly", "Some of it couldn't be added."),
-      tooBig: host.txt("desktop.share.tooBig", "That file is over {mb} MB, which is the most Tailzu takes.")
+      tooBig: host.txt("desktop.share.tooBig", "That file is over {mb} MB, which is the most X0 Bot takes.")
         .replace("{mb}", String(Math.round(within(limits().bytes, MAX_BYTES) / 1024 / 1024))),
     });
 

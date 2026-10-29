@@ -30,7 +30,7 @@ const ACCEPT_AT = 0.85;
 /** …and beat the runner-up's by this much. */
 const MARGIN = 0.2;
 /** The names it answers to when none are given: its own, and the guide's. */
-const NAMES = ["Tailzu", "Blip"];
+const NAMES = ["X0", "Blip", "Tailzu"];
 
 const str = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
 
@@ -84,7 +84,7 @@ function commandText(said, names = NAMES) {
  */
 const SHOW_OPENING_EN = /^(?:where|how|what|whats|what's|why|which|who|whose|when|is there|are there|is it|is this|is that|does|do i|do you|did|can i|could i|should i|am i|show me|point|find|locate|explain|tell me|help me (?:find|understand)|i can'?t find|i cannot find|i don'?t see|i do not see|look for|wheres|where's|hows|how's)\b/;
 const SHOW_ANYWHERE_EN = /\b(?:kahan|kahaan|kaha|kidhar|kaise|kaisa|kyun|kyu|kaun sa|kaunsa)\b|कहाँ|कहां|किधर|कैसे|क्यों|कौन सा/u;
-const POLITE_REQUEST_EN = /^(?:\W*)(?:hey\s+\S+[\s,]+)?(?:please\s+)?(?:can|could|would|will) (?:you|u)\b/i;
+const POLITE_REQUEST_EN = /^(?:\W*)(?:hey\s+\S+(?:\s+bot)?[\s,]+)?(?:please\s+)?(?:can|could|would|will) (?:you|u)\b/i;
 
 function modeOf(said, names = NAMES) {
   const clean = commandText(said, names);

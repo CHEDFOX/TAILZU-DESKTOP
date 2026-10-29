@@ -209,3 +209,68 @@ test("the server's lists: they replace today's, and a list that is not one keeps
   }
   assert.deepStrictEqual(r.botTask(r.norm("travel bot, find a hotel"), []), { slug: "travel", named: true }, "today's again");
 });
+
+// ---- X0, however it is heard --------------------------------------------------------
+
+const X0_NAMES = ["X0", "Blip", "Zara"];
+const goX = (heard, f = BOX, o = {}) => r.route(Object.assign({ heard, field: field(f), names: X0_NAMES, askOn: true, notesOn: false }, o));
+
+test("X0 by name, as the recogniser spells it: Ask, with the name taken off", () => {
+  for (const [s, msg] of [
+    ["X0, what is this error?", "What is this error?"], ["x0 what is this error", "What is this error"],
+    ["XO, where is the export button?", "Where is the export button?"], ["x o where is the export button", "Where is the export button"],
+    ["X-0, what is this?", "What is this?"], ["X.O. what is this?", "What is this?"],
+    ["X zero, what does this say?", "What does this say?"], ["Ex zero what does this say", "What does this say"],
+    ["Ex-oh, explain this chart", "Explain this chart"], ["Zo, what's this?", "What's this?"],
+    ["Zero bot, what is this?", "What is this?"], ["X0 Bot, what is this?", "What is this?"], ["XO bot what is this", "What is this"],
+    ["hey X0, what is this?", "What is this?"], ["Hey ex oh what is this", "What is this"],
+    ["एक्स ज़ीरो यह क्या है", "यह क्या है"],
+    ["What does this say, X zero?", "What does this say?"], ["what does this error mean ex oh", "What does this error mean"],
+  ]) {
+    assert.strictEqual(r.firstLook({ heard: s, field: BOX, names: X0_NAMES, askOn: true }), "hold", s);
+    const x = goX(s);
+    assert.strictEqual(x.to, "ask", s);
+    assert.strictEqual(x.message, msg, s);
+  }
+});
+
+test("their own name for it works the same, case and punctuation aside", () => {
+  for (const s of ["Zara, what is this?", "zara what is this", "ZARA... what is this?", "hey zara, what is this"]) {
+    assert.strictEqual(goX(s).to, "ask", s);
+    assert.strictEqual(goX(s).message, "What is this?".replace(/\?$/, s.endsWith("?") ? "?" : ""), s);
+  }
+});
+
+test("xo and zo are words too: at the end of a message they are typed, not an address", () => {
+  for (const s of ["Love you, xo", "see you soon xo", "miss you x o", "that was a zo"]) {
+    const x = goX(s);
+    assert.strictEqual(x.to, "type", s);
+    assert.strictEqual(x.message, s, s);
+  }
+  // At the front they are the name.
+  assert.strictEqual(goX("xo, what is this?").to, "ask");
+  // A name that only starts a word is not the name.
+  assert.strictEqual(goX("Xoxo gossip girl is on").to, "type");
+  assert.strictEqual(goX("Zombies are coming").to, "type");
+  assert.strictEqual(goX("Exodus is a good film").to, "type");
+});
+
+test("X0 by name with a text box: the writer's own instruction is still typed", () => {
+  for (const s of ["X0, reply saying I'm running late", "ex zero make it formal", "Zara, translate this in Hindi"]) {
+    const x = goX(s);
+    assert.strictEqual(x.to, "type", s);
+    assert.strictEqual(x.close, true, s);
+  }
+});
+
+test("the server's front-only list replaces today's", () => {
+  const knobs = require("./knobs.js");
+  try {
+    knobs.setKnobs({ labels: {}, flags: { "desktop.router.frontOnly": ["zero bot"] } });
+    assert.strictEqual(goX("see you soon xo").to, "ask", "xo counts at the end once the server says so");
+    assert.strictEqual(goX("see you soon zero bot").to, "type");
+  } finally {
+    knobs.setKnobs({ labels: {}, flags: {} });
+  }
+  assert.strictEqual(goX("see you soon xo").to, "type", "today's again");
+});

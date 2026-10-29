@@ -75,7 +75,7 @@ function runOne(command, ms, o) {
   return new Promise((resolve) => {
     let started;
     try { started = o.spawnCommand(command, { cwd: o.cwd, env: o.env }); } catch (err) {
-      o.onOutput("[Tailzu: could not start the command: " + String((err && err.message) || err).slice(0, 200) + "]\n");
+      o.onOutput("[X0 Bot: could not start the command: " + String((err && err.message) || err).slice(0, 200) + "]\n");
       resolve({ code: 127, timedOut: false });
       return;
     }
@@ -108,7 +108,7 @@ function runOne(command, ms, o) {
     if (o.signal) { if (o.signal.aborted) kill(); else o.signal.addEventListener("abort", kill, { once: true }); }
     child.on("error", (err) => {
       gone = { code: 127, signal: null };
-      try { o.onOutput("[Tailzu: could not start the command: " + String((err && err.message) || err).slice(0, 200) + "]\n"); } catch { /* sink */ }
+      try { o.onOutput("[X0 Bot: could not start the command: " + String((err && err.message) || err).slice(0, 200) + "]\n"); } catch { /* sink */ }
       finish();
     });
     child.on("exit", (code, signal) => { gone = { code, signal }; const t = setTimeout(finish, o.graceMs === undefined ? GRACE_MS : o.graceMs); if (t.unref) t.unref(); });
@@ -135,7 +135,7 @@ async function runCommands(commands, timeoutSec, o) {
     const command = commands[index];
     const left = deadline - now();
     if (left <= 0) {
-      add("\n[Tailzu: the step ran out of time before: " + command + "]\n");
+      add("\n[X0 Bot: the step ran out of time before: " + command + "]\n");
       return { exitCode: 124, output: held, ran, timedOut: true, cancelled: false };
     }
     add("$ " + command + "\n");
@@ -145,8 +145,8 @@ async function runCommands(commands, timeoutSec, o) {
     ran += 1;
     const cancelled = !!(o.signal && o.signal.aborted);
     let exitCode = r.code;
-    if (cancelled) { add("\n[Tailzu: stopped]\n"); exitCode = 130; }
-    else if (r.timedOut) { add("\n[Tailzu: stopped after " + timeoutSec + " seconds, the time this step had]\n"); exitCode = 124; }
+    if (cancelled) { add("\n[X0 Bot: stopped]\n"); exitCode = 130; }
+    else if (r.timedOut) { add("\n[X0 Bot: stopped after " + timeoutSec + " seconds, the time this step had]\n"); exitCode = 124; }
     if (o.onEnd) o.onEnd({ command, index, exitCode, ms: now() - t0, timedOut: r.timedOut && !cancelled, cancelled });
     if (cancelled) return { exitCode: 130, output: held, ran, timedOut: false, cancelled: true };
     if (r.timedOut) return { exitCode: 124, output: held, ran, timedOut: true, cancelled: false };

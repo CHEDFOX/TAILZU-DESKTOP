@@ -13,12 +13,12 @@ const {
   ACCEPT_AT, MARGIN, NAMES,
 } = require("./resolver.js");
 
-const SERVER_NAMES = ["Tailzu", "Blip", "Zara"];
+const SERVER_NAMES = ["X0", "Blip", "Zara"];
 
 // ---- the server's cases ---------------------------------------------------------
 
 test("commandText takes off fillers, a name it was called by, and politeness", () => {
-  assert.strictEqual(commandText("Hey Tailzu, um, can you scroll down please?", SERVER_NAMES), "scroll down");
+  assert.strictEqual(commandText("Hey X0, um, can you scroll down please?", SERVER_NAMES), "scroll down");
   assert.strictEqual(commandText("Zara, go back.", SERVER_NAMES), "go back");
   assert.strictEqual(commandText("okay so just undo that, thanks", SERVER_NAMES), "undo that");
   assert.strictEqual(commandText("right click the file", SERVER_NAMES), "right click the file");
@@ -28,7 +28,7 @@ test("modeOf shows for questions and pointing, does for commands", () => {
   for (const q of ["where's export?", "How do I turn on captions", "what does this error mean?", "show me the settings", "point at the send button", "find export", "Is there a dark mode?", "export kahan hai", "help me understand this chart"]) {
     assert.strictEqual(modeOf(q, SERVER_NAMES), "show", q);
   }
-  for (const c of ["turn on captions", "open #design and tell them the mockups are ready", "Can you turn on captions?", "Hey Tailzu, could you export this?", "scroll down"]) {
+  for (const c of ["turn on captions", "open #design and tell them the mockups are ready", "Can you turn on captions?", "Hey X0, could you export this?", "scroll down"]) {
     assert.strictEqual(modeOf(c, SERVER_NAMES), "do", c);
   }
 });
@@ -84,7 +84,7 @@ test("a disabled control is never pressed", () => {
 test("the bars are the server's: 0.85, and 0.2 over the runner-up", () => {
   assert.strictEqual(ACCEPT_AT, 0.85);
   assert.strictEqual(MARGIN, 0.2);
-  assert.deepStrictEqual(NAMES, ["Tailzu", "Blip"]);
+  assert.deepStrictEqual(NAMES, ["X0", "Blip", "Tailzu"]);
   // Exactly 0.2 apart is enough (the float slack): 1.0 against 0.8, where
   // 1 - 0.8 is 0.19999999999999996 and would fail a bare comparison.
   const els = [{ id: "e1", role: "button", label: "Export PDF" }, { id: "e2", role: "button", label: "Export as PDF" }];
@@ -132,7 +132,7 @@ const SCREEN = [
 ];
 
 test("match: a question that names one thing is a show, with its id, label and how sure", () => {
-  const m = match("Hey Tailzu, where's export?", SCREEN);
+  const m = match("Hey X0, where's export?", SCREEN);
   assert.deepStrictEqual(Object.keys(m).sort(), ["id", "intent", "label", "margin", "score"]);
   assert.strictEqual(m.id, "e1");
   assert.strictEqual(m.label, "Export");
@@ -173,7 +173,7 @@ test("match: the names it answers to are taken off the front, the knobs' bars us
 test("isVisualQuestion: equations, charts, sums to solve and a bare “what's this”", () => {
   for (const q of [
     "explain this equation", "what does this chart show", "solve this", "what's this?", "whats this",
-    "Hey Tailzu, what is this?", "how do I solve this", "help me understand this graph",
+    "Hey X0, what is this?", "how do I solve this", "help me understand this graph",
     "can you describe this picture", "is this graph going up?", "what am I looking at",
     "find the derivative", "find x", "summarize this diagram", "ye kya hai", "is equation ko samjhao",
     "what is the formula in this cell", "show me what this chart means",

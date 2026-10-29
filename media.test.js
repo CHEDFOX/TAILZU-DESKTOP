@@ -156,7 +156,7 @@ test("nothing chosen is nothing sent; too big is said before sending", async () 
   const big = page({ file: { name: "movie.mov", size: 60 * 1024 * 1024 } });
   await big.m.mediaRun({ kind: "uploadFile", pick: "video", assignTo: "sent", onError: { kind: "toast", message: "$event" } });
   assert.equal(big.xhrs.length, 0);
-  assert.equal(big.ran[0][1], "That file is over 50 MB, the most Tailzu takes.");
+  assert.equal(big.ran[0][1], "That file is over 50 MB, the most X0 Bot takes.");
 });
 
 test("a screenshot is the Mac's own picker; refused Screen Recording offers a picture", async () => {
@@ -165,7 +165,7 @@ test("a screenshot is the Mac's own picker; refused Screen Recording offers a pi
   assert.equal(mac.xhrs[0].form.parts[0][2], "Screenshot 2026-10-28 at 20.15.png");
   const off = page({ bridge: { captureScreen: async () => ({ unavailable: true, why: "screen" }) } });
   await off.m.mediaRun({ kind: "uploadFile", pick: "screenshot", assignTo: "sent" });
-  assert.equal(off.toasts[0], "Screen Recording is off for Tailzu, so pick a picture instead.");
+  assert.equal(off.toasts[0], "Screen Recording is off for X0 Bot, so pick a picture instead.");
   assert.equal(off.xhrs[0].form.parts[0][2], "Price list.pdf");
   const esc = page({ bridge: { captureScreen: async () => ({ cancelled: true }) } });
   await esc.m.mediaRun({ kind: "uploadFile", pick: "screenshot", assignTo: "sent" });

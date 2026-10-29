@@ -209,7 +209,7 @@ function createLocalFiles(opts) {
     if (fold(p) === fold(realHome) || isInside(realHome, p)) return txt("desktop.files.wholeHome", "That's your whole home folder, which holds system and hidden folders.");
     const segs = p.split(sep).filter(Boolean);
     if (segs.some(badName)) return txt("desktop.files.hiddenFolder", "That's a hidden or app folder.");
-    if (realData && (isInside(p, realData) || isInside(realData, p))) return txt("desktop.files.ownFolder", "That's Tailzu's own folder.");
+    if (realData && (isInside(p, realData) || isInside(realData, p))) return txt("desktop.files.ownFolder", "That's X0 Bot's own folder.");
     const inHome = isInside(p, realHome);
     if (inHome) {
       const parts = path.relative(realHome, p).split(sep).map((x) => x.toLowerCase());
@@ -303,7 +303,7 @@ function createLocalFiles(opts) {
     if (!root) return { ok: false, why: txt("desktop.files.outside", "That's outside the folders Ask may use.") };
     const rel = relTo(root.path, resolved);
     if (rel && rel.split(sep).some(badName)) return { ok: false, why: txt("desktop.files.intoHidden", "Ask doesn't go into hidden or app folders.") };
-    if (isApp(resolved, rs)) return { ok: false, why: txt("desktop.files.tailzuItself", "That's part of Tailzu itself.") };
+    if (isApp(resolved, rs)) return { ok: false, why: txt("desktop.files.tailzuItself", "That's part of X0 Bot itself.") };
     if (rest.some((x) => CONTROL.test(x)) || CONTROL.test(base)) return { ok: false, why: txt("desktop.files.badPath", "That isn't a usable path.") };
     const st = lstat(resolved);
     return { ok: true, real: resolved, root, rel: rel.split(sep).join("/"), exists: !!st, link: !!st && st.isSymbolicLink() };

@@ -8,8 +8,8 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
 
   const STATES = {
-    off: ["", "Off"], signed_out: ["bad", "Sign in to Tailzu to use this"], connecting: ["", "Connecting…"], backoff: ["", "Connecting…"], online: ["online", "Online for Tailzu Code"],
-    working: ["working", "Working"], paused: ["paused", "Paused"], live_off: ["", "Tailzu Code is not on for your account yet"], replaced: ["bad", "Another copy of Tailzu has this computer"], idle: ["", "Connecting…"],
+    off: ["", "Off"], signed_out: ["bad", "Sign in to X0 Bot to use this"], connecting: ["", "Connecting…"], backoff: ["", "Connecting…"], online: ["online", "Online for X0 Code"],
+    working: ["working", "Working"], paused: ["paused", "Paused"], live_off: ["", "X0 Code is not on for your account yet"], replaced: ["bad", "Another copy of X0 Bot has this computer"], idle: ["", "Connecting…"],
   };
   const PAUSE = { battery_low: "Paused: the battery is under 20%", low_power_mode: "Paused: Low Power Mode is on" };
 
@@ -25,7 +25,7 @@
     $("state").textContent = st.state === "paused" ? (PAUSE[st.pausedReason] || label) : st.state === "working" ? "Working on " + st.project : label;
     $("workingRow").hidden = !st.working;
     $("stopNote").hidden = !st.working;
-    $("working").textContent = st.working ? "Tailzu is working on " + st.project : "";
+    $("working").textContent = st.working ? "X0 Bot is working on " + st.project : "";
 
     $("container").checked = !!s.container.on;
     const d = s.container.docker;
@@ -38,7 +38,7 @@
 
     const box = $("projects");
     box.textContent = "";
-    if (!s.projects.length) box.appendChild(el("div", "empty", "No projects yet. Tailzu Code asks the first time it wants to run one here."));
+    if (!s.projects.length) box.appendChild(el("div", "empty", "No projects yet. X0 Code asks the first time it wants to run one here."));
     for (const p of s.projects) {
       const row = el("div", "proj");
       row.appendChild(el("span", "name", p.name));

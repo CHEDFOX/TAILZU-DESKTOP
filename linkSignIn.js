@@ -58,7 +58,7 @@ function linkSignInNode(p, s) {
 
 function linkSection() {
   const st = LINK.state, r = LINK.req;
-  const steps = Array.isArray(LINK.props.steps) ? LINK.props.steps : ["Open the camera on your phone", "Point it at this code", "Tap Approve in Tailzu"];
+  const steps = Array.isArray(LINK.props.steps) ? LINK.props.steps : ["Open the camera on your phone", "Point it at this code", "Tap Approve in X0 Bot"];
   let qr;
   if (r && r.qr) {
     const n = r.qr.size;
@@ -68,7 +68,7 @@ function linkSection() {
   } else {
     qr = '<span class="d-qr-blank" aria-hidden="true"></span>';
   }
-  const typed = r ? esc(linkWord("typed", "No camera? In Tailzu, go to You, then Link a computer, and type {code}")).split("{code}")
+  const typed = r ? esc(linkWord("typed", "No camera? In X0 Bot, go to You, then Link a computer, and type {code}")).split("{code}")
     .join('<b class="d-qr-code">' + esc(r.code) + "</b>") : "";
   let status;
   if (st === "waiting") {
@@ -86,7 +86,7 @@ function linkSection() {
   }
   return '<section class="d-qr" data-link-panel data-state="' + esc(st) + '" aria-label="' + esc(linkWord("title", "Scan with your phone")) + '" style="' + LINK.style + '">' +
     '<div class="d-qr-head"><span class="d-qr-t">' + esc(linkWord("title", "Scan with your phone")) + '</span><span class="d-qr-s">' +
-    esc(linkWord("sub", "Already use Tailzu there? No code to type.")) + "</span></div>" +
+    esc(linkWord("sub", "Already use X0 Bot there? No code to type.")) + "</span></div>" +
     '<div class="d-qr-box">' + qr + "</div>" +
     '<ol class="d-qr-steps">' + steps.slice(0, 4).map((w) => "<li>" + esc(label(w) || "") + "</li>").join("") + "</ol>" +
     (typed ? '<p class="d-qr-typed">' + typed + "</p>" : "") +

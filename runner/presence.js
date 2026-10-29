@@ -154,7 +154,7 @@ function createPresence(o) {
     if (replaced || (info && info.code === 4000)) {
       running = false;
       setState("replaced");
-      log("presence: another copy of Tailzu has this computer now; not reconnecting");
+      log("presence: another copy of X0 Bot has this computer now; not reconnecting");
       return;
     }
     backoff("the socket closed (" + ((info && info.code) || "?") + ")");
