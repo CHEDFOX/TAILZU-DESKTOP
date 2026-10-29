@@ -144,7 +144,7 @@
     "appx": {
       "applicationId": "Tailzu",
       "displayName": "X0 Bot",
-      "backgroundColor": "#0F0D0B",
+      "backgroundColor": "#F7F3EC",
       "languages": [
         "en-US"
       ],

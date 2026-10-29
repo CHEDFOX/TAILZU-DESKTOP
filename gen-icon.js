@@ -13,7 +13,9 @@
 // It does NOT touch assets/icon.png any more. That used to be generated here
 // too, and it is now the real brand mark — running this script would have
 // silently replaced authored artwork with a dot, one npm command away from
-// shipping the wrong installer icon.
+// shipping the wrong installer icon. The app icons (assets/icon.png,
+// assets/icon-mac.png, build/icon.ico, build/appx/*) are cut from the brand's
+// master picture by gen-app-icon.py, run by hand, and committed.
 //
 // The tray stays a dot on purpose. It renders at 18pt in a macOS menu bar that
 // may be light or dark; the mark is white shapes on black, which reads as a
