@@ -184,3 +184,28 @@ test("the pieces: names, questions, commands", () => {
   assert.strictEqual(r.notesCommand("meeting notes"), "toggle");
   assert.strictEqual(r.notesCommand("notes"), null);
 });
+
+test("the server's lists: they replace today's, and a list that is not one keeps today's", () => {
+  const knobs = require("./knobs.js");
+  try {
+    knobs.setKnobs({ labels: {}, flags: {
+      // A new way the recogniser hears the name, a new greeting, a new bot, a new task rule.
+      "desktop.router.heardAs": [{ name: "tailzu", heard: ["tailzu", "tale zoo"] }, { name: "blip", heard: ["blip"] }],
+      "desktop.router.greetings": ["hey", "namaste"],
+      "desktop.router.bots": [{ slug: "plan", names: ["plan bot"] }, { slug: "chef", names: ["chef bot"] }],
+      "desktop.router.tasks": [{ slug: "chef", re: "^(?:cook|bake) " }, { slug: "x", re: "(" }],
+      // Not words: today's list holds.
+      "desktop.router.questionStart": [1, null],
+      "desktop.router.screenStrong": ["("],
+    } });
+    assert.deepStrictEqual(r.address(r.norm("Namaste tale zoo, open mail"), NAMES), { addressed: true, rest: "open mail" });
+    assert.deepStrictEqual(r.botTask(r.norm("Chef bot, dinner ideas"), []), { slug: "chef", named: true });
+    assert.deepStrictEqual(r.botTask(r.norm("cook something with paneer"), []), { slug: "chef", named: false });
+    assert.strictEqual(r.botTask(r.norm("travel bot, find a hotel"), []), null, "the server's bots are the bots");
+    assert.ok(r.isQuestion("", "what is this"), "an unusable list keeps today's");
+    assert.ok(r.aboutScreen("what is this", "what is this", true), "patterns that do not compile keep today's");
+  } finally {
+    knobs.setKnobs({ labels: {}, flags: {} });
+  }
+  assert.deepStrictEqual(r.botTask(r.norm("travel bot, find a hotel"), []), { slug: "travel", named: true }, "today's again");
+});

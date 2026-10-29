@@ -428,7 +428,11 @@ function loadConfig() {
   // THE ACCOUNT'S TOKEN RIDES ON EVERY REQUEST TO THIS ADDRESS, so it is https
   // — or plain http to this machine, for a backend run locally. Anything else
   // would send the token in clear; it is refused and said so, like broken JSON.
-  const wanted = String(process.env.TAILZU_BASE_URL || file.baseUrl || "https://api.tailzu.space").trim();
+  // config.json is seeded with the address in use (openConfig), so the old
+  // default, api.tailzu.space, is read as today's: such an install moves to
+  // x0bot.com with everyone else. Any other address written there stays.
+  const fromFile = /^https:\/\/api\.tailzu\.space\/?$/i.test(String(file.baseUrl || "").trim()) ? "" : file.baseUrl;
+  const wanted = String(process.env.TAILZU_BASE_URL || fromFile || "https://api.x0bot.com").trim();
   let baseUrl = null;
   try {
     const u = new URL(wanted);
@@ -441,7 +445,7 @@ function loadConfig() {
       "baseUrl must be https (or http to localhost): {url} was ignored.", { url: wanted });
   }
   return {
-    baseUrl: baseUrl || "https://api.tailzu.space",
+    baseUrl: baseUrl || "https://api.x0bot.com",
     language: process.env.TAILZU_LANGUAGE || file.language || str("desktop.language.default", "auto"),
     // Electron accelerator string. CommandOrControl = ⌘ on macOS, Ctrl on Win/Linux.
     hotkey: process.env.TAILZU_HOTKEY || file.hotkey || str("desktop.hotkey.default", "CommandOrControl+Shift+Space"),
@@ -562,6 +566,7 @@ function toneLabel(id) {
 let runner = null;                 // Tailzu Code on this computer (setupRunner, below)
 let authSession = loadSession();   // { access_token, refresh_token, expires_at }
 let accountTone = null;            // last value read from the account
+let accountPreset = null;          // the voice it belongs to (personality.activePresetId), when one was read
 let accountNickname = "";          // their own name for the assistant ("Jarvis"), "" when none
 let refreshing = null;             // in-flight refresh, so N callers make 1 POST
 
@@ -679,6 +684,8 @@ async function refreshAccountTone() {
   try {
     const p = await apiJson("/v1/personality", { method: "GET" });
     const t = (p && (p.personality ? p.personality.activeTone : p.activeTone)) || null;
+    const pid = (p && (p.personality ? p.personality.activePresetId : p.activePresetId)) || null;
+    if (pid !== accountPreset) { accountPreset = typeof pid === "string" ? pid : null; if (t === accountTone) refreshTray(); }
     if (t && t !== accountTone) { accountTone = t; refreshTray(); }
     else if (t) accountTone = t;
     // Their own name for it, from the same read. Ask takes it off the front
@@ -696,10 +703,30 @@ async function refreshAccountTone() {
  *  the setup card's yes for every app, for the same reason: it was theirs. */
 function signedOut() {
   accountTone = null;
+  accountPreset = null;
   accountNickname = "";
   if (picturesAllowed().length || localState.askPicturesAlwaysAll === true) forgetPictures();
   // The kinds of change to their files they said yes to were theirs too.
   if (deviceKinds().length) { localState.askDeviceOk = []; saveLocalState(); }
+}
+
+/** One of their own voices, from the tray (desktop.voices): the voice and its tone, as the keyboard picks one. */
+async function setAccountVoice(v) {
+  if (!signedIn()) return;
+  accountTone = v.tone;
+  accountPreset = v.id;
+  refreshTray();
+  try {
+    await apiJson("/v1/personality", { method: "PUT", body: JSON.stringify({ activePresetId: v.id, activeTone: v.tone }) });
+  } catch { void refreshAccountTone(); }
+}
+
+/** Their own voices, for the tray's tone menu: sent with their bootstrap (per person, not a knob). */
+function voices() {
+  return list("desktop.voices", [])
+    .filter((x) => x && typeof x.id === "string" && x.id && typeof x.tone === "string" && x.tone)
+    .map((x) => ({ id: x.id, tone: x.tone, label: typeof x.label === "string" && x.label.trim() ? x.label.trim().slice(0, 40) : x.id }))
+    .slice(0, 6);
 }
 
 async function setAccountTone(tone) {
@@ -731,7 +758,7 @@ function currentTone() { return accountTone || cfg.tone; }
 // the redirect URL is never fetched and does not have to exist. It only has to
 // be on the provider's allow-list, which is why it is a real https URL on a
 // domain that is ours rather than a localhost port or a custom scheme.
-function redirectUrl() { return str("desktop.oauth.redirectUrl", "https://tailzu.space/auth/callback"); }
+function redirectUrl() { return str("desktop.oauth.redirectUrl", "https://x0bot.com/auth/callback"); }
 
 // GOOGLE WILL NOT SIGN YOU IN INSIDE A WINDOW WE OWN.
 //
@@ -1786,13 +1813,13 @@ function tapLabel() {
 }
 
 function buildMenu() {
-  return Menu.buildFromTemplate([
+  return Menu.buildFromTemplate(trayOrder([
     // Says what the press will actually do. A plain "Dictate" on a signed-out
     // machine promises something the click cannot deliver.
     {
       label: recording ? fmt("tray.listening", { key: oneKeyBound || prettyKey(cfg.hotkey) })
         : signedIn() ? t("tray.dictate") : t("tray.signInToDictate"),
-      click: toggleDictation,
+      click: toggleDictation, row: "dictate",
     },
     // One microphone: while a dictation records it is the dictation's, and
     // a question started now would throw its words away.
@@ -1800,7 +1827,7 @@ function buildMenu() {
       label: cfg.tap && tapActive && !cfg.oneKey ? txt("desktop.tray.ask", "Ask about this screen (tap {key} twice)", { key: askKey() })
         : txt("desktop.tray.askNoTap", "Ask about this screen"),
       enabled: signedIn() && !recording,
-      click: () => { if (!recording) void ask.tap({ menu: true }); },
+      click: () => { if (!recording) void ask.tap({ menu: true }); }, row: "ask",
     }] : []),
     // "Always for <app>" on the picture card, taken back: one click on it
     // sent pictures of that app for good, with nowhere to undo it. Listed
@@ -1817,6 +1844,7 @@ function buildMenu() {
         { type: "separator" },
         { label: txt("desktop.tray.picturesForgetAll", "Ask again for all of them"), click: () => forgetPictures() },
       ]),
+      row: "pictures",
     }] : []),
     {
       label: !notes ? txt("desktop.tray.notesStart", "Take notes") + (cfg.oneKey ? "" : "  " + prettyKey(cfg.notesHotkey))
@@ -1824,39 +1852,47 @@ function buildMenu() {
         : notes.state === "saving" ? txt("desktop.tray.notesSaving", "Saving notes…")
         : txt("desktop.tray.notesStarting", "Starting notes…"),
       enabled: !notes || notes.state === "recording",
-      click: toggleNotes,
+      click: toggleNotes, row: "notes",
     },
-    { label: t("tray.open"), click: () => openAppWindow() },
-    ...runnerMenuItems(),
+    { label: t("tray.open"), click: () => openAppWindow(), row: "open" },
+    ...runnerMenuItems().map((x) => Object.assign(x, { row: "runner" })),
     { type: "separator" },
     {
-      label: `${t("tray.tone")}: ${toneLabel(currentTone())}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
+      label: `${t("tray.tone")}: ${(signedIn() && (voices().find((v) => v.id === accountPreset && v.tone === currentTone()) || {}).label) || toneLabel(currentTone())}${signedIn() ? "" : ` (${t("tray.toneThisDevice")})`}`,
       // The account's tone may be a voice the user created, which is not in
       // this list — include it so the menu can show it selected rather than
       // showing five unticked rows and implying none is active.
       submenu: (() => {
         const rows = tones();
         if (accountTone && !rows.some((x) => x.id === accountTone)) rows.push({ id: accountTone, label: accountTone });
-        return rows.map((x) => ({
-          label: x.label, type: "radio", checked: currentTone() === x.id,
+        // Their own voices first (signed in only), then the tones, as one radio group (no separator between, so one
+        // tick for the lot): the voice in use, else its tone.
+        const own = signedIn() ? voices() : [];
+        const onVoice = own.find((v) => v.id === accountPreset && v.tone === currentTone());
+        return own.map((v) => ({
+          label: v.label, type: "radio", checked: onVoice === v,
+          click: () => { void setAccountVoice(v); },
+        })).concat(rows.map((x) => ({
+          label: x.label, type: "radio", checked: !onVoice && currentTone() === x.id,
           click: () => { void setAccountTone(x.id); },
-        }));
+        })));
       })(),
+      row: "tone",
     },
     {
       label: t("tray.liveCaptions"),
       type: "checkbox", checked: cfg.live,
-      click: (item) => setLocal("live", item.checked),
+      click: (item) => setLocal("live", item.checked), row: "liveCaptions",
     },
     {
       label: txt("desktop.tray.showPill", "Show the pill"),
       type: "checkbox", checked: cfg.pill !== false,
-      click: (item) => setLocal("pill", item.checked),
+      click: (item) => setLocal("pill", item.checked), row: "showPill",
     },
     {
       label: t("tray.startAtLogin"),
       type: "checkbox", checked: cfg.autoStart,
-      click: (item) => setLocal("autoStart", item.checked),
+      click: (item) => setLocal("autoStart", item.checked), row: "startAtLogin",
     },
     { type: "separator" },
     // The double-tap first, because it is the way in now and the chord is the
@@ -1890,19 +1926,43 @@ function buildMenu() {
           : t("tray.holdOff"),
         enabled: false,
       },
-    ]),
-    { label: `${t("tray.backend")}: ${cfg.baseUrl}`, enabled: false },
+    ]).map((x) => Object.assign(x, { row: "keys" })),
+    { label: `${t("tray.backend")}: ${cfg.baseUrl}`, enabled: false, row: "backend" },
     // Which credential is ACTUALLY in use — ends the "which token is it using"
     // guessing when auth fails. Signed in, that is the account; signed out
     // there is none, because there is no static token to fall back on.
     {
       label: signedIn() ? t("tray.signedIn") : txt("desktop.tray.signedOut", "Not signed in"),
-      enabled: false,
+      enabled: false, row: "account",
     },
-    { label: t("tray.editConfig"), click: openConfig },
+    { label: t("tray.editConfig"), click: openConfig, row: "editConfig" },
     { type: "separator" },
-    { label: t("tray.quit"), click: () => app.quit() },
-  ]);
+    { label: t("tray.quit"), click: () => app.quit(), row: "quit" },
+  ]));
+}
+
+/**
+ * THE TRAY'S ORDER, the server's (desktop.tray.rows): the rows by name, top to
+ * bottom, and "separator" for a line. A row the server leaves out is not shown;
+ * one it names that is not there now (Ask while it is off) is skipped. Quit is
+ * always there, last if it was not named: a tray must always be able to quit.
+ * No list, or nothing usable in one: the menu as it is built above, unchanged.
+ */
+function trayOrder(items) {
+  const strip = (x) => { const o = Object.assign({}, x); delete o.row; return o; };
+  const order = list("desktop.tray.rows", []).filter((r) => typeof r === "string" && r);
+  if (!order.some((r) => r !== "separator" && items.some((x) => x.row === r))) return items.map(strip);
+  const out = [];
+  for (const r of order) {
+    if (r === "separator") { if (out.length && out[out.length - 1].type !== "separator") out.push({ type: "separator" }); continue; }
+    for (const x of items) if (x.row === r && !(x.type === "separator" && (!out.length || out[out.length - 1].type === "separator"))) out.push(strip(x));
+  }
+  if (!order.includes("quit")) {
+    if (out.length && out[out.length - 1].type !== "separator") out.push({ type: "separator" });
+    out.push(strip(items.find((x) => x.row === "quit")));
+  }
+  while (out.length && out[out.length - 1].type === "separator") out.pop();
+  return out;
 }
 
 function openConfig() {
@@ -1974,7 +2034,7 @@ function runnerMenuItems() {
   });
   const line = runnerStateLine(st);
   if (st.enabled && line && !st.working) items.push({ label: "    " + line, enabled: false });
-  items.push({ label: txt("desktop.tray.runnerActivity", "Tailzu Code activity…"), click: openRunnerWindow });
+  items.push({ label: txt("desktop.tray.runnerActivity", "Tailzu Code activity…"), click: openRunnerPage });
   return items;
 }
 
@@ -2063,42 +2123,76 @@ function openRunnerWindow() {
   runnerWin.loadFile("runner/runner.html");
 }
 
-// Told on every change, at most four times a second.
+/**
+ * Where "Tailzu Code activity…" goes: the server's page for it (desktop.runner.screenId, bots.computer, whose
+ * DeskRunner card runnerCard.js draws) for someone in the Bots app, where the server names one; else this
+ * window, as it always was.
+ */
+function openRunnerPage() {
+  const id = bool("bots.app", false) ? str("desktop.runner.screenId", "") : "";
+  if (id && /^[a-z][a-z0-9._-]{0,80}$/.test(id)) openAppWindow(id);
+  else openRunnerWindow();
+}
+
+// Told on every change, at most four times a second: the runner's window, and the app window's card.
 let runnerPushTimer = null;
 function pushRunnerWindow() {
-  if (!runnerWin || runnerWin.isDestroyed() || runnerPushTimer) return;
+  const wins = [runnerWin, appWin].filter((w) => w && !w.isDestroyed());
+  if (!wins.length || runnerPushTimer) return;
   runnerPushTimer = setTimeout(async () => {
     runnerPushTimer = null;
-    if (!runnerWin || runnerWin.isDestroyed() || !runner || runnerWin.webContents.isLoading()) return;
-    try { runnerWin.webContents.send("runner:update", await runner.snapshot({ fetchProjects: false })); } catch { /* the window went */ }
+    if (!runner) return;
+    let snap;
+    try { snap = await runner.snapshot({ fetchProjects: false }); } catch { return; }
+    for (const w of [runnerWin, appWin]) {
+      if (!w || w.isDestroyed() || w.webContents.isLoading()) continue;
+      try { w.webContents.send("runner:update", snap); } catch { /* the window went */ }
+    }
   }, 250);
 }
 
-// What the runner's window may ask for: narrow, checked here, and only from that window.
+// What the runner's window, and the app window's card on the server's page (runnerCard.js), may ask for:
+// narrow, checked here, and only from those two windows. The card's words are the server's, so they are not
+// the consent: from the app window, turning it on asks here first (runnerSwitch, with this file's own words,
+// the first time) and allowing a project asks as a project's first run does (askRunnerProject). Taking
+// anything back (off, don't allow, ask again, Stop) needs no asking.
 const fromRunnerWin = (e) => isFrom(e, runnerWin);
-ipcMain.handle("runner:state", async (e) => (fromRunnerWin(e) && runner ? runner.snapshot() : null));
+const fromRunnerCard = (e) => fromRunnerWin(e) || fromApp(e);
+ipcMain.handle("runner:state", async (e) => (fromRunnerCard(e) && runner ? runner.snapshot() : null));
 ipcMain.handle("runner:set", async (e, key, value) => {
-  if (!fromRunnerWin(e) || !runner || typeof value !== "boolean") return null;
+  if (!fromRunnerCard(e) || !runner || typeof value !== "boolean") return null;
   if (key === "enabled") {
-    // Its words are on the page the switch is on.
-    if (value && localState.runner && !localState.runner.explained) { localState.runner.explained = true; saveLocalState(); }
-    runner.setEnabled(value);
+    if (fromRunnerWin(e)) {
+      // Its words are on the page the switch is on.
+      if (value && localState.runner && !localState.runner.explained) { localState.runner.explained = true; saveLocalState(); }
+      runner.setEnabled(value);
+    } else if (value) {
+      await runnerSwitch(true);
+    } else {
+      runner.setEnabled(false);
+    }
   } else if (key === "container") runner.setContainer(value);
   return runner.snapshot({ fetchProjects: false });
 });
 ipcMain.handle("runner:project", async (e, id, name, action) => {
-  if (!fromRunnerWin(e) || !runner) return null;
+  if (!fromRunnerCard(e) || !runner) return null;
   if (!["allow", "deny", "ask"].includes(action)) return null;
-  await runner.setProject(String(id || ""), String(name || "").slice(0, 120), action);
+  const pid = String(id || ""), pname = String(name || "").slice(0, 120);
+  if (action === "allow" && !fromRunnerWin(e)) {
+    // Asked here, with its own words, before a project the page names may run on this computer.
+    const yes = await askRunnerProject({ name: pname });
+    if (yes !== true) return runner.snapshot({ fetchProjects: false });
+  }
+  await runner.setProject(pid, pname, action);
   return runner.snapshot({ fetchProjects: false });
 });
 ipcMain.handle("runner:checkDocker", async (e) => {
-  if (!fromRunnerWin(e) || !runner) return null;
+  if (!fromRunnerCard(e) || !runner) return null;
   await runner.checkDocker();
   return runner.snapshot({ fetchProjects: false });
 });
-ipcMain.on("runner:stop", (e) => { if (fromRunnerWin(e) && runner) runner.stopWork(); });
-ipcMain.on("runner:openAudit", (e) => { if (fromRunnerWin(e) && runner) shell.openPath(runner.auditDir).catch(() => {}); });
+ipcMain.on("runner:stop", (e) => { if (fromRunnerCard(e) && runner) runner.stopWork(); });
+ipcMain.on("runner:openAudit", (e) => { if (fromRunnerCard(e) && runner) shell.openPath(runner.auditDir).catch(() => {}); });
 
 // ---- What the app window is allowed to ask for -------------------------------
 // Narrow on purpose: the renderer gets the backend URL, the session, and the
@@ -2143,6 +2237,8 @@ ipcMain.handle("app:env", (e) => {
     // Ask is here, so the window declares its one-time setup card
     // (DeskAskSetup) and reads its states with askSetup().
     askSetup: askOn(),
+    // Tailzu Code on this computer is here: the window declares its card (DeskRunner) on bots.computer.
+    runner: !!runner,
     // The notes chord, when there is one: with the one key none is bound (notes go by "take notes" with it held).
     notesHotkey: cfg.oneKey ? "" : prettyKey(cfg.notesHotkey),
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
@@ -2945,6 +3041,8 @@ const localFiles = createLocalFiles({
   // This program and where it lives are never touched, wherever it was put (a Downloads folder, say).
   protect: [process.execPath, path.dirname(process.execPath), typeof app.getAppPath === "function" ? app.getAppPath() : ""],
   roots: () => (Array.isArray(localState.askFolders) ? localState.askFolders : null),
+  // Its refusals' words: the server's labels (desktop.files.*), today's as the fallback.
+  txt,
 });
 function deviceKinds() {
   return Array.isArray(localState.askDeviceOk) ? localState.askDeviceOk.filter((k) => typeof k === "string") : [];
@@ -2994,6 +3092,12 @@ const askSetup = createAskSetup({
   },
 });
 
+/** The names it answers to: the server's (its own and the guide's), and theirs for it. */
+function wakeNames() {
+  const own = list("desktop.router.names", ["Tailzu", "Blip"]).filter((n) => typeof n === "string" && n.trim());
+  return (own.length ? own : ["Tailzu", "Blip"]).concat(accountNickname ? [accountNickname] : []);
+}
+
 function setupAsk() {
   if (ask) return;
   ask = createAsk({
@@ -3018,7 +3122,7 @@ function setupAsk() {
     // A dictation recording keeps the microphone; a question waits its turn.
     dictating: () => recording,
     // The names it answers to: its own, Blip, and theirs for it.
-    names: () => ["Tailzu", "Blip", accountNickname].filter(Boolean),
+    names: () => wakeNames(),
     // The one key as bound ("Fn"): what its cards tell the person to press.
     oneKey: () => oneKeyBound,
     // The card's button when the Mac has not let Tailzu see the screen; none
@@ -3104,7 +3208,7 @@ ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn
 const withinMs = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out")), ms))]);
 const routing = createRouting({
   on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
-  signals: () => ({ names: ["Tailzu", "Blip", accountNickname].filter(Boolean), askOn: askOn(), notesOn: !!notes }),
+  signals: () => ({ names: wakeNames(), askOn: askOn(), notesOn: !!notes }),
   type: (sid, chunks) => {
     const written = chunks.filter((c) => c && c.text);
     for (const c of written) paste(spaced(sid, c.text, c.join));

@@ -49,8 +49,12 @@ function makeOutbox(io, o) {
     else void ready();
     listeners.forEach((fn) => { try { fn(); } catch { /* a listener's own problem */ } });
   };
+  // How many it keeps (never more than OUTBOX_MAX) and how long a sent one stays (a minute to a week):
+  // numbers, or readers of the server's (outbox.max, outbox.keepSentMs), read each time.
+  const limit = (v, fallback) => { const n = Number(typeof v === "function" ? v() : v); return Number.isFinite(n) && n > 0 ? n : fallback; };
+  const maxNow = () => Math.min(Math.floor(limit(o.max, OUTBOX_MAX)) || OUTBOX_MAX, OUTBOX_MAX);
   const prune = () => {
-    const keep = o.keepSentMs || OUTBOX_KEEP_SENT_MS, t = io.now();
+    const keep = Math.min(Math.max(limit(o.keepSentMs, OUTBOX_KEEP_SENT_MS), 60000), 7 * 24 * 3600000), t = io.now();
     list = list.filter((e) => e.state !== "sent" || t - (e.sentAt || 0) < keep);
   };
 
@@ -88,7 +92,7 @@ function makeOutbox(io, o) {
       const label = typeof a.label === "string" ? a.label.trim() : "";
       if (!label) return null;
       prune();
-      if (list.length >= (o.max || OUTBOX_MAX)) {
+      if (list.length >= maxNow()) {
         const sent = list.findIndex((e) => e.state === "sent");
         if (sent < 0) return null;
         list.splice(sent, 1);
@@ -184,6 +188,9 @@ function outboxBox() {
     now: () => Date.now(),
     newId: () => (window.crypto && typeof window.crypto.randomUUID === "function" ? window.crypto.randomUUID() : "o" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)),
     timeText: outboxClock,
+  }, {
+    max: () => K.num("outbox.max", 20),
+    keepSentMs: () => K.num("outbox.keepSentMs", 86400000),
   });
   OUTBOX.subscribe(() => { offlinePut(); if (typeof repaint === "function" && CURRENT_SCREEN) repaint(); });
   void OUTBOX.ready().then(() => outboxGo());

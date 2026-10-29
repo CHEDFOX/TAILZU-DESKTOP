@@ -162,6 +162,14 @@ function createLocalFiles(opts) {
   const insensitive = typeof o.caseInsensitive === "boolean" ? o.caseInsensitive : platform === "darwin" || platform === "win32";
   const chosen = typeof o.roots === "function" ? o.roots : () => null;
   const sep = path.sep;
+  // THE REFUSALS' WORDS are labels (desktop.files.*, through `o.txt`, the knobs' reader), so the server words
+  // and translates them; the words below are today's, and the fallback. The rules themselves stay here.
+  const say = typeof o.txt === "function" ? o.txt : null;
+  function txt(key, fallback, vars) {
+    let v;
+    try { v = say ? say(key, fallback, vars) : undefined; } catch { v = undefined; }
+    return typeof v === "string" && v.trim() ? v : fill(fallback, vars);
+  }
 
   const fold = (p) => (insensitive ? p.toLowerCase() : p);
   const real = (p) => (fs.realpathSync.native || fs.realpathSync)(p);
@@ -196,25 +204,25 @@ function createLocalFiles(opts) {
 
   /** Why a folder may not be one of the allowed ones, or "" when it may. `p` is already resolved. */
   function rootProblem(p, usual) {
-    if (!p || !path.isAbsolute(p)) return "That isn't a folder on this computer.";
-    if (path.parse(p).root === p) return "That's a whole disk.";
-    if (fold(p) === fold(realHome) || isInside(realHome, p)) return "That's your whole home folder, which holds system and hidden folders.";
+    if (!p || !path.isAbsolute(p)) return txt("desktop.files.notOnComputer", "That isn't a folder on this computer.");
+    if (path.parse(p).root === p) return txt("desktop.files.wholeDisk", "That's a whole disk.");
+    if (fold(p) === fold(realHome) || isInside(realHome, p)) return txt("desktop.files.wholeHome", "That's your whole home folder, which holds system and hidden folders.");
     const segs = p.split(sep).filter(Boolean);
-    if (segs.some(badName)) return "That's a hidden or app folder.";
-    if (realData && (isInside(p, realData) || isInside(realData, p))) return "That's Tailzu's own folder.";
+    if (segs.some(badName)) return txt("desktop.files.hiddenFolder", "That's a hidden or app folder.");
+    if (realData && (isInside(p, realData) || isInside(realData, p))) return txt("desktop.files.ownFolder", "That's Tailzu's own folder.");
     const inHome = isInside(p, realHome);
     if (inHome) {
       const parts = path.relative(realHome, p).split(sep).map((x) => x.toLowerCase());
-      if (parts[0] === "applications" || parts[0] === "appdata") return "That's a system or app folder.";
+      if (parts[0] === "applications" || parts[0] === "appdata") return txt("desktop.files.appFolder", "That's a system or app folder.");
       // The usual three are the system's own Downloads, Desktop and Documents, wherever it keeps them: with
       // iCloud Drive or a cloud folder on, a Mac keeps them under Library/Mobile Documents or Library/CloudStorage.
       // Nothing else under Library is ever one, the usual three included.
-      if (parts[0] === "library" && !(usual && (parts[1] === "mobile documents" || parts[1] === "cloudstorage"))) return "That's a system or app folder.";
+      if (parts[0] === "library" && !(usual && (parts[1] === "mobile documents" || parts[1] === "cloudstorage"))) return txt("desktop.files.appFolder", "That's a system or app folder.");
       return "";
     }
     const first = (platform === "win32" ? segs.slice(1) : segs)[0];
     const list = platform === "win32" ? WIN_SYSTEM : POSIX_SYSTEM;
-    if (first && list.includes(first.toLowerCase())) return "That's a system folder.";
+    if (first && list.includes(first.toLowerCase())) return txt("desktop.files.systemFolder", "That's a system folder.");
     return "";
   }
 
@@ -242,7 +250,7 @@ function createLocalFiles(opts) {
   /** A folder offered for the allowed list: { ok, path } resolved, or { ok: false, why }. */
   function checkRoot(p) {
     let r;
-    try { r = real(str(p)); if (!fs.statSync(r).isDirectory()) return { ok: false, why: "That isn't a folder." }; } catch { return { ok: false, why: "I can't open that folder." }; }
+    try { r = real(str(p)); if (!fs.statSync(r).isDirectory()) return { ok: false, why: txt("desktop.files.notFolder", "That isn't a folder.") }; } catch { return { ok: false, why: txt("desktop.files.cantOpen", "I can't open that folder.") }; }
     const why = rootProblem(r);
     return why ? { ok: false, why } : { ok: true, path: r };
   }
@@ -257,24 +265,24 @@ function createLocalFiles(opts) {
   function guard(input, roots_, internal) {
     const rs = roots_ || roots();
     const text = str(input).trim();
-    if (!text || text.length > 600 || CONTROL.test(text)) return { ok: false, why: "That isn't a usable path." };
-    if (!rs.length) return { ok: false, why: "No folder is allowed for Ask. Add one in Settings." };
+    if (!text || text.length > 600 || CONTROL.test(text)) return { ok: false, why: txt("desktop.files.badPath", "That isn't a usable path.") };
+    if (!rs.length) return { ok: false, why: txt("desktop.files.noFolders", "No folder is allowed for Ask. Add one in Settings.") };
     // What the planner names starts with an allowed folder's name. A full path (a drive, a \\server share, a
     // leading slash) is only ever this module's own: the undo log's, or a step it made itself (`internal`).
     // Refused before anything is looked up, so a share the planner names is never even contacted.
     const full = path.isAbsolute(text) || /^(?:[\\/]{2}|[A-Za-z]:|[\\/])/.test(text);
-    if (full && !internal) return { ok: false, why: "A path starts with the name of a folder Ask may use." };
+    if (full && !internal) return { ok: false, why: txt("desktop.files.startWithFolder", "A path starts with the name of a folder Ask may use.") };
     const segs = text.replace(/\\/g, "/").split("/").filter((s) => s !== "" && s !== ".");
-    if (segs.includes("..")) return { ok: false, why: "That path goes up out of its folder." };
+    if (segs.includes("..")) return { ok: false, why: txt("desktop.files.goesUp", "That path goes up out of its folder.") };
     // "... " and "..." are ".." to a system that drops trailing dots and spaces; on Windows so is any name that ends so, and
     // ":" starts a hidden stream.
-    if (!internal && segs.some((x) => /^[. ]+$/.test(x) || (platform === "win32" && (/[<>:"|?*]/.test(x) || /[. ]$/.test(x))))) return { ok: false, why: "That isn't a usable path." };
+    if (!internal && segs.some((x) => /^[. ]+$/.test(x) || (platform === "win32" && (/[<>:"|?*]/.test(x) || /[. ]$/.test(x))))) return { ok: false, why: txt("desktop.files.badPath", "That isn't a usable path.") };
     let candidate;
     if (path.isAbsolute(text)) {
       candidate = path.normalize(text);
     } else {
       const root = rs.find((r) => fold(r.label) === fold(segs[0] || ""));
-      if (!root) return { ok: false, why: `${clip(segs[0] || text, 40)} isn't one of the folders Ask may use.` };
+      if (!root) return { ok: false, why: txt("desktop.files.notAllowed", "{name} isn't one of the folders Ask may use.", { name: clip(segs[0] || text, 40) }) };
       candidate = path.join(root.path, ...segs.slice(1));
     }
     // The folder it is in is resolved through the system (links in the way lead where they lead, and are
@@ -284,7 +292,7 @@ function createLocalFiles(opts) {
     const rest = [];
     for (;;) {
       try { at = real(at); break; } catch (e) {
-        if (!e || e.code !== "ENOENT" || path.dirname(at) === at) return { ok: false, why: "I can't reach that." };
+        if (!e || e.code !== "ENOENT" || path.dirname(at) === at) return { ok: false, why: txt("desktop.files.cantReach", "I can't reach that.") };
         rest.unshift(path.basename(at));
         at = path.dirname(at);
       }
@@ -292,11 +300,11 @@ function createLocalFiles(opts) {
     const base = path.basename(candidate);
     const resolved = path.join(at, ...rest, base);
     const root = rs.find((r) => isInside(resolved, r.path));
-    if (!root) return { ok: false, why: "That's outside the folders Ask may use." };
+    if (!root) return { ok: false, why: txt("desktop.files.outside", "That's outside the folders Ask may use.") };
     const rel = relTo(root.path, resolved);
-    if (rel && rel.split(sep).some(badName)) return { ok: false, why: "Ask doesn't go into hidden or app folders." };
-    if (isApp(resolved, rs)) return { ok: false, why: "That's part of Tailzu itself." };
-    if (rest.some((x) => CONTROL.test(x)) || CONTROL.test(base)) return { ok: false, why: "That isn't a usable path." };
+    if (rel && rel.split(sep).some(badName)) return { ok: false, why: txt("desktop.files.intoHidden", "Ask doesn't go into hidden or app folders.") };
+    if (isApp(resolved, rs)) return { ok: false, why: txt("desktop.files.tailzuItself", "That's part of Tailzu itself.") };
+    if (rest.some((x) => CONTROL.test(x)) || CONTROL.test(base)) return { ok: false, why: txt("desktop.files.badPath", "That isn't a usable path.") };
     const st = lstat(resolved);
     return { ok: true, real: resolved, root, rel: rel.split(sep).join("/"), exists: !!st, link: !!st && st.isSymbolicLink() };
   }
@@ -397,7 +405,7 @@ function createLocalFiles(opts) {
     const g = guard(args.folder, rs);
     if (!g.ok) return { why: g.why };
     const st = g.exists ? lstat(g.real) : null;
-    if (!st || !st.isDirectory()) return { why: `${clip(str(args.folder), 40)} isn't a folder I can see.` };
+    if (!st || !st.isDirectory()) return { why: txt("desktop.files.cantSeeFolder", "{name} isn't a folder I can see.", { name: clip(str(args.folder), 40) }) };
     return { from: [g] };
   }
 
@@ -409,19 +417,19 @@ function createLocalFiles(opts) {
       for (const p of args.paths) {
         const g = guard(p, rs);
         if (!g.ok) return { why: g.why };
-        if (!g.exists) return { why: `${clip(str(p), 60)} isn't there.` };
-        if (!g.rel) return { why: "Ask doesn't move or remove a whole allowed folder." };
+        if (!g.exists) return { why: txt("desktop.files.notThere", "{name} isn't there.", { name: clip(str(p), 60) }) };
+        if (!g.rel) return { why: txt("desktop.files.wholeAllowed", "Ask doesn't move or remove a whole allowed folder.") };
         const st = lstat(g.real);
-        if (!st || st.isSymbolicLink()) return { why: `${clip(path.basename(g.real), 60)} is a link, so I leave it.` };
-        if (st.isDirectory() && !dirs) return { why: `${clip(path.basename(g.real), 60)} is a folder; I only do this to files.` };
-        if (!st.isDirectory() && !st.isFile()) return { why: `${clip(path.basename(g.real), 60)} isn't a regular file.` };
+        if (!st || st.isSymbolicLink()) return { why: txt("desktop.files.isLink", "{name} is a link, so I leave it.", { name: clip(path.basename(g.real), 60) }) };
+        if (st.isDirectory() && !dirs) return { why: txt("desktop.files.isFolder", "{name} is a folder; I only do this to files.", { name: clip(path.basename(g.real), 60) }) };
+        if (!st.isDirectory() && !st.isFile()) return { why: txt("desktop.files.notRegular", "{name} isn't a regular file.", { name: clip(path.basename(g.real), 60) }) };
         if (seen.has(fold(g.real))) continue;
         seen.add(fold(g.real));
         items.push(describe(g.real, st, rs));
       }
       return { items: items.slice(0, MAX_FILES), more: Math.max(0, items.length - MAX_FILES) };
     }
-    if (!hasFilter(args)) return { why: "Tell me which files: a word in the name, a kind, a date or a size." };
+    if (!hasFilter(args)) return { why: txt("desktop.files.whichFiles", "Tell me which files: a word in the name, a kind, a date or a size.") };
     const sc = scope(args, rs);
     if (sc.why) return { why: sc.why };
     const found = files(sc.from, rs, filterOf(args), MAX_FILES + 1);

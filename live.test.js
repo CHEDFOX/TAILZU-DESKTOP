@@ -38,7 +38,7 @@ test("hears its own topics and a wildcard's family", () => {
 });
 
 test("the socket's address: the API's host, ws or wss, no token", () => {
-  assert.equal(L.wsUrlOf("https://api.tailzu.space/", "/v1/live"), "wss://api.tailzu.space/v1/live");
+  assert.equal(L.wsUrlOf("https://api.x0bot.com/", "/v1/live"), "wss://api.x0bot.com/v1/live");
   assert.equal(L.wsUrlOf("http://localhost:8787"), "ws://localhost:8787/v1/live");
 });
 
@@ -110,7 +110,7 @@ function client(token = "jwt") {
   let resumed = 0;
   const lc = new L.LiveClient({
     open: (u) => { const s = new FakeSocket(u); sockets.push(s); return s; },
-    url: () => "wss://api.tailzu.space/v1/live", token: () => token,
+    url: () => "wss://api.x0bot.com/v1/live", token: () => token,
     onEvent: (t) => topics.push(t), onResume: () => { resumed++; }, timers: c.timers, random: () => 1,
   });
   return { lc, c, sockets, topics, resumed: () => resumed };
@@ -120,7 +120,7 @@ test("signs in by its first message, hears events once ready, answers pings", as
   const { lc, c, sockets, topics } = client();
   lc.start();
   await c.flush();
-  assert.equal(sockets[0].url, "wss://api.tailzu.space/v1/live");
+  assert.equal(sockets[0].url, "wss://api.x0bot.com/v1/live");
   sockets[0].open();
   assert.deepEqual(JSON.parse(sockets[0].sent[0]), { type: "auth", token: "jwt" });
   sockets[0].say({ type: "ready", heartbeatMs: 1000 });
@@ -214,7 +214,7 @@ function host(o = {}) {
   const h = {
     window: { WebSocket: FakeSocket, addEventListener: () => {} },
     document: doc,
-    enabled: () => true, signedIn: () => false, token: () => "jwt", baseUrl: () => "https://api.tailzu.space", path: () => "/v1/live",
+    enabled: () => true, signedIn: () => false, token: () => "jwt", baseUrl: () => "https://api.x0bot.com", path: () => "/v1/live",
     current: shown, stack: [{ screenId: "bots.home" }], STATE: { ask: "kal", n: 1, desktop: {} }, seq: 1, applied: [],
     screen: () => h.current, target: () => h.stack[h.stack.length - 1], state: () => h.STATE, paintSeq: () => h.seq,
     fetch: async () => o.next || { screenId: "bots.home", liveTopics: ["home"], state: { ask: "", n: 2 } },

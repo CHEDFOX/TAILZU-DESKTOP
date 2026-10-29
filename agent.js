@@ -123,27 +123,51 @@ const SCROLL_DIRS = new Set(["up", "down", "left", "right"]);
 // What the guide says when the run stops on this side. Short, because they
 // appear in a card beside a one-eyed character, and plain, because they are
 // what someone reads when something did NOT happen.
-const TEXT = {
-  private: "Ask doesn't look at private windows.",
-  sensitive: "Ask doesn't look at this app.",
-  declined: "Okay, I left it.",
-  steps: "I stopped there: that was taking too many steps.",
-  deadline: "I stopped there: that was taking too long.",
-  stuck: "That didn't change anything, so I stopped.",
-  loop: "I was going round in circles, so I stopped.",
-  blocked: "I'll stop here: I don't look at this app.",
-  blockedPrivate: "I'll stop here: I don't look at private windows.",
-  network: "Couldn't reach Tailzu.",
-  incomplete: "The answer was cut off. Try again?",
-  failed: "Something went wrong.",
-  signIn: "Sign in to Tailzu to use Ask.",
-  needLook: "I'd have to see the picture to answer that, and I can't look at it here.",
-  // A Mac that has not let Tailzu see the screen (Screen Recording), with a
-  // button on the card to that page of System Settings (guide offer).
-  needScreen: "I'd have to see the picture to answer that, and this Mac hasn't let Tailzu see the screen. Turn on Tailzu in System Settings, Privacy & Security, Screen Recording.",
-  looking: "Looking",
-  pictureSent: "1 picture sent",
-};
+//
+// LABELS (desktop.agent.text.*), so the server words them and translates them;
+// the words here are today's, and the fallback. TEXT reads them as they are
+// now, so every line below that says TEXT.x says the server's word for it.
+const knobs = require("./knobs.js");
+function textsFrom(txt) {
+  return {
+    private: txt("desktop.agent.text.private", "Ask doesn't look at private windows."),
+    sensitive: txt("desktop.agent.text.sensitive", "Ask doesn't look at this app."),
+    declined: txt("desktop.agent.text.declined", "Okay, I left it."),
+    steps: txt("desktop.agent.text.steps", "I stopped there: that was taking too many steps."),
+    deadline: txt("desktop.agent.text.deadline", "I stopped there: that was taking too long."),
+    stuck: txt("desktop.agent.text.stuck", "That didn't change anything, so I stopped."),
+    loop: txt("desktop.agent.text.loop", "I was going round in circles, so I stopped."),
+    blocked: txt("desktop.agent.text.blocked", "I'll stop here: I don't look at this app."),
+    blockedPrivate: txt("desktop.agent.text.blockedPrivate", "I'll stop here: I don't look at private windows."),
+    network: txt("desktop.agent.text.network", "Couldn't reach Tailzu."),
+    incomplete: txt("desktop.agent.text.incomplete", "The answer was cut off. Try again?"),
+    failed: txt("desktop.agent.text.failed", "Something went wrong."),
+    signIn: txt("desktop.agent.text.signIn", "Sign in to Tailzu to use Ask."),
+    needLook: txt("desktop.agent.text.needLook", "I'd have to see the picture to answer that, and I can't look at it here."),
+    // A Mac that has not let Tailzu see the screen (Screen Recording), with a
+    // button on the card to that page of System Settings (guide offer).
+    needScreen: txt("desktop.agent.text.needScreen", "I'd have to see the picture to answer that, and this Mac hasn't let Tailzu see the screen. Turn on Tailzu in System Settings, Privacy & Security, Screen Recording."),
+    looking: txt("desktop.agent.text.looking", "Looking"),
+    pictureSent: txt("desktop.agent.text.pictureSent", "1 picture sent"),
+    // The server's refusals, by status, when it gave no words of its own (makePost).
+    status400: txt("desktop.agent.text.status400", "Ask couldn't read that request."),
+    status413: txt("desktop.agent.text.status413", "There's too much on this screen to read."),
+    status429: txt("desktop.agent.text.status429", "Too many asks. Try again in a moment."),
+  };
+}
+/** Today's words: what TEXT falls back to, and what a line the server sends empty becomes. */
+const TEXT_EN = textsFrom((_key, fallback) => fallback);
+const TEXT = {};
+for (const k of Object.keys(TEXT_EN)) {
+  Object.defineProperty(TEXT, k, {
+    enumerable: true,
+    get() {
+      let v;
+      try { v = textsFrom(knobs.txt)[k]; } catch { v = undefined; }
+      return typeof v === "string" && v.trim() ? v : TEXT_EN[k];
+    },
+  });
+}
 
 // ---- the server's "open" event ---------------------------------------------------
 
@@ -314,15 +338,40 @@ const words = (list) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${list.join("|")})(?![
 
 /** Apps whose controls are web pages: a page's author writes its
  *  accessibility labels, and they can say anything. */
-const BROWSERS = words(["chrome", "chromium", "safari", "edge", "msedge", "firefox", "arc", "brave", "opera", "vivaldi"]);
+const BROWSERS_BUILT_IN = words(["chrome", "chromium", "safari", "edge", "msedge", "firefox", "arc", "brave", "opera", "vivaldi"]);
 /** …and the apps built on one (Electron, webviews). Their text boxes are
  *  React or Quill components that only hear typing, not a value set from
  *  outside: a SET there leaves the message empty, or it snaps back. */
-const WEB_APPS = words([
+const WEB_APPS_BUILT_IN = words([
   "chrome", "chromium", "safari", "edge", "msedge", "firefox", "arc", "brave", "opera", "vivaldi",
   "slack", "discord", "notion", "whatsapp", "teams", "code", "visual\\s+studio\\s+code", "figma", "linear",
   "obsidian", "electron",
 ]);
+/**
+ * The server may add to both (desktop.agent.browsers, desktop.agent.webApps),
+ * never take from them: a press in a browser asks first, so a browser it does
+ * not know of would be a press that does not. A bad list, or none, leaves them
+ * as they are.
+ */
+function plusServer(builtIn, key) {
+  let from = null;
+  let more = null;
+  return {
+    test(name) {
+      if (builtIn.test(name)) return true;
+      const v = key === "browsers" ? knobs.list("desktop.agent.browsers", []) : knobs.list("desktop.agent.webApps", []);
+      if (v !== from) {
+        from = v;
+        const w = (Array.isArray(v) ? v : []).filter((x) => typeof x === "string" && x.trim())
+          .map((x) => x.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
+        more = w.length ? words(w) : null;
+      }
+      return !!more && more.test(name);
+    },
+  };
+}
+const BROWSERS = plusServer(BROWSERS_BUILT_IN, "browsers");
+const WEB_APPS = plusServer(WEB_APPS_BUILT_IN, "webApps");
 
 // ---- the screen, as it leaves this computer ---------------------------------
 
@@ -2757,12 +2806,12 @@ function pictureFile(mime) {
   return { name: "picture.jpg", type: "image/jpeg" };
 }
 
-const STATUS_TEXT = {
-  400: "Ask couldn't read that request.",
-  401: TEXT.signIn,
-  413: "There's too much on this screen to read.",
-  429: "Too many asks. Try again in a moment.",
-};
+const STATUS_TEXT = Object.defineProperties({}, {
+  400: { enumerable: true, get: () => TEXT.status400 },
+  401: { enumerable: true, get: () => TEXT.signIn },
+  413: { enumerable: true, get: () => TEXT.status413 },
+  429: { enumerable: true, get: () => TEXT.status429 },
+});
 
 /**
  * The `post` dependency, over fetch: POST {baseUrl}/v1/agent, answered as a

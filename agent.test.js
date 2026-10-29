@@ -902,8 +902,8 @@ test("no key, paste or select-all goes into a window that turned private while t
   const PRIVATE = snap([BAR], { app: CHROME, focused: "e1", window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
   for (const action of [
     { t: "action", kind: "key", keys: "enter", risk: "free" },
-    { t: "action", kind: "type", text: "tailzu.space", risk: "free" },
-    { t: "action", kind: "set", id: "e1", text: "tailzu.space", risk: "free" },
+    { t: "action", kind: "type", text: "x0bot.com", risk: "free" },
+    { t: "action", kind: "set", id: "e1", text: "x0bot.com", risk: "free" },
   ]) {
     const r = rig({ snaps: [NORMAL, PRIVATE], scripts: [[heardDo("go to tailzu"), action], [{ t: "done" }]] });
     r.agent.begin({ app: "Chrome" });
@@ -1464,12 +1464,12 @@ const REQ = { runId: "abc123def", step: 0, platform: "mac", app: "Slack", screen
 test("makePost: JSON without audio, with the bearer token", async () => {
   const fetch = fakeFetch([ndjson([{ t: "heard", text: "hi", mode: "show" }, { t: "done" }])]);
   const tokens = [];
-  const post = makePost({ baseUrl: "https://api.tailzu.space/", token: async (renew) => { tokens.push(renew); return "t1"; }, fetch });
+  const post = makePost({ baseUrl: "https://api.x0bot.com/", token: async (renew) => { tokens.push(renew); return "t1"; }, fetch });
   const ac = new AbortController();
   const events = await collect(post(REQ, null, ac.signal));
   assert.deepStrictEqual(events, [{ t: "heard", text: "hi", mode: "show" }, { t: "done" }]);
   const [{ url, init }] = fetch.calls;
-  assert.strictEqual(url, "https://api.tailzu.space/v1/agent");
+  assert.strictEqual(url, "https://api.x0bot.com/v1/agent");
   assert.strictEqual(init.method, "POST");
   assert.strictEqual(init.signal, ac.signal);
   assert.strictEqual(init.headers.Authorization, "Bearer t1");
@@ -3120,7 +3120,7 @@ const HAND_OFFS = [
   "https://wa.me/919876543210?text=Running%2010%20minutes%20late",
   "https://wa.me/?text=Running%2010%20minutes%20late",
   "https://api.whatsapp.com/send?phone=919876543210&text=Hi%20Rahul",
-  "https://t.me/share/url?url=https%3A%2F%2Ftailzu.space&text=Have%20a%20look",
+  "https://t.me/share/url?url=https%3A%2F%2Fx0bot.com&text=Have%20a%20look",
   "https://t.me/rahul_k",
   "https://t.me/rahul_k?text=Hi%20Rahul",
   "https://www.google.com/maps/dir/?api=1&destination=Indiranagar%2C%20Bengaluru&travelmode=driving",

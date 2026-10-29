@@ -22,6 +22,8 @@
 // had already started talking throws that away.
 "use strict";
 
+const knobs = require("./knobs.js");
+
 const CHOICES = {
   darwin: [{ id: "fn", label: "Fn" }, { id: "rightOption", label: "Right ⌥" }, { id: "rightCommand", label: "Right ⌘" }],
   win32: [{ id: "rightCtrl", label: "Right Ctrl" }, { id: "rightAlt", label: "Right Alt" }],
@@ -29,8 +31,19 @@ const CHOICES = {
 // The key hook's names for each (UiohookKey). Fn has none: the helper watches it.
 const HOOK = { rightOption: "AltRight", rightCommand: "MetaRight", rightCtrl: "CtrlRight", rightAlt: "AltRight" };
 
+/** A key's name as the person reads it: the server's label (desktop.oneKey.label.*), the one above as the fallback. */
+function named(c) {
+  const said = {
+    fn: knobs.txt("desktop.oneKey.label.fn", "Fn"),
+    rightOption: knobs.txt("desktop.oneKey.label.rightOption", "Right ⌥"),
+    rightCommand: knobs.txt("desktop.oneKey.label.rightCommand", "Right ⌘"),
+    rightCtrl: knobs.txt("desktop.oneKey.label.rightCtrl", "Right Ctrl"),
+    rightAlt: knobs.txt("desktop.oneKey.label.rightAlt", "Right Alt"),
+  }[c.id];
+  return typeof said === "string" && said.trim() ? said : c.label;
+}
 /** The keys this system can use as the one key: [{ id, label }]. None on Linux. */
-function choices(platform) { return (CHOICES[platform] || []).map((c) => Object.assign({}, c)); }
+function choices(platform) { return (CHOICES[platform] || []).map((c) => Object.assign({}, c, { label: named(c) })); }
 /** Whether this system has the one key at all. */
 function supported(platform) { return Object.hasOwn(CHOICES, platform); }
 /** Fn on a Mac, Right Ctrl on Windows; null elsewhere. */
@@ -44,7 +57,7 @@ function pickKey(platform, wanted) {
 /** "Fn", "Right ⌥", "Right Ctrl" … as the person reads it. */
 function keyLabel(id, platform) {
   const hit = (CHOICES[platform] || []).find((c) => c.id === id);
-  return hit ? hit.label : "";
+  return hit ? named(hit) : "";
 }
 /** The hook's key code, or null (Fn, or a hook without the key). */
 function hookCode(id, UiohookKey) {

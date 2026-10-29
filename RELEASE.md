@@ -2,7 +2,7 @@
 
 This repo's `build` workflow builds all three installers on every push and
 publishes them only on a manual run (Actions → build → Run workflow), with
-the `DOWNLOADS_SSH_KEY` secret set. The delivery side is already built. `tailzu.space/download` detects the
+the `DOWNLOADS_SSH_KEY` secret set. The delivery side is already built. `x0bot.com/download` detects the
 visitor's OS and links to `/downloads/Tailzu-Setup.exe`, `/downloads/Tailzu.dmg`
 or `/downloads/Tailzu.AppImage`, HEAD-checks each one, and shows "coming soon"
 for whatever is not published yet. The server serves that directory from a host
@@ -108,7 +108,8 @@ notarization worked.
 From 0.2.2 a build installs its own updates (updater.js). Publishing records
 the installer's SHA-512 beside it (receive-download.sh, backend), and the
 window's update card gets an "Update now" button: it downloads the new build
-from tailzu.space (over https, and a redirect anywhere else is refused) into a
+from our site (x0bot.com; tailzu.space for builds up to 0.4.4, which trust no
+other host) over https, refusing a redirect anywhere else, into a
 fresh private temp folder, checks it against that checksum, puts it in place of the
 running one and restarts on it, still signed in. Windows runs the installer
 silently over the install; macOS swaps the .app; Linux swaps the AppImage.
@@ -519,7 +520,7 @@ Until then the server tells installed builds about a release. Bump `version` in
 console:
 
 ```
-desktop.update = { "latest": "0.1.2", "min": "", "url": "https://tailzu.space/download", "notes": "" }
+desktop.update = { "latest": "0.1.2", "min": "", "url": "https://x0bot.com/download", "notes": "" }
 ```
 
 - A build older than `latest` gets one notification per version, and a click

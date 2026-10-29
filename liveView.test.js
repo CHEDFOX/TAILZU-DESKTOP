@@ -17,8 +17,8 @@ test("a live page comes only from http(s), data: or about:, or the html the serv
   assert.deepStrictEqual(liveSourceOf({ url: "https://preview.example/app" }), { kind: "url", url: "https://preview.example/app" });
   assert.deepStrictEqual(liveSourceOf({ url: "data:text/html,<p>x</p>" }), { kind: "url", url: "data:text/html,<p>x</p>" });
   for (const url of ["javascript:alert(1)", "file:///etc/passwd", "tulmi://x", "https://u:p@x.example/", "", 7]) assert.strictEqual(liveSourceOf({ url }), null, String(url));
-  assert.deepStrictEqual(liveSourceOf({ html: "<p>x</p>", origin: "https://tailzu.space/a" }), { kind: "html", html: "<p>x</p>", baseUrl: "https://tailzu.space/" });
-  assert.deepStrictEqual(liveSourceOf({ html: "<p>x</p>", origin: "http://tailzu.space" }), { kind: "html", html: "<p>x</p>", baseUrl: "" });
+  assert.deepStrictEqual(liveSourceOf({ html: "<p>x</p>", origin: "https://x0bot.com/a" }), { kind: "html", html: "<p>x</p>", baseUrl: "https://x0bot.com/" });
+  assert.deepStrictEqual(liveSourceOf({ html: "<p>x</p>", origin: "http://x0bot.com" }), { kind: "html", html: "<p>x</p>", baseUrl: "" });
   assert.notStrictEqual(liveKey(liveSourceOf({ html: "<p>a</p>" })), liveKey(liveSourceOf({ html: "<p>b</p>" })));
   assert.strictEqual(liveKey(liveSourceOf({ url: "https://a.example" })), liveKey(liveSourceOf({ url: "https://a.example" })));
 });
@@ -41,7 +41,7 @@ test("every webview runs locked down, whatever it asked for, and stays on its ow
   assert.ok(!LIVE_PARTITION.startsWith("persist:"));
   assert.strictEqual(staysHome("https://preview.example/a", "https://preview.example/b"), true);
   assert.strictEqual(staysHome("https://preview.example/a", "https://other.example/"), false);
-  assert.strictEqual(staysHome("data:text/html,x", "https://tailzu.space/"), false);
+  assert.strictEqual(staysHome("data:text/html,x", "https://x0bot.com/"), false);
   assert.strictEqual(staysHome("https://preview.example/", "javascript:alert(1)"), false);
 });
 
@@ -177,13 +177,13 @@ test("the window says it keeps an outbox, and draws LiveView only where it can m
 test("a LiveView is a slot in the page, with the state it is to be told; the page itself is a layer kept by its source", () => {
   const p = page({ webview: true });
   p.run("STATE = { liveSend: { pick: true } }");
-  p.ctx.__n = { type: "LiveView", props: { html: "<p>host</p>", origin: "https://tailzu.space", messagePath: "live", title: "Pricing card" }, bind: { send: "liveSend" }, style: { height: 440 } };
+  p.ctx.__n = { type: "LiveView", props: { html: "<p>host</p>", origin: "https://x0bot.com", messagePath: "live", title: "Pricing card" }, bind: { send: "liveSend" }, style: { height: 440 } };
   const html = p.run("node(__n)");
   assert.match(html, /^<div data-live="[a-z0-9-]+" style="height:440px;position:relative;" aria-label="Pricing card"><\/div>$/);
   const slots = JSON.parse(p.run("JSON.stringify(LIVE_SLOTS.map((x) => ({ key: x.key, props: x.props, src: x.src })))"));
   assert.strictEqual(slots.length, 1);
   assert.deepStrictEqual(slots[0].props.send, { pick: true });
-  assert.deepStrictEqual(slots[0].src, { kind: "html", html: "<p>host</p>", baseUrl: "https://tailzu.space/" });
+  assert.deepStrictEqual(slots[0].src, { kind: "html", html: "<p>host</p>", baseUrl: "https://x0bot.com/" });
   // An address it may not show is the error's words, never a webview.
   p.ctx.__bad = { type: "LiveView", props: { url: "file:///etc/passwd", errorText: "Couldn't open the page." } };
   assert.match(p.run("node(__bad)"), /Couldn't open the page\./);

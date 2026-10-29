@@ -18,6 +18,12 @@
 // Also here: whether a question is about something only a picture shows ("explain
 // this equation", "what does this chart show", "solve this", "what's this"),
 // which no list of labels can answer.
+//
+// THE SERVER SENDS ITS OWN (desktop.agent.grammar, built from those two
+// modules), so the two cannot drift: each rule it sends replaces the one
+// below, and a rule that is missing or does not compile keeps the one below.
+
+const knobs = require("./knobs.js");
 
 /** The best label's score has to reach this… */
 const ACCEPT_AT = 0.85;
@@ -45,9 +51,9 @@ function plainWords(s) {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const HEAD_FILLER = /^(?:u+m+|u+h+|uhm+|e+r+m*|h+m+|ok(?:ay)?|so|well|hey|hi|yo|alright|and|now|just|please|pls|kindly|actually)\b[\s,]*/;
-const HEAD_ASK = /^(?:can you|could you|would you|will you|can u|could u|i want you to|i'd like you to|i need you to|go ahead and)\b\s*/;
-const TAIL = /\s*\b(?:please|pls|thanks|thank you|for me|now|right now|quickly|okay|ok|again)$/;
+const HEAD_FILLER_EN = /^(?:u+m+|u+h+|uhm+|e+r+m*|h+m+|ok(?:ay)?|so|well|hey|hi|yo|alright|and|now|just|please|pls|kindly|actually)\b[\s,]*/;
+const HEAD_ASK_EN = /^(?:can you|could you|would you|will you|can u|could u|i want you to|i'd like you to|i need you to|go ahead and)\b\s*/;
+const TAIL_EN = /\s*\b(?:please|pls|thanks|thank you|for me|now|right now|quickly|okay|ok|again)$/;
 
 /**
  * What they said with the padding gone, for matching: "Hey Tailzu, um, can
@@ -58,11 +64,12 @@ function commandText(said, names = NAMES) {
   let s = plainWords(said);
   const named = (Array.isArray(names) ? names : []).map((n) => plainWords(n)).filter(Boolean).map(escapeRe);
   const NAME = named.length ? new RegExp(`^(?:${named.join("|")})\\b[\\s,]*`) : null;
+  const G = grammar();
   for (let i = 0; i < 8; i++) {
     const before = s;
-    s = s.replace(HEAD_FILLER, "").replace(HEAD_ASK, "");
+    s = s.replace(G.headFiller, "").replace(G.headAsk, "");
     if (NAME) s = s.replace(NAME, "");
-    s = s.replace(TAIL, "").trim();
+    s = s.replace(G.tail, "").trim();
     if (s === before) break;
   }
   return s;
@@ -75,31 +82,66 @@ function commandText(said, names = NAMES) {
  * open as a polite request counts too. When in doubt this says "show", which
  * is the safe side: a show run never acts.
  */
-const SHOW_OPENING = /^(?:where|how|what|whats|what's|why|which|who|whose|when|is there|are there|is it|is this|is that|does|do i|do you|did|can i|could i|should i|am i|show me|point|find|locate|explain|tell me|help me (?:find|understand)|i can'?t find|i cannot find|i don'?t see|i do not see|look for|wheres|where's|hows|how's)\b/;
-const SHOW_ANYWHERE = /\b(?:kahan|kahaan|kaha|kidhar|kaise|kaisa|kyun|kyu|kaun sa|kaunsa)\b|कहाँ|कहां|किधर|कैसे|क्यों|कौन सा/u;
-const POLITE_REQUEST = /^(?:\W*)(?:hey\s+\S+[\s,]+)?(?:please\s+)?(?:can|could|would|will) (?:you|u)\b/i;
+const SHOW_OPENING_EN = /^(?:where|how|what|whats|what's|why|which|who|whose|when|is there|are there|is it|is this|is that|does|do i|do you|did|can i|could i|should i|am i|show me|point|find|locate|explain|tell me|help me (?:find|understand)|i can'?t find|i cannot find|i don'?t see|i do not see|look for|wheres|where's|hows|how's)\b/;
+const SHOW_ANYWHERE_EN = /\b(?:kahan|kahaan|kaha|kidhar|kaise|kaisa|kyun|kyu|kaun sa|kaunsa)\b|कहाँ|कहां|किधर|कैसे|क्यों|कौन सा/u;
+const POLITE_REQUEST_EN = /^(?:\W*)(?:hey\s+\S+[\s,]+)?(?:please\s+)?(?:can|could|would|will) (?:you|u)\b/i;
 
 function modeOf(said, names = NAMES) {
   const clean = commandText(said, names);
-  if (SHOW_OPENING.test(clean) || SHOW_ANYWHERE.test(clean)) return "show";
-  if (/\?\s*$/.test(str(said)) && !POLITE_REQUEST.test(str(said).trim())) return "show";
+  const G = grammar();
+  if (G.showOpening.test(clean) || G.showAnywhere.test(clean)) return "show";
+  if (/\?\s*$/.test(str(said)) && !G.politeRequest.test(str(said).trim())) return "show";
   return "do";
 }
 
 // ---- the label resolver -------------------------------------------------------
 
-const POINT_ASK = /^(?:where(?:'s| is| are|s)?|where can i find|where do i find|point (?:at|to)|show me(?: where)?(?: the)?|find|locate|look for|help me find|i can'?t find|i cannot find)\s+(.+)$/;
-const PRESS_ASK = /^(?:click on|click|press|tap on|tap|hit|select|choose|open)\s+(.+)$/;
+const POINT_ASK_EN = /^(?:where(?:'s| is| are|s)?|where can i find|where do i find|point (?:at|to)|show me(?: where)?(?: the)?|find|locate|look for|help me find|i can'?t find|i cannot find)\s+(.+)$/;
+const PRESS_ASK_EN = /^(?:click on|click|press|tap on|tap|hit|select|choose|open)\s+(.+)$/;
 
 /** Role words people say, and the roles they mean. */
-const ROLE_WORDS = {
+const ROLE_WORDS_EN = {
   button: ["button"], link: ["link"], tab: ["tab"], menu: ["menu", "menuitem"],
   option: ["menuitem", "item", "radio"], item: ["item", "menuitem", "row", "cell"],
   field: ["field", "area", "combo"], box: ["field", "area", "combo", "check"],
   checkbox: ["check"], toggle: ["switch", "check"], switch: ["switch", "check"],
   icon: ["button", "image", "link"], dropdown: ["combo", "menu"],
 };
-const hasRoleWord = (w) => Object.prototype.hasOwnProperty.call(ROLE_WORDS, w);
+
+/** The server's rules (desktop.agent.grammar), each over its fallback above; compiled again only when they change. */
+const FALLBACK = {
+  headFiller: HEAD_FILLER_EN, headAsk: HEAD_ASK_EN, tail: TAIL_EN, showOpening: SHOW_OPENING_EN, showAnywhere: SHOW_ANYWHERE_EN,
+  politeRequest: POLITE_REQUEST_EN, pointAsk: POINT_ASK_EN, pressAsk: PRESS_ASK_EN,
+};
+let grammarFrom = null;
+let grammarNow = null;
+function grammar() {
+  const g = knobs.obj("desktop.agent.grammar", {});
+  const keys = Object.keys(FALLBACK).concat("roleWords");
+  if (grammarNow && grammarFrom && keys.every((k) => g[k] === grammarFrom[k])) return grammarNow;
+  const out = {};
+  for (const k of Object.keys(FALLBACK)) {
+    const r = g[k];
+    let re = null;
+    if (r && typeof r === "object" && typeof r.source === "string" && r.source) {
+      const flags = typeof r.flags === "string" ? r.flags.replace(/[^imsu]/g, "") : "";
+      try { re = new RegExp(r.source, flags); } catch { re = null; }
+    }
+    out[k] = re || FALLBACK[k];
+  }
+  const roles = {};
+  if (g.roleWords && typeof g.roleWords === "object" && !Array.isArray(g.roleWords)) {
+    for (const [w, list] of Object.entries(g.roleWords)) {
+      const ok = Array.isArray(list) ? list.filter((x) => typeof x === "string" && x) : [];
+      if (w && ok.length) roles[w] = ok;
+    }
+  }
+  out.roleWords = Object.keys(roles).length ? roles : ROLE_WORDS_EN;
+  grammarFrom = g;
+  grammarNow = out;
+  return out;
+}
+const hasRoleWord = (w) => Object.prototype.hasOwnProperty.call(grammar().roleWords, w);
 
 /**
  * What they asked of a named control, from the cleaned words: to be shown it
@@ -112,9 +154,10 @@ function resolverAsk(clean) {
   let verb = null;
   let rest = "";
   const c = str(clean);
-  let m = POINT_ASK.exec(c);
+  const G = grammar();
+  let m = G.pointAsk.exec(c);
   if (m) { verb = "point"; rest = m[1]; }
-  else if ((m = PRESS_ASK.exec(c))) { verb = "press"; rest = m[1]; }
+  else if ((m = G.pressAsk.exec(c))) { verb = "press"; rest = m[1]; }
   if (!verb) return null;
   let roleHint;
   let t = rest
@@ -203,7 +246,7 @@ function resolve(ask, elements, opts) {
   const o = opts || {};
   const acceptAt = bar(o.score, ACCEPT_AT);
   const margin = bar(o.margin, MARGIN);
-  const roles = ask.roleHint && hasRoleWord(ask.roleHint) ? ROLE_WORDS[ask.roleHint] : [];
+  const roles = ask.roleHint && hasRoleWord(ask.roleHint) ? grammar().roleWords[ask.roleHint] : [];
   const scored = [];
   for (const el of Array.isArray(elements) ? elements : []) {
     if (!el || typeof el !== "object" || !el.label) continue;

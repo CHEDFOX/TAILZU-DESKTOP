@@ -6,7 +6,8 @@
 // this one has none. So the same small job is done here, the same way on all
 // three:
 //
-//   1. download the installer the server named, from tailzu.space only;
+//   1. download the installer the server named, from our site only
+//      (x0bot.com, or tailzu.space, the address before it);
 //   2. check its SHA-512 against the one the server recorded when the build
 //      was published (deploy/receive-download.sh in the backend);
 //   3. put it in place of the running build:
@@ -29,7 +30,9 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 
-const HOSTS = new Set(["tailzu.space", "www.tailzu.space"]);
+// x0bot.com, and tailzu.space: the server names the old address to builds up
+// to 0.4.4, which trust nothing else (the backend's desktopRelease.ts).
+const HOSTS = new Set(["x0bot.com", "www.x0bot.com", "tailzu.space", "www.tailzu.space"]);
 const FILES = { win32: "Tailzu-Setup.exe", darwin: "Tailzu.dmg", linux: "Tailzu.AppImage" };
 // receive-download.sh refuses anything smaller; so does this.
 const MIN_BYTES = 5_000_000;
@@ -95,7 +98,7 @@ function download(url, file, onProgress) {
     req.on("redirect", (_status, _method, to) => {
       let ok = false;
       try { ok = trusted(new URL(to)); } catch { /* not an address */ }
-      if (ok) req.followRedirect(); else fail(new Error("redirected off tailzu.space"));
+      if (ok) req.followRedirect(); else fail(new Error("redirected off our site"));
     });
     req.on("response", (res) => {
       if (res.statusCode !== 200) return fail(new Error("download status " + res.statusCode));

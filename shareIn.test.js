@@ -69,12 +69,12 @@ test("files go up one by one with the session, and the screen opens with every i
   const d = door({});
   const opened = [], toasts = [];
   const out = await sendDrop({ files: [file("Ticket.pdf"), file("IMG_2041.jpg")], text: "For Goa", url: "", skipped: 0 }, {
-    ...d, token: async () => "tok", baseUrl: () => "https://api.tailzu.space", open: (p) => opened.push(p), toast: (m) => toasts.push(m), words: WORDS,
+    ...d, token: async () => "tok", baseUrl: () => "https://api.x0bot.com", open: (p) => opened.push(p), toast: (m) => toasts.push(m), words: WORDS,
   });
   assert.strictEqual(out, "opened");
   assert.deepStrictEqual(d.sent, [
-    { url: "https://api.tailzu.space/v1/files", auth: "Bearer tok", name: "Ticket.pdf" },
-    { url: "https://api.tailzu.space/v1/files", auth: "Bearer tok", name: "IMG_2041.jpg" },
+    { url: "https://api.x0bot.com/v1/files", auth: "Bearer tok", name: "Ticket.pdf" },
+    { url: "https://api.x0bot.com/v1/files", auth: "Bearer tok", name: "IMG_2041.jpg" },
   ]);
   assert.deepStrictEqual(opened, [{ file: "id-Ticket.pdf", files: "id-Ticket.pdf,id-IMG_2041.jpg", text: "For Goa" }]);
   assert.deepStrictEqual(toasts, []);

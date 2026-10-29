@@ -79,7 +79,7 @@ function page(o = {}) {
     XMLHttpRequest: FakeXHR, FormData: FakeFormData, File: FakeFile, AudioContext: FakeAC,
     fetch: async (url, init) => { fetched.push({ url, init }); return o.sound || { ok: true, arrayBuffer: async () => new ArrayBuffer(8), text: async () => "" }; },
     K: { txt: (_k, f) => f, num: (_k, f) => f },
-    ENV: { baseUrl: "https://api.tailzu.space" },
+    ENV: { baseUrl: "https://api.x0bot.com" },
     STACK: [{ screenId: "bots.ask" }],
     COMPONENTS: ["Screen"], ACTIONS: ["navigate"],
     stateAt: get, setStatePath: put,
@@ -128,7 +128,7 @@ test("a chosen file goes up with its progress, and the answer lands in state", a
   await p.m.mediaRun(a);
   const x = p.xhrs[0];
   assert.equal(x.method, "POST");
-  assert.equal(x.url, "https://api.tailzu.space/v1/files");
+  assert.equal(x.url, "https://api.x0bot.com/v1/files");
   assert.equal(x.headers.Authorization, "Bearer tok");
   assert.equal(x.form.parts[0][0], "file");
   assert.equal(x.form.parts[0][2], "Price list.pdf");
@@ -176,7 +176,7 @@ test("one sound at a time, from the app's own path with the session; it stops wi
   const p = page();
   p.state.read = { speed: "1.25" };
   await p.m.mediaRun({ kind: "playAudio", url: "/v1/keybot/voices/sage/sample?speed=$state.read.speed", id: "sage", statePath: "playing" });
-  assert.equal(p.fetched[0].url, "https://api.tailzu.space/v1/keybot/voices/sage/sample?speed=1.25");
+  assert.equal(p.fetched[0].url, "https://api.x0bot.com/v1/keybot/voices/sage/sample?speed=1.25");
   assert.equal(p.fetched[0].init.headers.Authorization, "Bearer tok");
   assert.equal(p.state.playing.id, "sage");
   assert.ok(p.sounds[0].started);

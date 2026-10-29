@@ -28,9 +28,42 @@
 // send it. A password field is never read and never described.
 
 const { spawn, execFile } = require("child_process");
+const knobs = require("./knobs.js");
 
-const BROWSERS = /^(?:google chrome|chrome|chromium|microsoft edge|msedge|edge|firefox|mozilla firefox|brave|brave browser|opera|vivaldi|arc|safari|zen)$/i;
-const SHORT = { "google chrome": "Chrome", "microsoft edge": "Edge", "msedge": "Edge", "mozilla firefox": "Firefox", "brave browser": "Brave" };
+const BROWSERS_BUILT_IN = /^(?:google chrome|chrome|chromium|microsoft edge|msedge|edge|firefox|mozilla firefox|brave|brave browser|opera|vivaldi|arc|safari|zen)$/i;
+
+// THE SERVER MAY ADD TO THESE LISTS, NEVER TAKE FROM THEM. A browser's label is
+// its page's, and "Always for <app>" is never remembered for one (pictureKey);
+// a private window or a money or health app is never read. So what the server
+// sends (desktop.apps.*) only joins what is built in here, and a bad list or
+// none leaves the built-in ones exactly as they are.
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+let extraFrom = {};
+let extraRe = {};
+/** The server's extra words for `key` as one test, or null for none. */
+function extra(key, wrap) {
+  const v = key === "browsers" ? knobs.list("desktop.apps.browsers", [])
+    : key === "private" ? knobs.list("desktop.apps.privateTerms", [])
+      : knobs.list("desktop.apps.sensitiveTerms", []);
+  if (extraFrom[key] === v) return extraRe[key];
+  const w = (Array.isArray(v) ? v : []).filter((x) => typeof x === "string" && x.trim()).map((x) => escRe(x.trim().toLowerCase()));
+  extraFrom[key] = v;
+  extraRe[key] = w.length ? new RegExp(wrap(w.join("|")), "i") : null;
+  return extraRe[key];
+}
+const BROWSERS = {
+  test(name) {
+    if (BROWSERS_BUILT_IN.test(name)) return true;
+    const more = extra("browsers", (alt) => `^(?:${alt})$`);
+    return !!more && more.test(String(name || "").trim());
+  },
+};
+/** "Google Chrome" is "Chrome": the server's names (desktop.apps.shortNames) over these. */
+function shortName(raw) {
+  const names = knobs.obj("desktop.apps.shortNames", { "google chrome": "Chrome", "microsoft edge": "Edge", "msedge": "Edge", "mozilla firefox": "Firefox", "brave browser": "Brave" });
+  const v = names[raw.toLowerCase()];
+  return typeof v === "string" && v.trim() ? v.trim() : raw;
+}
 
 /** The site a browser tab is on, from its title: the last part that is not the browser's own. */
 function siteOf(title, app) {
@@ -52,14 +85,24 @@ function siteOf(title, app) {
 
 // A private window names itself in its title; its screen is not read.
 const PRIVATE = /\b(?:incognito|inprivate|private browsing|private window|guest (?:mode|window))\b/i;
-/** True when the front window is a private/incognito one (from its title). */
-function isPrivate(title) { return PRIVATE.test(String(title || "")); }
+/** True when the front window is a private/incognito one (from its title). The server may add words (desktop.apps.privateTerms). */
+function isPrivate(title) {
+  const t = String(title || "");
+  if (PRIVATE.test(t)) return true;
+  const more = extra("private", (alt) => `\\b(?:${alt})\\b`);
+  return !!more && more.test(t);
+}
 
 // A money/health/secrets app, named loosely, mirroring the server's gate
 // (sensitive.ts): its screen is not read at all, here at the source.
 const SENSITIVE = /\b(?:bank|banking|netbanking|chase|wells\s*fargo|citi(?:bank)?|barclays|hsbc|lloyds|santander|hdfc|icici|axis|kotak|sbi|paytm|phonepe|gpay|google\s*pay|venmo|zelle|cash\s*app|revolut|monzo|wise|coinbase|binance|metamask|robinhood|fidelity|schwab|paypal|credit\s*card|debit\s*card|1password|bitwarden|lastpass|dashlane|keeper|authenticator|wallet|irs|hmrc|health|patient|medical|clinic|hospital|insur\w*)\b/i;
-/** True when this app/site should not have its screen read (money, health). */
-function looksSensitive(label) { return SENSITIVE.test(String(label || "")); }
+/** True when this app/site should not have its screen read (money, health). The server may add words (desktop.apps.sensitiveTerms). */
+function looksSensitive(label) {
+  const t = String(label || "");
+  if (SENSITIVE.test(t)) return true;
+  const more = extra("sensitive", (alt) => `\\b(?:${alt})\\b`);
+  return !!more && more.test(t);
+}
 
 /**
  * The screen around the field, from the pieces of text a window gives up:
@@ -108,7 +151,7 @@ const rawName = (app) => String(app || "").replace(/\.exe$/i, "").replace(/[\r\n
 function label(app, title) {
   const raw = rawName(app);
   if (!raw) return null;
-  const name = SHORT[raw.toLowerCase()] || raw;
+  const name = shortName(raw);
   if (!BROWSERS.test(raw)) return name.slice(0, 40);
   const site = siteOf(title, raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return (site ? `${name}: ${site}` : name).slice(0, 40);
