@@ -1,6 +1,6 @@
 {
   "name": "tailzu-desktop",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "X0 Bot desktop voice dictation — hotkey → record → clean → paste. Reuses the X0 Bot backend.",
   "author": "X0 Bot <hello@x0bot.com>",
   "main": "main.js",

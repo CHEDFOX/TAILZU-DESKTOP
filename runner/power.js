@@ -3,7 +3,7 @@
 // The person's computer is not a server. Running a build on a laptop at 15% battery, or one the person has put in Low Power
 // Mode to make it last, is the opposite of a favour. So the gate watches two facts - on battery and how full, and whether the
 // system's low-power mode is on - and says "paused" (with the reason) when either calls for it. The runner then goes offline for
-// the Code bot, which sends the work somewhere else, and comes back by itself.
+// Xode, which sends the work somewhere else, and comes back by itself.
 //
 // Cheap on purpose: on mains power nothing is polled at all (the platform's on-ac / on-battery events wake it); on battery it
 // looks every two minutes, every minute once the level is near the line. It stops looking when it is off.

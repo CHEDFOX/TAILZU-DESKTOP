@@ -84,11 +84,11 @@ const COMPONENTS = [
   "BotsKit",
   // THE LIVING BOT TILES (shared/types/sdui.ts, "The living bot tiles"): BotTiles, Home's grid with a tiny Blip
   // playing in each tile on a faint fabric, and BotCard, a card with one on top (the first-arrival permission
-  // card, Keybot's). The physics is botTiles.js, generated from the phone's core so the two cannot differ.
+  // card, Keylessbord's). The physics is botTiles.js, generated from the phone's core so the two cannot differ.
   "BotsMotion", "BotTiles", "BotCard",
   // A full-width strip under BotTiles' grid (Notes), its bot at the left, in the same world as the tiles.
   "BotTilesStrip",
-  // A bot's own tiny bot on its pages (a header, the Code bot's setup steps): BotBuddy, on the same core.
+  // A bot's own tiny bot on its pages (a header, Xode's setup steps): BotBuddy, on the same core.
   "BotBuddy",
   // BotBuddy's act "carry" and `doneWhen`: a lane under a message on its way, where he hauls it as a bag, heavier
   // each trip, and sets it down when the answer is here (botBuddyNode). Without it the server sends "Asking…".
@@ -1181,7 +1181,7 @@ function botBuddyNode(p) {
 // ---------------------------------------------------------------------------
 //
 // WriteOn: the bold line writes itself in word by word (botTiles.js writeOnTimes: dictation's uneven pace) with
-// Keybot's clay caret blinking after the last word; it fades a few seconds on. Once per app open and line (`once`):
+// Keylessbord's clay caret blinking after the last word; it fades a few seconds on. Once per app open and line (`once`):
 // a repaint or a return finds it written, or carries on from where it was. LiveMark: the dot mark, alive (botTiles.js
 // LiveMark): ring dots on springs, eyes on the cursor and swinging with a scroll, a ring dot lit for each bot at work;
 // a click squishes it and runs on.onPress. HeadBar: a compact bar over the top of the main column (the kit puts it
@@ -1246,7 +1246,7 @@ function mountHomeHead(root, reduced) {
     });
     if (last >= 0) at(last);
     if (el0 >= end + WO_CARET_MS) return;
-    // Keybot's caret: blinking while he writes and a moment after, then it fades.
+    // Keylessbord's caret: blinking while he writes and a moment after, then it fades.
     let on = true;
     caret.style.opacity = "1";
     const blink = setInterval(() => { if (!el.isConnected) { clearInterval(blink); return; } on = !on; caret.style.opacity = on ? "1" : "0"; }, 520);

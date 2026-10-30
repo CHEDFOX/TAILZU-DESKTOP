@@ -123,7 +123,7 @@ test("a background process does not hold the step up, and is killed when the ses
   assert.ok(Date.now() - t0 < 4000);
   const bg = Number(fs.readFileSync(path.join(r.ws, "bg.pid"), "utf8"));
   assert.ok(alive(bg), "it was left running");
-  assert.ok(r.procs.size > 0, "and X0 Code knows of it");
+  assert.ok(r.procs.size > 0, "and Xode knows of it");
   r.procs.killAll();
   await until(() => !alive(bg), 3000, "the background process to be killed");
   r.remove();

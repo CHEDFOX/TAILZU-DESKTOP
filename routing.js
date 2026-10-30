@@ -21,7 +21,7 @@
 //   unclear          the backend is asked who answers: a bot, or else Ask
 //
 // THE ONE-TAP FIX. After a route the pill says what it did and offers one
-// other thing ("Typed · Ask instead", "Sent to Plan bot · Type it instead").
+// other thing ("Typed · Ask instead", "Sent to Plan Ease · Type it instead").
 // Choosing it undoes the first and does the other: what was typed is taken
 // back with the app's own undo, a question is put away, and a bot's task or a
 // notes command is held for a moment before it goes, so taking it back is

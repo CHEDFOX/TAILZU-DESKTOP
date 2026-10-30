@@ -34,7 +34,7 @@
   const ctx = fx.getContext("2d");
   const wctx = wave.getContext("2d");
   // THE BOTS LOOK (DeskAsk), behind the switch the window learns from its bootstrap (flag bots.app, which the
-  // knobs carry): a white card with an ink line, Geist, ink buttons, clay (Keybot's colour) for the open microphone,
+  // knobs carry): a white card with an ink line, Geist, ink buttons, clay (Keylessbord's colour) for the open microphone,
   // an ink ring and ink marks with a white edge. Off, or before the first bootstrap: the guide as it was. Only how it
   // looks changes; what it does is the same. ?demo&bots shows it on the review page.
   const BOTS = () => K.bool("bots.app", false) || (DEMO && params.has("bots"));

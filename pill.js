@@ -172,7 +172,7 @@ function doneLabel() {
 
 // ---- a route (main.js, routing.js) --------------------------------------------------
 // Where the words went, and the one other place they can go instead:
-// "Typed · Ask instead", "Sent to Plan bot · Type it instead". A press on the
+// "Typed · Ask instead", "Sent to Plan Ease · Type it instead". A press on the
 // pill chooses the alternative; main undoes the first and does the other.
 const SEP = " · ";
 function routedLabel() { return (S.data.label || "") + (S.data.alt ? SEP + S.data.alt : ""); }
@@ -650,7 +650,7 @@ function drawBead(x, y, room, now) {
 }
 
 // ---- the Bots look (DeskPill) ---------------------------------------------------------
-// The app's white and ink, with Keybot's clay for what is live. Knobs like every other colour here.
+// The app's white and ink, with Keylessbord's clay for what is live. Knobs like every other colour here.
 const B = {
   paper: () => K.color("desktop.pill.botsPaper", "#ffffff"),
   line: () => K.color("desktop.pill.botsLine", "#e6e6e6"),

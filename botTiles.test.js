@@ -69,8 +69,8 @@ test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make
     props: {
       columns: 4, height: 150, padding: 18, gap: 14, faces: { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold" },
       tiles: [
-        { slug: "code", name: "Code bot", sub: "Working · fixing cart", color: "#4F7A3A", kind: "code", state: "working", action: { kind: "navigate", screenId: "bots.code" } },
-        { slug: "plan", name: "Plan bot", sub: "Needs you · 1 question", color: "#8F6A1F", kind: "plan", state: "needs" },
+        { slug: "code", name: "Xode", sub: "Working · fixing cart", color: "#4F7A3A", kind: "code", state: "working", action: { kind: "navigate", screenId: "bots.code" } },
+        { slug: "plan", name: "Plan Ease", sub: "Needs you · 1 question", color: "#8F6A1F", kind: "plan", state: "needs" },
         { slug: "make", name: "Make a bot", sub: "Say what it should do", color: "#0a0a0a", kind: "make", state: "idle" },
       ],
     },
@@ -83,7 +83,7 @@ test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make
   assert.match(html, /background:#4F7A3A/, "working: a dot in its colour");
   assert.match(html, /background:#0a0a0a/, "needs you: an ink dot");
   assert.match(html, /border:1\.5px dashed #c9c9c9/, "Make a bot: dashed");
-  assert.match(html, /role="button" tabindex="0" aria-label="Code bot\. Working · fixing cart"/);
+  assert.match(html, /role="button" tabindex="0" aria-label="Xode\. Working · fixing cart"/);
 });
 
 test("BotCard: waits for readings, shows its visible step over a blur, and is gone once closed", () => {
@@ -137,9 +137,9 @@ const HOME = {
   props: {
     columns: 4, height: 150, padding: 18, gap: 14,
     tiles: [
-      { slug: "code", name: "Code bot", sub: "Idle", color: "#4F7A3A", kind: "code", state: "idle", action: { kind: "navigate", screenId: "bots.code" } },
-      { slug: "plan", name: "Plan bot", sub: "Idle", color: "#8F6A1F", kind: "plan", state: "idle", action: { kind: "navigate", screenId: "bots.plan" } },
-      { slug: "keybot", name: "Keybot", sub: "Idle", color: "#A9573A", kind: "keybot", state: "idle" },
+      { slug: "code", name: "Xode", sub: "Idle", color: "#4F7A3A", kind: "code", state: "idle", action: { kind: "navigate", screenId: "bots.code" } },
+      { slug: "plan", name: "Plan Ease", sub: "Idle", color: "#8F6A1F", kind: "plan", state: "idle", action: { kind: "navigate", screenId: "bots.plan" } },
+      { slug: "keybot", name: "Keylessbord", sub: "Idle", color: "#A9573A", kind: "keybot", state: "idle" },
     ],
   },
 };
@@ -268,7 +268,7 @@ test("an answer as it is written: pieces in order into state, the bound line cha
   p.run("IN_KIT = false");
 });
 
-test("Home's header alive: the line in words with Keybot's caret, the living mark as a button, the bar hidden until a scroll", () => {
+test("Home's header alive: the line in words with Keylessbord's caret, the living mark as a button, the bar hidden until a scroll", () => {
   const p = page();
   const comps = p.run("COMPONENTS");
   for (const c of ["WriteOn", "LiveMark", "HeadBar"]) assert.ok(comps.includes(c), c);
@@ -276,7 +276,7 @@ test("Home's header alive: the line in words with Keybot's caret, the living mar
   const line = p.run("node(__n)");
   assert.strictEqual((line.match(/class="tz-wo-w"/g) || []).length, 8, "a span per word");
   assert.match(line, /aria-label="Anything to write up before the day ends\?"/);
-  assert.match(line, /class="tz-wo-c"[^>]*background:#A9573A/, "Keybot's clay caret");
+  assert.match(line, /class="tz-wo-c"[^>]*background:#A9573A/, "Keylessbord's clay caret");
   p.ctx.__n = { type: "LiveMark", props: { size: 56, lit: ["#4F7A3A"], label: "Tailzu. Ask anything" }, on: { onPress: { kind: "navigate", screenId: "bots.ask" } } };
   const mark = p.run("node(__n)");
   assert.match(mark, /data-lm="\d+" role="button" tabindex="0" aria-label="Tailzu\. Ask anything"/);

@@ -1,4 +1,4 @@
-// PRESENCE: this computer, online for the Code bot, for as long as the socket is open.
+// PRESENCE: this computer, online for Xode, for as long as the socket is open.
 //
 // docs/desktop-runner-session.md section 3. The app asks the VPS for a ticket (a two-minute, one-use pass), opens
 // `wss://<jobs>/v1/devices/connect` with it, says `hello` (who this computer is, whether it may run commands, for which

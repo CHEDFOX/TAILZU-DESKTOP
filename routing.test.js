@@ -25,8 +25,8 @@ function rig(o = {}) {
     ask: (m) => { did.push(["ask", m]); return o.askTakes !== false; },
     askCancel: () => did.push(["askCancel"]),
     notes: (start) => did.push(["notes", start]),
-    whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan bot", confidence: 0.9 }; },
-    sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Plan bot", text: "Saturday is planned." }; },
+    whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan Ease", confidence: 0.9 }; },
+    sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Plan Ease", text: "Saturday is planned." }; },
     botAnswered: (a) => did.push(["answered", a.name, a.text]),
     pill: (state, data) => pills.push([state, data || {}]),
     pillRest: () => pills.push(["rest?"]),
@@ -184,10 +184,10 @@ test("a bot's task with no text box: the backend picks the bot, the pill names i
   await settle();
   // Not named: the backend's own pick, not this file's guess.
   assert.deepStrictEqual(h.did, [["whichBot", "plan my saturday", undefined]]);
-  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Plan bot", alt: "Type it instead" }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Plan Ease", alt: "Type it instead" }]);
   h.elapse();
   await settle();
-  assert.deepStrictEqual(h.did.slice(1), [["sendBot", "plan my saturday", "plan"], ["answered", "Plan bot", "Saturday is planned."]]);
+  assert.deepStrictEqual(h.did.slice(1), [["sendBot", "plan my saturday", "plan"], ["answered", "Plan Ease", "Saturday is planned."]]);
 });
 
 test("Type it instead in time: the bot is never asked; the words are typed", async () => {
@@ -252,10 +252,10 @@ test("typed into a text box but a bot's task: said, with Send to a bot, which ta
 });
 
 test("a bot by name: the backend is told which, so it is that bot", async () => {
-  const h = rig({ whichBot: (m, slug) => ({ slug, name: "Code bot", confidence: 1 }) });
+  const h = rig({ whichBot: (m, slug) => ({ slug, name: "Xode", confidence: 1 }) });
   h.r.start(1, {});
   h.r.field(1, BOX);
-  h.r.end(1, { text: "Code bot, fix the build.", heard: "code bot fix the build" }, true);
+  h.r.end(1, { text: "Xode, fix the build.", heard: "code bot fix the build" }, true);
   await settle();
   assert.deepStrictEqual(h.did, [["whichBot", "code bot fix the build", "code"]]);
   h.elapse();

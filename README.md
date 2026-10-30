@@ -55,7 +55,7 @@ Every page carries a Content-Security-Policy that runs only this folder's own
 script files, which is why no page has an inline script (neuralField.html's
 one is allowed by hash, written by gen-field.js).
 - **runner/** — Tailzu Code on this computer: the person's own computer as a
-  runner for the Code bot's live sessions (see the section of that name).
+  runner for Xode's live sessions (see the section of that name).
 - **preload.js** — the tiny IPC bridge.
 - **knobs.js** — the server's values for everything above (see below).
 
@@ -86,10 +86,10 @@ it would pin those values against anything the server later changes.
 | `hold` | `true` → hold-to-talk on `holdKey` (`desktop.hold.default`; needs uiohook-napi) |
 | `holdKey` | key name for hold-to-talk, e.g. `F9` (`desktop.hold.key`) |
 | `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`); with the one key, `tap` is whether a quick tap keeps it listening |
-| `oneKey` | the one key (Mac/Windows): `fn`, `rightOption`, `rightCommand` / `rightCtrl`, `rightAlt` (default Fn on a Mac, Right Ctrl on Windows: `desktop.oneKey.default.mac` / `.windows`); `"off"` → the keys above. Set from Keybot's settings in the window |
+| `oneKey` | the one key (Mac/Windows): `fn`, `rightOption`, `rightCommand` / `rightCtrl`, `rightAlt` (default Fn on a Mac, Right Ctrl on Windows: `desktop.oneKey.default.mac` / `.windows`); `"off"` → the keys above. Set from Keylessbord's settings in the window |
 | `autoStart` | launch at login (`desktop.autoStart.default`; installed app; also in the tray menu) |
 | `runnerImage` | the Docker image for "Run in a container" (default `node:22-bookworm`; it needs `bash`) |
-| `runnerName` | the name this computer is listed under for the Code bot (default: the computer's name) |
+| `runnerName` | the name this computer is listed under for Xode (default: the computer's name) |
 
 There is no `token` any more. Signed out, nothing is sent with an
 Authorization header; dictation needs a signed-in account.
@@ -111,7 +111,7 @@ window rather than recording into a history no account owns.
   front; meeting notes for "take notes" / "stop notes" (and "notes lo", "नोट्स
   बंद करो"); a bot for a bot's task (the backend's `/v1/shell/route` picks which,
   `/v1/shell/ask` sends it). The pill says where it went, with one tap for the
-  other choice ("Typed · Ask instead", "Sent to Plan bot · Type it instead").
+  other choice ("Typed · Ask instead", "Sent to Plan Ease · Type it instead").
   Fn is watched by `native/tzkey.swift` (`npm run tzkey`); the others by the key
   hook. A key that cannot be bound falls back to the toggle hotkey, said once.
 - **Toggle** (Linux, or `oneKey: "off"`): press the hotkey → speak → press again.
@@ -178,7 +178,7 @@ window rather than recording into a history no account owns.
 
 ## Tailzu Code on this computer
 
-The Code bot works on a project's code and needs somewhere to run commands (tests,
+Xode works on a project's code and needs somewhere to run commands (tests,
 builds, installs). Its first choice is the person's own computer, if they have said
 it may: free, and fast, because nothing waits for a cloud computer to start. This
 app speaks the backend's runner protocol for that (`docs/desktop-runner-session.md`
