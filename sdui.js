@@ -3815,7 +3815,7 @@ async function run(action, eventValue) {
       return;
     case "haptic": return;                      // no equivalent, and none faked
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
-    case "openUrl": window.tailzuApp.openExternal(action.url); return;
+    case "openUrl": window.tailzuApp.openExternal(String(resolveValue(action.url) ?? "")); return;
     case "notes.toggle": try { window.tailzuApp.toggleNotes(); } catch { /* an older main process */ } return;
     case "notes.allowSystemAudio": try { window.tailzuApp.allowSystemAudio(); } catch { /* an older main process */ } return;
     case "installUpdate": return installUpdate(action);
