@@ -143,10 +143,10 @@ const LISTS = {
     "in bullet points", "as bullets", "politely", "hindi mein", "english mein", "हिंदी में"],
   // A task for a bot: the built-ins by name, and the tasks that are theirs (patterns, on normalised words).
   bots: [
-    { slug: "plan", names: ["plan bot", "planner bot"] },
+    { slug: "plan", names: ["plan ease", "planease", "plan bot", "planner bot"] },
     { slug: "travel", names: ["travel bot"] },
-    { slug: "code", names: ["code bot", "coding bot"] },
-    { slug: "keybot", names: ["keybot", "key bot"] },
+    { slug: "code", names: ["xode", "code bot", "coding bot"] },
+    { slug: "keybot", names: ["keylessbord", "keylessboard", "keybot", "key bot"] },
   ],
   tasks: [
     { slug: "plan", re: `^(?:plan|organi[sz]e|sort out|block) (?:my|the|our) (?:${DAYS})(?: |$)` },
@@ -380,7 +380,7 @@ function writingInstruction(words) { const R = rules(); return R.WRITE_START.tes
 // ---- a task for a bot -----------------------------------------------------------------
 
 /** { slug, named } when the words are a task for a bot: `named` when they say
- *  which bot ("Plan bot, …", "ask the Code bot to …"). The slug of an unnamed
+ *  which bot ("Plan Ease, …", "ask Xode to …"). The slug of an unnamed
  *  task is only a guess; the backend's own routing decides. */
 function botTask(words, bots) {
   if (!words) return null;
@@ -453,7 +453,7 @@ function route(i) {
     if (r.askOn && (r.q || explains(r.rest))) return out("ask", { alt: "type", why: "selection question" });
     return out("rewrite", { alt: r.addressed && r.askOn ? "ask" : null, close: r.addressed, why: "selection" });
   }
-  // A bot by name: "Plan bot, plan my Saturday", "ask the Code bot to …".
+  // A bot by name: "Plan Ease, plan my Saturday", "ask Xode to …".
   if (r.bot && r.bot.named) return out("bot", { slug: r.bot.slug, named: true, alt: "type", why: "bot named" });
   // Tailzu by name: the writer's own instruction while a text box is in focus
   // ("Tailzu, reply saying I'm late"), else Ask, or a bot for a bot's task.

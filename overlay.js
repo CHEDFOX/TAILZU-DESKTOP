@@ -6,7 +6,7 @@ let last = "";
 function style() {
   const box = document.getElementById("box").style;
   const dot = document.getElementById("dot").style;
-  // THE BOTS LOOK (bots.app, from the bootstrap's flags): the strip in the app's white and ink, Keybot's clay dot.
+  // THE BOTS LOOK (bots.app, from the bootstrap's flags): the strip in the app's white and ink, Keylessbord's clay dot.
   // overlay.html's .bots rules set the face; off, the strip as it was.
   const bots = K.bool("bots.app", false);
   document.documentElement.classList.toggle("bots", bots);

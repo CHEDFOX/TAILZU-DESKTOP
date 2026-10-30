@@ -1,4 +1,4 @@
-// TAILZU CODE ON THIS COMPUTER: the person's own computer as a runner for the Code bot.
+// TAILZU CODE ON THIS COMPUTER: the person's own computer as a runner for Xode.
 //
 // docs/desktop-runner-session.md (in the backend repository) is the protocol; this is the app's side of it, from the switch in
 // the tray to the last process killed. In the order things happen:
@@ -364,7 +364,7 @@ function createRunner(o) {
       const d = await dockerNow(true);
       if (!d.running) {
         decline(j, "docker_unavailable");
-        if (o.notify) o.notify(d.reason || "Docker is not available, so X0 Code did not run. Turn off \"Run in a container\" or start Docker.");
+        if (o.notify) o.notify(d.reason || "Docker is not available, so Xode did not run. Turn off \"Run in a container\" or start Docker.");
         return;
       }
     }
@@ -484,7 +484,7 @@ function createRunner(o) {
       settings.enabled = false;
       o.saveState();
       sync();
-      if (o.notify) o.notify("X0 Code stopped. This computer is off for X0 Code until you turn it on again.");
+      if (o.notify) o.notify("Xode stopped. This computer is off for Xode until you turn it on again.");
     },
     /** A project's answer, from the window: "allow", "deny" or "ask" (forget). */
     async setProject(id, name, action) {

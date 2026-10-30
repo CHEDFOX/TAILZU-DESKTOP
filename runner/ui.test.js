@@ -43,7 +43,7 @@ test("it draws the switch, the state, the projects with what to do about each, a
   const p = page(snap());
   await new Promise((r) => setImmediate(r));
   assert.strictEqual(p.ids["#enabled"].checked, true);
-  assert.strictEqual(p.ids["#state"].textContent, "Online for X0 Code");
+  assert.strictEqual(p.ids["#state"].textContent, "Online for Xode");
   assert.strictEqual(p.ids["#workingRow"].hidden, true);
   const names = []; p.ids["#projects"].walk((e) => { if (e.className === "name") names.push(e.textContent); });
   assert.deepStrictEqual(names, ["acme/app", "<img src=x onerror=alert(1)>", "acme/no"], "a server's text is text");

@@ -1,6 +1,6 @@
 // THE ALLOW LIST: which of the person's projects may run on this computer.
 //
-// Per project, and decided by the person here, on this computer. The first time the Code bot offers a project's work to this
+// Per project, and decided by the person here, on this computer. The first time Xode offers a project's work to this
 // computer, a question is put to them ("Let Tailzu Code run this project's commands on this computer?") and the answer is
 // remembered: allowed, or not. A project that was never answered is not run. A project that was refused is never offered again
 // (it is left out of the list `hello` sends, so the server does not even try).

@@ -35,7 +35,7 @@ const screenRead = require("./screenRead.js");
 const driver = require("./driver.js");
 const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
 const { createLocalFiles, createFolderSettings } = require("./localfiles.js");
-// Tailzu Code on this computer: the person's own computer as a runner for the Code bot (runner/).
+// Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("./runner/index.js");
 // Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
 const { setupLiveViews } = require("./liveViewMain.js");
@@ -610,7 +610,7 @@ function adoptSession(raw) {
       }
     : null;
   saveSession(authSession);
-  // Signed in, or out: the runner goes online for the Code bot, or stands down and forgets which projects the last person allowed.
+  // Signed in, or out: the runner goes online for Xode, or stands down and forgets which projects the last person allowed.
   if (runner) { try { runner.sessionChanged(); } catch { /* the runner's own */ } }
 }
 
@@ -1999,7 +1999,7 @@ function setLocal(key, value) {
 }
 
 // ---- Tailzu Code on this computer ---------------------------------------------
-// The person's own computer as a runner for the Code bot (runner/index.js; the protocol is the backend's
+// The person's own computer as a runner for Xode (runner/index.js; the protocol is the backend's
 // docs/desktop-runner-session.md). OFF until they turn it on, here or in its window. When it is on, the tray says what it is doing
 // ("Tailzu is working on <project>", with a Stop), its window lists the commands it ran, and every command goes into an audit log.
 let runnerWin = null;
@@ -2007,12 +2007,12 @@ let runnerWin = null;
 /** The runner's one-line state, for under its switch in the tray. */
 function runnerStateLine(st) {
   switch (st.state) {
-    case "online": return txt("desktop.tray.runnerOnline", "Online for X0 Code");
+    case "online": return txt("desktop.tray.runnerOnline", "Online for Xode");
     case "paused": return st.pausedReason === "low_power_mode"
       ? txt("desktop.tray.runnerPausedLowPower", "Paused: Low Power Mode is on")
       : txt("desktop.tray.runnerPausedBattery", "Paused: battery is under 20%");
     case "signed_out": return txt("desktop.tray.runnerSignIn", "Sign in to use this computer");
-    case "live_off": return txt("desktop.tray.runnerLiveOff", "X0 Code is not on for your account yet");
+    case "live_off": return txt("desktop.tray.runnerLiveOff", "Xode is not on for your account yet");
     case "replaced": return txt("desktop.tray.runnerReplaced", "Another copy of X0 Bot has this computer");
     case "connecting": case "backoff": return txt("desktop.tray.runnerConnecting", "Connecting…");
     default: return "";
@@ -2030,18 +2030,18 @@ function runnerMenuItems() {
     items.push({ label: txt("desktop.tray.runnerStop", "Stop"), click: () => runner.stopWork() });
   }
   items.push({
-    label: txt("desktop.tray.runnerUse", "Use this computer for X0 Code"),
+    label: txt("desktop.tray.runnerUse", "Use this computer for Xode"),
     type: "checkbox", checked: st.enabled, click: (item) => { void runnerSwitch(item.checked); },
   });
   const line = runnerStateLine(st);
   if (st.enabled && line && !st.working) items.push({ label: "    " + line, enabled: false });
-  items.push({ label: txt("desktop.tray.runnerActivity", "X0 Code activity…"), click: openRunnerPage });
+  items.push({ label: txt("desktop.tray.runnerActivity", "Xode activity…"), click: openRunnerPage });
   return items;
 }
 
 /** What turning it on means, in plain words: said the first time it is turned on from the tray, and written under the switch in its window. */
 const RUNNER_EXPLAIN = () => txt("desktop.runner.explain",
-  "When this is on, and only while X0 Bot is open, X0 Code can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in X0 Code on this computer, and kept in a log here for 7 days. Turn it off any time.");
+  "When this is on, and only while X0 Bot is open, Xode can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in Xode on this computer, and kept in a log here for 7 days. Turn it off any time.");
 
 /** The switch. Turned on from the tray for the first time, it says what it does first; from its window the words are already on the page. */
 async function runnerSwitch(on) {
@@ -2052,8 +2052,8 @@ async function runnerSwitch(on) {
       try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
       const r = await dialog.showMessageBox({
         type: "question", noLink: true, defaultId: 1, cancelId: 1,
-        title: txt("desktop.runner.askTitle", "X0 Code"),
-        message: txt("desktop.runner.onMessage", "Use this computer for X0 Code?"),
+        title: txt("desktop.runner.askTitle", "Xode"),
+        message: txt("desktop.runner.onMessage", "Use this computer for Xode?"),
         detail: RUNNER_EXPLAIN(),
         buttons: [txt("desktop.runner.onYes", "Turn on"), txt("desktop.runner.onNo", "Not now")],
       });
@@ -2071,10 +2071,10 @@ async function askRunnerProject({ name }) {
   try {
     const r = await dialog.showMessageBox({
       type: "question", noLink: true, defaultId: 1, cancelId: 2,
-      title: txt("desktop.runner.askTitle", "X0 Code"),
-      message: txt("desktop.runner.askMessage", "Let X0 Code run {project} on this computer?", { project: name }),
+      title: txt("desktop.runner.askTitle", "Xode"),
+      message: txt("desktop.runner.askMessage", "Let Xode run {project} on this computer?", { project: name }),
       detail: txt("desktop.runner.askDetail",
-        "X0 Code wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in X0 Code on this computer."),
+        "Xode wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in Xode on this computer."),
       buttons: [
         txt("desktop.runner.askAllow", "Allow for this project"),
         txt("desktop.runner.askDeny", "Not on this computer"),
@@ -2115,7 +2115,7 @@ function openRunnerWindow() {
   if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); return; }
   const size = fitToDisplay(num("desktop.runner.width", 860), num("desktop.runner.height", 740));
   runnerWin = new BrowserWindow({
-    ...size, minWidth: 560, minHeight: 460, title: txt("desktop.runner.title", "X0 Code on this computer"),
+    ...size, minWidth: 560, minHeight: 460, title: txt("desktop.runner.title", "Xode on this computer"),
     backgroundColor: "#151210", show: false, autoHideMenuBar: true, webPreferences: webPrefs(),
   });
   runnerWin.once("ready-to-show", () => { if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); } });
@@ -3559,7 +3559,7 @@ app.whenReady().then(() => {
 
   tray = new Tray(trayIcon());
   refreshTray();
-  // Tailzu Code on this computer: off until the person turns it on (the tray, or its window), online for the Code bot when they have.
+  // Tailzu Code on this computer: off until the person turns it on (the tray, or its window), online for Xode when they have.
   setupRunner();
 
   // ASK THE SERVER NOW, window or no window. A login-item start never opens

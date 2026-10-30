@@ -126,7 +126,7 @@ test("a task for a bot: to a bot, named or not; typed into a text box unless it 
     assert.strictEqual(t.alt, "bot", s);
   }
   // Named, it goes whatever has focus.
-  for (const [s, slug] of [["Plan bot, what's on tomorrow", "plan"], ["ask the code bot to fix the build", "code"], ["Travel bot find me a hotel", "travel"]]) {
+  for (const [s, slug] of [["Plan Ease, what's on tomorrow", "plan"], ["ask the code bot to fix the build", "code"], ["Travel bot find me a hotel", "travel"]]) {
     assert.strictEqual(look(s), "hold", s);
     const x = go(s);
     assert.strictEqual(x.to, "bot", s);

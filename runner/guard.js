@@ -350,16 +350,16 @@ function writeProblem(abs, ctx) {
     // The runner's private folders (its home, its temp, its caches) are the commands' own, dotfiles of that home excepted.
     if (underDir(p, ctx.runnerDirCanon) && !ctx.runnerHomeDotfile(p)) continue;
     if (SYSTEM_DIRS.some((d) => underDir(p, d)) || WIN_SYSTEM.some((d) => underDir(p, d)) || /^[a-z]:\/(windows|program files)/.test(p)) {
-      return { rule: "system_write", message: "That writes to a system folder (" + abs + "). X0 Code only writes inside the project's workspace." };
+      return { rule: "system_write", message: "That writes to a system folder (" + abs + "). Xode only writes inside the project's workspace." };
     }
     const h = homeOf(p, ctx);
     if (h) {
       const first = p.slice(h.dir.length).replace(/^\//, "").split("/")[0];
-      if (!first) return { rule: "home_write", message: "That writes to a home folder itself (" + abs + "). X0 Code only writes inside the project's workspace." };
+      if (!first) return { rule: "home_write", message: "That writes to a home folder itself (" + abs + "). Xode only writes inside the project's workspace." };
       if (first.startsWith(".") || first === "library" || first === "appdata") {
-        return { rule: "home_write", message: "That writes to a dotfile or settings folder in a home directory (" + abs + "). X0 Code never changes those." };
+        return { rule: "home_write", message: "That writes to a dotfile or settings folder in a home directory (" + abs + "). Xode never changes those." };
       }
-      if (h.person) return { rule: "outside_write", message: "That writes outside the project's workspace, into the person's own folders (" + abs + "). X0 Code only writes inside the workspace." };
+      if (h.person) return { rule: "outside_write", message: "That writes outside the project's workspace, into the person's own folders (" + abs + "). Xode only writes inside the workspace." };
     }
   }
   return null;
@@ -467,7 +467,7 @@ function publishProblem(cmd) {
     // git [global options] <subcommand>: -C <dir> and -c <k=v> take a value.
     const sub = positionals(args, 1, new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--super-prefix"]))[0] || "";
     if (sub === "push" || sub === "send-pack" || sub === "receive-pack") {
-      return refuse("push", "git push isn't allowed here: X0 Code has read-only access to the code, and it never pushes. Its changes come back through X0 Bot.");
+      return refuse("push", "git push isn't allowed here: Xode has read-only access to the code, and it never pushes. Its changes come back through X0 Bot.");
     }
     if (sub === "config" && args.some((a) => /^--(global|system)$/.test(a.text))) return refuse("home_write", "git config --global or --system would change settings outside the workspace. Use --local, or leave it.");
     if (sub === "credential" || sub === "credential-store" || sub === "credential-cache") return refuse("secret_read", "git credential would touch stored passwords. It isn't allowed here.");
@@ -476,7 +476,7 @@ function publishProblem(cmd) {
   if (name === "gh") {
     const sub = positionals(args, 1)[0] || "";
     if (["release", "repo", "workflow", "secret", "variable", "auth", "gist", "ruleset", "label", "pr", "issue", "api"].includes(sub) && sub !== "") {
-      return refuse("publish", "gh " + sub + " acts on GitHub as the person, which X0 Code doesn't do from this computer.");
+      return refuse("publish", "gh " + sub + " acts on GitHub as the person, which Xode doesn't do from this computer.");
     }
     return null;
   }
@@ -502,7 +502,7 @@ function publishProblem(cmd) {
     const words = positionals(args, 4, new Set(NPM_VALUES)).map((w) => w.toLowerCase());
     const t = PUBLISH[name];
     const hit = t ? words.slice(0, t.depth).find((w) => t.verbs.has(w)) : "";
-    if (hit) return refuse("publish", name + " " + hit + " isn't allowed here: X0 Code doesn't publish packages or log in to registries.");
+    if (hit) return refuse("publish", name + " " + hit + " isn't allowed here: Xode doesn't publish packages or log in to registries.");
     const runAt = words.findIndex((w) => w === "run" || w === "run-script");
     const script = runAt >= 0 ? words[runAt + 1] : name === "npm" ? "" : words[0];
     if (script && PUBLISH_SCRIPTS.has(script)) return refuse("publish", name + " run " + script + " looks like a publish or deploy script, which isn't allowed here.");
@@ -510,7 +510,7 @@ function publishProblem(cmd) {
   }
   if (name === "dotnet") {
     const words = positionals(args, 3).map((w) => w.toLowerCase());
-    if (words[0] === "nuget" && (words[1] === "push" || words[1] === "delete")) return refuse("publish", "dotnet nuget " + words[1] + " isn't allowed here: X0 Code doesn't publish packages.");
+    if (words[0] === "nuget" && (words[1] === "push" || words[1] === "delete")) return refuse("publish", "dotnet nuget " + words[1] + " isn't allowed here: Xode doesn't publish packages.");
     return null;
   }
   const t = Object.prototype.hasOwnProperty.call(PUBLISH, name) ? PUBLISH[name] : null;
@@ -518,8 +518,8 @@ function publishProblem(cmd) {
     const words = positionals(name === "cargo" ? args.filter((a) => !a.text.startsWith("+")) : args, t.depth, t.values).map((w) => w.toLowerCase());
     const hit = words.find((w) => t.verbs.has(w) || ((name === "gradle" || name === "gradlew") && /^publish(?!tomavenlocal$)/.test(w)));
     const flag = args.find((a) => t.verbs.has(a.text.toLowerCase()) && isOption(a.text));
-    if (hit || flag) return refuse("publish", name + " " + (hit || flag.text) + " isn't allowed here: X0 Code doesn't publish or deploy from this computer.");
-    if ((name === "docker" || name === "podman") && args.some((a) => a.text === "--push" || /^--output=.*push=true/.test(a.text))) return refuse("publish", name + " build --push isn't allowed here: X0 Code doesn't push images.");
+    if (hit || flag) return refuse("publish", name + " " + (hit || flag.text) + " isn't allowed here: Xode doesn't publish or deploy from this computer.");
+    if ((name === "docker" || name === "podman") && args.some((a) => a.text === "--push" || /^--output=.*push=true/.test(a.text))) return refuse("publish", name + " build --push isn't allowed here: Xode doesn't push images.");
   }
   return globalProblem(cmd);
 }
@@ -694,12 +694,12 @@ function checkCommand(command, o) {
     here.cwd = depth === 0 ? cwd : null;
     for (const w of stage.words.concat(stage.redirs.map((r) => r.target))) {
       const abs = pathOf(w, here);
-      if (abs && secretProblem(abs, here)) return refuse("secret_read", "That names a place where keys and tokens are kept (" + w.text + "). X0 Code doesn't look there.");
+      if (abs && secretProblem(abs, here)) return refuse("secret_read", "That names a place where keys and tokens are kept (" + w.text + "). Xode doesn't look there.");
     }
     if (!cmd.name) continue;
     const { name } = cmd;
 
-    if (SUDO.has(name)) return refuse("sudo", name + " isn't allowed: it would run with more power than X0 Code has on this computer. Run the command without it.");
+    if (SUDO.has(name)) return refuse("sudo", name + " isn't allowed: it would run with more power than Xode has on this computer. Run the command without it.");
     if (POWER.has(name) || /^mkfs\./.test(name) || (name === "diskutil" && cmd.args.some((a) => /^(erase|partition|reformat|zero|secure)/i.test(a.text)))) {
       return refuse("system", name + " changes the whole computer, which isn't allowed here.");
     }
@@ -722,7 +722,7 @@ function checkCommand(command, o) {
       for (const w of cmd.args.filter((a) => !isOption(a.text) && !/^\/[a-z]$/i.test(a.text))) {
         const abs = pathOf(w, here);
         if (abs ? catastrophic(abs, here) : /^(\/|~|\$HOME|\$\{HOME\}|\.\.)(\/\*|\/)?$/.test(w.text)) {
-          return refuse("rm_root", "That would delete a whole folder tree (" + w.text + "): the root of the disk, a home folder or a parent of the workspace. X0 Code only deletes inside the workspace.");
+          return refuse("rm_root", "That would delete a whole folder tree (" + w.text + "): the root of the disk, a home folder or a parent of the workspace. Xode only deletes inside the workspace.");
         }
       }
     }
