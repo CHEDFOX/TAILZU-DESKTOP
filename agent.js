@@ -1124,9 +1124,10 @@ function carriesScreenSecret(text, snapshot, target, said) {
  *
  * @param {object} action   the server's action event
  * @param {object} snapshot the snapshot whose ids the action uses
- * @param {{ startApp?: string|string[], said?: string }} [ctx]  the app(s) the
- *        run began in (the snapshot's own app when not given) and everything
- *        the person said in the run (nothing, when not given)
+ * @param {{ startApp?: string|string[], said?: string, trusted?: boolean }} [ctx]  the app(s) the
+ *        run began in (the snapshot's own app when not given), everything
+ *        the person said in the run (nothing, when not given), and whether
+ *        they asked for this task in so many words (the brain's task or send)
  */
 function classifyRisk(action, snapshot, ctx) {
   if (!action || typeof action !== "object") return "free";
@@ -1139,10 +1140,18 @@ function classifyRisk(action, snapshot, ctx) {
   let risk = "free";
   for (const t of [target && target.label, action.text]) risk = maxRisk(risk, keywordRisk(t));
 
+  // ASKED FOR ALREADY: a task or a message the person gave in so many words
+  // (the one key's brain said task or send, and nothing in it moves money or
+  // deletes). Its ordinary steps (the Enter that sends what they asked to
+  // send, a press on a web page, opening the app the task is in) are what
+  // they asked for, and are not asked about again. Words on the target, the
+  // chords that close, quit or delete, and anything copied off the screen
+  // still are.
+  const asked = c.trusted === true;
   if (kind === "key") {
     const chord = parseChord(action.keys || action.text);
     risk = maxRisk(risk, chordRisk(chord));
-    if (chord.key === "enter" && looksLikeComposer(focused)) risk = maxRisk(risk, "confirm");
+    if (chord.key === "enter" && looksLikeComposer(focused) && !asked) risk = maxRisk(risk, "confirm");
     if (!takesText(focused) && (isPrintable(chord) || chord.key === "delete" || chord.key === "backspace")) {
       risk = maxRisk(risk, "confirm");
     }
@@ -1150,11 +1159,11 @@ function classifyRisk(action, snapshot, ctx) {
 
   if (kind === "type" && !takesText(focused)) risk = maxRisk(risk, "confirm");
 
-  if (kind === "press" && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
+  if (kind === "press" && !asked && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
     risk = maxRisk(risk, "confirm");
   }
 
-  if (kind === "open") {
+  if (kind === "open" && !asked) {
     const given = c.startApp != null ? [].concat(c.startApp) : [snapshot && snapshot.app && snapshot.app.name];
     const starts = given.filter((s) => typeof s === "string" && s.trim());
     if (!sameApp(action.app || action.text, starts)) risk = maxRisk(risk, "confirm");
@@ -2083,7 +2092,7 @@ function createAgent(deps) {
       return null;
     }
 
-    const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run) });
+    const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run), trusted: run.trusted === true });
     const risk = maxRisk(maxRisk(a.risk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
 
     if (frame) tell(run, "point", frame);
@@ -2694,8 +2703,9 @@ function createAgent(deps) {
    * nothing is read. Otherwise the guide starts listening and the screen is
    * read at the same time, while they are still speaking: the tree, and a
    * look at the window (its text and its picture), in parallel.
-   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number } }} [opts]
-   *        `pointer` in the driver's units (Windows: physical pixels)
+   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number }, trusted?: boolean }} [opts]
+   *        `pointer` in the driver's units (Windows: physical pixels); `trusted`: the person asked for this
+   *        task or message in so many words, so its ordinary steps are not asked about (classifyRisk)
    * @returns {boolean} whether a run began
    */
   function begin(opts) {
@@ -2727,6 +2737,8 @@ function createAgent(deps) {
       plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
       pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
       acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0, says: 0,
+      // Asked for in so many words (the one key's brain: a task or a message, no money, nothing deleted).
+      trusted: o.trusted === true,
     };
     current = run;
     callGuide("show", ["listening", { app: run.app }]);

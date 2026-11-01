@@ -15,14 +15,17 @@ function rig(o = {}) {
   const did = [];
   const pills = [];
   let timers = [];
-  const knobs = Object.assign({ "desktop.route.labelMs": 5000, "desktop.route.botGraceMs": 3500, "desktop.route.notesGraceMs": 2000 }, o.knobs);
+  const knobs = Object.assign({ "desktop.route.labelMs": 5000, "desktop.route.botGraceMs": 3500, "desktop.route.notesGraceMs": 2000 }, o.decide ? { "desktop.route.brain": true } : {}, o.knobs);
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
   const r = createRouting({
     on: () => o.on !== false,
     signals: () => ({ names: ["X0", "Blip"], askOn: o.askOn !== false, notesOn: !!o.notesOn }),
     type: (sid, chunks) => { did.push(["type", sid, chunks.map((c) => c.text)]); return Promise.resolve(); },
     undo: (n) => { did.push(["undo", n]); return Promise.resolve(); },
-    ask: (m) => { did.push(["ask", m]); return o.askTakes !== false; },
+    ask: (m, opt) => { did.push(opt ? ["ask", m, opt] : ["ask", m]); return o.askTakes !== false; },
+    ...(o.decide ? { decide: async (i) => { did.push(["decide", i.words, i.last.length]); return o.decide(i); } } : {}),
+    ...(o.routine ? { routine: async (g) => { did.push(["routine", g]); return o.routine(g); } } : {}),
+    ...(o.needGrant ? { needGrant: async (m) => { did.push(["needGrant", m]); return o.needGrant(m); } } : {}),
     askCancel: () => did.push(["askCancel"]),
     notes: (start) => did.push(["notes", start]),
     whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan Ease", confidence: 0.9 }; },
@@ -376,4 +379,116 @@ test("a Mac or Windows field read still decides there (blind is Linux's alone)",
   h.r.start(1, {});
   h.r.field(1, null);
   assert.strictEqual(h.r.chunk(1, { text: "Book a table for eight.", heard: "book a table for eight" }), "hold", "no text box on a Mac: a task is held, as before");
+});
+
+// ---- the one key's brain ------------------------------------------------------------
+
+const said = (h, sid, words, field) => {
+  h.r.start(sid, {});
+  h.r.target(sid, { label: "WhatsApp" });
+  if (field !== undefined) h.r.field(sid, field);
+  return h.r.end(sid, { text: words, heard: words }, true);
+};
+
+test("brain: every session's words are held for it, even with a text box in front", async () => {
+  const h = rig({ decide: () => ({ do: "write", sure: 0.95, by: "model" }) });
+  h.r.start(1, {});
+  h.r.target(1, { label: "WhatsApp" });
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "Running late,", heard: "running late" }), "hold");
+  assert.strictEqual(h.r.end(1, { text: "be there in ten.", heard: "be there in ten" }, true), "routed");
+  await settle();
+  assert.deepStrictEqual(h.did, [["decide", "running late be there in ten", 0], ["type", 1, ["Running late,", "be there in ten."]]]);
+});
+
+test("brain: off unless the server turns it on (desktop.route.brain): the lists decide, typed as it comes", async () => {
+  const h = rig({ decide: () => { throw new Error("must not be asked"); }, knobs: { "desktop.route.brain": false } });
+  h.r.start(1, {});
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "Running late,", heard: "running late" }), "type");
+});
+
+test("brain: a private window or a money app never goes to it; the lists decide, typed as it comes", async () => {
+  const h = rig({ decide: () => { throw new Error("must not be asked"); } });
+  h.r.start(1, {});
+  h.r.target(1, { label: "HDFC", sensitive: true });
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "hello", heard: "hello" }), "type");
+  assert.strictEqual(h.r.end(1, { text: "there", heard: "there" }, true), "type");
+  await settle();
+  assert.ok(!h.did.some((x) => x[0] === "decide"));
+});
+
+test("brain: a message to send goes to Ask, trusted, with the goal made whole", async () => {
+  const h = rig({ decide: () => ({ do: "send", goal: "Tell Riya the mockups are ready", to: "Riya", risk: "send", sure: 0.9, by: "model", missing: [] }) });
+  assert.strictEqual(said(h, 1, "tell Riya the mockups are ready", null), "routed");
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "Tell Riya the mockups are ready", { trusted: true }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sending", alt: "Type it instead" }]);
+});
+
+test("brain: a task that moves money is not trusted, so every step that matters is confirmed", async () => {
+  const h = rig({ decide: () => ({ do: "task", goal: "Pay the electricity bill", risk: "money", sure: 0.9, by: "model", missing: [] }) });
+  said(h, 1, "pay the electricity bill", null);
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "Pay the electricity bill"]);
+  assert.strictEqual(h.lastPill()[1].label, "On it");
+});
+
+test("brain: a permission the card has not given is asked for first, at this turn, then Ask goes on", async () => {
+  const h = rig({ decide: () => ({ do: "answer", goal: "What should I do here?", screen: true, risk: "none", sure: 0.9, by: "model", missing: ["see"] }), needGrant: () => true });
+  said(h, 1, "what should I do here", null);
+  await settle();
+  const order = h.did.map((x) => x[0]);
+  assert.deepStrictEqual(order.slice(-2), ["needGrant", "ask"]);
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "needGrant"), ["needGrant", ["see"]]);
+});
+
+test("brain: nothing missing, nothing asked", async () => {
+  const h = rig({ decide: () => ({ do: "answer", goal: "Why is December high?", risk: "none", sure: 0.9, by: "model", missing: [] }), needGrant: () => true });
+  said(h, 1, "why is december so high", null);
+  await settle();
+  assert.ok(!h.did.some((x) => x[0] === "needGrant"));
+});
+
+test("brain: a routine is held a moment, then saved, and said", async () => {
+  const h = rig({ decide: () => ({ do: "routine", goal: "Every morning at 8, tell me the top tech news", sure: 0.9, by: "model" }), routine: () => ({ text: "Top tech news · Every day at 8:00" }) });
+  said(h, 1, "every morning at 8 tell me the top tech news", null);
+  await settle();
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Saving a routine", alt: "Type it instead" }]);
+  assert.ok(!h.did.some((x) => x[0] === "routine"), "not before its moment");
+  h.elapse();
+  await settle();
+  assert.deepStrictEqual(h.did.slice(-2), [["routine", "Every morning at 8, tell me the top tech news"], ["answered", "Routines", "Top tech news · Every day at 8:00"]]);
+});
+
+test("brain: one of their bots, by the brain's pick", async () => {
+  const h = rig({ decide: () => ({ do: "bot", goal: "Plan my Saturday", bot: { slug: "plan", name: "Plan Ease" }, sure: 0.9, by: "model" }) });
+  said(h, 1, "plan my saturday", null);
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "whichBot"), ["whichBot", "Plan my Saturday", "plan"]);
+});
+
+test("brain: down or slow, and the word lists decide as before", async () => {
+  const h = rig({ decide: () => new Promise(() => {}), knobs: { "desktop.route.brainMs": 300 } });
+  said(h, 1, "what does this error mean", null);
+  await settle();
+  h.elapse();
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "what does this error mean"]);
+});
+
+test("brain: the last three asks go with the next, so a follow-up is understood", async () => {
+  let n = 0;
+  const h = rig({ decide: () => ({ do: "send", goal: `message ${++n}`, to: "Riya", risk: "send", sure: 0.9, by: "model", missing: [] }) });
+  for (let i = 1; i <= 5; i++) { said(h, i, `tell riya ${i}`, null); await settle(); }
+  const counts = h.did.filter((x) => x[0] === "decide").map((x) => x[2]);
+  assert.deepStrictEqual(counts, [0, 1, 2, 3, 3]);
+});
+
+test("brain: a write with text selected is the server's rewrite of it", async () => {
+  const h = rig({ decide: () => ({ do: "write", sure: 0.9, by: "model" }) });
+  said(h, 1, "make this shorter", { kind: "text", selection: "a long paragraph" });
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "type"), ["type", 1, ["make this shorter"]]);
 });

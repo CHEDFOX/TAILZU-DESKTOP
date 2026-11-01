@@ -2572,6 +2572,7 @@ function toggleDictation() {
         // not read — not its text around the field, not the field's own text.
         // The request is marked private so the server keeps nothing either.
         const off = !!info.private || !!info.sensitive;
+        routing.target(sid, info);
         sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off });
         // No field will be read: the recorder is told at once, so a short
         // first stretch does not wait for one (a private window says so
@@ -3231,6 +3232,39 @@ ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn
 // went and one tap to have them typed instead. On wherever the one key is
 // (a Mac, Windows), the chord standing in for it included; off on Linux.
 const withinMs = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out")), ms))]);
+/** The setup card's state, as the brain reads it: read, see, pictures. */
+function grantsNow() {
+  try { const st = askSetup.state(); return { read: st.read, see: st.see, pictures: st.pictures }; } catch { return undefined; }
+}
+
+/**
+ * ASKED AT THE TURN THAT NEEDS IT. The setup card is answered once; what it
+ * has not allowed and this ask needs ("read": using the apps, "see": the
+ * screen) is asked for now: the Mac's own page for it opens, the pill says
+ * why, and the ask waits (desktop.route.grantWaitMs) until it is on. Given
+ * already, or a system with no such permission: nothing is asked. True once
+ * they are all on; false when the wait ran out (Ask then does what it can).
+ */
+async function needGrant(missing) {
+  const want = (Array.isArray(missing) ? missing : []).filter((g) => g === "read" || g === "see");
+  const off = () => { const g = grantsNow() || {}; return want.filter((k) => g[k] !== "on" && g[k] !== "na"); };
+  let left = off();
+  if (!left.length) return true;
+  const first = left[0];
+  pill("routed", { label: first === "read"
+    ? txt("desktop.route.needRead", "Your turn: let X0 use your apps")
+    : txt("desktop.route.needSee", "Your turn: let X0 see your screen"), alt: "" });
+  try { askSetup.act({ kind: first === "read" ? "openAccessibility" : "openScreenRecording" }); } catch { /* the card in the app still asks */ }
+  askSetup.push();
+  const until = Date.now() + Math.max(5000, num("desktop.route.grantWaitMs", 90000));
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1000));
+    left = off();
+    if (!left.length) { askSetup.push(); return true; }
+  }
+  return false;
+}
+
 const routing = createRouting({
   on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
   signals: () => ({ names: wakeNames(), askOn: askOn(), notesOn: !!notes }),
@@ -3242,7 +3276,23 @@ const routing = createRouting({
     return pasting;
   },
   undo: undoPastes,
-  ask: (message) => (ask && askOn() ? ask.askHeard(message) : false),
+  ask: (message, o) => (ask && askOn() ? ask.askHeard(message, o) : false),
+  // THE ONE KEY'S BRAIN (POST /v1/ask/decide): what was meant, in any language.
+  // The setup card's state goes with it, so what it needs and has not been
+  // given comes back, and is asked for only then (needGrant).
+  decide: (i) => apiJson("/v1/ask/decide", {
+    method: "POST",
+    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined })),
+  }),
+  // A routine, saved from what was said: the server's draft, then the routine.
+  routine: async (goal) => {
+    const tz = -new Date().getTimezoneOffset();
+    const dr = await apiJson("/v1/routines/draft", { method: "POST", body: JSON.stringify({ message: String(goal).slice(0, 2000), tz }) });
+    if (!dr || !dr.draft || !dr.draft.token) return null;
+    const made = await apiJson("/v1/routines", { method: "POST", body: JSON.stringify({ token: dr.draft.token, tz }) });
+    return made && made.routine ? { text: [made.routine.task, made.routine.when].filter(Boolean).join(" · ") || txt("desktop.route.routineSaved", "Routine saved") } : null;
+  },
+  needGrant: (missing) => needGrant(missing),
   askCancel: () => { if (ask) ask.cancel("route"); },
   notes: (start) => {
     if (start && !notes) void startNotes();
