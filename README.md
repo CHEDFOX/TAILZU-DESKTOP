@@ -86,7 +86,7 @@ it would pin those values against anything the server later changes.
 | `hold` | `true` → hold-to-talk on `holdKey` (`desktop.hold.default`; needs uiohook-napi) |
 | `holdKey` | key name for hold-to-talk, e.g. `F9` (`desktop.hold.key`) |
 | `tap` / `tapKeys` | double-tap to dictate, on `["Ctrl", "Alt"]` (`desktop.tap.default`, `desktop.tap.keys`); with the one key, `tap` is whether a quick tap keeps it listening |
-| `oneKey` | the one key (Mac/Windows): `fn`, `rightOption`, `rightCommand` / `rightCtrl`, `rightAlt` (default Fn on a Mac, Right Ctrl on Windows: `desktop.oneKey.default.mac` / `.windows`); `"off"` → the keys above. Set from Keylessbord's settings in the window |
+| `oneKey` | the one key: Mac `rightCommand`, `fn`, `rightOption`; Windows `rightCtrl`, `rightAlt`; Linux `rightCtrl`, `rightAlt`, `rightSuper`. Default Right ⌘ on a new Mac (a Mac that already ran keeps Fn), Right Ctrl on Windows and Linux (`desktop.oneKey.default.mac` / `.windows` / `.linux`). A Linux Wayland session keeps the keys above (a key hook hears only X11 windows there). On Linux no text box can be read, so the words are typed as they come unless they say where they go. `"off"` → the keys above. Set from Keylessbord's settings in the window |
 | `autoStart` | launch at login (`desktop.autoStart.default`; installed app; also in the tray menu) |
 | `runnerImage` | the Docker image for "Run in a container" (default `node:22-bookworm`; it needs `bash`) |
 | `runnerName` | the name this computer is listed under for Xode (default: the computer's name) |

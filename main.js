@@ -410,6 +410,21 @@ function checkForUpdate() {
 }
 
 let configError = null; // surfaced as a notification once the app is ready
+/**
+ * The one key for someone who never picked one, decided at the first launch of a copy that has it and kept (oneKey.js
+ * firstDefault): a Mac that had launched before keeps Fn, the default it had; a new one gets Right ⌘. launchCount is still
+ * the launches BEFORE this one here (it is counted when the app is ready).
+ */
+function oneKeyFirstDefault() {
+  if (!localState.oneKeyDefault) {
+    const first = oneKey.firstDefault(process.platform, Number(localState.launchCount) || 0);
+    if (!first) return null;
+    localState.oneKeyDefault = first;
+    saveLocalState();
+  }
+  return localState.oneKeyDefault;
+}
+
 function loadConfig() {
   let file = {};
   try {
@@ -496,12 +511,16 @@ function loadConfig() {
     runnerImage: typeof file.runnerImage === "string" ? file.runnerImage.trim() : "",
     runnerName: typeof file.runnerName === "string" ? file.runnerName.trim().slice(0, 80) : "",
     // THE ONE KEY (oneKey.js): hold to talk, tap for hands-free, and the words
-    // go where they are meant (routing.js). Fn on a Mac, Right Ctrl on
-    // Windows, or the one picked in Settings; null on Linux, or with "off"
-    // here, or the server's switch off: the old keys, as they were.
-    oneKey: bool("desktop.oneKey.enabled", true)
+    // go where they are meant (routing.js). Right ⌘ on a new Mac (Fn on one
+    // that already had it: oneKeyFirstDefault), Right Ctrl on Windows and
+    // Linux, or the one picked in Settings; null with "off" here, or the
+    // server's switch off: the old keys, as they were.
+    // A Linux Wayland session keeps its old keys: a key hook there hears only X11 windows (oneKey.linuxSession).
+    oneKey: bool("desktop.oneKey.enabled", true) && oneKey.linuxSession(process.platform, process.env) !== "wayland"
       ? oneKey.pickKey(process.platform, typeof file.oneKey === "string" ? file.oneKey
-        : process.platform === "darwin" ? str("desktop.oneKey.default.mac", "fn") : str("desktop.oneKey.default.windows", "rightCtrl"))
+        : process.platform === "darwin" ? str("desktop.oneKey.default.mac", oneKeyFirstDefault() || "rightCommand")
+        : process.platform === "linux" ? str("desktop.oneKey.default.linux", "rightCtrl")
+        : str("desktop.oneKey.default.windows", "rightCtrl"))
       : null,
   };
 }
@@ -2543,7 +2562,8 @@ function toggleDictation() {
     const focused = BrowserWindow.getFocusedWindow();
     const ours = !!focused && focused === appWin;
     // Where its words go is decided on what it says (routing.js).
-    routing.start(sid, { ours });
+    // On Linux no text box can be read (frontApp.focusedField answers null there): the field is unknown, not absent.
+    routing.start(sid, { ours, blind: process.platform === "linux" });
     const named = ours ? Promise.resolve({ label: "X0 Bot" }) : frontApp.frontInfo();
     named
       .then((info) => {
@@ -2773,8 +2793,9 @@ function bindOneKeyNow() {
   // an answer for a binding since replaced is not this one's.
   const watch = oneKeyMark = {};
   oneKeyWatch = oneKey.bindOneKey({
-    key, platform: process.platform, gesture: oneKeyGesture, hook: oneKeyHook,
-    helper: { path: tzkeyPath(), exists: (f) => fs.existsSync(f), spawn },
+    key, platform: process.platform, session: oneKey.linuxSession(process.platform, process.env), gesture: oneKeyGesture, hook: oneKeyHook,
+    // The Fn helper only for Fn: no other key, on any system, looks for it.
+    helper: oneKey.needsHelper(key) ? { path: tzkeyPath(), exists: (f) => fs.existsSync(f), spawn } : null,
     bound: () => {
       if (oneKeyMark !== watch) return;
       oneKeyState = "bound";
@@ -2797,6 +2818,7 @@ function bindOneKeyNow() {
         localState.oneKeyWarned = said;
         saveLocalState();
         notify(!bound ? txt("desktop.notify.oneKeyNone", "{key} can't be used here, and no other key was free. Use Dictate in the tray menu.", { key: label })
+          : why === "wayland" ? txt("desktop.notify.oneKeyWayland", "{key} can't be heard in a Wayland session, so talk with {bound}. An X11 session gives you {key}.", { key: label, bound: prettyKey(bound) })
           : why === "denied" ? txt("desktop.notify.oneKeyDenied", "X0 Bot can't use {key} until it's allowed in Privacy & Security › Accessibility. Talk with {bound} for now.", { key: label, bound: prettyKey(bound) })
           : txt("desktop.notify.oneKeyUnavailable", "{key} can't be used on this computer, so talk with {bound}. Pick another key in Settings.", { key: label, bound: prettyKey(bound) }));
       }

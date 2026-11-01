@@ -408,11 +408,13 @@ function read(i) {
   const a = address(words, i && i.names);
   const field = i ? i.field : undefined;
   const known = field !== undefined;
+  // Blind: this computer cannot read a text box at all (Linux), so the field is never known.
+  const blind = !!(i && i.blind);
   const focused = !known || !!field;          // not known: a text box, as dictation always assumed
   const sel = field && typeof field.selection === "string" && field.selection.trim() ? field.selection : "";
   const rest = a.rest;
   return {
-    raw, words, rest, addressed: a.addressed, known, focused, sel,
+    raw, words, rest, addressed: a.addressed, known, blind, focused, sel,
     ours: !!(i && i.ours), askOn: !!(i && i.askOn), notesOn: !!(i && i.notesOn),
     notes: notesCommand(rest),
     q: isQuestion(raw, rest), cmd: isCommand(rest), screen: aboutScreen(raw, rest, known && !!field),
@@ -428,7 +430,10 @@ function read(i) {
  */
 function firstLook(i) {
   const r = read(i);
-  if (!r.words || r.ours || !r.known) return "type";
+  if (!r.words || r.ours) return "type";
+  // Not known yet (a Mac or Windows field read still on its way): typed now, never held for it. Blind (Linux, where it
+  // never comes): typed too, unless the words themselves say where they go.
+  if (!r.known) return r.blind && (r.notes || r.addressed || (r.bot && r.bot.named)) ? "hold" : "type";
   if (r.notes || r.addressed || (r.bot && r.bot.named)) return "hold";
   if (r.sel && r.askOn && (r.q || explains(r.rest))) return "hold";
   if (r.screen && r.askOn) return "hold";
