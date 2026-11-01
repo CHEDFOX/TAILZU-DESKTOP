@@ -34,6 +34,7 @@ function ndjson(events) {
 }
 
 function harness(opts = {}) {
+  let screenPoint = null;   // where the pointer is, when a test moves it (setPoint)
   const sent = [];          // what the guide window was sent
   const recorder = [];      // what the recorder was sent
   const log = [];           // both, in the order they happened
@@ -64,6 +65,7 @@ function harness(opts = {}) {
       windows.push(self);
     }
     setVisibleOnAllWorkspaces() {}
+    getBounds() { return this.bounds || { x: 0, y: 0, width: 1440, height: 900 }; }
     setIgnoreMouseEvents(v, o) { this.ignore.push([v, o]); }
     setContentProtection(v) { this.protected = v; }
     loadFile(f) { this.file = f; }
@@ -119,7 +121,7 @@ function harness(opts = {}) {
     picturesAlwaysAll: opts.alwaysAll != null ? () => opts.alwaysAll : undefined,
     lookPermission: opts.lookPermission,
     screen: opts.screen || {
-      getCursorScreenPoint: () => ({ x: 500, y: 400 }),
+      getCursorScreenPoint: () => (screenPoint ? screenPoint() : { x: 500, y: 400 }),
       getDisplayNearestPoint: () => ({ workArea: WORK }),
       screenToDipRect: (_w, r) => r,
     },
@@ -175,7 +177,7 @@ function harness(opts = {}) {
     openExternal: opts.openExternal,
     screenSettings: opts.screenSettings,
   });
-  return { ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
+  return { setPoint: (f) => { screenPoint = f; }, ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
     heardCalls: () => calls.filter((c) => c[0] === "heard"),
     previews: () => calls.filter((c) => c[0] === "preview").map((c) => c[1]),
     types: () => sent.map((m) => m.type),
@@ -384,6 +386,22 @@ test("the pointer over the card takes clicks; off it, they go through", async ()
   const last2 = win.ignore.slice(-2);
   assert.deepStrictEqual(last2[0], [false, undefined]);
   assert.deepStrictEqual(last2[1], [true, { forward: true }]);
+});
+
+test("the card's first click is a button's: the window takes a first click, and the pointer is told every frame or two", async () => {
+  const h = harness();
+  await h.ask.tap();
+  const win = h.windows[0];
+  // A Mac spends a first click on a window that is never active unless it is accepted (Do it took two clicks, or none).
+  assert.strictEqual(win.o.acceptFirstMouse, true);
+  assert.strictEqual(win.o.focusable, false, "it still never takes the keyboard");
+  // The pointer is fed fast enough that a quick move onto a button is known before the click: not ten times a second.
+  const before = h.sent.filter((m) => m.type === "cursor").length;
+  let n = 0;
+  h.setPoint(() => ({ x: 500 + (n++ % 2), y: 400 }));
+  await sleep(160);
+  assert.ok(h.sent.filter((m) => m.type === "cursor").length - before >= 3, "several pointer reports in 160 ms");
+  h.ask.cancel("test over");
 });
 
 test("a question's voice level and errors are routed to it, a dictation's are not", async () => {

@@ -1757,6 +1757,9 @@
     // with the card.
     if (PK.on) endPeek();
     const first = !S.shown;
+    // A new card asks to take clicks afresh (the window may have been let go by main meanwhile, hidden or peeked): the next
+    // frame's hit test says whether the pointer is on it.
+    PTR.inside = false;
     // Put away completely (not just folding): it starts from nothing, where
     // it is to be. A fold still under way is turned round where it is.
     const fresh = first && lifeAt(now()).over;
@@ -1810,6 +1813,10 @@
     chip.classList.remove("on");
     fadeMarks();
     startLife(false);
+    // Let clicks through, and forget the pointer was on the card: the next card that comes up under a pointer that has not
+    // moved must ask to take clicks again. Kept "inside", it never asked, and its buttons let every click through to the
+    // app below until the pointer left the card and came back (every system: the buttons that "worked a few times only").
+    PTR.inside = false;
     bridge.mouse(false);
     wake();
   }
@@ -1978,9 +1985,12 @@
   // window's own (forwarded) moves, and main's report of the pointer while
   // the window is up (the "cursor" message), which needs no move at all.
   const PTR = { x: -1, y: -1, inside: false };
+  // A card waiting on an answer (its buttons up) takes clicks a little before the pointer reaches it, so the switch from
+  // letting clicks through is done by the time the pointer is on a button; any other card only when the pointer is on it.
+  const ANSWERING = new Set(["confirm", "permission"]);
   function hitTest() {
     const r = card.getBoundingClientRect();
-    const slack = 4;
+    const slack = ANSWERING.has(S.state) ? 28 : 4;
     const inside = S.shown && card.classList.contains("on") && r.width > 0 &&
       PTR.x >= r.left - slack && PTR.x <= r.right + slack && PTR.y >= r.top - slack && PTR.y <= r.bottom + slack;
     if (inside !== PTR.inside) { PTR.inside = inside; bridge.mouse(inside); }
