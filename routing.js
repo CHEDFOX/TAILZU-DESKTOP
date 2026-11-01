@@ -29,7 +29,7 @@
 //
 // Every effect is a dependency (main.js passes its own), so the flow can be
 // run in the tests with fakes:
-//   d.on()                   routing is on (the one key, on a Mac or Windows)
+//   d.on()                   routing is on (the one key: a Mac, Windows or Linux)
 //   d.signals()              { names, askOn, notesOn, bots }
 //   d.type(sid, chunks)      paste these, in order, the usual way → Promise
 //   d.undo(times)            the app in front's own undo, `times` times → Promise
@@ -56,7 +56,7 @@ function createRouting(d) {
 
   const on = () => { try { return d.on() === true; } catch { return false; } };
   const signals = () => { try { return d.signals() || {}; } catch { return {}; } };
-  const input = (s, heard) => Object.assign({}, signals(), { heard, field: s.field, ours: s.ours });
+  const input = (s, heard) => Object.assign({}, signals(), { heard, field: s.field, ours: s.ours }, s.blind ? { blind: true } : {});
   const words = (c) => String((c && (c.heard || c.text)) || "").trim();
   const heardOf = (s) => s.heard.filter(Boolean).join(" ").trim();
 
@@ -67,14 +67,15 @@ function createRouting(d) {
    *  waiting out its moment goes now. */
   function start(sid, o) {
     commit();
-    sessions.set(sid, { ours: !!(o && o.ours), field: undefined, mode: null, chunks: [], heard: [], typed: 0, pasted: [] });
+    // blind: this computer cannot read a text box (Linux): the field stays unknown, whatever a read says.
+    sessions.set(sid, { ours: !!(o && o.ours), blind: !!(o && o.blind), field: undefined, mode: null, chunks: [], heard: [], typed: 0, pasted: [] });
     for (const k of sessions.keys()) if (sessions.size > 16 && k !== sid) sessions.delete(k);
   }
 
   /** The field read answered: null (no text box), or { selection? }. */
   function field(sid, f) {
     const s = session(sid);
-    if (s && s.field === undefined) s.field = f && typeof f === "object" ? { selection: typeof f.selection === "string" ? f.selection : "" } : null;
+    if (s && !s.blind && s.field === undefined) s.field = f && typeof f === "object" ? { selection: typeof f.selection === "string" ? f.selection : "" } : null;
   }
 
   /** A stretch of a running session: "type" (paste it) or "hold". */

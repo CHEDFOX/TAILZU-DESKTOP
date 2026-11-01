@@ -40,7 +40,7 @@ function rig(o = {}) {
 }
 const BOX = { kind: "text", selection: "" };
 
-test("off (Linux, or the server's switch): every stretch typed, nothing held, nothing said", () => {
+test("off (config.json's \"off\", a Wayland session, or the server's switch): every stretch typed, nothing held, nothing said", () => {
   const h = rig({ on: false });
   h.r.start(1, {});
   h.r.field(1, null);
@@ -335,4 +335,45 @@ test("nothing was typed (the writer wrote nothing): no label offering to take it
   h.r.chunk(1, { text: "", heard: "hmm" });
   assert.strictEqual(h.r.end(1, { text: "", heard: "okay" }, true), "type");
   assert.deepStrictEqual(h.pills, []);
+});
+
+// ---- Linux: no text box can be read, so the field is unknown, never "none" ----------------------
+
+test("Linux (blind): plain words, questions and commands are typed as they come, whatever the field read said", async () => {
+  const h = rig({ askOn: false });
+  h.r.start(1, { blind: true });
+  h.r.field(1, null);   // frontApp.focusedField answers null on Linux: not "no text box"
+  assert.strictEqual(h.r.chunk(1, { text: "Can you send me the deck?", heard: "can you send me the deck" }), "type");
+  assert.strictEqual(h.r.chunk(1, { text: "Book a table for eight.", heard: "book a table for eight" }), "type");
+  assert.strictEqual(h.r.end(1, { text: "Thanks!", heard: "thanks" }, true), "type");
+  await settle();
+  assert.deepStrictEqual(h.did, [], "nothing was held, routed or taken back");
+});
+
+test("Linux (blind): words that say where they go still go there: notes, X0 by name, a bot by name", async () => {
+  const notes = rig({ askOn: false, knobs: { "desktop.route.notesGraceMs": 0 } });
+  notes.r.start(1, { blind: true });
+  notes.r.field(1, null);
+  assert.strictEqual(notes.r.chunk(1, { text: "Take notes.", heard: "take notes" }), "hold");
+  assert.strictEqual(notes.r.end(1, null, true), "routed");
+  await settle();
+  notes.elapse();
+  assert.deepStrictEqual(notes.did.filter((d) => d[0] === "notes"), [["notes", true]]);
+
+  const bot = rig({ askOn: false, knobs: { "desktop.route.botGraceMs": 0 } });
+  bot.r.start(2, { blind: true });
+  assert.strictEqual(bot.r.chunk(2, { text: "X0, plan my Saturday.", heard: "X0 plan my Saturday" }), "hold");
+  assert.strictEqual(bot.r.end(2, null, true), "routed");
+  await settle();
+  bot.elapse();
+  await settle();
+  assert.ok(bot.did.some((d) => d[0] === "sendBot"), "a bot's task, through the backend's pick");
+  assert.ok(!bot.did.some((d) => d[0] === "type"), "nothing typed");
+});
+
+test("a Mac or Windows field read still decides there (blind is Linux's alone)", () => {
+  const h = rig();
+  h.r.start(1, {});
+  h.r.field(1, null);
+  assert.strictEqual(h.r.chunk(1, { text: "Book a table for eight.", heard: "book a table for eight" }), "hold", "no text box on a Mac: a task is held, as before");
 });
