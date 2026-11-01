@@ -3269,3 +3269,24 @@ test("handover: the person's turn on a card, then the job goes on with the scree
   assert.strictEqual(stop.post.reqs().length, 1);
   assert.deepStrictEqual(stop.guide.of("state").at(-1), ["state", "done", TEXT.handoverStopped]);
 });
+
+// ---- asked for already (the one key's brain said task or send) -------------------------------
+
+test("classifyRisk: a task the person asked for in so many words is not asked about at its ordinary steps", () => {
+  const composer = snap([COMPOSER], { focused: "e2", app: { name: "Slack", pid: 1 } });
+  const enter = { kind: "key", keys: "enter" };
+  assert.strictEqual(classifyRisk(enter, composer, {}), "confirm", "untrusted: the Enter that sends is asked about");
+  assert.strictEqual(classifyRisk(enter, composer, { trusted: true }), "free", "they said to send it");
+  const page = snap([{ id: "e7", role: "button", label: "Next", frame: [10, 10, 80, 30] }], { app: { name: "Google Chrome", pid: 2 } });
+  assert.strictEqual(classifyRisk({ kind: "press", id: "e7" }, page, {}), "confirm");
+  assert.strictEqual(classifyRisk({ kind: "press", id: "e7" }, page, { trusted: true }), "free");
+  assert.strictEqual(classifyRisk({ kind: "open", app: "Gmail" }, page, { startApp: "Google Chrome" }), "confirm");
+  assert.strictEqual(classifyRisk({ kind: "open", app: "Gmail" }, page, { startApp: "Google Chrome", trusted: true }), "free");
+});
+
+test("classifyRisk: trusted or not, the words on a target and the chords that close or delete are still asked about", () => {
+  const page = snap([{ id: "e8", role: "button", label: "Delete account", frame: [10, 10, 80, 30] }], { app: { name: "Google Chrome", pid: 2 } });
+  assert.notStrictEqual(classifyRisk({ kind: "press", id: "e8" }, page, { trusted: true }), "free");
+  const notes = snap([], { app: { name: "Notes", pid: 1 } });
+  assert.notStrictEqual(classifyRisk({ kind: "key", keys: "cmd+q" }, notes, { trusted: true }), "free");
+});

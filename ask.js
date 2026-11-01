@@ -1203,7 +1203,10 @@ function createAsk(ctx) {
    * not (a dictation still has the microphone, signed out, the window could
    * not be told, a private window or a bank: their cards say so).
    */
-  async function askHeard(text) {
+  /** `o.trusted`: the one key's brain read a task or a message they asked
+   *  for in so many words (no money, nothing deleted): its ordinary steps are
+   *  not asked about again (agent.js classifyRisk). */
+  async function askHeard(text, o) {
     const words = String(text || "").replace(/\s+/g, " ").trim();
     if (!words) return false;
     if (ctx.dictating && ctx.dictating()) return false;
@@ -1222,7 +1225,7 @@ function createAsk(ctx) {
       return false;
     }
     pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
-    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer });
+    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer, trusted: !!(o && o.trusted === true) });
     if (!agent.active()) return false;     // refused: a private window, a bank
     void agent.heard(null, { text: words, final: true });
     return true;
