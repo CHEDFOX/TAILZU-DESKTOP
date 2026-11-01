@@ -2204,6 +2204,75 @@
         send({ type: "draw", id: "d2", kind: "number", frame: box("m-composer"), n: 2 });
         send({ type: "draw", id: "d3", kind: "number", frame: box("m-send"), n: 3 });
       },
+      // THE ONE KEY'S BRAIN (routing.js, /v1/ask/decide): each kind of ask, as the guide shows it.
+      // A message they asked to send: trusted, so it goes without a "send?" card.
+      brainSend: () => {
+        send({ type: "show", state: "doing", app: "Slack" });
+        send({ type: "heard", text: "tell design the mockups are ready, round two is in the deck" });
+        send({ type: "say", text: "Sending it in #design." });
+        send({ type: "steps", items: [{ text: "Open #design", state: "done" }, { text: "Write the message", state: "done" }, { text: "Send it", state: "doing" }] });
+        send({ type: "point", frame: box("m-send"), caption: "Send" });
+      },
+      brainSent: () => {
+        send({ type: "show", state: "doing", app: "Slack" });
+        send({ type: "heard", text: "tell design the mockups are ready, round two is in the deck" });
+        send({ type: "steps", items: [{ text: "Open #design", state: "done" }, { text: "Write the message", state: "done" }, { text: "Send it", state: "done" }] });
+        send({ type: "say", text: "Sent to #design." });
+        send({ type: "state", state: "done" });
+      },
+      // A question about the screen, in any language.
+      brainScreen: () => {
+        send({ type: "show", state: "thinking", app: "Keynote" });
+        send({ type: "heard", text: "yeh formula kya bata raha hai?" });
+        send({ type: "say", text: "Yeh 0 se 1 tak x² ke neeche ka area hai: ek tihaai (1/3)." });
+        send({ type: "point", frame: box("m-fig"), caption: "∫ x² dx" });
+        send({ type: "state", state: "done" });
+      },
+      // A question that needs the web: searched, pages read, answered with where it came from.
+      brainWeb: () => {
+        send({ type: "show", state: "thinking", app: "Keynote" });
+        send({ type: "heard", text: "find the cheapest flight to Goa on Friday" });
+        send({ type: "badge", text: "Searched flights" });
+        send({ type: "say", text: "Cheapest on Friday: a 7:05 morning flight, non-stop, about ₹4,800. Want me to open it?" });
+        send({ type: "state", state: "done" });
+      },
+      // A long job: the plan, the step it is on, and where it is on the screen.
+      brainJob: () => {
+        send({ type: "show", state: "doing", app: "Chrome: Gmail" });
+        send({ type: "heard", text: "go to Gmail and unsubscribe from all the promo emails" });
+        send({ type: "say", text: "On it. 14 senders so far." });
+        send({ type: "steps", items: [{ text: "Open Gmail, Promotions", state: "done" }, { text: "List who sends them", state: "done" }, { text: "Unsubscribe, one by one", state: "doing" }, { text: "Archive what's left", state: "todo" }, { text: "Tell you what changed", state: "todo" }] });
+        send({ type: "badge", text: "Step 3 of 5" });
+      },
+      // Only they can do this part: a password, a code, a card. Asked once, then it carries on.
+      brainYourTurn: () => {
+        send({ type: "show", state: "doing", app: "Chrome: Gmail" });
+        send({ type: "heard", text: "go to Gmail and unsubscribe from all the promo emails" });
+        send({
+          type: "confirm", text: "", risk: "confirm",
+          card: {
+            title: "Your turn", app: "Chrome: Gmail", label: "",
+            preview: "Gmail wants your password. Sign in, then press Continue.",
+            note: "I don't type passwords, codes or card details. I'll carry on when you press Continue.",
+            buttons: [{ id: "approve", label: "Continue" }, { id: "deny", label: "Stop" }],
+          },
+        });
+      },
+      brainJobDone: () => {
+        send({ type: "show", state: "doing", app: "Chrome: Gmail" });
+        send({ type: "heard", text: "go to Gmail and unsubscribe from all the promo emails" });
+        send({ type: "steps", items: [{ text: "Open Gmail, Promotions", state: "done" }, { text: "List who sends them", state: "done" }, { text: "Unsubscribe, one by one", state: "done" }, { text: "Archive what's left", state: "done" }, { text: "Tell you what changed", state: "done" }] });
+        send({ type: "say", text: "Done. Unsubscribed from 23 senders and archived 1,180 old promos." });
+        send({ type: "state", state: "done" });
+      },
+      // Money is never trusted: the step that pays is always asked about.
+      brainMoney: () => {
+        send({ type: "show", state: "doing", app: "Chrome: Tata Power" });
+        send({ type: "heard", text: "pay the electricity bill" });
+        send({ type: "steps", items: [{ text: "Open the bill", state: "done" }, { text: "Check the amount", state: "done" }, { text: "Pay", state: "doing" }] });
+        send({ type: "point", frame: box("m-export"), caption: "Pay ₹1,240" });
+        send({ type: "confirm", text: "Pay ₹1,240 to Tata Power for October?", risk: "always" });
+      },
       // The server's own card, for something in a connected app.
       approval: () => {
         send({ type: "show", state: "thinking", app: "Slack" });

@@ -936,8 +936,10 @@ if (DEMO) {
       const typed = document.getElementById("typed"); if (typed) typed.textContent = SENT.slice(0, Math.round(SENT.length * outCubic(p)));
     }
   };
+  // The review page sets a state of its own (a route's label, say): window.__pill({ state: "routed", label, alt }).
+  window.__pill = (m) => { step = 1e9; onPill(m); frame(); };
   if (CAPTURE) {
-    window.__step = (ms) => { virtual += ms; window.__demo(virtual / 1000); frame(); };
+    window.__step = (ms) => { virtual += ms; if (step !== 1e9) window.__demo(virtual / 1000); frame(); };
     window.__ready = true;
     virtual = 0; last = 0; window.__demo(0); frame();
   } else {
