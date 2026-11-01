@@ -223,6 +223,10 @@ function createAsk(ctx) {
     const w = win = new BrowserWindow(Object.assign({}, bounds, {
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true,
       focusable: false, resizable: false, movable: false, hasShadow: false, show: false,
+      // The window is never the active one (focusable: false), so on a Mac every click on the card is a "first" click,
+      // which AppKit spends activating the window instead of handing to the button: Do it, Not now and Continue took two
+      // clicks, or none. A first click goes to the button.
+      acceptFirstMouse: true,
       ...(platform === "darwin" ? { type: "panel", enableLargerThanScreen: true } : {}),
       webPreferences: ctx.webPrefs({ backgroundThrottling: false }),
     }));
@@ -272,8 +276,11 @@ function createAsk(ctx) {
     feedCursor();
   }
 
-  // Where the pointer is, in the window's own coordinates, ten times a second
-  // while the window is up and only when it moved: the card works out from it
+  // Where the pointer is, in the window's own coordinates, every frame or two
+  // (desktop.guide.cursorMs, 30 ms) while the window is up and only when it
+  // moved. At ten a second a quick move onto a button and a click landed
+  // before the window took clicks, and went to the app under the card. The
+  // card works out from it
   // whether it is under the pointer (guide.js TAKING CLICKS), which a pointer
   // that has not moved since the card arrived could never tell it otherwise.
   // It stops by itself once the window is hidden or gone.
@@ -291,7 +298,7 @@ function createAsk(ctx) {
         cursorLast = key;
         send({ type: "cursor", x: p.x - b.x, y: p.y - b.y });
       } catch { clearInterval(cursorTimer); cursorTimer = null; cursorLast = ""; }
-    }, 100);
+    }, Math.max(16, Math.min(200, num("desktop.guide.cursorMs", 30))));
     if (cursorTimer && cursorTimer.unref) cursorTimer.unref();
   }
 
