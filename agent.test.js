@@ -3204,3 +3204,68 @@ test("open: a computer with no way to open it still finishes the run", async () 
   assert.strictEqual(lastState(r)[1], "done");
   assert.strictEqual(r.agent.active(), false);
 });
+
+// ---- long jobs (docs/long-jobs.md) ------------------------------------------------
+
+test("a long job: its ledger goes with every step, the planner ticks it off, and it may pass a small run's limits", async () => {
+  const PLAN = ["Open Export", "Choose PDF", "Name the file", "Save it"];
+  const step = (extra, id) => [heardDo("export this as a pdf called notes"), { t: "steps", items: PLAN }, ...extra, press(id)];
+  const scripts = [
+    step([], "e1"),
+    step([{ t: "progress", done: [0], note: "Export menu has PDF" }], "e2"),
+    step([{ t: "progress", done: [1, 7], note: "Export menu has PDF" }], "e3"),
+    step([{ t: "progress", done: [2] }], "e4"),
+    [heardDo("export this as a pdf called notes"), { t: "done", text: "Saved notes.pdf." }],
+  ];
+  const r = rig({ knobs: { "desktop.agent.maxSteps": 2 }, snaps: [SLACK, (n) => snap([EXPORT, COMPOSER, SEND, HEADING, { id: "e9", role: "text", label: `step ${n}`, frame: [10, 300, 80, 20] }])], scripts });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+
+  const reqs = r.post.reqs();
+  assert.strictEqual(reqs.length, 5, "past maxSteps 2: a job may take a job's steps");
+  assert.strictEqual(reqs[0].job, undefined, "the plan comes with the first answer");
+  assert.deepStrictEqual(reqs[1].job, { goal: "export this as a pdf called notes", plan: PLAN, done: [], notes: [] });
+  assert.deepStrictEqual(reqs[3].job.done, [0, 1], "a step the plan does not have is not kept");
+  assert.deepStrictEqual(reqs[3].job.notes, ["Export menu has PDF"], "a note is kept once");
+  assert.deepStrictEqual(reqs[4].job.done, [0, 1, 2]);
+  assert.deepStrictEqual(r.guide.of("steps").at(-2)[1].map((s) => s.state), ["done", "done", "done", "active"]);
+  assert.deepStrictEqual(r.guide.of("steps").at(-1)[1].map((s) => s.state), ["done", "done", "done", "done"]);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", "Saved notes.pdf."]);
+});
+
+test("a short plan is not a job, and keeps a small run's limits", async () => {
+  const r = rig({ knobs: { "desktop.agent.maxSteps": 2 }, scripts: [[heardDo("export"), { t: "steps", items: ["Open Export"] }, press("e1")], [heardDo("export"), press("e3")], [{ t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.reqs().length, 2, "a small run's two steps, then it stops");
+  assert.strictEqual(r.post.reqs()[1].job, undefined);
+});
+
+test("handover: the person's turn on a card, then the job goes on with the screen read again; Stop ends it", async () => {
+  const LOGIN = snap([{ id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] }, { id: "e8", role: "button", label: "Sign in", frame: [300, 250, 80, 30] }]);
+  const IN = snap([EXPORT, HEADING]);
+  const scripts = [
+    [heardDo("download my statement"), { t: "steps", items: ["Sign in", "Open statements", "Download October"] }, { t: "handover", why: "login", text: "Type your password and sign in, then press Continue." }],
+    [heardDo("download my statement"), { t: "progress", done: [0] }, press("e1")],
+    [{ t: "done", text: "Downloaded." }],
+  ];
+  const cards = [];
+  const r = rig({ snaps: [LOGIN, IN], scripts });
+  r.guide.approve = async (card) => { cards.push(card); return "approve"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(cards.map((c) => [c.title, c.preview, c.buttons.map((b) => b.label)]), [["Your turn", "Type your password and sign in, then press Continue.", ["Continue", "Stop"]]]);
+  const reqs = r.post.reqs();
+  assert.deepStrictEqual(reqs[1].history.slice(-2).map((h) => [h.did, h.result || ""]), [["HANDOVER", ""], ["HANDOVER", "ok"]]);
+  assert.ok(reqs[1].screen.elements.some((e) => e.label === "Export"), "the screen after their part is the one sent");
+  assert.ok(!reqs[1].screen.elements.some((e) => e.label === "Password"));
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]], "nothing was typed for them");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", "Downloaded."]);
+
+  const stop = rig({ snaps: [LOGIN], scripts: [scripts[0]] });
+  stop.guide.approve = async () => "deny";
+  stop.agent.begin({ app: "Bank" });
+  await stop.agent.heard(AUDIO);
+  assert.strictEqual(stop.post.reqs().length, 1);
+  assert.deepStrictEqual(stop.guide.of("state").at(-1), ["state", "done", TEXT.handoverStopped]);
+});
