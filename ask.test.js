@@ -78,7 +78,7 @@ function harness(opts = {}) {
   }
   // The stream's final text is not waited for unless a test says so: most
   // of them hand over a clip and nothing else.
-  const knobs = Object.assign({ "desktop.agent.serverVoice": false, "desktop.agent.settleMs": 0, "desktop.agent.doneMs": 50, "desktop.agent.finalTextMs": 0 }, opts.knobs);
+  const knobs = Object.assign({ "desktop.agent.serverVoice": false, "desktop.agent.settleMs": 0, "desktop.agent.doneMs": 50, "desktop.agent.finalTextMs": 0, "desktop.agent.askOpensMic": true }, opts.knobs);
   for (const k of opts.unset || []) delete knobs[k];
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
   const actions = [];
@@ -3588,4 +3588,41 @@ test("main.js: a space's invite link opens the window at Spaces with the code, a
     await open("tulmi://screen/assistant_apps");
     assert.deepStrictEqual(navs().at(-1), "desk_settings");
   } finally { m.close(); }
+});
+
+// ---- a question waits for the key: the microphone is not opened at once ------------------------------------------
+
+test("an ASK waits: no microphone after the question, a hint on the card, and the next press opens it for the answer", async () => {
+  const h = harness({
+    knobs: { "desktop.agent.askOpensMic": false },
+    steps: [
+      [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
+      [{ t: "done", text: "Okay." }],
+    ],
+  });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "badge" && /to answer/.test(m.text || "")));
+  await sleep(60);
+  assert.strictEqual(h.starts(), 1, "the microphone did not open again by itself");
+  assert.ok(!h.sent.slice(-3).some((m) => m.type === "state" && m.state === "listening"), "the card does not pretend to listen");
+  await h.ask.tap();
+  await until(() => h.starts() === 2);
+  h.clip();
+  await until(() => h.requests.length === 2);
+  assert.ok(h.requests[1].multipart, "the answer went as the next step's audio");
+});
+
+test("an ASK nobody answers ends quietly after replyWaitMs; Esc puts it away at once", async () => {
+  const h = harness({
+    knobs: { "desktop.agent.askOpensMic": false, "desktop.agent.replyWaitMs": 5000 },
+    steps: [[{ t: "heard", text: "book it", mode: "do" }, { t: "ask", text: "Which day?" }]],
+  });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "badge" && /to answer/.test(m.text || "")));
+  assert.strictEqual(h.ask.escape(), true);
+  await sleep(20);
+  assert.strictEqual(h.ask.active(), false);
+  assert.strictEqual(h.starts(), 1);
 });

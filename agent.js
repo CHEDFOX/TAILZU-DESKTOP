@@ -2350,7 +2350,9 @@ function createAgent(deps) {
     const question = clip(squash(ev.text), 240);
     pushHistory(run, { said: run.said, did: "ASK", note: question });
     if (question) tell(run, "say", question, sayOpts(""));
-    tell(run, "state", "listening");
+    // Listening only when the microphone opens at once (desktop.agent.askOpensMic); otherwise the question stays
+    // up, waiting for the key, and the card does not pretend to listen.
+    tell(run, "state", bool("desktop.agent.askOpensMic", false) ? "listening" : "showing");
     let audio = null;
     try {
       if (typeof d.listen === "function") audio = await race(run, Promise.resolve().then(() => d.listen()));

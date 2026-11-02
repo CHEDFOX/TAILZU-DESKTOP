@@ -127,6 +127,9 @@ function createAsk(ctx) {
   let clipTimer = null;
   let onAudio = null;      // who the next recorded question is for (begin, or an ASK's reply)
   let reply = null;        // the ASK's reply it is, when it is one
+  // An ASK said and waiting for its answer, the microphone NOT open: the next press of the one key (or Alt twice)
+  // opens it for the answer. Nobody answering in replyWaitMs: the run ends quietly.
+  let replyWait = null, replyTimer = null;
   // Counts the questions begun and thrown away, so a tap still waiting to
   // learn which app is in front can tell it has been overtaken.
   let asking = 0;
@@ -1062,12 +1065,23 @@ function createAsk(ctx) {
       const link = agentCore.safeOpenUrl(url);
       return link && typeof ctx.openExternal === "function" ? ctx.openExternal(link) : false;
     },
-    // An ASK's answer: the microphone again, its clip back to the agent;
-    // opened once the question has been said, or the microphone hears Blip
-    // ask it, and a reply in ask mode ends at its first pause.
+    // An ASK's answer. NOT the microphone at once (desktop.agent.askOpensMic, off): straight after an answer it
+    // was listening before they had decided to say anything, and it heard the room. The question stays on the card
+    // with "Hold {key} to answer"; the next press opens the microphone for the answer (tap), and a reply in ask mode
+    // ends at its first pause. Nobody answers within replyWaitMs: null, and the run ends quietly.
     listen: () => new Promise((resolve) => {
-      onAudio = reply = resolve;
-      afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
+      if (bool("desktop.agent.askOpensMic", false)) {
+        onAudio = reply = resolve;
+        afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
+        return;
+      }
+      clearTimeout(replyTimer);
+      replyWait = resolve;
+      const key = oneKeyName();
+      send({ type: "badge", text: key
+        ? txt("desktop.agent.replyHintOneKey", "Hold {key} to answer", { key })
+        : txt("desktop.agent.replyHint", "Tap {key} twice to answer", { key: str("desktop.agent.tapKey", "Alt") }) });
+      replyTimer = soft(setTimeout(() => { if (replyWait === resolve) { replyWait = null; resolve(null); } }, Math.max(5000, num("desktop.agent.replyWaitMs", 90000))));
     }),
     knob: (name, fallback) => {
       if (typeof fallback === "boolean") return bool(name, fallback);
@@ -1133,6 +1147,14 @@ function createAsk(ctx) {
     // is up means stop, as it does while a run works: a picture is never
     // sent on a pair of taps that may have been begun to stop it.
     if (permitWait) { cancel("tap"); return; }
+    // A question waiting for its answer: this press is the answer. The microphone opens for it now.
+    if (replyWait) {
+      const answer = replyWait; replyWait = null; clearTimeout(replyTimer);
+      send({ type: "badge", text: "" });
+      onAudio = reply = answer;
+      record();
+      return;
+    }
     if (listening) { stopListening(); return; }
     if (agent.active() || onAudio || naming || finalWait) { cancel("tap"); return; }
     // One microphone: while a dictation records, it keeps it.
@@ -1188,6 +1210,7 @@ function createAsk(ctx) {
     if (previewing && streamText) preview(streamText);
   }
   function cancel(reason) {
+    if (replyWait) { const w = replyWait; replyWait = null; clearTimeout(replyTimer); w(null); }
     dropListening();
     if (confirmWait) confirmWait(false);
     if (permitWait) permitWait("no");
