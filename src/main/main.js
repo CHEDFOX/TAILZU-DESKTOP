@@ -33,7 +33,10 @@ const updater = require("./updater.js");
 const frontApp = require("../context/frontApp.js");
 const screenRead = require("../context/screenRead.js");
 const driver = require("../agent/driver/driver.js");
-const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("../agent/ask.js");
+const { createAsk } = require("../agent/ask.js");
+const { pillAskMove, capsuleRect } = require("../agent/pillAsk.js");
+const { createPeekWatch } = require("../agent/peek.js");
+const { createAskSetup } = require("../agent/askSetup.js");
 const { createLocalFiles, createFolderSettings } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");

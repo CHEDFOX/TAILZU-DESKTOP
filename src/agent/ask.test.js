@@ -9,7 +9,10 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
-const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
+const { createAsk } = require("./ask.js");
+const { pillAskMove, capsuleRect } = require("./pillAsk.js");
+const { createPeekWatch } = require("./peek.js");
+const { createAskSetup } = require("./askSetup.js");
 const agentCore = require("./run/agent.js");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
