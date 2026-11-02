@@ -19,6 +19,8 @@ function onPill(m) {
   if (typeof m.hint === "string") hint = m.hint;
   if (typeof m.rest === "boolean") restShown = m.rest;
   // Blip has gone to peek over the text box (ask.js): the pill draws him again once he is back.
+  // At rest Blip is at the edge of the screen (dictation/rest/): the pill shows him only once it is in use.
+  if (typeof m.restAway === "boolean") { blipResting = m.restAway; wake(); if (!m.state) return; }
   if (typeof m.blipAway === "boolean") { blipAwayAt = m.blipAway ? clock() : 0; wake(); if (!m.state) return; }
   if (m.state === "flash") { flashAt = clock(); wake(); return; }
   if (m.state === "caption") { caption = String(m.text || ""); wake(); return; }

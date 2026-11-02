@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld("tailzu", {
   token: (renew) => ipcRenderer.invoke("recorder:token", !!renew),
   // main → pill: its state, and the voice's level while it listens.
   onPill: (cb) => ipcRenderer.on("pill", (_e, m) => cb(m)),
+  // The rest window (dictation/rest/): shown, and whether to duck from the pointer.
+  onRest: (cb) => ipcRenderer.on("rest", (_e, m) => cb(m)),
   onLevel: (cb) => ipcRenderer.on("pill-level", (_e, p) => cb(p)),
   // pill → main: the pointer is over it (take clicks) or not (let them
   // through), and what a click on it asks for: start, finish or cancel, or

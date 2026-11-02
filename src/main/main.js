@@ -28,6 +28,7 @@ const { createTapDetector } = require("../dictation/tapDetector.js");
 // The one key (hold to talk, tap for hands-free) and where its words go (oneKey.js, router.js, routing.js).
 const oneKey = require("../dictation/oneKey.js");
 const { createRouting, undoCommand } = require("../dictation/routing.js");
+const restSpot = require("../dictation/restSpot.js");
 const { joinStretch } = require("../dictation/pasteJoin.js");
 const updater = require("./updater.js");
 const frontApp = require("../context/frontApp.js");
@@ -1087,6 +1088,61 @@ function pillBlipAt() {
   return { x: b.x + b.width / 2, y: b.y + b.height - num("desktop.pill.bottomPad", 14) - 2 };
 }
 
+// ---- Blip at rest (dictation/restSpot.js, dictation/rest/) ------------------------------------------------
+// Between dictations Blip rests against the right edge of the screen in a window of his own, and the pill leaves him
+// out (restAway). Only in the Bots look with Blip in the pill; desktop.rest.edge turns it off.
+let restWin = null, restWatch = null, restShown = false, restDuck = false;
+const restOn = () => bool("bots.app", false) && bool("desktop.pill.blip", true) && bool("desktop.rest.edge", true);
+function restSend(m) {
+  if (restWin && !restWin.isDestroyed() && !restWin.webContents.isLoading()) restWin.webContents.send("rest", m);
+}
+function createRestWindow(bounds) {
+  if (restWin && !restWin.isDestroyed()) return restWin;
+  const win = restWin = new BrowserWindow(Object.assign({}, bounds, {
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false,
+    maximizable: false, fullscreenable: false, skipTaskbar: true, focusable: false,
+    hasShadow: false, alwaysOnTop: true, show: false,
+    ...(process.platform === "darwin" ? { type: "panel" } : {}),
+    webPreferences: webPrefs({ backgroundThrottling: false }),
+  }));
+  // Every space, but not over a full-screen app (video, a game, a presentation): there he is out of sight.
+  try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false, skipTransformProcessType: true }); } catch { /* one space */ }
+  // In no screen share or recording.
+  try { win.setContentProtection(true); } catch { /* the system has none */ }
+  win.setIgnoreMouseEvents(true);
+  hardenWindow(win);
+  win.webContents.on("did-finish-load", () => { if (restShown) restSend({ shown: true, duck: restDuck }); });
+  win.on("closed", () => { if (restWin === win) restWin = null; });
+  win.loadFile("src/dictation/rest/rest.html");
+  return win;
+}
+/** Shown while he rests, hidden otherwise; the pill told whether he is with it. */
+function updateRest() {
+  const rests = restOn() && restSpot.restsNow({ on: true, pillOn: pillOn(), pillState });
+  if (rests === restShown) return;
+  restShown = rests;
+  pillSend({ restAway: rests });
+  if (!rests) {
+    clearInterval(restWatch); restWatch = null;
+    if (restWin && !restWin.isDestroyed() && restWin.isVisible()) restWin.hide();
+    return;
+  }
+  const display = pillWin && !pillWin.isDestroyed() ? screen.getDisplayMatching(pillWin.getBounds()) : screen.getPrimaryDisplay();
+  const bounds = restSpot.restBounds(display.workArea, { h: num("desktop.rest.windowHeight", restSpot.REST_H) });
+  const w = createRestWindow(bounds);
+  setBoundsExactly(w, bounds);
+  restDuck = false;
+  restSend({ shown: true, duck: false });
+  w.showInactive();
+  // The pointer near him: he ducks out of its way, and comes back once it has gone.
+  clearInterval(restWatch);
+  restWatch = setInterval(() => {
+    if (!restWin || restWin.isDestroyed()) return;
+    const near = restSpot.pointerNear(screen.getCursorScreenPoint(), restWin.getBounds(), num("desktop.rest.nearPx", restSpot.NEAR_PX));
+    if (near !== restDuck) { restDuck = near; restSend({ duck: near }); }
+  }, Math.max(100, num("desktop.rest.watchMs", 200)));
+}
+
 function pillSend(m) {
   if (pillWin && !pillWin.isDestroyed() && !pillWin.webContents.isLoading()) pillWin.webContents.send("pill", m);
 }
@@ -1117,6 +1173,7 @@ function pill(state, data) {
     // guard puts the pill back over it (see raiseGuide).
     guardPill(pillOn() && (state === "listening" || state === "writing" || state === "ask"));
   }
+  if (!moment) updateRest();
   // Switched off, by the tray or by the server: hidden, not left on screen
   // showing whatever it showed last.
   if (!pillOn()) { hidePill(); return; }

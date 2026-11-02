@@ -21,6 +21,8 @@ let bCapK = 0;
 // When Blip left to peek over the text box (0: he is here). Away longer than desktop.pill.blipAwayMaxMs, he is drawn
 // again all the same: a peek whose end was never told must not leave the pill empty.
 let blipAwayAt = 0;
+// He rests at the screen's edge (main.js updateRest): at rest the pill leaves him out.
+let blipResting = false;
 const blipAway = (now) => blipAwayAt > 0 && now - blipAwayAt < K.num("desktop.pill.blipAwayMaxMs", 90000);
 /** The gesture for a state the pill is put in (setState), from the one it was in. */
 function blipFor(st, data, from) {
@@ -204,7 +206,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
   }
   ctx.restore();
   // Blip, over the pill's edge: feet in its left end, his head out over the top. Not clipped by it.
-  if (blip && P.show > 0.01 && !blipAway(now)) {
+  if (blip && P.show > 0.01 && !blipAway(now) && !(st === "rest" && blipResting)) {
     const pf = blipper();
     if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
     let bx, bh;
