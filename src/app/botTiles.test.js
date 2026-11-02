@@ -1,6 +1,6 @@
 // botTiles.js: the living bot tiles' physics and drawing, GENERATED from the phone's core
 // (TAILZU-FRONTEND/app/src/botTiles/core.ts). Here: the file is exactly what was generated (a hand edit fails),
-// the core runs in node as the window loads it, and sdui.js draws the BotTiles and BotCard nodes around it.
+// the core runs in node as the window loads it, and sdui/ draws the BotTiles and BotCard nodes around it.
 const test = require("node:test");
 const assert = require("node:assert");
 const crypto = require("node:crypto");
@@ -38,7 +38,7 @@ test("the core runs as the window loads it: every bot, a few seconds, finite and
   assert.strictEqual(api.kindOf("gym"), "custom");
 });
 
-/** sdui.js as the page runs it, with botTiles.js loaded first. */
+/** sdui/ as the page runs it, with botTiles.js loaded first. */
 function page() {
   const noop = () => {};
   const g = {

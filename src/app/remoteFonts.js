@@ -9,7 +9,7 @@
 // per face and silent; only https, and only a font file. The bytes are fetched (connect-src) and handed to the page
 // as data (a FontFace from an ArrayBuffer), so the window's own font-src stays its own files.
 //
-// Loaded after sdui.js (its knobs, K); sdui.js hands it every bootstrap it receives (received()).
+// Loaded after sdui/ (its knobs, K); sdui/ hands it every bootstrap it receives (received()).
 /* global K */
 /* eslint-env browser */
 

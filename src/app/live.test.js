@@ -295,7 +295,7 @@ test("in the window: wired to sdui.js's own session, stack, state and painting",
     assert.equal(run("TailzuLiveWindow.host.signedIn()"), true);
     assert.equal(run("TailzuLiveWindow.host.screen().screenId"), "bots.home");
     assert.equal(run("TailzuLiveWindow.host.target().screenId"), "bots.home");
-    // Applying a quiet reload writes into sdui.js's own state and actions, and paints with its own repaint.
+    // Applying a quiet reload writes into the renderer's own state and actions, and paints with its own repaint.
     run("var __painted = null; repaint = function (s) { __painted = s; };");
     run("TailzuLiveWindow.host.apply({ screenId: 'bots.home', actions: { go: { kind: 'refresh' } }, state: { n: 2 } }, [['n', 2]]);");
     assert.equal(run("STATE.n"), 2);

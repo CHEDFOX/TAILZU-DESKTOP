@@ -1,6 +1,6 @@
-// The Bots app's kit in the window (sdui.js): SVG shapes and their motions, bound text, Enter in a field, navigate
-// params from state, solid borders on a Bots page. sdui.js is a page script, so it runs here as the page runs it:
-// knobs.js then sdui.js in one context with a stand-in window (sdui.test.js does the same).
+// The Bots app's kit in the window (sdui/): SVG shapes and their motions, bound text, Enter in a field, navigate
+// params from state, solid borders on a Bots page. sdui/ is page scripts, so it runs here as the page runs it:
+// knobs.js then sdui/ in one context with a stand-in window (sdui.test.js does the same).
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");

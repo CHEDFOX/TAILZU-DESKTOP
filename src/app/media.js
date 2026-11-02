@@ -1,7 +1,7 @@
 // SEND A FILE AND PLAY A SOUND, in the app window: the Bots app's media
-// actions (backend shared/types/sdui.ts section 3d). Loaded after sdui.js,
+// actions (backend shared/types/sdui.ts section 3d). Loaded after sdui/,
 // whose session, state and painting it uses (api's base, bearer, setStatePath,
-// stateAt, repaint, run, toast); sdui.js's run() hands it the actions.
+// stateAt, repaint, run, toast); sdui/actions.js's run() hands it the actions.
 //
 //   uploadFile   the system's chooser for the kind asked (a picture, a video,
 //                any file); a screenshot is the Mac's own (drag over an area,
@@ -15,7 +15,7 @@
 //                into state. Kept decoded for the window's life.
 //
 // Each belongs to the screen it started on: painting another screen stops it
-// (sdui.js paint calls mediaLeave). A tick of progress repaints the screen
+// (sdui/navigation.js paint calls mediaLeave). A tick of progress repaints the screen
 // without taking a click in flight or the caret from the field being typed in.
 "use strict";
 
@@ -305,7 +305,7 @@ async function mediaPlay(a) {
 }
 
 // ---------------------------------------------------------------------------
-// The hand-off from sdui.js
+// The hand-off from sdui/
 // ---------------------------------------------------------------------------
 
 /** run()'s media actions. */
@@ -328,7 +328,7 @@ function mediaLeave(entry) {
   }
 }
 
-// Declared to the server (sdui.js capabilities() reads these lists when it asks).
+// Declared to the server (sdui/backend.js capabilities() reads these lists when it asks).
 COMPONENTS.push("FileUpload", "AudioPlay");
 ACTIONS.push("uploadFile", "playAudio", "stopAudio");
 

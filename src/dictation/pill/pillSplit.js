@@ -1,4 +1,4 @@
-// The split pill (pill.js draws it): while it listens the pill comes apart,
+// The split pill (pill/ draws it): while it listens the pill comes apart,
 // ✕ to one edge of the screen and ✓ to the other, and the body between them
 // stretches into a thread the voice plucks. On stop the halves glide back and
 // the pill is whole again where it started. Geometry and motion only, no
@@ -31,7 +31,7 @@
    * (target 1) it eases out taut, well damped, barely past the edge. Going
    * home (target 0) it is pulled: a stiff, lightly-damped yank that
    * accelerates the halves inward and overshoots the join a touch — the
-   * capsule's click-shut (pill.js snapAt) absorbs the overshoot, so it looks
+   * capsule's click-shut (pill/core.js snapAt) absorbs the overshoot, so it looks
    * like the thread's tension snapped them back into one pill.
    *
    * `s` is { x, v }, mutated in place and returned. `target` is 0 (home) or 1

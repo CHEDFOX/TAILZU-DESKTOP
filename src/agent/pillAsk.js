@@ -1,5 +1,5 @@
 // A question grows out of the pill: its halves part, and the guide's thread
-// rises from the gap to the card (pill.js "ask", guide.js dock). These two
+// rises from the gap to the card (pill/ "ask", guide/ dock). These two
 // are main.js's rules for that (pillAsk), kept here, without Electron, so
 // they can be tested.
 
@@ -37,12 +37,12 @@ function pillAskMove(phase, now) {
 /**
  * The pill's capsule in screen DIP, for a pill window whose bounds are `b`:
  * centred across it, its bottom desktop.pill.bottomPad above the window's,
- * exactly where pill.js draws it, from the same knobs pill.js reads. The
+ * exactly where pill/ draws it, from the same knobs pill/ reads. The
  * small pill's size when the capsule look is off, or the Bots look is on.
  */
 function capsuleRect(b, K) {
   if (!b || ![b.x, b.y, b.width, b.height].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
-  // The Bots look (bots.app) has no capsule: the small white pill (pill.js botsTargets).
+  // The Bots look (bots.app) has no capsule: the small white pill (pill/bots.js botsTargets).
   const capsule = !K.bool("bots.app", false) && K.bool("desktop.pill.split", true) && K.bool("desktop.pill.capsule", true);
   const w = capsule ? K.num("desktop.pill.capsuleWidth", 40) : K.num("desktop.pill.restWidth", 46);
   const h = capsule ? K.num("desktop.pill.capsuleHeight", 16) : K.num("desktop.pill.restHeight", 14);

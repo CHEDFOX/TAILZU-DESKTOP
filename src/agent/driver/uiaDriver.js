@@ -67,7 +67,7 @@ function shapeLook(r) {
   }
   // Where the window's title is drawn (its title bar, the lines the helper
   // dropped for being the title): frames only, for the device to cut the
-  // picture below them (agent.js chromeBottom).
+  // picture below them (run/picture.js chromeBottom).
   const titleFrames = (Array.isArray(rest.titleFrames) ? rest.titleFrames : [])
     .filter((f) => isFrame(f) && f[2] > 0 && f[3] > 0).slice(0, 8).map((f) => f.slice());
   const im = rest.image;

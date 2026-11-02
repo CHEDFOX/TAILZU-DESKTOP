@@ -29,7 +29,7 @@ function runDemo(scene) {
         <div class="fig" id="m-fig"><span>&int;<sub>0</sub><sup>1</sup> x<sup>2</sup> dx = &#8531;</span></div></div>
       <div class="composer" id="m-composer">Message #design<em id="m-send">Send</em></div>`;
   document.body.insertBefore(mock, fx);
-  // THE PILL, as main has it while a question is up (pill.js "ask"): its
+  // THE PILL, as main has it while a question is up (pill/ "ask"): its
   // halves parted at the seam, a bead in the gap, amber while it listens.
   // Over this window, as main keeps it, so it hides the tether's first
   // pixels. Drawn on this page's clock, from what the guide is doing.
@@ -40,7 +40,7 @@ function runDemo(scene) {
   const mp = { x: 0, v: 0, bead: 0, hot: 1, slow: 0 };
   const pillMode = params.get("pill");    // "seed": no pill (the guide's seed); "off": not docked at all
   const pillAt = () => ({ x: Math.round(W / 2 - 20), y: H - S.inset.bottom - 34, w: 40, h: 16 });
-  // A dictation under way (?demo=peek, peekdoc): what pill.js shows while
+  // A dictation under way (?demo=peek, peekdoc): what pill/ shows while
   // it listens, the halves out at the screen's edges and the amber thread
   // the voice plucks between them, the words so far above it.
   const DICT = { on: false, state: "idle", words: "" };
@@ -103,7 +103,7 @@ function runDemo(scene) {
     pg.shadowColor = "transparent";
     pg.strokeStyle = "rgba(243,226,198,.16)"; pg.lineWidth = 1; pg.beginPath(); pg.roundRect(cx - 19.5 - gap / 2, P.y + .5, 19, 15, [7.5, sr, sr, 7.5]); pg.stroke();
     pg.strokeStyle = "rgba(15,13,11,.3)"; pg.beginPath(); pg.roundRect(cx + gap / 2 + .5, P.y + .5, 19, 15, [sr, 7.5, 7.5, sr]); pg.stroke();
-    // Under reduced motion it holds still, glow and all, as pill.js's does.
+    // Under reduced motion it holds still, glow and all, as the pill's does.
     const breath = reduced ? 1 : .5 + .5 * Math.sin(t * TAU / 1.25), pulse = .5 - .5 * Math.cos(t * TAU / 1.8);
     const r = Math.min((gap - 2) / 2, 3.5 * mp.bead * (reduced ? 1 : 1 - .22 * mp.hot * (1 - breath) - .1 * mp.slow * (1 - pulse)));
     if (r > .3) {

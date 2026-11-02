@@ -60,7 +60,7 @@ function overlayBounds() {
 function pillBounds(display) {
   const wa = (display || screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea;
   // AS WIDE AS THE SCREEN when the pill comes apart while it listens: ✕ to
-  // one edge, ✓ to the other, the thread between (pill.js, pillSplit.js).
+  // one edge, ✓ to the other, the thread between (pill/, pillSplit.js).
   // Transparent and click-through everywhere but the pill or its two halves,
   // so the strip it spans stays the app's below it. A cap keeps it from
   // reaching across an ultrawide; 0 is the whole work area.

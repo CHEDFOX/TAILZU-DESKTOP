@@ -1,5 +1,5 @@
 /**
- * OFFLINE, IN THE WINDOW (the server's shared/types/sdui.ts 3e; docs/bots-app.md "Offline"). Loaded after sdui.js, whose session,
+ * OFFLINE, IN THE WINDOW (the server's shared/types/sdui.ts 3e; docs/bots-app.md "Offline"). Loaded after sdui/, whose session,
  * state, stack and painting it uses.
  *
  *   the outbox      asks typed while offline, kept in this window's storage (per account) with when they were typed, and sent once
@@ -217,7 +217,7 @@ async function outboxGo() {
   if (due != null && ONLINE) OUTBOX_TIMER = setTimeout(outboxGo, Math.max(1000, due - Date.now()));
 }
 
-/** The `outbox` action (sdui.js run()): add · remove · retry · clear. */
+/** The `outbox` action (sdui/actions.js run()): add · remove · retry · clear. */
 function outboxRun(action) {
   const box = outboxBox();
   if (!box) return;
@@ -235,7 +235,7 @@ function outboxRun(action) {
   }
 }
 
-/** What every screen's state carries (sdui.js paint()). */
+/** What every screen's state carries (sdui/navigation.js paint()). */
 function offlineState() {
   const box = outboxBox();
   const v = box ? box.view() : { outbox: [], outboxWaiting: 0 };
@@ -249,7 +249,7 @@ function offlinePut() {
 }
 
 /**
- * Before a paint fetches (sdui.js paint()): offline, a root screen is drawn as the kept Offline page instead (the stack remembers
+ * Before a paint fetches (sdui/navigation.js paint()): offline, a root screen is drawn as the kept Offline page instead (the stack remembers
  * what it stands in for), and the Offline page itself is drawn from what was kept. Null: fetch as usual.
  */
 function offlineInstead(cur) {

@@ -1,5 +1,5 @@
-// This computer's Accessibility in the window's screen state ($state.axGranted, sdui.js axFollow): the Bots app's
-// arrival card moves on, and closes, once it is on. Run as the page runs sdui.js, with a stand-in bridge.
+// This computer's Accessibility in the window's screen state ($state.axGranted, sdui/permissions.js axFollow): the Bots app's
+// arrival card moves on, and closes, once it is on. Run as the page runs sdui/, with a stand-in bridge.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");

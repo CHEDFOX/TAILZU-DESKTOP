@@ -772,7 +772,7 @@ test("look: the window's title is kept out of the lines, against the whole of it
   assert.ok(skip > 0, "a title line is skipped");
   assert.ok(skip < worker.indexOf("$shot::Line($ln.Text"), "before it becomes a line");
   // Only where it was goes back (frames, no text), with the title bar's band:
-  // the device cuts the picture below them (agent.js chromeBottom).
+  // the device cuts the picture below them (run/picture.js chromeBottom).
   const skipped = worker.slice(skip, worker.indexOf("$shot::Line($ln.Text"));
   assert.match(skipped, /\$titleFrames\.Add\(\$b\)/);
   assert.match(skipped, /\$shot::Box\(\$x0, \$y0, \$x1, \$y1, \$up, \$frame\[0\], \$frame\[1\]\)/, "moved as the lines are");
@@ -786,7 +786,7 @@ test("look: the window's title is kept out of the lines, against the whole of it
   assert.match(key, /if \(char\.IsWhiteSpace\(ch\)\) continue;/, "spaces do not count");
   assert.match(key, /sb\.Append\(char\.ToLowerInvariant\(c\)\)/, "nor case");
   assert.match(key, /\\u2026/, "nor a trailing ellipsis");
-  // Nor which dash or quote it was read with: the same rule as agent.js textKey.
+  // Nor which dash or quote it was read with: the same rule as run/picture.js textKey.
   assert.match(key, /\(c >= '\\u2010' && c <= '\\u2015'\) \|\| c == '\\u2212'\) c = '-'/);
   assert.match(key, /c == '\\u2018' \|\| c == '\\u2019' \|\| c == '\\u201a' \|\| c == '\\u201b' \|\| c == '\\u2032'\) c = '\\''/);
   assert.match(key, /\(c >= '\\u201c' && c <= '\\u201f'\) \|\| c == '\\u2033'\) c = '"'/);

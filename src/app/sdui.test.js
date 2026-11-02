@@ -1,6 +1,6 @@
-// The app window's Ask setup card (sdui.js DeskAskSetup), without a browser.
-// sdui.js is a page script, not a module, so it is run here as the page runs
-// it: knobs.js first, then sdui.js, in one context with a stand-in window and
+// The app window's Ask setup card (sdui/ DeskAskSetup), without a browser.
+// sdui/ is page scripts, not modules, so it is run here as the page runs
+// it: knobs.js first, then sdui/, in one context with a stand-in window and
 // bridge. Its start() waits on env() forever, so nothing past the top level
 // runs unless a test calls it.
 const test = require("node:test");
@@ -827,7 +827,7 @@ test("the held mic is a disc of the node's size with its own glyph, and says whe
   assert.doesNotMatch(p.run("node(__n)"), /data-hold/);
 });
 
-// ---- the folders row under Ask (sdui.js DeskFolders) --------------------------------
+// ---- the folders row under Ask (sdui/ DeskFolders) --------------------------------
 
 const FOLDER_PROPS = {
   title: "Folders Ask can use", lede: "Only inside these.", usual: "The usual three", add: "Add a folder", remove: "Remove",

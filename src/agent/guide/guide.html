@@ -4,7 +4,7 @@
   that says what Tailzu heard and what it found, a ring on the thing itself,
   and Blip peeking over the card's top edge, pointing at it.
 
-  It grows out of the pill. The pill's halves part (pill.js "ask") and a
+  It grows out of the pill. The pill's halves part (pill/ "ask") and a
   thread rises from the gap between them; the card blooms at the thread's end
   and stays tied to it while it is up: pill, card, thing, one line. When the
   run ends the card folds back into the thread's end, the thread is pulled
@@ -106,7 +106,7 @@
 
   /* THE CARD -------------------------------------------------------------
      Where it is, how tall, and its bloom out of the thread and its fold
-     back into it are all set by guide.js on every frame (transform, height,
+     back into it are all set by guide/ on every frame (transform, height,
      opacity, the corners while it blooms), so the tether can stay on its
      edge and a review can stop on any frame: nothing here transitions. */
   #card {
@@ -127,7 +127,7 @@
     background-size:5px 5px;
     -webkit-mask-image: linear-gradient(180deg, #000 0, rgba(0,0,0,.25) 70%, transparent);
   }
-  /* A column that never outgrows the room it is given (guide.js caps its
+  /* A column that never outgrows the room it is given (guide/ caps its
      height to the work area): the answer and the plan give way and scroll,
      everything else, the quote and its buttons above all, keeps its size. */
   #inner { position:relative; padding:15px 18px 16px; box-sizing:border-box; display:flex; flex-direction:column; }
@@ -269,7 +269,7 @@
     #steps li[data-s="doing"] i::after, #card[data-state="listening"] #lamp { animation:none; }
   }
 
-  /* THE BOTS LOOK (DeskAsk): with the Bots app switched on (bootstrap flag bots.app; guide.js puts .bots on the
+  /* THE BOTS LOOK (DeskAsk): with the Bots app switched on (bootstrap flag bots.app; guide/ puts .bots on the
      root), the card is the app's own: white, a #e6e6e6 line, Geist, ink words and ink buttons, clay (Keylessbord's
      colour) only for the open microphone, no red. Every state and every button is the same one, only drawn so.
      Off, none of this applies. */

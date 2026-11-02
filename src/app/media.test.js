@@ -1,7 +1,7 @@
 // The app window's media actions (media.js): sending a picked file with its
 // progress, playing one sound at a time, and both stopping with their screen.
-// media.js is a page script loaded after sdui.js; here it runs in one context
-// with stand-ins for what it uses of sdui.js (state, painting, run, the
+// media.js is a page script loaded after sdui/; here it runs in one context
+// with stand-ins for what it uses of sdui/ (state, painting, run, the
 // session) and of the page (the chooser, XMLHttpRequest, fetch, Web Audio).
 const test = require("node:test");
 const assert = require("node:assert");

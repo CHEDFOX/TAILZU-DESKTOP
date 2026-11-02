@@ -3,7 +3,7 @@
  * and the agent's hands (agent.js), wired to each other.
  *
  * Tap Alt twice (desktop.agent.tapKey) and say something about the app in
- * front. The recorder records one clip in "ask" mode (recorder.js), ended by
+ * front. The recorder records one clip in "ask" mode (recorder/), ended by
  * the first real pause, Alt twice again, or a ceiling; it comes here whole,
  * and the agent asks /v1/agent with it and a text snapshot of the screen
  * (driver.js). What comes back is drawn by the guide (guide.html): the card,
@@ -40,7 +40,7 @@ const agentCore = require("./run/agent.js");
 const { pillAskMove, capsuleRect } = require("./pillAsk.js");
 const { PEEK_STATES, PEEK_GONE_MS, peekFrame } = require("./peek.js");
 
-// What the guide can draw (guide.js draw).
+// What the guide can draw (guide/ draw).
 const MARKS = new Set(["box", "circle", "underline", "highlight", "arrow", "number", "label", "path"]);
 // The ones drawn round (or under, or over) a frame.
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
@@ -209,7 +209,7 @@ function createAsk(ctx) {
 
   // Where the pointer is, in the window's own coordinates, ten times a second
   // while the window is up and only when it moved: the card works out from it
-  // whether it is under the pointer (guide.js TAKING CLICKS), which a pointer
+  // whether it is under the pointer (guide/ TAKING CLICKS), which a pointer
   // that has not moved since the card arrived could never tell it otherwise.
   // It stops by itself once the window is hidden or gone.
   let cursorTimer = null;
@@ -274,7 +274,7 @@ function createAsk(ctx) {
   }
   /**
    * Tell the card where the pill is, in its window's own coordinates, so it
-   * grows from it (guide.js dock). `pill: null` when no question has the pill
+   * grows from it (guide/ dock). `pill: null` when no question has the pill
    * (off, or a dictation's): the card grows from a seed of its own. And
    * `seed: false` with it when the pill is on another display than the guide
    * (a ring there took it there): no seed, no tether, the card placed as it
@@ -574,7 +574,7 @@ function createAsk(ctx) {
     // THE CARD FOLDS BACK INTO THE PILL. The guide folds the card into the
     // thread's end and pulls the thread down into the bead (foldMs); the
     // pill is told at once, and holds its gap open until the thread is home
-    // (pill.js askCloseDelayMs) before it clicks shut. The window stays up
+    // (pill/ askCloseDelayMs) before it clicks shut. The window stays up
     // for the fold, and then the pill is given back: at rest, unless a
     // dictation has it by now. A card that came back up in the meantime (a
     // new question; the not-heard card, put up right after the run's own
@@ -1159,7 +1159,7 @@ function createAsk(ctx) {
   function oneKeyName() { try { return (typeof ctx.oneKey === "function" && ctx.oneKey()) || ""; } catch { return ""; } }
 
   // ---- the peek, while a dictation records ----------------------------------------
-  // Blip over the text box at the cursor (guide.js peek), in the guide's own
+  // Blip over the text box at the cursor (guide/peek.js peek), in the guide's own
   // window: put on the field's display, its frames turned to DIP and then to
   // the window's own coordinates, as a ring is. Decoration on top of
   // dictation: anything wrong with it is dropped without a word, and it never

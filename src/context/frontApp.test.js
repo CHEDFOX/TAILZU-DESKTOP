@@ -225,13 +225,13 @@ test("the merged screen is cut from the end, keeping whole lines", () => {
   assert.ok(!out.includes("AAAA"));
 });
 
-// THE RECORDER'S SIDE OF IT (recorder.js, the hidden window's script, run
+// THE RECORDER'S SIDE OF IT (recorder/, the hidden window's scripts, run
 // here in a sandbox with a stand-in for the main process and the server).
 const vm = require("node:vm");
 const fs = require("node:fs");
 const path = require("node:path");
 
-/** recorder.js in a sandbox: `on` holds the handlers it registered, `sent`
+/** The recorder's scripts in a sandbox: `on` holds the handlers it registered, `sent`
  *  what it told the main process, `posts` every upload's form fields. */
 function loadRecorder(flags = {}, platform = "MacIntel") {
   const on = {}, sent = [], posts = [];

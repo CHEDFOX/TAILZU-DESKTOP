@@ -17,7 +17,7 @@
  *
  * The parts that decide (planDrop, shareParams, sendDrop) are pure and tested
  * in shareIn.test.js; install() wires them to the page, reading the window's
- * own session and navigation from sdui.js, loaded before this file.
+ * own session and navigation from sdui/, loaded before this file.
  */
 (function (root, factory) {
   const api = factory();
@@ -276,7 +276,7 @@
   return { MAX_FILES, MAX_BYTES, acceptable, planDrop, shareParams, uploadFile, sendDrop, install };
 });
 
-// In the window: wire it to the app (sdui.js, loaded first, holds the session and the navigation).
+// In the window: wire it to the app (sdui/, loaded first, holds the session and the navigation).
 /* global SESSION, STACK, ENV, K, go, bearer, toast */
 if (typeof module === "undefined" && typeof window !== "undefined" && typeof go === "function" && window.TailzuShareIn) {
   window.TailzuShareIn.install({
