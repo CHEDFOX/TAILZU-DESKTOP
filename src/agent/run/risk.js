@@ -23,8 +23,12 @@ const ALWAYS_WORDS = words([
   "order", "check-?out", "transfer", "subscribe", "cancel\\s+(?:my\\s+|your\\s+|the\\s+)?subscription",
 ]);
 
-function keywordRisk(text) {
-  const t = str(text);
+/** The words of plain sending: what a message they asked for is sent with. Asked for in so many words (trusted), these are their
+ *  yes already; reply-all, share, invite, publish and the rest still ask, and paying or deleting always does. */
+const SEND_WORDS = words(["send", "post", "submit"]);
+
+function keywordRisk(text, asked) {
+  const t = asked === true ? str(text).replace(new RegExp(SEND_WORDS.source, "giu"), " ") : str(text);
   if (!t) return "free";
   if (ALWAYS_WORDS.test(t)) return "always";
   if (CONFIRM_WORDS.test(t)) return "confirm";
@@ -178,6 +182,14 @@ function carriesScreenSecret(text, snapshot, target, said) {
   return false;
 }
 
+/** The risk in an action's words alone: its target's label and its text (keywordRisk). */
+function wordsRisk(action, snapshot, asked) {
+  if (!action || typeof action !== "object") return "free";
+  const els = elementsOf(snapshot);
+  const named = action.id != null ? els.find((e) => e.id === String(action.id)) || null : null;
+  return maxRisk(keywordRisk(named && named.label, asked), keywordRisk(action.text, asked));
+}
+
 /**
  * How much of a yes this action needs: "free", "confirm" or "always".
  *
@@ -215,7 +227,10 @@ function classifyRisk(action, snapshot, ctx) {
   const named = action.id != null ? els.find((e) => e.id === String(action.id)) || null : null;
   const target = named || (kind === "type" || kind === "key" ? focused : null);
   let risk = "free";
-  for (const t of [target && target.label, action.text]) risk = maxRisk(risk, keywordRisk(t));
+  // A message they asked for, typed into a message box: its words are what they want said ("the checkout mockups are
+  // ready" pays for nothing); the press that sends it is checked on its own. A command typed anywhere else still is.
+  const messageWords = c.trusted === true && (kind === "type" || kind === "set") && looksLikeComposer(target);
+  for (const t of [target && target.label, messageWords ? "" : action.text]) risk = maxRisk(risk, keywordRisk(t, c.trusted === true));
 
   // ASKED FOR ALREADY: a task or a message the person gave in so many words
   // (the one key's brain said task or send, and nothing in it moves money or
@@ -254,4 +269,4 @@ function classifyRisk(action, snapshot, ctx) {
   return risk;
 }
 
-module.exports = { maxRisk, appWords, sameApp, classifyRisk };
+module.exports = { maxRisk, appWords, sameApp, classifyRisk, wordsRisk };

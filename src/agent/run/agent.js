@@ -73,7 +73,7 @@ const { MAX_ELEMENTS, SCREEN_CHARS, frameMap, ADDRESS_BAR, stripUrls, HAS_URL_TA
 const { sameWindow, ocrElements, pictureRegion, hasBytes, byteSize } = require("./picture.js");
 const { resolveMark } = require("./marks.js");
 const { describeChange, focusMoved, focusLandedOn, titleOf } = require("./changes.js");
-const { maxRisk, sameApp, classifyRisk } = require("./risk.js");
+const { maxRisk, sameApp, classifyRisk, wordsRisk } = require("./risk.js");
 const { actionLine, fingerprint, confirmText, acting } = require("./actions.js");
 const { makePost } = require("./stream.js");
 
@@ -951,7 +951,12 @@ function createAgent(deps) {
     }
 
     const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run), trusted: run.trusted === true });
-    const risk = maxRisk(maxRisk(a.risk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
+    // ASKED FOR ALREADY, the server's side too: the send they asked to send is marked "confirm" by the server as every send
+    // is. A task or a message they gave in so many words (trusted) takes that as their yes, unless the words on the target or
+    // in the text are themselves risky (pay, delete…) or the server says "always". Found end to end: a trusted message still
+    // asked "Send to #design: …?" before the one press they had asked for.
+    const serverRisk = run.trusted === true && a.risk === "confirm" && wordsRisk(a, run.snapshot, true) === "free" ? "free" : a.risk;
+    const risk = maxRisk(maxRisk(serverRisk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
 
     if (frame) tell(run, "point", frame);
     if (risk !== "free") {

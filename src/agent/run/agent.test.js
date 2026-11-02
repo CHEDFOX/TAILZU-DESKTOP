@@ -3282,3 +3282,40 @@ test("classifyRisk: trusted or not, the words on a target and the chords that cl
   const notes = snap([], { app: { name: "Notes", pid: 1 } });
   assert.notStrictEqual(classifyRisk({ kind: "key", keys: "cmd+q" }, notes, { trusted: true }), "free");
 });
+
+// ---- asked for already, the server's side too (found end to end) -------------------------------------------------
+async function until(cond, ms = 2000) { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) throw new Error("timed out waiting"); await sleep(5); } }
+
+test("a trusted message: the server's confirm on its Send is their yes already; untrusted it still asks", async () => {
+  const steps = () => [[heardDo("tell design it's ready"), press("e3", { risk: "confirm", confirm: "Send to #design?" })], [{ t: "done" }]];
+  const trusted = rig({ scripts: steps() });
+  trusted.agent.begin({ app: "Slack", trusted: true });
+  await trusted.agent.heard(AUDIO);
+  await until(() => trusted.post.requests.length === 2);
+  assert.strictEqual(trusted.guide.of("confirm").length, 0, "no second yes for the send they asked for");
+  assert.ok(trusted.driver.acts().some((c) => c[0] === "press" && c[1] === "e3"));
+  const plain = rig({ scripts: steps() });
+  plain.agent.begin({ app: "Slack" });
+  await plain.agent.heard(AUDIO);
+  await until(() => plain.guide.of("confirm").length === 1);
+});
+
+test("trusted or not, a server confirm on a risky word (pay, delete) still asks", async () => {
+  const PAY = snap([{ id: "e7", role: "button", label: "Pay ₹1,240", frame: [10, 10, 80, 30] }]);
+  const r = rig({ snaps: [PAY], scripts: [[heardDo("pay it"), press("e7", { risk: "confirm" })], [{ t: "done" }]], confirm: false });
+  r.agent.begin({ app: "Chrome", trusted: true });
+  await r.agent.heard(AUDIO);
+  await until(() => r.guide.of("confirm").length === 1);
+  assert.ok(!r.driver.acts().some((c) => c[0] === "press"));
+});
+
+test("classifyRisk, trusted: a message's own words in a message box are not risk words; a command elsewhere still is", () => {
+  const els = [{ id: "e3", role: "area", label: "Message #design", value: "", frame: [1, 1, 9, 9] }, { id: "e9", role: "area", label: "Terminal", value: "", frame: [1, 1, 9, 9] }];
+  const at = (f) => snap(els, { focused: f });
+  assert.strictEqual(classifyRisk({ kind: "type", text: "The checkout mockups are ready" }, at("e3"), { trusted: true, said: "tell them" }), "free");
+  assert.strictEqual(classifyRisk({ kind: "type", text: "The checkout mockups are ready" }, at("e3"), { said: "tell them" }), "always");
+  assert.strictEqual(classifyRisk({ kind: "type", text: "delete the build folder" }, at("e9"), { trusted: true, said: "x" }), "always");
+  const send = snap([{ id: "e4", role: "button", label: "Send", frame: [1, 1, 9, 9] }, { id: "e6", role: "button", label: "Share", frame: [1, 1, 9, 9] }]);
+  assert.strictEqual(classifyRisk({ kind: "press", id: "e4" }, send, { trusted: true }), "free");
+  assert.strictEqual(classifyRisk({ kind: "press", id: "e6" }, send, { trusted: true }), "confirm", "share still asks");
+});
