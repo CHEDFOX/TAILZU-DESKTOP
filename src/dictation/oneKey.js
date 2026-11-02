@@ -290,4 +290,4 @@ function bindOneKey(o) {
   return { stop };
 }
 
-module.exports = { choices, supported, defaultKey, firstDefault, linuxSession, pickKey, keyLabel, hookCode, needsHelper, createHoldTap, bindOneKey, lineReader };
+module.exports = { choices, defaultKey, firstDefault, linuxSession, pickKey, keyLabel, hookCode, needsHelper, createHoldTap, bindOneKey, lineReader };

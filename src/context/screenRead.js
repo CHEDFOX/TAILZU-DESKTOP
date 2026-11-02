@@ -112,4 +112,4 @@ async function readScreen(info, opts = {}) {
   return frontApp.mergeScreen(ax, ocrText, axChars);
 }
 
-module.exports = { readScreen, captureWindowPng, runOcr, captureBlocked, ocrBinary, _cache: cache };
+module.exports = { readScreen };

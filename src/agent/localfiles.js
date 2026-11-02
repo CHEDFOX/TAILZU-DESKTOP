@@ -861,11 +861,11 @@ function createLocalFiles(opts) {
     }
   }
 
-  return { plan, roots, checkRoot, guard, rootProblem, undoBatch, riskOf: (tool) => (Object.hasOwn(RISK, str(tool)) ? RISK[str(tool)] : ""), kindOf };
+  return { plan, roots, checkRoot, guard, rootProblem, riskOf: (tool) => (Object.hasOwn(RISK, str(tool)) ? RISK[str(tool)] : "") };
 }
 
 /** The most dangerous of two tiers. */
 const RANK = { "": 0, read: 1, write: 2, destructive: 3 };
 const higher = (a, b) => ((RANK[a] || 0) >= (RANK[b] || 0) ? a : b);
 
-module.exports = { createLocalFiles, higher, fill, EN_WORDS, RISK, MAX_FILES, KIND_FOLDER, kindOf, RUNS_CODE };
+module.exports = { createLocalFiles, higher, fill, EN_WORDS, RISK, MAX_FILES };

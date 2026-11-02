@@ -15,10 +15,15 @@
 
 const test = require("node:test");
 const assert = require("node:assert");
-const {
-  createAgent, safeOpenUrl, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  ocrElements, pictureRegion, resolveMark, readEvents, makePost, SCREEN_CHARS, TEXT,
-} = require("./agent.js");
+const { createAgent, safeOpenUrl, isTaskRoute, makePost } = require("./agent.js");
+const { approvalOf } = require("./approval.js");
+const { classifyRisk, maxRisk } = require("./risk.js");
+const { regionOf, toRequestElements, frameMap, SCREEN_CHARS } = require("./screen.js");
+const { describeChange } = require("./changes.js");
+const { ocrElements, pictureRegion } = require("./picture.js");
+const { resolveMark } = require("./marks.js");
+const { readEvents } = require("./stream.js");
+const { TEXT } = require("./text.js");
 
 // ---- fixtures ---------------------------------------------------------------
 

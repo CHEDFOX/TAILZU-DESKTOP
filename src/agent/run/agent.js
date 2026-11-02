@@ -69,13 +69,13 @@ const { TEXT } = require("./text.js");
 const { safeOpenUrl } = require("./openLink.js");
 const { isTaskRoute, CARD_BUTTONS, approvalOf } = require("./approval.js");
 const { str, squash, clip, errText, isFrame, elementsOf, focusedOf, within, sleep, WEB_APPS } = require("./helpers.js");
-const { MAX_ELEMENTS, SCREEN_CHARS, regionOf, frameMap, ADDRESS_BAR, stripUrls, HAS_URL_TAIL, toRequestElements } = require("./screen.js");
+const { MAX_ELEMENTS, SCREEN_CHARS, frameMap, ADDRESS_BAR, stripUrls, HAS_URL_TAIL, toRequestElements } = require("./screen.js");
 const { sameWindow, ocrElements, pictureRegion, hasBytes, byteSize } = require("./picture.js");
 const { resolveMark } = require("./marks.js");
 const { describeChange, focusMoved, focusLandedOn, titleOf } = require("./changes.js");
 const { maxRisk, sameApp, classifyRisk } = require("./risk.js");
 const { actionLine, fingerprint, confirmText, acting } = require("./actions.js");
-const { readEvents, makePost } = require("./stream.js");
+const { makePost } = require("./stream.js");
 
 /** History the server takes, oldest first. Older turns fall off the front. */
 const MAX_HISTORY = 16;
@@ -88,9 +88,6 @@ const JOB_NOTES_MAX = 8;
 const DEVICE_PER_RUN = 6;
 /** A remembered kind of change still asks when it touches more files than this. */
 const DEVICE_BIG = 100;
-/** A run that has not finished in this long is stopped: a loop that keeps
- *  "almost" getting there costs a request a step and holds the guide up. */
-const RUN_DEADLINE_MS = 60000;
 /** The driver resolves within the timeout it is given, so a little more than
  *  that here only ever catches a driver that broke its promise. */
 const SNAPSHOT_GRACE_MS = 250;
@@ -1689,8 +1686,5 @@ function createAgent(deps) {
   return { begin, heard, typed, preview, cancel, active };
 }
 
-module.exports = {
-  createAgent, safeOpenUrl, approvalOf, isTaskRoute, classifyRisk, maxRisk, regionOf, toRequestElements, frameMap, describeChange,
-  ocrElements, pictureRegion, resolveMark, readEvents, makePost,
-  MAX_ELEMENTS, MAX_HISTORY, RUN_DEADLINE_MS, MAX_PICTURE_BYTES, SCREEN_CHARS, TEXT,
-};
+// ask.js takes the run, and the three pieces of it it uses on its own.
+module.exports = { createAgent, safeOpenUrl, isTaskRoute, makePost };

@@ -72,7 +72,7 @@ function createFolderSettings(o) {
     if (!o.fromApp(e)) return;
     if (await act(p)) push();
   });
-  return { state, push, act };
+  return { state, act };
 }
 
 module.exports = { createFolderSettings };

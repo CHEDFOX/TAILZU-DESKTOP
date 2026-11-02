@@ -37,7 +37,6 @@
  * of what happens can be read in one place and tested without Electron.
  */
 const agentCore = require("./run/agent.js");
-const { pillAskMove, capsuleRect } = require("./pillAsk.js");
 const { PEEK_STATES, PEEK_GONE_MS, peekFrame } = require("./peek.js");
 
 // What the guide can draw (guide/ draw).
@@ -1305,7 +1304,6 @@ function createAsk(ctx) {
     },
     /** The recorder's page crashed: a question it was recording will not come back. */
     recorderGone() { if (clipDue) noClip(); },
-    owns(sid) { return sid === session && sid !== 0; },
     active: () => listening || !!onAudio || !!naming || !!finalWait || agent.active(),
     /** A card is up: a run's, or a finished answer's, which may still be
      *  saying it. A dictation starting puts it away (main.js toggleDictation). */

@@ -579,7 +579,6 @@ function macField(chars) {
  * line, separated by RS, for joinSurroundings to clean and bound.
  */
 function macSurroundingsScript() {
-  const RS = "\u001e";
   return `
 set RS to character id 30
 set out to ""
@@ -675,8 +674,6 @@ function frontInfo() {
   const ask = process.platform === "win32" ? windowsApp() : process.platform === "darwin" ? macApp() : linuxApp();
   return Promise.race([ask, new Promise((r) => setTimeout(() => r(null), 1500))]).catch(() => null);
 }
-/** The app in front, as a short name, or null. Never waits more than 1.5 s. */
-function frontApp() { return frontInfo().then((i) => (i ? i.label : null)); }
 
 /**
  * The field with the keyboard's focus: { kind, label?, before?, selection? }, or null
@@ -710,7 +707,7 @@ function warmUp() { if (process.platform === "win32") { try { psProcess(); } cat
 function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* gone */ } ps = null; } }
 
 module.exports = {
-  frontApp, frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
-  label, siteOf, infoFrom, pictureKey, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
-  isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
+  frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
+  label, infoFrom, pictureKey, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
+  isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundingsScript, PS,
 };
