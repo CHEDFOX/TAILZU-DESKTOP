@@ -94,7 +94,7 @@ function liveDataUrl(html) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { liveSourceOf, liveParse, liveSendScript, liveOpenableHost, liveKey, liveOriginOf, LIVE_READY_MS };
+  module.exports = { liveSourceOf, liveParse, liveSendScript, liveOpenableHost, liveKey };
 }
 
 // ------------------------------------------------------------------------- the window

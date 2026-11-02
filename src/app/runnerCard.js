@@ -138,5 +138,3 @@ function runnerNode(p, s) {
     " <span>" + esc(w("workspaces", { dir: String(RUNNER.workspacesDir || "").slice(0, 240) })) + "</span></p>" +
     "</div></section>";
 }
-
-if (typeof module === "object" && module && module.exports) module.exports = { runnerNode, runnerRun, runnerTook };

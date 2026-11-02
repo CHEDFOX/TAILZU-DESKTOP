@@ -273,7 +273,7 @@
     return { show, hide };
   }
 
-  return { MAX_FILES, MAX_BYTES, acceptable, planDrop, shareParams, uploadFile, sendDrop, install };
+  return { acceptable, planDrop, shareParams, sendDrop, install };
 });
 
 // In the window: wire it to the app (sdui/, loaded first, holds the session and the navigation).

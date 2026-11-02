@@ -81,7 +81,6 @@ function makeOutbox(io, o) {
   return {
     ready,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
-    entries: () => list,
     view: () => ({
       outbox: list.map((e) => ({ id: e.id, label: e.label, sub: e.sub, state: e.state, typedAt: e.typedAt })),
       outboxWaiting: list.filter((e) => e.state === "waiting" || e.state === "sending").length,
@@ -120,7 +119,6 @@ function makeOutbox(io, o) {
       return true;
     },
     clear() { const n = list.length; list = list.filter((e) => e.state !== "sent"); if (list.length !== n) changed(); },
-    clearAll() { list = []; changed(); },
     nextDue() { const w = list.find((e) => e.state === "waiting"); return w ? w.nextAt : null; },
     flush(online) {
       if (!online) return Promise.resolve(0);
@@ -158,7 +156,7 @@ function makeOutbox(io, o) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { makeOutbox, outboxRetryable, outboxClock, OUTBOX_MAX };
+  module.exports = { makeOutbox, outboxRetryable, outboxClock };
 }
 
 // ------------------------------------------------------------------------- the window

@@ -344,11 +344,7 @@
     return { host, client, scheduler, reloadQuietly, stop: () => { clearInterval(tick); client.stop(); scheduler.cancel(); } };
   }
 
-  return {
-    DELAY_MS, MAX_WAIT_MS, QUIET_MS, MAX_DEFER_MS, CLOSE,
-    parseLiveMessage, wsUrlOf, hears, backoffMs, mergeLiveState, reloadDelay, ReloadScheduler, LiveClient,
-    pathOf, atPath, holdView, restoreView, install,
-  };
+  return { parseLiveMessage, wsUrlOf, hears, backoffMs, mergeLiveState, ReloadScheduler, LiveClient, holdView, restoreView, install };
 });
 
 // In the window: wire it to the app (sdui/, loaded first, holds the session, the stack, the state and the painting).

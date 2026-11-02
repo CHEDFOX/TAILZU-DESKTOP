@@ -331,7 +331,3 @@ function mediaLeave(entry) {
 // Declared to the server (sdui/backend.js capabilities() reads these lists when it asks).
 COMPONENTS.push("FileUpload", "AudioPlay");
 ACTIONS.push("uploadFile", "playAudio", "stopAudio");
-
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { mediaSize, mediaClock, mediaPct, mediaProgress, mediaPlayState, mediaRefusal, mediaSource, mediaName };
-}

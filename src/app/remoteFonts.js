@@ -47,5 +47,3 @@ function deskLoadFonts(fonts) {
       .catch(() => { DESK_FONTS.delete(name); });
   }
 }
-
-if (typeof module === "object" && module && module.exports) module.exports = { deskFontUsable, deskLoadFonts };
