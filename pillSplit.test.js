@@ -2,8 +2,7 @@
 //
 // The split pill: while it listens it comes apart, ✕ to the left edge of the
 // screen and ✓ to the right, with a thread between them the voice plucks; on
-// stop it is whole again where it started. The owner: "When stop listening,
-// the pill will assemble again and complete shape, initial position."
+// stop it reassembles into its complete shape, at its initial position.
 
 const test = require("node:test");
 const assert = require("node:assert");

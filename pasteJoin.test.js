@@ -11,7 +11,7 @@ const { separator, joinStretch } = require("./pasteJoin.js");
 /** Paste the stretches one after another, the way main.js does. */
 const paste = (...parts) => parts.reduce((field, p, i) => field + (i ? joinStretch(parts[i - 1], p) : p), "");
 
-test("the owner's texts: one space between stretches, whatever the script", () => {
+test("real dictations: one space between stretches, whatever the script", () => {
   assert.strictEqual(paste("So see that and", "जिंदगी में.", "I'm not a", "जिंदगी में."),
     "So see that and जिंदगी में. I'm not a जिंदगी में.");
   assert.strictEqual(paste("Jhal", "Thank you.", "Jhal"), "Jhal Thank you. Jhal");
