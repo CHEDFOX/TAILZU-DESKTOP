@@ -1,0 +1,716 @@
+// WHICH APP THEY ARE DICTATING INTO.
+//
+// Every request from this computer used to say "Desktop", so the writer could
+// not tell an email from a chat from a prompt for ChatGPT, and the Today page
+// labelled every line DESKTOP. It should show for every app, the desktop
+// app's own lines included.
+//
+// Asked of the system at the moment dictation starts, while the app they are
+// typing into is still the one in front:
+//
+//   Windows  one PowerShell kept open for the whole run, asked per press, so
+//            the answer costs milliseconds rather than a PowerShell start.
+//   Mac      System Events, the same route the paste already takes.
+//   Linux    xdotool, when it is installed; nothing when it is not.
+//
+// WHAT LEAVES THIS COMPUTER IS A NAME, NOT A TITLE. A window title can hold an
+// email subject or a document's name, so only the app is sent — and for a
+// browser, the site, taken from the end of the tab's title ("…- Gmail"),
+// because "Chrome" alone says nothing about where the words are going.
+//
+// AND THE FIELD ITSELF (focusedField, below): screen and app awareness come
+// first. "Gmail" is the search box, the To line, the subject and the
+// message at once, and only the message wants sentences. The focused field
+// is asked of the system's accessibility layer, the same permission the
+// paste already needs on a Mac: what kind it is (a search box, an address
+// bar, a text area), its label or placeholder ("Search mail", "Subject"),
+// and what is already written before the cursor, as the phone keyboards
+// send it. A password field is never read and never described.
+
+const { spawn, execFile } = require("child_process");
+const knobs = require("../../knobs.js");
+
+const BROWSERS_BUILT_IN = /^(?:google chrome|chrome|chromium|microsoft edge|msedge|edge|firefox|mozilla firefox|brave|brave browser|opera|vivaldi|arc|safari|zen)$/i;
+
+// THE SERVER MAY ADD TO THESE LISTS, NEVER TAKE FROM THEM. A browser's label is
+// its page's, and "Always for <app>" is never remembered for one (pictureKey);
+// a private window or a money or health app is never read. So what the server
+// sends (desktop.apps.*) only joins what is built in here, and a bad list or
+// none leaves the built-in ones exactly as they are.
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+let extraFrom = {};
+let extraRe = {};
+/** The server's extra words for `key` as one test, or null for none. */
+function extra(key, wrap) {
+  const v = key === "browsers" ? knobs.list("desktop.apps.browsers", [])
+    : key === "private" ? knobs.list("desktop.apps.privateTerms", [])
+      : knobs.list("desktop.apps.sensitiveTerms", []);
+  if (extraFrom[key] === v) return extraRe[key];
+  const w = (Array.isArray(v) ? v : []).filter((x) => typeof x === "string" && x.trim()).map((x) => escRe(x.trim().toLowerCase()));
+  extraFrom[key] = v;
+  extraRe[key] = w.length ? new RegExp(wrap(w.join("|")), "i") : null;
+  return extraRe[key];
+}
+const BROWSERS = {
+  test(name) {
+    if (BROWSERS_BUILT_IN.test(name)) return true;
+    const more = extra("browsers", (alt) => `^(?:${alt})$`);
+    return !!more && more.test(String(name || "").trim());
+  },
+};
+/** "Google Chrome" is "Chrome": the server's names (desktop.apps.shortNames) over these. */
+function shortName(raw) {
+  const names = knobs.obj("desktop.apps.shortNames", { "google chrome": "Chrome", "microsoft edge": "Edge", "msedge": "Edge", "mozilla firefox": "Firefox", "brave browser": "Brave" });
+  const v = names[raw.toLowerCase()];
+  return typeof v === "string" && v.trim() ? v.trim() : raw;
+}
+
+/** The site a browser tab is on, from its title: the last part that is not the browser's own. */
+function siteOf(title, app) {
+  const skip = new RegExp(`^(?:${app}|google chrome|chrome|microsoft\\s*edge|edge|mozilla firefox|firefox|brave|safari|opera|vivaldi|arc|personal|work|profile \\d+|and \\d+ more pages?)$`, "i");
+  const parts = String(title || "")
+    .replace(/[​-‍﻿]/g, "")
+    .split(/\s+[-–—|·]\s+/)
+    .map((p) => p.replace(/^\(\d+\+?\)\s*/, "").trim())
+    .filter((p) => p && !skip.test(p));
+  // From the end: the site's name is last; skip anything that looks like an
+  // address or an account, which is theirs and not a site.
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (/@|\d{4,}/.test(p) || p.length > 40) continue;
+    return p;
+  }
+  return "";
+}
+
+// A private window names itself in its title; its screen is not read.
+const PRIVATE = /\b(?:incognito|inprivate|private browsing|private window|guest (?:mode|window))\b/i;
+/** True when the front window is a private/incognito one (from its title). The server may add words (desktop.apps.privateTerms). */
+function isPrivate(title) {
+  const t = String(title || "");
+  if (PRIVATE.test(t)) return true;
+  const more = extra("private", (alt) => `\\b(?:${alt})\\b`);
+  return !!more && more.test(t);
+}
+
+// A money/health/secrets app, named loosely, mirroring the server's gate
+// (sensitive.ts): its screen is not read at all, here at the source.
+const SENSITIVE = /\b(?:bank|banking|netbanking|chase|wells\s*fargo|citi(?:bank)?|barclays|hsbc|lloyds|santander|hdfc|icici|axis|kotak|sbi|paytm|phonepe|gpay|google\s*pay|venmo|zelle|cash\s*app|revolut|monzo|wise|coinbase|binance|metamask|robinhood|fidelity|schwab|paypal|credit\s*card|debit\s*card|1password|bitwarden|lastpass|dashlane|keeper|authenticator|wallet|irs|hmrc|health|patient|medical|clinic|hospital|insur\w*)\b/i;
+/** True when this app/site should not have its screen read (money, health). The server may add words (desktop.apps.sensitiveTerms). */
+function looksSensitive(label) {
+  const t = String(label || "");
+  if (SENSITIVE.test(t)) return true;
+  const more = extra("sensitive", (alt) => `\\b(?:${alt})\\b`);
+  return !!more && more.test(t);
+}
+
+/**
+ * The screen around the field, from the pieces of text a window gives up:
+ * trimmed, the UI's one- and two-character scraps and pure punctuation
+ * dropped, a run of the same line collapsed, joined top to bottom and cut to
+ * `chars` from the END — in a chat the newest lines, nearest the field, are
+ * what a reply answers. "" when nothing is left.
+ */
+function joinSurroundings(parts, chars = 2000) {
+  const lines = [];
+  let last = "";
+  for (const raw of Array.isArray(parts) ? parts : []) {
+    const t = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+    if (t.length < 3 || !/[\p{L}\p{N}]/u.test(t) || t === last) continue;
+    lines.push(t); last = t;
+  }
+  let out = lines.join("\n").trim();
+  if (out.length > chars) out = out.slice(-chars).replace(/^[^\n]*\n/, "");
+  return out;
+}
+
+/**
+ * Two readings of the screen into one: the accessibility tree is exact, so
+ * it leads; OCR (the picture, read on the device) only adds lines the tree
+ * did not already have. A line the tree gave is never repeated from the
+ * image, so an app that exposes half its text does not get it twice.
+ */
+function mergeScreen(axText, ocrText, chars = 2000) {
+  const ax = String(axText || "").trim();
+  const have = new Set(ax.split("\n").map((l) => l.trim().toLowerCase()).filter(Boolean));
+  const extra = [];
+  for (const raw of String(ocrText || "").split("\n")) {
+    const t = raw.replace(/\s+/g, " ").trim();
+    if (t.length < 3 || !/[\p{L}\p{N}]/u.test(t) || have.has(t.toLowerCase())) continue;
+    have.add(t.toLowerCase()); extra.push(t);
+  }
+  let out = (ax ? ax + (extra.length ? "\n" + extra.join("\n") : "") : extra.join("\n")).trim();
+  if (out.length > chars) out = out.slice(-chars).replace(/^[^\n]*\n/, "");
+  return out;
+}
+
+/** The app's name as the system gave it, on one line. */
+const rawName = (app) => String(app || "").replace(/\.exe$/i, "").replace(/[\r\n<>]+/g, " ").trim();
+
+/** "Chrome: Gmail", "Slack", "WhatsApp". At most 40 characters, one line. */
+function label(app, title) {
+  const raw = rawName(app);
+  if (!raw) return null;
+  const name = shortName(raw);
+  if (!BROWSERS.test(raw)) return name.slice(0, 40);
+  const site = siteOf(title, raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return (site ? `${name}: ${site}` : name).slice(0, 40);
+}
+
+// ---- The field ------------------------------------------------------------------
+/**
+ * What kind of field it is, from the accessibility role ("field", "area",
+ * "combo"), its subrole and its label, in the words the server takes
+ * (search | url | email | message | text | longtext), "password" for a
+ * password field, or null for anything that is not a text field.
+ */
+function kindOf(role, subrole, lbl) {
+  const L = String(lbl || "");
+  if (/secure|password/i.test(subrole || "")) return "password";
+  if (/search/i.test(subrole || "")) return "search";
+  if (role === "field" || role === "combo") {
+    if (/\b(?:address and search|address bar|search or (?:type|enter) (?:a |web )?(?:address|url)|url)\b/i.test(L)) return "url";
+    if (/\bsearch\b/i.test(L)) return "search";
+    if (/\be-?mail(?: address)?\b/i.test(L) && !/\bmessage\b/i.test(L)) return "email";
+    return "text";
+  }
+  if (role === "area") return /\b(?:message|reply|chat|comment)\b/i.test(L) ? "message" : "longtext";
+  return null;
+}
+
+// The most selected text that goes with a request. A selection is sent whole
+// or not at all: the answer is pasted over all of it, so a rewrite of only
+// its start would lose the rest.
+const SELECTION_MAX = 8000;
+// Fields that take a value rather than prose. An address bar, a search box or
+// a find bar selects its whole contents on focus (Cmd+L, a click), so what is
+// selected there is the old address or query, not text they mean to have
+// rewritten: what they say is the new value. Sent, it would carry a URL with
+// its share keys or reset tokens off the computer and have the rewrite
+// prompt, not the value writer, answer it.
+const NO_SELECTION_KINDS = new Set(["url", "search", "email"]);
+
+/** The field as it leaves this computer: its kind, its label (one short
+ *  line), only when the cursor itself was read, what is before it, and what
+ *  is selected in it (never in a field that takes a value). */
+function fieldOf({ role, subrole, label: lbl, caret, before, selection }, chars = 1000) {
+  const kind = kindOf(role, subrole, lbl);
+  if (!kind || kind === "password") return null;
+  const out = { kind };
+  const l = String(lbl || "").replace(/[\u0000-\u001f<>]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (l) out.label = l;
+  // A guess at the cursor would put a capital or a space where none
+  // belongs; no cursor, no text.
+  if (caret && typeof before === "string") out.before = before.slice(-chars);
+  // WHAT IS SELECTED: what they say is then about it ("make this bullet
+  // points"), and the server's rewrite of it is pasted over it.
+  if (!NO_SELECTION_KINDS.has(kind) && typeof selection === "string" && selection.trim() && selection.length <= SELECTION_MAX) out.selection = selection;
+  return out;
+}
+
+const WIN_ROLES = { "ControlType.Edit": "field", "ControlType.Document": "area", "ControlType.ComboBox": "combo" };
+/** UI Automation's window walk (see PS, "s"), read into a bounded blob. */
+function windowsSurroundings(o, chars) {
+  if (!o || !o.ok || !Array.isArray(o.parts)) return "";
+  return joinSurroundings(o.parts, chars);
+}
+
+/** UI Automation's answer (see PS, "f"), read. */
+function windowsField(o, chars) {
+  if (!o || !o.ok) return null;
+  return fieldOf({
+    role: WIN_ROLES[o.type], subrole: o.password ? "password" : "",
+    label: o.name || o.help, caret: !!o.caret, before: o.before, selection: o.selection,
+  }, chars);
+}
+
+const MAC_ROLES = { AXTextField: "field", AXTextArea: "area", AXComboBox: "combo", AXSearchField: "field" };
+const RS = "\u001e";
+/** System Events' answer (see macField), read. */
+function macFieldOf(out, chars) {
+  const [role, subrole, placeholder, description, title, caret, selection, ...rest] = String(out || "").replace(/\r?\n$/, "").split(RS);
+  if (!role) return null;
+  return fieldOf({
+    role: MAC_ROLES[role], subrole,
+    label: placeholder || description || title,
+    caret: caret === "yes", selection, before: rest.join(RS),
+  }, chars);
+}
+
+// ---- Windows ------------------------------------------------------------------
+// One PowerShell, two questions: "q" is the app in front, "f<chars>" the
+// field with the keyboard's focus (UI Automation: its control type, whether
+// it is a password, its name, the text before the caret through the
+// TextPattern, no more than <chars> of it, and the selection in a field
+// that can be written in).
+const PS = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class TzFg {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
+}
+'@
+$uia = $false
+try { Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes; $uia = $true } catch {}
+# On-device OCR (Windows.Media.Ocr, built into Windows 10+). The image is
+# read into text HERE; only the text leaves. IAsyncOperation is awaited with
+# the standard WindowsRuntimeSystemExtensions.AsTask bridge.
+$ocrReady = $false
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+  [void][Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+  [void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+  [void][Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+  [void][Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+  $ocrReady = $true
+} catch {}
+function TzAwait($op, $t) {
+  $m = $asTask.MakeGenericMethod($t)
+  $task = $m.Invoke($null, @($op))
+  [void]$task.Wait(8000)
+  return $task.Result
+}
+function TzOcr([string]$path) {
+  $o = @{ ok = $false; text = '' }
+  if (-not $ocrReady) { return $o }
+  try {
+    $file = TzAwait ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+    $stream = TzAwait ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = TzAwait ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bitmap = TzAwait ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+    if ($engine -ne $null) {
+      $res = TzAwait ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+      # One line per OCR line, top to bottom, so the merge reads in order.
+      $lines = foreach ($ln in $res.Lines) { $ln.Text }
+      $o.text = ($lines -join "\`n")
+      $o.ok = $true
+    }
+    $stream.Dispose()
+  } catch {}
+  return $o
+}
+function TzText($el) {
+  $s = 
+  try { $s = $el.Current.Name } catch {}
+  if ([string]::IsNullOrWhiteSpace($s)) {
+    $vp = $null
+    try { if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $s = $vp.Current.Value } } catch {}
+  }
+  return $s
+}
+# The text around the focused field: a bounded walk of its top-level window,
+# the text of the Text, Edit, Document and header controls under it, in order,
+# newest nearest the field. Capped hard in nodes and time so the one shared
+# PowerShell is never held: a big window yields a little, never a stall.
+function TzAround([int]$chars) {
+  $o = @{ ok = $false; parts = @() }
+  if (-not $uia) { return $o }
+  try {
+    $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($el -eq $null) { return $o }
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $win = $el
+    for ($i = 0; $i -lt 12; $i++) {
+      $p = $walker.GetParent($win); if ($p -eq $null) { break }
+      $win = $p
+      if ($win.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window) { break }
+    }
+    $o.ok = $true
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $parts = New-Object System.Collections.Generic.List[string]
+    $queue = New-Object System.Collections.Generic.Queue[object]
+    $queue.Enqueue($win)
+    $seen = 0
+    $wanted = @([System.Windows.Automation.ControlType]::Text, [System.Windows.Automation.ControlType]::Edit,
+                [System.Windows.Automation.ControlType]::Document, [System.Windows.Automation.ControlType]::Header,
+                [System.Windows.Automation.ControlType]::HeaderItem)
+    while ($queue.Count -gt 0 -and $seen -lt 500 -and $sw.ElapsedMilliseconds -lt 700 -and $parts.Count -lt 120) {
+      $n = $queue.Dequeue(); $seen++
+      try {
+        if ($wanted -contains $n.Current.ControlType -and -not $n.Current.IsPassword) {
+          $t = TzText $n
+          if (-not [string]::IsNullOrWhiteSpace($t)) { [void]$parts.Add($t) }
+        }
+        $child = $walker.GetFirstChild($n)
+        while ($child -ne $null -and $queue.Count -lt 600) { $queue.Enqueue($child); $child = $walker.GetNextSibling($child) }
+      } catch {}
+    }
+    $o.parts = $parts.ToArray()
+  } catch {}
+  return $o
+}
+function TzField([int]$chars) {
+  $o = @{ ok = $false }
+  if (-not $uia) { return $o }
+  try {
+    $el = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($el -eq $null) { return $o }
+    $c = $el.Current
+    $o.ok = $true
+    $o.type = $c.ControlType.ProgrammaticName
+    $o.password = [bool]$c.IsPassword
+    $o.name = $c.Name
+    $o.help = $c.HelpText
+    if (-not $o.password) {
+      $tp = $null
+      if ($el.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$tp)) {
+        $sel = $tp.GetSelection()
+        if ($sel -and $sel.Length -gt 0) {
+          $r = $sel[0].Clone()
+          [void]$r.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End, $sel[0], [System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+          [void]$r.MoveEndpointByUnit([System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start, [System.Windows.Automation.Text.TextUnit]::Character, -$chars)
+          $o.before = $r.GetText($chars + 8)
+          $o.caret = $true
+          # What is selected, whole or not at all (see SELECTION_MAX), and
+          # only where it can be written over: not a page's text in a browser.
+          $vp = $null
+          $ro = $false
+          if ($el.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $ro = [bool]$vp.Current.IsReadOnly }
+          if (-not $ro) {
+            $st = $sel[0].GetText(${SELECTION_MAX + 1})
+            if ($st -and $st.Length -le ${SELECTION_MAX}) { $o.selection = $st }
+          }
+        }
+      }
+    }
+  } catch {}
+  return $o
+}
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+while ($true) {
+  $q = [Console]::In.ReadLine()
+  if ($q -eq $null) { break }
+  if ($q.StartsWith('f')) {
+    [int]$n = 1000
+    [void][int]::TryParse($q.Substring(1), [ref]$n)
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress (TzField $n)))
+    [Console]::Out.Flush()
+    continue
+  }
+  if ($q.StartsWith('s')) {
+    [int]$n = 2000
+    [void][int]::TryParse($q.Substring(1), [ref]$n)
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 (TzAround $n)))
+    [Console]::Out.Flush()
+    continue
+  }
+  if ($q.StartsWith('o')) {
+    [Console]::Out.WriteLine((ConvertTo-Json -Compress (TzOcr $q.Substring(1))))
+    [Console]::Out.Flush()
+    continue
+  }
+  $h = [TzFg]::GetForegroundWindow()
+  [uint32]$procId = 0
+  [void][TzFg]::GetWindowThreadProcessId($h, [ref]$procId)
+  $sb = New-Object Text.StringBuilder 512
+  [void][TzFg]::GetWindowText($h, $sb, 512)
+  $name = ''
+  $p = Get-Process -Id $procId
+  # A Store app (Calculator, Settings, Mail, Phone Link) is drawn in a frame
+  # that ApplicationFrameHost owns, so every one of them was named
+  # "Application Frame Host". The app is the CoreWindow inside the frame,
+  # and its own process names it.
+  if ($p -and $p.ProcessName -eq 'ApplicationFrameHost') {
+    $core = [TzFg]::FindWindowEx($h, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', [IntPtr]::Zero)
+    [uint32]$coreId = 0
+    if ($core -ne [IntPtr]::Zero) { [void][TzFg]::GetWindowThreadProcessId($core, [ref]$coreId) }
+    if ($coreId -ne 0 -and $coreId -ne $procId) { $hosted = Get-Process -Id $coreId; if ($hosted) { $p = $hosted } }
+  }
+  if ($p) {
+    $name = $p.ProcessName
+    try { $d = $p.MainModule.FileVersionInfo.FileDescription; if ($d) { $name = $d } } catch {}
+  }
+  [Console]::Out.WriteLine((ConvertTo-Json -Compress @{ app = $name; title = $sb.ToString() }))
+  [Console]::Out.Flush()
+}
+`;
+
+let ps = null;
+let psBuf = "";
+const psWaiting = [];
+function psProcess() {
+  if (ps && !ps.killed && ps.exitCode === null) return ps;
+  psBuf = "";
+  ps = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-EncodedCommand", Buffer.from(PS, "utf16le").toString("base64")], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+  ps.stdout.setEncoding("utf8");
+  ps.stdout.on("data", (d) => {
+    psBuf += d;
+    let i;
+    while ((i = psBuf.indexOf("\n")) >= 0) {
+      const line = psBuf.slice(0, i).trim(); psBuf = psBuf.slice(i + 1);
+      // One answer per question, in the order asked: a late one still
+      // settles the question it belongs to, never the next one's.
+      const done = psWaiting.shift();
+      if (!done) continue;
+      try { done(JSON.parse(line)); } catch { done(null); }
+    }
+  });
+  const fail = () => { ps = null; while (psWaiting.length) psWaiting.shift()(null); };
+  ps.on("exit", fail);
+  ps.on("error", fail);
+  return ps;
+}
+function psAsk(q) {
+  return new Promise((resolve) => {
+    try { const p = psProcess(); psWaiting.push(resolve); p.stdin.write(q + "\n"); } catch { resolve(null); }
+  });
+}
+function windowsApp() { return psAsk("q").then((o) => infoFrom(o && o.app, o && o.title)); }
+/** Windows OCR of a PNG at `path`, through the shared PowerShell ("o<path>",
+ *  Windows.Media.Ocr). Returns the recognized text, or "". */
+function psOcr(filePath) {
+  return psAsk("o" + String(filePath)).then((o) => (o && o.ok && typeof o.text === "string" ? o.text : "")).catch(() => "");
+}
+
+// ---- Mac ------------------------------------------------------------------------
+function macApp() {
+  const script = [
+    'tell application "System Events"',
+    "set p to first application process whose frontmost is true",
+    "set n to name of p",
+    'set t to ""',
+    "try",
+    "set t to name of front window of p",
+    "end try",
+    "end tell",
+    "return n & linefeed & t",
+  ];
+  return new Promise((resolve) => {
+    execFile("osascript", script.flatMap((l) => ["-e", l]), { timeout: 1500 }, (err, out) => {
+      if (err) return resolve(null);
+      const [app, ...rest] = String(out).split("\n");
+      resolve(infoFrom(app, rest.join(" ")));
+    });
+  });
+}
+
+/**
+ * The focused element of the app in front, asked of System Events. Electron
+ * and Chromium apps (Slack, Chrome, VS Code) build their accessibility tree
+ * only when asked to, so they are asked first (AXManualAccessibility, which
+ * changes nothing else about them). A secure text field's value is never
+ * read. The selection's start is the cursor; without it, no text. What is
+ * selected is read only where it can be written over (its AXValue is
+ * settable), as on Windows: a terminal or a read-only text view answers
+ * AXSelectedText too, and a paste there does not replace the selection, so
+ * its rewrite would be typed at the prompt instead.
+ */
+function macFieldScript(chars) {
+  return `
+on attr(el, nm)
+  tell application "System Events"
+    try
+      set x to value of attribute nm of el
+      if x is missing value then return ""
+      return x as text
+    end try
+  end tell
+  return ""
+end attr
+set RS to character id 30
+tell application "System Events"
+  set p to first application process whose frontmost is true
+  try
+    set value of attribute "AXManualAccessibility" of p to true
+  end try
+  set el to value of attribute "AXFocusedUIElement" of p
+end tell
+set r to attr(el, "AXRole")
+set sr to attr(el, "AXSubrole")
+set b to ""
+set sel to ""
+set caret to "no"
+if sr is not "AXSecureTextField" and r is in {"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"} then
+  set v to missing value
+  set rng to missing value
+  tell application "System Events"
+    try
+      set v to value of attribute "AXValue" of el
+      set rng to value of attribute "AXSelectedTextRange" of el
+    end try
+    try
+      if settable of attribute "AXValue" of el then set sel to value of attribute "AXSelectedText" of el
+    end try
+  end tell
+  -- What is selected, whole or not at all (see SELECTION_MAX).
+  try
+    if sel is missing value then error "no selection"
+    set sel to sel as text
+    if (count of sel) > ${SELECTION_MAX} then set sel to ""
+  on error
+    set sel to ""
+  end try
+  -- Cut outside System Events, whose own words would read "text" as a UI element.
+  try
+    if v is missing value or rng is missing value then error "no cursor"
+    set v to v as text
+    set c to (item 1 of rng) - 1
+    set n to count of v
+    if c >= 0 and c <= n then
+      set s0 to c - ${Math.max(1, chars | 0)}
+      if s0 < 0 then set s0 to 0
+      if c > 0 then set b to text (s0 + 1) thru c of v
+      set caret to "yes"
+    end if
+  end try
+end if
+return r & RS & sr & RS & attr(el, "AXPlaceholderValue") & RS & attr(el, "AXDescription") & RS & attr(el, "AXTitle") & RS & caret & RS & sel & RS & b
+`;
+}
+function macField(chars) {
+  return new Promise((resolve) => {
+    execFile("osascript", ["-e", macFieldScript(chars)], { timeout: 1500, maxBuffer: 1 << 20 }, (err, out) => resolve(err ? null : macFieldOf(out, chars)));
+  });
+}
+
+/**
+ * The text around the field, from the focused window's static text and text
+ * areas. Best effort: a window's whole contents can be slow to read over the
+ * accessibility bridge, so it is bounded and the osascript timeout caps it —
+ * a slow read returns nothing rather than holding the mic. Each piece is one
+ * line, separated by RS, for joinSurroundings to clean and bound.
+ */
+function macSurroundingsScript() {
+  const RS = "\u001e";
+  return `
+set RS to character id 30
+set out to ""
+set k to 0
+tell application "System Events"
+  set p to first application process whose frontmost is true
+  try
+    set value of attribute "AXManualAccessibility" of p to true
+  end try
+  try
+    set w to value of attribute "AXFocusedWindow" of p
+  on error
+    return ""
+  end try
+  try
+    set els to entire contents of w
+  on error
+    return ""
+  end try
+  repeat with e in els
+    if k ≥ 400 then exit repeat
+    set k to k + 1
+    try
+      set r to role of e
+      if r is "AXStaticText" or r is "AXTextArea" then
+        set v to value of e
+        if v is not missing value then
+          set v to v as text
+          if (count of v) > 2 then set out to out & v & RS
+        end if
+      end if
+    end try
+  end repeat
+end tell
+return out
+`;
+}
+function macSurroundings(out, chars) {
+  const RS = "\u001e";
+  return joinSurroundings(String(out || "").split(RS), chars);
+}
+function macAround(chars) {
+  return new Promise((resolve) => {
+    execFile("osascript", ["-e", macSurroundingsScript()], { timeout: 1400, maxBuffer: 1 << 20 }, (err, out) => resolve(err ? "" : macSurroundings(out, chars)));
+  });
+}
+
+// ---- Linux ----------------------------------------------------------------------
+function linuxApp() {
+  return new Promise((resolve) => {
+    execFile("xdotool", ["getactivewindow", "getwindowclassname"], { timeout: 800 }, (err, cls) => {
+      if (err) return resolve(null);
+      execFile("xdotool", ["getactivewindow", "getwindowname"], { timeout: 800 }, (e2, title) =>
+        resolve(infoFrom(String(cls).trim(), e2 ? "" : String(title))));
+    });
+  });
+}
+
+// Windows' frame for a Store app (Calculator, Settings, Mail), named for
+// itself when what is inside it could not be told.
+const FRAME_HOST = /^application\s*frame\s*host$/i;
+
+/**
+ * What Ask's "Always for <app>" is remembered by: the app's own name, or null
+ * where there is no name that stays the app's. A browser's label is the
+ * page's: its site comes from the tab's title, which the page writes, so
+ * "Always for Chrome: Dashboard" would have covered any page calling itself
+ * that, and a title with no site in it is the page's own name. And a Store
+ * app the helper could not see into is only its frame, the same for all of
+ * them.
+ */
+function pictureKey(app, name) {
+  const raw = rawName(app);
+  return !name || BROWSERS.test(raw) || FRAME_HOST.test(raw) ? null : name;
+}
+
+/** The front window, as the app's name plus what the screen around it may be:
+ *  its label, and whether it is private (incognito) or sensitive (money,
+ *  health) — in both of which the screen is not read. null when unknown. */
+function infoFrom(app, title) {
+  const name = label(app, title);
+  if (!name) return null;
+  // The raw window title rides back only to MATCH the window for a screen
+  // capture (screenRead.js); it is used in the main process and never sent.
+  return {
+    label: name, title: String(title || "").slice(0, 200), private: isPrivate(title), sensitive: looksSensitive(name) || looksSensitive(title),
+    pictureKey: pictureKey(app, name),
+  };
+}
+
+/** The front window: { label, private, sensitive }, or null. ≤1.5 s. */
+function frontInfo() {
+  const ask = process.platform === "win32" ? windowsApp() : process.platform === "darwin" ? macApp() : linuxApp();
+  return Promise.race([ask, new Promise((r) => setTimeout(() => r(null), 1500))]).catch(() => null);
+}
+/** The app in front, as a short name, or null. Never waits more than 1.5 s. */
+function frontApp() { return frontInfo().then((i) => (i ? i.label : null)); }
+
+/**
+ * The field with the keyboard's focus: { kind, label?, before?, selection? }, or null
+ * (not a text field, a password field, no permission, Linux, or too slow).
+ * Never waits more than `timeoutMs`.
+ */
+function focusedField({ chars = 1000, timeoutMs = 1200 } = {}) {
+  const n = Math.max(0, Math.min(4000, chars | 0));
+  const ask = process.platform === "win32" ? psAsk("f" + n).then((o) => windowsField(o, n))
+    : process.platform === "darwin" ? macField(n)
+    : Promise.resolve(null);
+  return Promise.race([ask, new Promise((r) => setTimeout(() => r(null), timeoutMs))]).catch(() => null);
+}
+
+/**
+ * The text on the screen around the field, as one bounded blob, or "" (no
+ * window text, no permission, Linux, or too slow). Other people's words, so
+ * the server reads it only to understand the message. Never waits more than
+ * `timeoutMs`; a slow read costs nothing but the help.
+ */
+function surroundings({ chars = 2000, timeoutMs = 1400 } = {}) {
+  const n = Math.max(0, Math.min(8000, chars | 0));
+  const ask = process.platform === "win32" ? psAsk("s" + n).then((o) => windowsSurroundings(o, n))
+    : process.platform === "darwin" ? macAround(n)
+    : Promise.resolve("");
+  return Promise.race([ask, new Promise((r) => setTimeout(() => r(""), timeoutMs))]).then((v) => v || "").catch(() => "");
+}
+
+/** Started early, so the first press is not the one that waits for PowerShell. */
+function warmUp() { if (process.platform === "win32") { try { psProcess(); } catch { /* asked again on the first press */ } } }
+function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* gone */ } ps = null; } }
+
+module.exports = {
+  frontApp, frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
+  label, siteOf, infoFrom, pictureKey, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
+  isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundings, macSurroundingsScript, PS,
+};
