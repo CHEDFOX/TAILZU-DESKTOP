@@ -328,7 +328,7 @@ Three fixes to the desk window:
   full height and the scroll view never got a bounded box — every page was
   clipped at the window's foot with no way down. One line fixes it.
 - **The masthead is the mark alone** — the "Tailzu" wordmark beside it is
-  gone, on the owner's ask. (The legacy rail, old builds only, keeps its name.)
+  gone. (The legacy rail, old builds only, keeps its name.)
 - **Today and Insights refresh like the phone.** A dictation happens in
   another app, so the window's numbers were stale until you switched tabs.
   Now the data tabs re-fetch when you return to the window or switch to them,
@@ -392,7 +392,7 @@ real machine; the knob disables it instantly if it ever misbehaves.
 
 ### 0.3.7 — it knows the field it is writing into
 
-The owner: "first the screen and app awareness". The app was known
+Screen and app awareness first. The app was known
 ("Chrome: Gmail"); the field never was, so the search box, the To line,
 the subject and the message were all just Gmail. When dictation starts,
 the field with the keyboard's focus is now read through the system's
@@ -433,7 +433,7 @@ left edge of the screen, ✓ to the right, and a thread the voice plucks runs
 between them (slack and barely moving when you are quiet, ringing when you
 talk, plucked when a pause writes a chunk). Stopped, the halves glide home
 and go back into the pill, small again in its own place. The thread
-replaces the bars, which the owner asked to rethink. Only the two halves
+replaces the bars. Only the two halves
 take clicks; the thread and the screen between them stay the app's.
 
 The pill never grows into a wide pill of dots: not to listen, and not to

@@ -4,9 +4,8 @@
 // the pill is whole again where it started. Geometry and motion only, no
 // drawing, so pillSplit.test.js can hold it to the design.
 //
-// Why a thread. The owner, of the bars and the waves before it: "the
-// listening wave part is not good … think something out of the box". A meter
-// says how loud. A string held between the two things you can do next (throw
+// Why a thread. The bars and the waves before it only metered the voice. A
+// meter says how loud. A string held between the two things you can do next (throw
 // it away, keep it) says the pill is open and waiting, and your voice is what
 // moves it: slack and barely trembling when you are quiet, ringing when you
 // talk, plucked when a pause writes a chunk.

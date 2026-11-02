@@ -2,8 +2,8 @@
 //
 // Every request from this computer used to say "Desktop", so the writer could
 // not tell an email from a chat from a prompt for ChatGPT, and the Today page
-// labelled every line DESKTOP. The owner: "it should show for all, and the
-// desktop app also".
+// labelled every line DESKTOP. It should show for every app, the desktop
+// app's own lines included.
 //
 // Asked of the system at the moment dictation starts, while the app they are
 // typing into is still the one in front:
@@ -18,8 +18,8 @@
 // browser, the site, taken from the end of the tab's title ("…- Gmail"),
 // because "Chrome" alone says nothing about where the words are going.
 //
-// AND THE FIELD ITSELF (focusedField, below). The owner: "first the screen and
-// app awareness". "Gmail" is the search box, the To line, the subject and the
+// AND THE FIELD ITSELF (focusedField, below): screen and app awareness come
+// first. "Gmail" is the search box, the To line, the subject and the
 // message at once, and only the message wants sentences. The focused field
 // is asked of the system's accessibility layer, the same permission the
 // paste already needs on a Mac: what kind it is (a search box, an address

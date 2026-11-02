@@ -163,11 +163,6 @@ function liveFollow() {
   LIVE_RAF = requestAnimationFrame(tick);
 }
 
-/** Drop every live page (the window signed out, or is going). */
-function dropLive() {
-  for (const live of LIVE.values()) liveDrop(live);
-}
-
 function liveDrop(live) {
   clearTimeout(live.timer);
   try { live.layer.remove(); } catch { /* gone */ }

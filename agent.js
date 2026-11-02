@@ -82,8 +82,6 @@ const RUN_DEADLINE_MS = 60000;
 /** The driver resolves within the timeout it is given, so a little more than
  *  that here only ever catches a driver that broke its promise. */
 const SNAPSHOT_GRACE_MS = 250;
-/** How far one SCROLL goes, in lines. The protocol carries only a direction. */
-const SCROLL_LINES = 5;
 /** A finished answer's card waits for its voice to finish before its doneMs
  *  starts, but never longer than this: a voice that never says it has
  *  finished does not hold the card up for good. */

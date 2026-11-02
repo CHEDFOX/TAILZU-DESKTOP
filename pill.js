@@ -67,7 +67,7 @@ const splitOpts = () => ({
 // and the ✓. At rest it is shut; hover opens it a little for the way in;
 // listening, it opens all the way and the halves go to the edges with the
 // thread between them; stopped, they click shut again where they were.
-// The owner, of the three dots it was: "change this … to something cool".
+// It replaced the three dots it was.
 const CAPSULE = () => SPLIT() && K.bool("desktop.pill.capsule", true);
 let splitT = 0;                 // 0 joined … 1 apart (= splitState.x, a spring now)
 const splitState = { x: 0, v: 0 }; // the separation's spring: position and velocity
@@ -109,9 +109,9 @@ const bands = new Float32Array(32);
 let bandsAt = -1e9;
 
 function setState(name, data) {
-  // NO "✓ 12 words". The owner, of the done label and the joined listening
-  // pill: "these both we don't need". Written, the pill goes straight back
-  // to rest; the words are in the field to be seen.
+  // NO "✓ 12 words", and no joined listening pill: neither is needed.
+  // Written, the pill goes straight back to rest; the words are in the
+  // field to be seen.
   if (name === "done" && !K.bool("desktop.pill.showDone", false)) name = "rest";
   // Ask's phase comes again as the guide moves on (and with every card it
   // puts up). The same phase again is not a new one: its clock, and the
@@ -217,8 +217,8 @@ function targets(t) {
   // comes apart where it is: the two halves leave it and it fades, and on
   // stop they come back into it, in its own place, and it writes there,
   // its three squares lighting in turn. The wide pill with its dots (joined
-  // listening, and the rolling wave while writing) was what the owner did
-  // not want: "the wave is still there".
+  // listening, and the rolling wave while writing) is what this design
+  // retired.
   if ((st === "listening" || st === "writing") && SPLIT()) {
     g.w = K.num("desktop.pill.restWidth", 46); g.h = K.num("desktop.pill.restHeight", 14);
     g.solid = 1; g.buttons = 0; g.text = 0; g.show = 1;
