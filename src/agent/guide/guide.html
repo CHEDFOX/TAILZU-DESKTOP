@@ -1,0 +1,439 @@
+<!doctype html>
+<!--
+  THE GUIDE. What Ask looks like: over the app you asked about, a small card
+  that says what Tailzu heard and what it found, a ring on the thing itself,
+  and Blip peeking over the card's top edge, pointing at it.
+
+  It grows out of the pill. The pill's halves part (pill.js "ask") and a
+  thread rises from the gap between them; the card blooms at the thread's end
+  and stays tied to it while it is up: pill, card, thing, one line. When the
+  run ends the card folds back into the thread's end, the thread is pulled
+  down into the pill, and the halves click shut. The tether's look follows the
+  card: an amber line the voice plucks while it listens, dots with a light
+  running up them while it thinks, still dots after.
+
+  It peeks. While you dictate, a small Blip peeks over the top edge of the
+  text box at the cursor, as if reading over your shoulder: antenna lit while
+  the microphone is, a nod as each chunk of words lands, a hop when the last
+  of them have, and down below the edge again. Nothing else of the guide is
+  up meanwhile, and it never takes the pointer.
+
+  It draws. While it explains it can mark up the screen, as a teacher uses a
+  pen: circle part of a diagram, an arrow from a label to what it names,
+  underline or highlight the words it means, number the places to click.
+  Each mark is drawn in order as a hand draws it, amber over an ink edge,
+  its labels in Caveat on an ink chip, never over the card.
+
+    listening   the card, a row of amber dots your voice moves, Blip's
+                antenna lit (the one amber the brand allows: something live);
+                a light, dotted, breathing ring on what the words so far seem
+                to name (tentative: no thread, no label, the card stays put)
+    thinking    the dots fall still and a light runs along them; Blip looks up
+    showing     the answer, word by word as it is spoken, growing a sentence
+                at a time when it is long; the ring on the target, a dotted
+                thread from Blip's finger to it
+    permission  may a picture go: Allow once, Always for <app>, Not now; the
+                header then says "1 picture sent" when one did
+    doing       the plan as a short checklist, the step being done ringed
+    confirm     the exact thing about to happen, quoted, and two buttons:
+                Do it, Not now (or tap Alt twice). Amber; pink when it cannot
+                be undone
+    done        a tick, a hop; it tucks itself away
+    error       a sentence, in pink, and a sorry brow
+
+  One window over the work area (on a Mac the whole display, so a menu-bar
+  item can be ringed; the card still keeps to the work area): transparent,
+  never focused (the app you are
+  in keeps the keyboard), click-through except while the pointer is over the
+  card, and kept out of screenshots. Every size, colour, timing and word is a
+  knob (desktop.guide.*); the literals below are only for the first frame.
+
+    guide.html               the window main.js opens
+    guide.html?demo          a scripted run over a mock app, for review
+    guide.html?demo=<scene>  one scene held still (listening, thinking, point,
+                             steps, confirm, approval, always, done, error), for screenshots;
+                             and the hard cases: tall (a confirm with everything
+                             at its longest), top (a target at the window's top
+                             edge), menubar (a Mac's File menu), long (a URL and
+                             a path with nowhere to break); and the picture
+                             layer: tentative (a guess ringed while they talk),
+                             permission (the picture card), growing (an answer
+                             about a picture, a sentence at a time); and the
+                             pill and the pen: dock (the birth, then listening,
+                             thinking, an answer), slide (a ring by the pill:
+                             the card goes aside, the tether bends), fold (an
+                             answer, then away, over and over), draw (a right
+                             triangle explained with marks on it); and the
+                             peek while you dictate: peek (Blip over a chat's
+                             message box at the cursor as the words land),
+                             peekdoc (over the cursor's line in a document)
+    …&capture                the same on a virtual clock: window.__step(ms)
+                             moves it on, for frame-exact screenshots
+    …&dark                   over a dark app instead of a light one
+    …&pill=seed | off        no pill on this display (the guide's own seed), or
+                             not tied to one at all (as before it had a pill)
+
+  Every scene has a mock pill at the bottom centre, drawn over this window as
+  main keeps the real one, with the dock message pointing at it.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Nothing runs but this app's own files, and nothing is fetched. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'">
+<title>X0 Bot guide</title>
+<style>
+  @font-face { font-family:"Newsreader"; font-weight:400; font-style:italic; src:url(../../../assets/fonts/newsreader-latin-400-italic.woff2) format("woff2"); }
+  @font-face { font-family:"Newsreader"; font-weight:400; font-style:normal; src:url(../../../assets/fonts/newsreader-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family:"IBM Plex Mono"; font-weight:500; src:url(../../../assets/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:400; src:url(../../../assets/fonts/instrument-sans-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:500; src:url(../../../assets/fonts/instrument-sans-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Instrument Sans"; font-weight:600; src:url(../../../assets/fonts/instrument-sans-latin-600-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Noto Sans Devanagari"; font-weight:100 900; src:url(../../../assets/fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format("woff2"); unicode-range:U+0900-097F,U+1CD0-1CF9,U+200C-200D,U+20A8,U+20B9,U+25CC,U+A830-A839,U+A8E0-A8FF; }
+  /* The marks' labels: the handwriting face, as app.html declares it. */
+  @font-face { font-family:"Caveat"; font-weight:600; font-display:swap; src:url(../../../assets/fonts/caveat-latin-600-normal.woff2) format("woff2"); }
+
+  :root {
+    --ink:#151210; --ink-2:#1D1916; --pale:#F3E2C6; --pale-2:rgba(243,226,198,.68); --pale-3:rgba(243,226,198,.42);
+    --rule:rgba(243,226,198,.12); --live:#E8A23C; --err:#E4587B;
+    --sans:"Instrument Sans","Noto Sans Devanagari",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --serif:"Newsreader","Noto Sans Devanagari",Georgia,serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+    --w:348px; --r:18px;
+  }
+  html, body { margin:0; background:transparent; overflow:hidden; user-select:none; -webkit-user-select:none; cursor:default; }
+  #fx { position:fixed; left:0; top:0; pointer-events:none; }
+
+  /* THE CARD -------------------------------------------------------------
+     Where it is, how tall, and its bloom out of the thread and its fold
+     back into it are all set by guide.js on every frame (transform, height,
+     opacity, the corners while it blooms), so the tether can stay on its
+     edge and a review can stop on any frame: nothing here transitions. */
+  #card {
+    position:fixed; left:0; top:0; width:var(--w); box-sizing:border-box;
+    border-radius:var(--r); background:var(--ink); color:var(--pale);
+    box-shadow: inset 0 0 0 1px var(--rule), 0 1px 0 rgba(255,255,255,.04) inset,
+      0 24px 56px -14px rgba(0,0,0,.55), 0 4px 14px rgba(0,0,0,.28);
+    font:400 15px/1.45 var(--sans); -webkit-font-smoothing:antialiased;
+    transform:translate3d(-9999px, 0, 0);
+    visibility:hidden; overflow:hidden;
+  }
+  #card.on { visibility:visible; }
+  /* The dots under everything: the same dither the films are drawn in, too
+     faint to read as anything but paper. */
+  #card::before {
+    content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+    background-image: radial-gradient(rgba(243,226,198,.075) .7px, transparent .9px);
+    background-size:5px 5px;
+    -webkit-mask-image: linear-gradient(180deg, #000 0, rgba(0,0,0,.25) 70%, transparent);
+  }
+  /* A column that never outgrows the room it is given (guide.js caps its
+     height to the work area): the answer and the plan give way and scroll,
+     everything else, the quote and its buttons above all, keeps its size. */
+  #inner { position:relative; padding:15px 18px 16px; box-sizing:border-box; display:flex; flex-direction:column; }
+  #inner > * { flex:none; }
+  #inner > #say, #inner > #steps { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
+    scrollbar-width:thin; scrollbar-color:rgba(243,226,198,.22) transparent; }
+  /* Room inside them for what moves a little past their edges (a word rising
+     into place, the step's spinning ring), so only real overflow scrolls. */
+  #inner > #say { padding-bottom:4px; margin-bottom:-4px; }
+  #inner > #steps { padding:5px 0; margin-bottom:-5px; }
+
+  header { display:flex; align-items:center; gap:8px; height:22px; }
+  #lamp { width:6px; height:6px; border-radius:50%; background:var(--pale-3); flex:0 0 auto; transition:background .2s; }
+  #card[data-state="listening"] #lamp { background:var(--live); animation:lamp 1.4s ease-in-out infinite; }
+  #card[data-state="confirm"] #lamp { background:var(--live); }
+  #card[data-state="confirm"][data-risk="always"] #lamp, #card[data-state="error"] #lamp { background:var(--err); }
+  #card[data-state="done"] #lamp { background:var(--pale); }
+  @keyframes lamp { 0%,100% { box-shadow:0 0 0 0 rgba(232,162,60,.55); } 60% { box-shadow:0 0 0 6px rgba(232,162,60,0); } }
+  #eyebrow { font:500 10px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--pale-2); white-space:nowrap; }
+  #app { font:500 10px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase; color:var(--pale-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  #app:not(:empty)::before { content:"·"; margin-right:8px; color:var(--pale-3); }
+  #card[data-state="confirm"] #eyebrow { color:var(--live); }
+  #card[data-state="confirm"][data-risk="always"] #eyebrow, #card[data-state="error"] #eyebrow { color:var(--err); }
+  #close { margin-left:auto; flex:0 0 auto; width:24px; height:24px; border-radius:50%; border:0; padding:0; background:transparent; color:var(--pale-3);
+    display:grid; place-items:center; cursor:pointer; transition:background .15s, color .15s; }
+  /* What went with the question, said plainly where the card begins: "1
+     picture sent". A quiet chip, never amber: it is a record, not a light. */
+  #badge { margin-left:auto; flex:0 0 auto; font:500 9px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--pale-2);
+    padding:4px 8px 4px 7px; border-radius:999px; box-shadow:inset 0 0 0 1px var(--rule); background:rgba(243,226,198,.04); white-space:nowrap; }
+  #badge:empty { display:none; }
+  #badge::before { content:""; display:inline-block; width:5px; height:4px; margin-right:6px; vertical-align:1px; border-radius:1px;
+    box-shadow:inset 0 0 0 1px var(--pale-2); }
+  #badge:not(:empty) + #close { margin-left:4px; }
+  #close:hover { background:rgba(243,226,198,.08); color:var(--pale); }
+  #close svg { width:10px; height:10px; }
+
+  /* A URL, a path or an address has nowhere to break, and the column is
+     312px wide: it breaks anywhere rather than run off the card's edge,
+     where part of what is about to be typed could not be seen. */
+  #heard { margin:11px 0 0; font:400 italic 15.5px/1.34 var(--serif); color:var(--pale-2); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+  #heard:empty { display:none; }
+
+  #voice { display:none; height:30px; margin-top:12px; }
+  #card[data-state="listening"] #voice, #card[data-state="thinking"] #voice { display:block; }
+  #voice canvas { display:block; width:100%; height:30px; }
+
+  #say { margin:10px 0 0; font:500 16px/1.42 var(--sans); letter-spacing:-.006em; color:var(--pale); text-wrap:pretty; overflow-wrap:anywhere; }
+  #say:empty { display:none; }
+  #say .w { opacity:0; display:inline-block; max-width:100%; overflow-wrap:anywhere; transform:translateY(3px); animation:word .34s cubic-bezier(.2,.8,.2,1) forwards; }
+  @keyframes word { to { opacity:1; transform:none; } }
+  #card[data-state="error"] #say { color:var(--pale); }
+
+  #steps { list-style:none; margin:7px 0 0; padding:0; display:grid; gap:7px; }
+  #steps:empty { display:none; }
+  #steps li { display:grid; grid-template-columns:20px minmax(0, 1fr); gap:10px; align-items:center; font:400 13.5px/1.3 var(--sans); color:var(--pale-2); transition:color .2s; }
+  #steps li span { min-width:0; overflow-wrap:anywhere; }
+  #steps li i { width:18px; height:18px; border-radius:50%; box-sizing:border-box; border:1px solid var(--pale-3); display:grid; place-items:center;
+    font:500 9px/1 var(--mono); font-style:normal; color:var(--pale-3); position:relative; }
+  #steps li[data-s="doing"] { color:var(--pale); }
+  #steps li[data-s="doing"] i { border-color:transparent; color:var(--live); }
+  #steps li[data-s="doing"] i::after { content:""; position:absolute; inset:-1px; border-radius:50%; border:1.5px dotted var(--live); animation:spin 2.4s linear infinite; }
+  #steps li[data-s="done"] { color:var(--pale-3); }
+  #steps li[data-s="done"] i { background:var(--pale); border-color:var(--pale); color:var(--ink); }
+  #steps li[data-s="done"] i b { display:none; }
+  #steps li[data-s="done"] i::before { content:""; width:7px; height:4px; border:solid var(--ink); border-width:0 0 1.6px 1.6px; transform:translateY(-1px) rotate(-45deg); }
+  #steps li[data-s="failed"] i { border-color:var(--err); color:var(--err); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  #ask { display:none; margin-top:13px; }
+  #card[data-state="confirm"] #ask { display:block; }
+  #ask .what { font:500 10px/1.2 var(--mono); letter-spacing:.16em; text-transform:uppercase; color:var(--pale-3); overflow-wrap:anywhere; }
+  #ask blockquote { margin:7px 0 0; padding:1px 0 1px 12px; border-left:2px solid var(--live); font:400 17px/1.36 var(--serif); color:var(--pale);
+    display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; }
+  #ask blockquote:empty { display:none; }
+  #card[data-risk="always"] #ask blockquote { border-left-color:var(--err); }
+  #ask .row { display:flex; align-items:center; gap:4px; margin-top:15px; }
+  #ask button { font:600 13.5px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
+  #ask button:active { transform:scale(.97); }
+  #yes { background:var(--pale); color:var(--ink); padding:10px 18px; }
+  #yes:hover { background:#FFF6E8; }
+  #card[data-risk="always"] #yes { background:var(--err); color:#1A0E12; }
+  #no { background:transparent; color:var(--pale-2); padding:10px 12px; }
+  #no:hover { color:var(--pale); background:rgba(243,226,198,.07); }
+  /* The server's own card for a connected app (a message, a change): the
+     exact words in full, what it will and won't do, and a third answer. */
+  #ask[data-server] blockquote { display:block; max-height:30vh; overflow-y:auto; -webkit-line-clamp:unset; white-space:pre-line; overflow-wrap:anywhere; }
+  #note { margin:10px 0 0; font:400 12.5px/1.4 var(--sans); color:var(--pale-2); overflow-wrap:anywhere; }
+  #note[hidden], #edit[hidden] { display:none; }
+  #edit { background:transparent; color:var(--pale); padding:10px 12px; box-shadow:inset 0 0 0 1px rgba(243,226,198,.3); }
+  #edit:hover { background:rgba(243,226,198,.07); }
+  #ask kbd { margin-left:auto; font:500 9.5px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color:var(--pale-3); white-space:nowrap; }
+
+  /* May a picture go. Three answers on one row; a long app name gives way
+     (it is in the header too) rather than push Not now off it. */
+  #permit { display:none; margin-top:12px; }
+  #card[data-state="permission"] #permit { display:block; }
+  #card[data-state="permission"] #lamp { background:var(--live); }
+  #card[data-state="permission"] #eyebrow { color:var(--live); }
+  #card[data-state="permission"] #foot { display:none; }
+  #permitText { margin:0; padding:1px 0 1px 12px; border-left:2px solid var(--live); font:400 16px/1.38 var(--serif); color:var(--pale); overflow-wrap:anywhere; }
+  #permitText:empty { display:none; }
+  #permit .row { display:flex; align-items:center; gap:4px; margin-top:14px; }
+  #permit button { font:600 13px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; white-space:nowrap; transition:background .15s, color .15s, transform .1s; }
+  #permit button:active { transform:scale(.97); }
+  #once { flex:none; background:var(--pale); color:var(--ink); padding:10px 14px; }
+  #once:hover { background:#FFF6E8; }
+  #always { background:transparent; color:var(--pale); padding:10px 12px; box-shadow:inset 0 0 0 1px rgba(243,226,198,.3);
+    flex:0 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  #always:hover { background:rgba(243,226,198,.07); }
+  #always[hidden] { display:none; }
+  #notnow { flex:none; background:transparent; color:var(--pale-2); padding:10px 8px; }
+  #notnow:hover { color:var(--pale); background:rgba(243,226,198,.07); }
+
+  /* A way past what stopped the answer (the Mac's Screen Recording page):
+     one button under what it says, on the finished card only. */
+  #offer { margin-top:13px; }
+  #offer[hidden] { display:none; }
+  #card[data-state="permission"] #offer, #card[data-state="confirm"] #offer { display:none; }
+  #offerBtn { font:600 13px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; background:var(--pale); color:var(--ink); padding:10px 14px;
+    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:background .15s, transform .1s; }
+  #offerBtn:hover { background:#FFF6E8; }
+  #offerBtn:active { transform:scale(.97); }
+
+  #foot { margin-top:13px; font:500 9.5px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--pale-3); }
+  #foot:empty { display:none; }
+  #card[data-state="confirm"] #foot { display:none; }
+
+  /* The label on the ring. */
+  #chip { position:fixed; left:0; top:0; padding:6px 10px 6px 9px; border-radius:999px; background:var(--ink); color:var(--pale);
+    box-shadow: inset 0 0 0 1px var(--rule), 0 6px 18px rgba(0,0,0,.35);
+    font:500 10px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis;
+    opacity:0; transform:translate3d(var(--x,0px), var(--y,0px), 0) scale(.94); transition:opacity .2s ease, transform .3s cubic-bezier(.2,.9,.24,1); pointer-events:none; }
+  #chip.on { opacity:1; transform:translate3d(var(--x,0px), var(--y,0px), 0); }
+  #chip::before { content:""; display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--live); margin-right:8px; vertical-align:1px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #chip { transition:opacity .2s ease; }
+    #say .w { animation:none; opacity:1; transform:none; }
+    #steps li[data-s="doing"] i::after, #card[data-state="listening"] #lamp { animation:none; }
+  }
+
+  /* THE BOTS LOOK (DeskAsk): with the Bots app switched on (bootstrap flag bots.app; guide.js puts .bots on the
+     root), the card is the app's own: white, a #e6e6e6 line, Geist, ink words and ink buttons, clay (Keylessbord's
+     colour) only for the open microphone, no red. Every state and every button is the same one, only drawn so.
+     Off, none of this applies. */
+  @font-face { font-family:"Tailzu Geist"; font-weight:100 900; font-display:swap; src:url(../../../assets/fonts/geist-400.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist Medium"; font-weight:100 900; font-display:swap; src:url(../../../assets/fonts/geist-500.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Geist SemiBold"; font-weight:100 900; font-display:swap; src:url(../../../assets/fonts/geist-600.woff2) format("woff2"); }
+  :root.bots {
+    --ink:#ffffff; --ink-2:#f5f5f5; --pale:#0a0a0a; --pale-2:#3d3d3d; --pale-3:#5c5c5c;
+    --rule:#e6e6e6; --live:#A9573A; --err:#0a0a0a;
+    --sans:"Tailzu Geist","Noto Sans Devanagari",-apple-system,"Segoe UI",system-ui,sans-serif;
+    --serif:var(--sans); --mono:var(--sans);
+    --w:340px; --r:18px;
+  }
+  :root.bots #card { box-shadow: inset 0 0 0 1px var(--rule), 0 18px 44px -14px rgba(0,0,0,.22), 0 3px 10px rgba(0,0,0,.06); }
+  :root.bots #card::before { display:none; }
+  :root.bots #inner { padding:16px; }
+  :root.bots header { height:28px; gap:10px; }
+  :root.bots #lamp { width:8px; height:8px; }
+  :root.bots #card[data-state="listening"] #lamp { animation:lampBots 1.8s ease-in-out infinite; }
+  @keyframes lampBots { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.5; transform:scale(.78); } }
+  :root.bots #card[data-state="thinking"] #lamp { background:var(--live); }
+  :root.bots #card[data-state="confirm"] #lamp, :root.bots #card[data-state="permission"] #lamp { background:var(--pale); }
+  :root.bots #card[data-state="done"] #lamp { background:transparent; box-shadow:inset 0 0 0 1.5px var(--pale); }
+  :root.bots #eyebrow { font:400 14px/1.2 "Tailzu Geist SemiBold", var(--sans); letter-spacing:-.1px; text-transform:none; color:var(--pale); }
+  :root.bots #card[data-state="confirm"] #eyebrow, :root.bots #card[data-state="permission"] #eyebrow,
+  :root.bots #card[data-state="error"] #eyebrow { color:var(--pale); }
+  :root.bots #app { font:400 12px/1.2 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #badge { font:400 11px/1 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-2); background:var(--ink-2); box-shadow:none; }
+  :root.bots #badge::before { box-shadow:inset 0 0 0 1px var(--pale-2); }
+  :root.bots #close { width:28px; height:28px; color:var(--pale-3); }
+  :root.bots #close:hover { background:var(--ink-2); color:var(--pale); }
+  :root.bots #heard { margin-top:10px; font:400 12.5px/1.4 var(--sans); color:var(--pale-3); }
+  :root.bots #say { font:400 15px/1.45 "Tailzu Geist Medium", var(--sans); letter-spacing:0; color:var(--pale); }
+  :root.bots #steps li { font:400 13.5px/1.35 var(--sans); }
+  :root.bots #steps li i { font:400 10px/1 var(--sans); }
+  :root.bots #steps li[data-s="failed"] i { border-color:var(--pale); color:var(--pale); }
+  :root.bots #ask .what { font:400 11px/1.3 "Tailzu Geist SemiBold", var(--sans); letter-spacing:.4px; color:var(--pale-3); }
+  :root.bots #ask blockquote, :root.bots #permitText { border-left:0; background:var(--ink-2); border-radius:12px; padding:9px 12px; font:400 14px/1.4 var(--sans); color:var(--pale); }
+  /* The pills: one ink primary, the rest outline, 44 tall (STYLE.md). */
+  :root.bots #ask button, :root.bots #permit button, :root.bots #offerBtn { font:400 14px/1 "Tailzu Geist Medium", var(--sans); height:44px; padding:0 18px; border-radius:22px; }
+  :root.bots #yes, :root.bots #once, :root.bots #offerBtn, :root.bots #card[data-risk="always"] #yes { background:#0a0a0a; color:#ffffff; }
+  :root.bots #yes:hover, :root.bots #once:hover, :root.bots #offerBtn:hover { background:#3d3d3d; }
+  :root.bots #edit, :root.bots #always { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px #d4d4d4; }
+  :root.bots #edit:hover, :root.bots #always:hover { background:var(--ink-2); }
+  :root.bots #no, :root.bots #notnow { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px #d4d4d4; }
+  :root.bots #no:hover, :root.bots #notnow:hover { background:var(--ink-2); color:var(--pale); }
+  :root.bots #ask .row, :root.bots #permit .row { gap:8px; flex-wrap:wrap; }
+  :root.bots #ask kbd { font:400 11px/1 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #note { font:400 12.5px/1.4 var(--sans); color:var(--pale-2); }
+  :root.bots #foot { font:400 11px/1.3 var(--sans); letter-spacing:0; text-transform:none; color:var(--pale-3); }
+  :root.bots #chip { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px var(--rule), 0 6px 18px rgba(0,0,0,.14);
+    font:400 12px/1 "Tailzu Geist Medium", var(--sans); letter-spacing:0; text-transform:none; }
+  :root.bots #chip::before { background:#0a0a0a; }
+  :root.bots #say, :root.bots #steps { scrollbar-color:rgba(10,10,10,.2) transparent; }
+
+  /* THE REVIEW PAGE ONLY: an app to point at, and the pill under it all. */
+  body.demo { background:#E9E5DE; }
+  body.demo #mockpill { position:fixed; left:0; top:0; pointer-events:none; }
+  body.demo .mock { position:fixed; left:50%; top:46px; transform:translateX(-50%); width:880px; height:560px; background:#fff; border-radius:12px; overflow:hidden;
+    box-shadow:0 1px 0 rgba(0,0,0,.05), 0 18px 40px rgba(0,0,0,.14); font:13px/1.4 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; }
+  body.demo .mock .bar { height:38px; border-bottom:1px solid #ECE7DF; background:#FAF8F4; display:flex; align-items:center; gap:7px; padding:0 14px; }
+  body.demo .mock .bar i { width:11px; height:11px; border-radius:50%; background:#E2DBD1; }
+  body.demo .mock .bar b { margin-left:14px; font-weight:600; color:#6B6258; }
+  body.demo .mock .tools { position:absolute; top:48px; right:16px; display:flex; gap:8px; }
+  body.demo .mock .tools span { padding:7px 12px; border-radius:7px; background:#F3EFE8; color:#3A332C; font-weight:500; }
+  body.demo .mock .tools span.primary { background:#2F6BFF; color:#fff; }
+  body.demo .mock .side { position:absolute; left:0; top:38px; bottom:0; width:190px; border-right:1px solid #ECE7DF; background:#FBFAF7; padding:14px 12px; box-sizing:border-box; }
+  body.demo .mock .side p { margin:0 0 6px; padding:6px 8px; border-radius:6px; color:#4A4239; }
+  body.demo .mock .side p.on { background:#ECE6DC; color:#1B1712; font-weight:600; }
+  body.demo .mock .page { position:absolute; left:214px; top:96px; right:24px; }
+  body.demo .mock .page h2 { margin:0 0 10px; font-size:22px; }
+  body.demo .mock .page .ln { height:10px; border-radius:5px; background:#EFEAE2; margin:10px 0; }
+  body.demo .mock .composer { position:absolute; left:214px; right:24px; bottom:22px; height:46px; border:1px solid #DDD5C9; border-radius:10px; display:flex; align-items:center; padding:0 12px; color:#9A9083; }
+  body.demo .menubar { position:fixed; left:0; top:0; right:0; height:25px; background:rgba(246,243,238,.92); display:flex; align-items:center; gap:2px; padding:0 10px;
+    font:13px/1 -apple-system,"Segoe UI",system-ui,sans-serif; color:#1B1712; box-shadow:0 1px 0 rgba(0,0,0,.08); }
+  body.demo .menubar b, body.demo .menubar span { padding:4px 8px; border-radius:4px; }
+  body.demo .mock .composer em { margin-left:auto; padding:6px 12px; border-radius:7px; background:#1B1712; color:#fff; font-style:normal; font-weight:600; }
+  /* A picture on the page: an equation, as a slide or a scan would have it. */
+  body.demo .mock .fig { margin-top:20px; width:330px; height:128px; border-radius:8px; background:#FBFAF7; box-shadow:inset 0 0 0 1px #ECE7DF;
+    display:grid; place-items:center; font:italic 400 30px/1 Georgia,"Times New Roman",serif; color:#1B1712; letter-spacing:.01em; }
+  body.demo .mock .fig sup, body.demo .mock .fig sub { font-size:.5em; line-height:0; }
+  /* A picture to explain: a right triangle, as a worksheet has it. */
+  body.demo .mock .tri { margin-top:10px; width:480px; height:250px; color:#1B1712; }
+  body.demo .mock .tri svg { display:block; }
+  body.demo .mock .tri text { font:italic 400 24px/1 Georgia,"Times New Roman",serif; fill:currentColor; }
+  /* Something by the pill: a slideshow's controls at the bottom of the screen. */
+  body.demo .dockbar { position:fixed; left:50%; bottom:132px; transform:translateX(-50%); display:flex; align-items:center; gap:4px; padding:5px;
+    border-radius:12px; background:rgba(255,255,255,.94); box-shadow:0 1px 0 rgba(0,0,0,.05), 0 10px 28px rgba(0,0,0,.16);
+    font:500 13px/1 -apple-system,"Segoe UI",system-ui,sans-serif; color:#3A332C; }
+  body.demo .dockbar span { padding:8px 11px; border-radius:8px; }
+  body.demo .dockbar span.n { color:#8A8076; font-variant-numeric:tabular-nums; }
+  body.demo .dockbar span.primary { background:#2F6BFF; color:#fff; font-weight:600; }
+  /* Dictating (?demo=peek, peekdoc): a chat's message box that grows a line
+     at a time from the bottom up, as chat apps' do, and a document. */
+  body.demo .mock.chat .page { top:62px; }
+  body.demo .mock .msg { display:flex; gap:12px; margin:0 0 16px; }
+  body.demo .mock .msg i { flex:none; width:36px; height:36px; border-radius:8px; color:#fff; font:600 15px/36px -apple-system,"Segoe UI",system-ui,sans-serif; font-style:normal; text-align:center; }
+  body.demo .mock .msg b { font-size:14.5px; }
+  body.demo .mock .msg time { margin-left:8px; font-size:12px; color:#9A9083; }
+  body.demo .mock .msg p { margin:3px 0 0; font-size:14.5px; }
+  body.demo .mock.chat .composer { height:auto; min-height:46px; box-sizing:border-box; align-items:flex-end; padding:11px 8px 8px 14px; color:#1B1712; font-size:14.5px; line-height:22px; }
+  body.demo .mock.chat .composer .text { position:relative; flex:1; min-width:0; padding-bottom:2px; }
+  body.demo .mock.chat .composer .ph { position:absolute; left:3px; top:0; color:#9A9083; pointer-events:none; }
+  body.demo .mock.chat .composer em { flex:none; margin-left:12px; }
+  body.demo .mock .caret { display:inline-block; width:1.5px; height:19px; margin-left:1px; vertical-align:-4px; background:currentColor; animation:caret 1.06s steps(1) infinite; }
+  @keyframes caret { 50% { opacity:0; } }
+  body.demo .mock.doc .page { top:56px; bottom:22px; }
+  body.demo .mock .sheet { height:100%; box-sizing:border-box; padding:24px 34px; border-radius:8px; background:#fff; box-shadow:inset 0 0 0 1px #ECE7DF; font:15px/25px -apple-system,"Segoe UI",system-ui,sans-serif; color:#2A241E; overflow:hidden; }
+  body.demo .mock .sheet h2 { font-size:22px; margin:0 0 12px; color:#1B1712; }
+  body.demo .mock .sheet p { margin:0 0 14px; }
+  /* …and over a dark app: a code editor's colours. */
+  body.demo.dark { background:#141619; }
+  body.demo.dark .mock { background:#1E2125; color:#DCD7CE; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 18px 40px rgba(0,0,0,.5); }
+  body.demo.dark .mock .bar { background:#23272C; border-bottom-color:#2F3339; }
+  body.demo.dark .mock .bar i { background:#3A3F46; }
+  body.demo.dark .mock .bar b { color:#9AA0A8; }
+  body.demo.dark .mock .tools span { background:#2A2F35; color:#D3CEC5; }
+  body.demo.dark .mock .tools span.primary { background:#2F6BFF; color:#fff; }
+  body.demo.dark .mock .side { background:#1A1D21; border-right-color:#2B2F35; }
+  body.demo.dark .mock .side p { color:#A9A49B; }
+  body.demo.dark .mock .side p.on { background:#2B3036; color:#F1ECE3; }
+  body.demo.dark .mock .page .ln { background:#2A2E34; }
+  body.demo.dark .mock .composer { border-color:#363B42; color:#7D8288; }
+  body.demo.dark .mock .composer em { background:#F1ECE3; color:#15171A; }
+  body.demo.dark .mock .fig { background:#23272C; box-shadow:inset 0 0 0 1px #30353B; color:#E6E1D8; }
+  body.demo.dark .mock .tri { color:#E6E1D8; }
+  body.demo.dark .dockbar { background:rgba(40,44,50,.96); color:#D3CEC5; box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 10px 28px rgba(0,0,0,.5); }
+  body.demo.dark .menubar { background:rgba(30,33,37,.92); color:#E6E1D8; }
+  body.demo.dark .mock .msg time { color:#7D8288; }
+  body.demo.dark .mock.chat .composer { color:#E6E1D8; }
+  body.demo.dark .mock.chat .composer .ph { color:#7D8288; }
+  body.demo.dark .mock .sheet { background:#23272C; box-shadow:inset 0 0 0 1px #30353B; color:#C9C4BB; }
+  body.demo.dark .mock .sheet h2 { color:#F1ECE3; }
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div id="chip"></div>
+<div id="card" role="dialog" aria-live="polite" data-state="listening">
+  <div id="inner">
+    <header>
+      <i id="lamp"></i><span id="eyebrow">Listening</span><span id="app"></span><span id="badge"></span>
+      <button id="close" aria-label="Stop"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
+    </header>
+    <p id="heard"></p>
+    <div id="voice"><canvas id="wave"></canvas></div>
+    <p id="say"></p>
+    <ol id="steps"></ol>
+    <div id="offer" hidden><button id="offerBtn"></button></div>
+    <div id="ask">
+      <div class="what" id="what"></div>
+      <blockquote id="quote"></blockquote>
+      <p id="note" hidden></p>
+      <div class="row"><button id="yes">Do it</button><button id="edit" hidden></button><button id="no">Not now</button><kbd id="askHint">or tap Alt twice</kbd></div>
+    </div>
+    <div id="permit">
+      <p id="permitText"></p>
+      <div class="row"><button id="once">Allow once</button><button id="always">Always</button><button id="notnow">Not now</button></div>
+    </div>
+    <div id="foot"></div>
+  </div>
+</div>
+<script src="../../../knobs.js"></script>
+<script src="../../shared/blip.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

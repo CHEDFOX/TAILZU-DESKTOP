@@ -38,7 +38,7 @@ jobs:
       # The focused-field reader's AppleScript, which no Linux machine can
       # check: it must at least compile against System Events.
       - name: Check the field reader
-        run: node nativeCheck.js mac
+        run: node scripts/nativeCheck.js mac
       - name: Build .dmg
         env:
           # SIGNED AND NOTARIZED when the Apple secrets are set, so macOS opens
@@ -94,13 +94,13 @@ jobs:
           npm ci
           npm run icon
           # The note-taker's helper that hears the computer's sound
-          # (audiotap/main.swift), built for both Mac architectures.
+          # (native/audiotap.swift), built for both Mac architectures.
           npm run audiotap
           # The on-device OCR helper (native/tzocr.swift, macOS Vision), same.
           npm run tzocr
           # Ask's accessibility helper (native/tzax.swift), same.
           npm run tzax
-          # The one key's Fn watcher (native/tzkey.swift, oneKey.js), same.
+          # The one key's Fn watcher (native/tzkey.swift, src/dictation/oneKey.js), same.
           npm run tzkey
           # --publish never: at a repo root on CI, electron-builder infers a
           # GitHub release and demands GH_TOKEN. Publishing is the step below.
@@ -160,9 +160,9 @@ jobs:
       # The PowerShell that names the app and reads the focused field (UI
       # Automation), run for real: one answer to each question, in order.
       - name: Check the field reader
-        run: node nativeCheck.js win
+        run: node scripts/nativeCheck.js win
       - name: Check the Ask UIA helper
-        run: node nativeCheck.js winagent
+        run: node scripts/nativeCheck.js winagent
       - name: Build installer
         run: |
           npm ci

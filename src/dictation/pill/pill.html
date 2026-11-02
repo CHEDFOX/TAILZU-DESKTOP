@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  THE PILL. What dictation looks like on a desktop, at the foot of the screen,
+  over whatever you are writing in.
+
+  One idea carries every state: the pill is a capsule of two halves, the ✕
+  and the ✓, that comes apart while you talk and clicks shut when you stop.
+
+    rest       a capsule, shut: two halves, ink and cream, that are the ✕
+               and the ✓ (desktop.pill.capsule; off, the slim pill with three
+               squares). Hover opens it around the way in ("Tap Ctrl twice to
+               talk"), the cream half a cap at the end; a click starts talking
+    listening  the capsule comes apart where it sits: ✕ glides to the
+               left edge of the screen, ✓ to the right, and between them runs
+               a thread your voice plucks, amber because the microphone
+               is open (the one amber the brand allows: something live).
+               ✕ discards, ✓ finishes. Stopped, the halves glide home and
+               click shut, in its own place (pillSplit.js). With
+               desktop.pill.split off: the squares multiply into bars that
+               move with your voice, inside the pill.
+    flash      a pause wrote a chunk while you keep talking: a pulse runs out
+               from the middle
+    writing    the capsule shut, a glint running over it. With
+               desktop.pill.split off: the bars fall back into
+               squares and roll like a wave
+    done       straight to rest: the words are in the field. With
+               desktop.pill.showDone: "✓ 12 words", then rest
+    error      a short sentence, the capsule's cap rose, then rest
+    routed     where the one key's words went, and the one other place they
+               can go: "Typed · Ask instead", "Sent to Plan Ease · Type it
+               instead" (routing.js). A press is the alternative; main puts
+               it back to rest after a few seconds
+    ask        a question about the screen (ask.js): the halves part a
+               little at the seam and a bead sits in the gap, where the
+               guide's thread rises to its card. Amber and breathing while
+               it listens, cream while it thinks and shows. Closing, the gap
+               waits for the thread to come home, then the bead goes into
+               the seam and the halves click shut. Without the capsule: the
+               small pill, solid, the bead on its top edge. A press puts the
+               question away
+
+  Drawn on a canvas so it is exact at any scale. Every size, colour, timing
+  and word is a knob (desktop.pill.*); the literals below are only for the
+  moment before the first bootstrap.
+
+    pill.html                 the window main.js opens (transparent, click-through
+                              until the pointer is over the pill, as wide as the
+                              screen so the pill can come apart across it)
+    pill.html?demo            a scripted run over a mock document, for review
+    pill.html?demo=ask        only the question: rest, listening, thinking,
+                              showing, closing, rest
+    pill.html?demo&capture    the same on a virtual clock: window.__step(ms)
+    pill.html?demo&bots       the same in the Bots look
+
+  THE BOTS LOOK (DeskPill). With the Bots app switched on (bootstrap flag
+  bots.app, which the knobs carry), the pill is the app's: one white pill
+  with a #e6e6e6 line, no split, no capsule. Listening: a clay disc with
+  the microphone (Keylessbord's colour), clay bars your voice moves, the words
+  as they come (live captions on), the time, and a small ✕ at its end;
+  a press anywhere else finishes, as before. Writing: the disc's three dots
+  light in turn. Done and error: ink words (an error is a small ink ✕,
+  never red). Ask: the small white pill with the bead on its top edge, clay
+  while it listens. Off: the pill as it was, untouched.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Nothing runs but this app's own files (so the script is pill.js), and
+     nothing is fetched. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'">
+<title>X0 Bot</title>
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; cursor: default; }
+  canvas { position: fixed; left: 0; top: 0; }
+  /* The Bots look's faces (pill.js, bots.app): Geist, from this app's own files. */
+  @font-face { font-family: "Tailzu Geist"; font-weight: 100 900; src: url(../../../assets/fonts/geist-400.woff2) format("woff2"); }
+  @font-face { font-family: "Tailzu Geist Medium"; font-weight: 100 900; src: url(../../../assets/fonts/geist-500.woff2) format("woff2"); }
+  /* The review page only: a document being written into, so the pill is seen
+     where it lives. */
+  body.demo { background: #DAD6CF; font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  .doc { position: absolute; left: 50%; top: 34px; transform: translateX(-50%); width: 620px; height: 250px; background: #FFFFFF;
+    border-radius: 12px; box-shadow: 0 1px 0 rgba(0,0,0,.05), 0 12px 32px rgba(0,0,0,.12); padding: 26px 34px; box-sizing: border-box; color: #1B1712; }
+  .doc .bar { position: absolute; left: 0; right: 0; top: 0; height: 30px; border-bottom: 1px solid #EEE9E1; border-radius: 12px 12px 0 0; background: #FAF8F4; }
+  .doc .bar i { position: absolute; top: 11px; width: 9px; height: 9px; border-radius: 50%; background: #DDD6CC; }
+  .doc h4 { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: #8A8175; letter-spacing: .06em; text-transform: uppercase; }
+  .doc p { margin: 0 0 8px; }
+  .doc .caret { display: inline-block; width: 2px; height: 18px; background: #1B1712; vertical-align: -3px; margin-left: 1px; animation: b 1s steps(1) infinite; }
+  @keyframes b { 50% { opacity: 0; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="../../../knobs.js"></script>
+<script src="pillSplit.js"></script>
+<script src="pill.js"></script>
+</body>
+</html>
