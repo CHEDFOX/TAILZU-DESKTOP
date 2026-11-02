@@ -30,6 +30,7 @@ test("short, on one line, and nothing when the system said nothing", () => {
 // THE FIELD ITSELF (focusedField): what kind it is, its label, and what is
 // before the cursor — never a password field, and no text without a cursor.
 const { kindOf, fieldOf, windowsField, macFieldOf } = require("./frontApp.js");
+const { recorderFiles } = require("../dictation/recorder/testkit.js");
 
 test("the field's kind, from its role and its label", () => {
   assert.strictEqual(kindOf("field", "AXSearchField", ""), "search");
@@ -252,7 +253,7 @@ function loadRecorder(flags = {}, platform = "MacIntel") {
     },
   };
   vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "dictation", "recorder", "recorder.js"), "utf8"), sandbox, { filename: "recorder.js" });
+  for (const f of recorderFiles()) vm.runInContext(fs.readFileSync(f, "utf8"), sandbox, { filename: f });
   const start = (session) => on.onStart({ session, baseUrl: "https://api.example", knobs: { flags, labels: {} } });
   const upload = async (sid, isSegment = false) => {
     const report = await sandbox.transcribe(sid, [new Blob(["x"])], "audio/webm", isSegment, 1000, false);

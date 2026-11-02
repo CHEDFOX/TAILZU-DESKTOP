@@ -1435,7 +1435,8 @@ test("a clip that never comes back, with the stream's final text already in, ans
 const vm = require("node:vm");
 const fs = require("node:fs");
 const path = require("node:path");
-const RECORDER_JS = fs.readFileSync(path.join(__dirname, "..", "dictation", "recorder", "recorder.js"), "utf8");
+const { recorderFiles } = require("../dictation/recorder/testkit.js");
+const RECORDER_JS = recorderFiles().map((f) => [f, fs.readFileSync(f, "utf8")]);
 
 function recorderPage(o = {}) {
   const opts = Object.assign({ voiced: true, finalText: "", done: true }, o);
@@ -1497,7 +1498,7 @@ function recorderPage(o = {}) {
       return new Response(JSON.stringify({ cleanedText: "Hello there.", transcript: "hello there" }), { status: 200, headers: { "Content-Type": "application/json" } });
     },
   });
-  vm.runInContext(RECORDER_JS, page);
+  for (const [f, src] of RECORDER_JS) vm.runInContext(src, page, { filename: f });
   return {
     out, fetches, sockets,
     ws: () => sockets[sockets.length - 1],
