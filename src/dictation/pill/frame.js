@@ -39,7 +39,7 @@ function capsuleTargets(st) {
 }
 
 /** Where everything wants to be this frame. */
-function targets(t) {
+function targets() {
   const st = S.name, sq = K.num("desktop.pill.atom", 3);
   const g = {};
   if (BOTS()) return botsTargets(st);
@@ -149,7 +149,7 @@ function frame() {
   // already said so (it does, once the guide's window has gone).
   if (shutting && askTarget === 0 && !SP.springMoving(askGap, 0) && bead < 0.01 && now - snapAt > 320) setState("rest");
 
-  const g = targets(t), k = K.num("desktop.pill.spring", 16);
+  const g = targets(), k = K.num("desktop.pill.spring", 16);
   const before = P.w + P.h + P.solid + P.buttons + P.text + P.cap;
   P.w = ease(P.w, g.w, k, dt); P.h = ease(P.h, g.h, k, dt);
   P.solid = ease(P.solid, g.solid, k * .8, dt); P.buttons = ease(P.buttons, g.buttons, k * .9, dt);
@@ -243,7 +243,7 @@ function frame() {
   const flashP = (now - flashAt) / 1000;
   const talking = now - bandsAt < 250;
   for (let i = 0; i < n; i++) {
-    const a = aa[i], d = Math.abs(i - mid), side = i < mid ? -1 : 1;
+    const a = aa[i], d = Math.abs(i - mid);
     let tx = cx, th = sq, ty = 0, ta = 0, hot = 0;
     if (S.name === "rest" || S.name === "ask" || (SPLIT() && (S.name === "listening" || S.name === "writing"))) {
       const open = P.text > .5 && hint;

@@ -32,14 +32,6 @@ test("a window narrower than the pill never pulls the halves inward", () => {
   assert.strictEqual(p.rx, 188 - 19);
 });
 
-test("the easing glides out of place and into it, and ends where it says", () => {
-  assert.strictEqual(SP.easeInOut(0), 0);
-  assert.strictEqual(SP.easeInOut(1), 1);
-  assert.ok(SP.easeInOut(0.1) < 0.1, "slow to leave");
-  assert.ok(SP.easeInOut(0.9) > 0.9, "slow to arrive");
-  assert.ok(Math.abs(SP.easeInOut(0.5) - 0.5) < 1e-9);
-});
-
 test("the separation is a spring: it stretches out taut and is pulled home", () => {
   // Coming apart: settles at ~1, and the stretch does not run past the edge cap.
   const out = { x: 0, v: 0 };

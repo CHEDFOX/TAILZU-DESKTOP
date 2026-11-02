@@ -433,7 +433,7 @@ function createRouting(d) {
   /** A session thrown away (✕, an error): forget it. */
   function forget(sid) { sessions.delete(sid); }
 
-  return { start, target, field, chunk, end, alternative, holdsPill, forget, commit };
+  return { start, target, field, chunk, end, alternative, holdsPill, forget };
 }
 
 /**

@@ -150,4 +150,4 @@ function createTapDetector(opts) {
   return { keyDown, keyUp, other };
 }
 
-module.exports = { createTapDetector, TAP_MAX_HOLD_MS, TAP_GAP_MS, TAP_MIN_GAP_MS, OTHER_KEY_TTL_MS };
+module.exports = { createTapDetector };

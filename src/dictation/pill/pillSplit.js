@@ -19,12 +19,6 @@
   const clamp = (v, a = 0, b = 1) => (v < a ? a : v > b ? b : v);
   const frac = (v) => v - Math.floor(v);
 
-  /** Slow out of place, slow into place: the halves glide, they do not snap. */
-  function easeInOut(t) {
-    t = clamp(t);
-    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-  }
-
   /**
    * THE PULL. The separation is not paced on a clock — it is a DAMPED SPRING,
    * so the thread between the halves reads as a physical thing. Coming apart
@@ -188,5 +182,5 @@
     return (i) => amount * (2 * frac(Math.sin(i * 12.9898 + frame * 78.233) * 43758.5453) - 1);
   }
 
-  return { easeInOut, spring, springMoving, smooth, pods, podAt, fades, createThread, tremor, THREAD, SPRING };
+  return { spring, springMoving, smooth, pods, podAt, fades, createThread, tremor };
 });

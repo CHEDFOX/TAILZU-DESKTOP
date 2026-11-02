@@ -20,7 +20,7 @@ function turn(sid) {
 /** End this segment and start the next one on the SAME microphone. The
  *  stream is never touched, so there is no permission blink, no device
  *  re-acquire, and no gap where speech would be lost. */
-function flushSegment(sid) {
+function flushSegment() {
   if (!mediaRecorder || mediaRecorder.state === "inactive") return;
   flushing = true;
   try { mediaRecorder.stop(); } catch { flushing = false; }

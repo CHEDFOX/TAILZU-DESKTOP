@@ -110,7 +110,7 @@ function watchLevel(sid, pausing) {
       speaking = false;
       if (speechMs < MIN_SPEECH_MS) return;   // a few words, or a cough: kept with the next ones
       speechMs = softSpeechMs = 0;
-      flushSegment(sid);
+      flushSegment();
     } else if (!speaking && now - lastSoundAt > IDLE_END_MS) {
       window.tailzu.idle({ session: sid });
     }

@@ -39,8 +39,5 @@
     return { text: body, stop: m[0] };
   }
 
-  /** Does `answer` close the held sentence itself, by opening with a stop of its own? */
-  function closesHeld(answer) { return /^[.!?…]/u.test(String(answer || "").trim()); }
-
-  return { holdStop, closesHeld };
+  return { holdStop };
 });

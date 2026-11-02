@@ -485,6 +485,6 @@ function route(i) {
 
 module.exports = {
   route, firstLook,
-  // for the tests, and the lists the server's copy started from
-  norm, address, stripName, notesCommand, isQuestion, isCommand, aboutScreen, botTask, writingInstruction, LISTS,
+  // for the tests
+  norm, address, stripName, notesCommand, isQuestion, isCommand, aboutScreen, botTask,
 };
