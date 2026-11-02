@@ -41,6 +41,7 @@ src/
     oauth.js            Apple/Google sign-in without a window: authorize URL, loopback page, code exchange
     links.js            which screen a tulmi:// link may open
     updater.js          in-place updates: download, verify SHA-512, swap, restart
+    testkit.js          for tests: main.js run whole with Electron faked (not shipped)
 
   dictation/            one-key dictation
     oneKey.js           the one key: choice per OS, the Fn helper's protocol, the hold/tap gesture
@@ -59,6 +60,7 @@ src/
       batch.js          MediaRecorder, webm, POST /v1/transcribe-clean
       live.js           WebAudio, 16 kHz PCM, WS /v1/transcribe-stream (captions)
       heldStop.js       a full stop held at a pause until the next stretch decides
+      testkit.js        for tests: recorder.html's scripts in order (not shipped)
     pill/               the dictation pill at the foot of the screen
       pill.html         the page; core, frame, capsule, bots, pointer, start, demo in order
       pillSplit.js      the split pill's geometry and spring (no drawing)
