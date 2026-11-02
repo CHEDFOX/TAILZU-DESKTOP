@@ -1534,7 +1534,7 @@ app.on("before-quit", () => {
 });
 
 function trayIcon(live = false) {
-  const p = path.join(__dirname, "assets", live ? "tray-live.png" : "tray.png");
+  const p = path.join(__dirname, "..", "..", "assets", live ? "tray-live.png" : "tray.png");
   if (fs.existsSync(p)) {
     const img = nativeImage.createFromPath(p);
     if (process.platform !== "darwin") return img;
