@@ -338,6 +338,18 @@ function createRouting(d) {
       default: return "";
     }
   }
+  /** What Blip does with the label (pill.js ROUTED_GESTURE): typed or rewritten, done; sent, a flip; a task, he
+   *  runs; a question, he looks; notes, he listens; a routine, his little dance. */
+  function gestureOf(o) {
+    switch (o.kind) {
+      case "typed": return "done";
+      case "asked": return o.route && o.route.kind === "task" ? "work" : o.route && o.route.kind === "send" ? "send" : "look";
+      case "notes": return "listen";
+      case "bot": return "send";
+      case "routine": return "routine";
+      default: return "done";
+    }
+  }
   function altText(a) {
     if (a === "ask") return txt("desktop.route.altAsk", "Ask instead");
     if (a === "bot") return txt("desktop.route.altBot", "Send to a bot");
@@ -355,7 +367,7 @@ function createRouting(d) {
     if (!bool("desktop.route.labels", true) && !o.pending) return false;
     offer = Object.assign({ at: Date.now() }, o);
     const shown = offer;
-    if (bool("desktop.route.labels", true)) d.pill("routed", { label: labelText(o), alt: altText(o.alt) });
+    if (bool("desktop.route.labels", true)) d.pill("routed", { label: labelText(o), alt: altText(o.alt), kind: gestureOf(o) });
     const ms = Math.max(1000, num("desktop.route.labelMs", 5000));
     cancelTimer(labelTimer);
     if (o.pending) {
@@ -363,7 +375,7 @@ function createRouting(d) {
         if (offer !== shown) return;
         go(shown);
         // Done now: the label stays a moment longer, with nothing to take back.
-        if (bool("desktop.route.labels", true) && shown.done) d.pill("routed", { label: shown.done, alt: "" });
+        if (bool("desktop.route.labels", true) && shown.done) d.pill("routed", { label: shown.done, alt: "", kind: "done" });
       }, Math.max(0, Math.min(ms, Number(o.graceMs) || 0)));
     }
     labelTimer = later(() => {

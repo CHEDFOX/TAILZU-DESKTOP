@@ -3253,7 +3253,7 @@ async function needGrant(missing) {
   const first = left[0];
   pill("routed", { label: first === "read"
     ? txt("desktop.route.needRead", "Your turn: let X0 use your apps")
-    : txt("desktop.route.needSee", "Your turn: let X0 see your screen"), alt: "" });
+    : txt("desktop.route.needSee", "Your turn: let X0 see your screen"), alt: "", kind: "yourTurn" });
   try { askSetup.act({ kind: first === "read" ? "openAccessibility" : "openScreenRecording" }); } catch { /* the card in the app still asks */ }
   askSetup.push();
   const until = Date.now() + Math.max(5000, num("desktop.route.grantWaitMs", 90000));
