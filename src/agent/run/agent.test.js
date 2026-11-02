@@ -1669,7 +1669,7 @@ test("ocrElements: nothing over a password field or an address bar, and never th
 });
 
 test("ocrElements: a control's label read nearly as it is (a letter misread, its ellipsis as dots, a mark beside it) is that label read again", () => {
-  const { match } = require("./resolver.js");
+  const { match } = require("../resolver.js");
   for (const [label, text] of [["Export", "Exp0rt"], ["Export…", "Export..."], ["Export", "Export ▾"], ["Name", "Name:"], ["Share", "↑ Share"]]) {
     const s = snap([{ id: "e1", role: "button", label, frame: [700, 20, 80, 30] }]);
     const lines = ocrElements(s, lookOf([{ text, frame: [705, 25, 70, 20] }]));
@@ -1708,8 +1708,8 @@ test("toRequestElements: a line goes as text with its words and region only, and
 });
 
 test("driver.js with no driver for the platform has every call the two drivers have, look included, each unsupported", async () => {
-  const stub = require("./driver/driver.js").pick("linux");
-  for (const k of Object.keys(require("./driver/axDriver.js"))) assert.strictEqual(typeof stub[k], "function", k);
+  const stub = require("../driver/driver.js").pick("linux");
+  for (const k of Object.keys(require("../driver/axDriver.js"))) assert.strictEqual(typeof stub[k], "function", k);
   assert.deepStrictEqual(await stub.look({ ocr: true }), { ok: false, error: "unsupported" });
   // …which a run takes as no look at all, not as a failed one.
   const r = rig({ scripts: [[heardShow("hi"), { t: "done" }]] });
