@@ -41,7 +41,7 @@
   @font-face { font-family:"Tailzu Geist Bold"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-700.woff2) format("woff2"); }
   @font-face { font-family:"Tailzu Geist Mono"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-mono-400.woff2) format("woff2"); }
   @font-face { font-family:"Tailzu Geist Mono Medium"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-mono-500.woff2) format("woff2"); }
-  /* THE BOTS APP'S THREE MOTIONS (SVG shapes, sdui.js svgShapes): a working bot breathes, a tab's icon pops in, the
+  /* THE BOTS APP'S THREE MOTIONS (SVG shapes, sdui/nodes.js svgShapes): a working bot breathes, a tab's icon pops in, the
      You ring draws to the month's spend. Calm by default, and none of it under Reduce Motion. */
   .tz-work { transform-box:fill-box; transform-origin:center; animation:tzBreathe 1.8s ease-in-out infinite; }
   @keyframes tzBreathe { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.5; transform:scale(.78); } }
@@ -93,7 +93,7 @@
     background:var(--bg); color:var(--body);
   }
   /* The desk's ground from the first frame, when this window was a desk last
-     time (sdui.js rememberedLook) — never black, then white. */
+     time (sdui/chrome.js rememberedLook) — never black, then white. */
   html[data-look="desk"] body { background:var(--d-sheet); }
   body {
     font:15px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;
@@ -136,7 +136,7 @@
   /* Three columns: the name, the tabs, the account. The outer two share the
      leftover width equally, so the tabs sit in the middle of the window; the
      tab column may shrink to nothing and scroll in a narrow one. Sizes and
-     the tabs' side come from the server (desktop.mast, sdui.js applyMast). */
+     the tabs' side come from the server (desktop.mast, sdui/chrome.js applyMast). */
   #shell[data-look="desk"] #mast {
     display:grid; grid-template-columns:1fr minmax(0, max-content) 1fr; align-items:center; column-gap:26px;
     height:60px; flex:none; padding:0 26px;
@@ -256,7 +256,7 @@
   .d-plan-lead { border-color:var(--d-ink); }
   .d-price { font:300 32px/1.1 var(--f-written); font-variant-numeric:tabular-nums; }
   .d-sticky { position:sticky; top:0; }
-  /* LET ASK SEE WHAT YOU SEE (sdui.js askSetupNode): the one-time setup card,
+  /* LET ASK SEE WHAT YOU SEE (sdui/askSetupCard.js askSetupNode): the one-time setup card,
      as designed. Its own faces rather than the desk's
      mono buttons: a sans headline row, a numbered disc that turns into a
      green tick, and ink pills, because three permissions read as three steps
@@ -332,7 +332,7 @@
   #back { background:none; border:0; color:var(--muted); cursor:pointer; padding:4px 8px; border-radius:7px; }
   #back:hover { background:var(--card); color:var(--text); }
   #view { flex:1; overflow-y:auto; overflow-x:hidden; position:relative; z-index:1; }
-  /* A SCREEN THAT IS SLOW TO ARRIVE (sdui.js paint): the page that is up
+  /* A SCREEN THAT IS SLOW TO ARRIVE (sdui/navigation.js paint): the page that is up
      stays up, quietened and out of reach, and a thin amber line runs along
      the top until the next one lands. No sheet in its place. A veil of the
      page's own paper rather than opacity on the page: the screen's entrance
@@ -504,7 +504,7 @@
     .tz-social[disabled]{opacity:.45;cursor:default}
 
     /* ---- the onboarding ------------------------------------------------- */
-    /* PAPER, ONE FRIEND, ONE BAR. While html[data-onboard] is set (sdui.js:
+    /* PAPER, ONE FRIEND, ONE BAR. While html[data-onboard] is set (sdui/:
        from the moment the sign-in stage is drawn until a screen that is not a
        stage is), the gate, the shell and the view are all one paper, the rail,
        masthead and the gate's own heading are gone, and Blip's canvas, bar
@@ -678,7 +678,7 @@
     </div>
   </div>
 
-  <!-- BLIP, ABOVE THE GATE AND THE SHELL, and cleared by neither (sdui.js
+  <!-- BLIP, ABOVE THE GATE AND THE SHELL, and cleared by neither (sdui/
        OnboardStage). One canvas for the life of the window; the bar and the
        bubble are drawn here too, so they stay put while the steps glide. None
        of it takes a click. -->
@@ -689,7 +689,7 @@
   <div id="toast" role="status" aria-live="polite"></div>
 
   <!-- The server's knobs, before the renderer that reads them. The words in
-       the markup above are only the first frame's: sdui.js replaces each with
+       the markup above are only the first frame's: sdui/ replaces each with
        its label (desktop.gate.*, desktop.rail.*) as soon as knobs are known. -->
   <script src="../../knobs.js"></script>
   <script src="../shared/blip.js"></script>
@@ -721,21 +721,21 @@
   <script src="sdui/chrome.js"></script>
   <script src="sdui/gate.js"></script>
   <script src="sdui/boot.js"></script>
-  <!-- Send a picked file, play a sound (after sdui.js, whose session, state and painting it uses). -->
+  <!-- Send a picked file, play a sound (after sdui/, whose session, state and painting it uses). -->
   <script src="media.js"></script>
-  <!-- Sign in with the phone: the QR panel beside the sign-in form (after sdui.js, whose pieces it uses). -->
+  <!-- Sign in with the phone: the QR panel beside the sign-in form (after sdui/, whose pieces it uses). -->
   <script src="linkSignIn.js"></script>
-  <!-- Files, a link or text dropped on the window: the share-in screen (after sdui.js, whose session and navigation it uses). -->
+  <!-- Files, a link or text dropped on the window: the share-in screen (after sdui/, whose session and navigation it uses). -->
   <script src="shareIn.js"></script>
-  <!-- Live updates: a change made on another device reloads the screen that is up, quietly (after sdui.js, whose session, stack, state and painting it uses). -->
+  <!-- Live updates: a change made on another device reloads the screen that is up, quietly (after sdui/, whose session, stack, state and painting it uses). -->
   <script src="live.js"></script>
-  <!-- A running page or artifact, in a webview of its own (after sdui.js, whose state, actions and painting it uses). -->
+  <!-- A running page or artifact, in a webview of its own (after sdui/, whose state, actions and painting it uses). -->
   <script src="liveView.js"></script>
-  <!-- Offline: the outbox, the Offline page in place of Home, the line over the rest (after sdui.js, likewise). -->
+  <!-- Offline: the outbox, the Offline page in place of Home, the line over the rest (after sdui/, likewise). -->
   <script src="outbox.js"></script>
-  <!-- Tailzu Code on this computer, drawn on the server's bots.computer (after sdui.js, whose escaping, actions and painting it uses). -->
+  <!-- Tailzu Code on this computer, drawn on the server's bots.computer (after sdui/, whose escaping, actions and painting it uses). -->
   <script src="runnerCard.js"></script>
-  <!-- The faces the server supplies, beside the bundled ones (after sdui.js, which hands it each bootstrap). -->
+  <!-- The faces the server supplies, beside the bundled ones (after sdui/, which hands it each bootstrap). -->
   <script src="remoteFonts.js"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 const { pageFiles } = require("./testkit.js");
 
-/** A page with sdui.js's pieces that runnerCard.js and remoteFonts.js use, and their files loaded into it. */
+/** A page with the renderer's pieces that runnerCard.js and remoteFonts.js use, and their files loaded into it. */
 function page(o = {}) {
   const handlers = [];
   const ctx = {

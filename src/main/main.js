@@ -265,12 +265,12 @@ function refreshBoot() {
             platform: "web",
             appVersion: app.getVersion(),
             device: { formFactor: "desktop", os: process.platform },
-            // The same answer the window gets (sdui.js declares these too):
+            // The same answer the window gets (sdui/ declares these too):
             // this copy's flags are the ones broadcast to every window and
             // the ones that decide where "out of words" opens.
             // BotsKit: the pill, the captions strip and the Ask card draw the
             // Bots app's look when the switch is on for this account (flag
-            // bots.app; pill.js, overlay.js, guide.js), so this copy's flags,
+            // bots.app; pill/, overlay.js, guide/), so this copy's flags,
             // the ones they are sent, must say so as the window's do.
             components: ["DeskShell", "Keys", "BotsKit"],
           },
@@ -1103,7 +1103,7 @@ function pill(state, data) {
 }
 
 /**
- * ASK GROWS OUT OF THE PILL (ask.js, pill.js "ask"). A question's phase,
+ * ASK GROWS OUT OF THE PILL (ask.js, pill/ "ask"). A question's phase,
  * "listening", "thinking", "showing" or "closing", or null to give the pill
  * back. Answers with the pill's capsule in screen DIP ({ x, y, w, h }), for
  * the guide to tie its card to, or null when the question does not have the
@@ -2798,7 +2798,7 @@ const askFolders = createFolderSettings({
 });
 
 // The Mac's Screen Recording page in System Settings, for Ask's card when a
-// look was refused for want of it (agent.js TEXT.needScreen). A fixed
+// look was refused for want of it (run/text.js TEXT.needScreen). A fixed
 // address: the card's button opens this and nothing else.
 const SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 function openScreenRecordingSettings() {
@@ -2883,7 +2883,7 @@ function setupAsk() {
     // The same one-at-a-time paste dictation uses; resolved once it is in.
     paste: (text) => { paste(text); return pasting; },
     // The server's hand-off: ask.js has already checked that this is a link
-    // agent.js safeOpenUrl allows (an email, a message, a search or a route)
+    // run/openLink.js safeOpenUrl allows (an email, a message, a search or a route)
     // and nothing else.
     openExternal: (url) => shell.openExternal(url).then(() => true, () => false),
     // A question's picture is cropped here, from the window the driver

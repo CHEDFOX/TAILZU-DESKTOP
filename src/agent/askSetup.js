@@ -6,7 +6,7 @@ const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "pictur
 
 /**
  * ASK'S ONE-TIME SETUP, the main process's side of it: "Let Ask see what you
- * see." in the app window (sdui.js DeskAskSetup), three rows, each with its
+ * see." in the app window (sdui/ DeskAskSetup), three rows, each with its
  * state and one button.
  *
  *   read      Accessibility on a Mac (the screen's buttons, fields and text);

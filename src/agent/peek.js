@@ -2,11 +2,11 @@
 // What the peek may be doing, and the watch that asks the driver where the
 // caret is (createPeekWatch).
 
-// What a peek can be doing (guide.js peek): watching the words go in while
+// What a peek can be doing (guide/peek.js peek): watching the words go in while
 // the microphone is open, watching the last of them be written, and the
 // little hop when they have landed.
 const PEEK_STATES = new Set(["listening", "writing", "done"]);
-// How long the guide takes to duck Blip back below the edge (guide.js
+// How long the guide takes to duck Blip back below the edge (guide/
 // PEEK_DUCK, 300 ms, and a frame or two for its loop to finish): the window
 // is hidden once it has, not while Blip is still going down in it.
 const PEEK_GONE_MS = 340;

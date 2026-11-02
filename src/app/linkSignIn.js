@@ -1,9 +1,9 @@
 /**
  * SIGN IN WITH THE PHONE: the QR panel beside the window's sign-in form
  * (DSignIn's right column; the server sends `DeskLinkSignIn` with its words,
- * screens/firstRun.ts, and sdui.js's node() hands it here).
+ * screens/firstRun.ts, and sdui/nodes.js's node() hands it here).
  *
- * A page script loaded after sdui.js, so it uses that file's own pieces: ENV
+ * A page script loaded after sdui/, so it uses that file's own pieces: ENV
  * (the backend, this computer's name and system), sbFetch (Supabase with the
  * anon key), setSession and render (the same two steps a typed code ends
  * with), esc and label.

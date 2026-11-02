@@ -65,14 +65,14 @@
 <html>
 <head>
 <meta charset="utf-8">
-<!-- Nothing runs but this app's own files (so the script is pill.js), and
-     nothing is fetched. -->
+<!-- Nothing runs but this app's own files (so the scripts are files beside
+     this page), and nothing is fetched. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'">
 <title>X0 Bot</title>
 <style>
   html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; -webkit-user-select: none; cursor: default; }
   canvas { position: fixed; left: 0; top: 0; }
-  /* The Bots look's faces (pill.js, bots.app): Geist, from this app's own files. */
+  /* The Bots look's faces (pill/, bots.app): Geist, from this app's own files. */
   @font-face { font-family: "Tailzu Geist"; font-weight: 100 900; src: url(../../../assets/fonts/geist-400.woff2) format("woff2"); }
   @font-face { font-family: "Tailzu Geist Medium"; font-weight: 100 900; src: url(../../../assets/fonts/geist-500.woff2) format("woff2"); }
   /* The review page only: a document being written into, so the pill is seen

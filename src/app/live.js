@@ -15,7 +15,7 @@
  * keystroke (at most 15 s).
  *
  * The pill and notes windows draw no server screens, so only this one listens. install() reads the window's session, stack,
- * state and painting from sdui.js, loaded first. Knobs: live.enabled (true), live.path ("/v1/live"), live.debounceMs (300),
+ * state and painting from sdui/, loaded first. Knobs: live.enabled (true), live.path ("/v1/live"), live.debounceMs (300),
  * live.typingQuietMs (1200).
  */
 (function (root, factory) {
@@ -351,7 +351,7 @@
   };
 });
 
-// In the window: wire it to the app (sdui.js, loaded first, holds the session, the stack, the state and the painting).
+// In the window: wire it to the app (sdui/, loaded first, holds the session, the stack, the state and the painting).
 /* global SESSION, STACK, ENV, K, STATE, CURRENT_SCREEN, CURRENT_ACTIONS, paint, repaint, bearer, fetchScreen, setStatePath, gateUp, askStreamTake */
 if (typeof module === "undefined" && typeof window !== "undefined" && typeof repaint === "function" && window.TailzuLive) {
   window.TailzuLiveWindow = window.TailzuLive.install({
@@ -370,7 +370,7 @@ if (typeof module === "undefined" && typeof window !== "undefined" && typeof rep
     paintSeq: () => paint._seq || 0,
     // The sign-in gate is up: its screen is not one of these.
     busy: () => (typeof gateUp === "function" && gateUp()),
-    // An answer's words as they come: to the call listening (sdui.js askStreamTake).
+    // An answer's words as they come: to the call listening (sdui/askStream.js askStreamTake).
     stream: (id, data) => { if (typeof askStreamTake === "function") askStreamTake(id, data); },
     apply: (next, patch) => {
       for (const [path, value] of patch) setStatePath(path, value);

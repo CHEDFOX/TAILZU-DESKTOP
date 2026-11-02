@@ -21,11 +21,11 @@
  * the display. `fingertip()` is where a pointing hand ends, for the thread.
  *
  * It also peeks over the text box you are dictating into, small, at the
- * cursor (guide.js peek): `peekSpot()` below says where it stands for a
+ * cursor (guide/peek.js peek): `peekSpot()` below says where it stands for a
  * caret and a field, and the same figure is drawn there on that edge.
  *
  * And it walks: `createWalker()` at the foot of this file is the whole Blip,
- * standing on the ground, who goes with you through the onboarding (sdui.js
+ * standing on the ground, who goes with you through the onboarding (sdui/
  * OnboardStage). One canvas for the life of the window; each step only says
  * where he should stand.
  */

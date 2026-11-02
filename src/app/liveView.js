@@ -1,5 +1,5 @@
 /**
- * LiveView IN THE WINDOW: a running web page or artifact (the server's shared/types/sdui.ts 3e). Loaded after sdui.js, whose
+ * LiveView IN THE WINDOW: a running web page or artifact (the server's shared/types/sdui.ts 3e). Loaded after sdui/, whose
  * state, actions and painting it uses; liveViewMain.js is the main process's half, liveViewGuest.js the page's preload.
  *
  * NEVER THE APP'S ORIGIN. Each live page is a <webview>: a separate page in a separate process, in a session of its own ("tz-live",
@@ -111,7 +111,7 @@ function liveViewOn() {
 const LIVE = new Map();      // key -> the live page: { key, layer, wv, src, node, props, phase, loads, sent, timer, seen }
 let LIVE_SLOTS = [];         // what this paint drew: [{ key, node, props }]
 
-/** The slot a paint draws (sdui.js node()): an empty box of the node's size. The page itself is a layer over it (wireLive). */
+/** The slot a paint draws (sdui/nodes.js node()): an empty box of the node's size. The page itself is a layer over it (wireLive). */
 function liveViewNode(n, p, s) {
   const src = liveSourceOf(p);
   const h = typeof p.height === "number" ? "height:" + p.height + "px;" : "";

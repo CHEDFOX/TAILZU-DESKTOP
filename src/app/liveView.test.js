@@ -1,5 +1,5 @@
 // A live page and the outbox in the window (liveView.js, liveViewMain.js, outbox.js; the server's shared/types/sdui.ts 3e).
-// The rules run on their own; the page scripts run as the page runs them: knobs.js, sdui.js, then these, in one context with a
+// The rules run on their own; the page scripts run as the page runs them: knobs.js, sdui/, then these, in one context with a
 // stand-in window (bots.test.js does the same).
 const test = require("node:test");
 const assert = require("node:assert");

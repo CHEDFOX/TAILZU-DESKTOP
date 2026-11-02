@@ -1427,8 +1427,8 @@ test("a clip that never comes back, with the stream's final text already in, ans
   h.ask.cancel("test over");
 });
 
-// ---- the recorder's side of a question (recorder.js, in a page of its own) ----------
-// recorder.js has no tests of its own; what it hands Ask is tested here, run
+// ---- the recorder's side of a question (recorder/, in a page of its own) ----------
+// recorder/ has no tests of its own; what it hands Ask is tested here, run
 // in a VM with a fake microphone, MediaRecorder, caption stream and meter.
 // `out` is every message it sent the main process, in order. Plain
 // dictation is run through the same page, to show it is as it was.

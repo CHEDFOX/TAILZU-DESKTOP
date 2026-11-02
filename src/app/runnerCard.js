@@ -6,7 +6,7 @@
 // to it, which checks each one (main.js, runner:*). Turning it on and allowing a project are asked by the main
 // process itself, in its own words, before they happen: a page the server drew is never the consent.
 //
-// Loaded after sdui.js, whose escaping, actions, state and painting it uses. Everything the main process sends
+// Loaded after sdui/, whose escaping, actions, state and painting it uses. Everything the main process sends
 // (project names, commands, a reason) goes in escaped, never as markup.
 /* global esc, label, bind, repaint, CURRENT_SCREEN, findNode */
 /* eslint-env browser */
