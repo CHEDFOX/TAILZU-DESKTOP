@@ -4,7 +4,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
 const { liveSourceOf, liveParse, liveSendScript, liveOpenableHost, liveKey } = require("./liveView.js");

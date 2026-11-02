@@ -266,4 +266,4 @@ async function until(fn, ms = 8000, what = "the condition") {
   }
 }
 
-module.exports = { startFakeCloud, FakeSocket, bareRepo, tempDir, sh, alive, until, counter, fakeTimers, tick, GIT_ENV };
+module.exports = { startFakeCloud, FakeSocket, bareRepo, tempDir, sh, alive, until, fakeTimers, tick };

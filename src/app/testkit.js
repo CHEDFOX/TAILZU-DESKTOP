@@ -25,4 +25,4 @@ function pageFiles(names) {
   });
 }
 
-module.exports = { appScripts, pageFiles };
+module.exports = { pageFiles };

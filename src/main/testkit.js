@@ -162,4 +162,4 @@ function mainProcess(o = {}) {
   };
 }
 
-module.exports = { mainProcess, NOTES, MAIN_JS };
+module.exports = { mainProcess, NOTES };

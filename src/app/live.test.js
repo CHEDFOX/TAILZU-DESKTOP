@@ -267,7 +267,6 @@ test("an answer's words as they come (topic ask:<id>) go to the call that asked,
 
 test("in the window: wired to sdui.js's own session, stack, state and painting", () => {
   const fs = require("node:fs");
-  const path = require("node:path");
   const vm = require("node:vm");
   const noop = () => {};
   const listeners = {};

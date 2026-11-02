@@ -5,7 +5,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 const { pageFiles } = require("./testkit.js");
 
