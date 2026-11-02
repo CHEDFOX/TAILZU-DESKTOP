@@ -31,7 +31,7 @@
   const MAX_DEFER_MS = 15000;
   const CONNECT_TIMEOUT_MS = 15000;
   const DEFAULT_HEARTBEAT_MS = 25000;
-  const CLOSE = { unauthorized: 4401, tooMany: 4008, renew: 4000 };
+  const CLOSE = { tooMany: 4008, renew: 4000 };
 
   /** A server message, or null for anything that is not one of ours. */
   function parseLiveMessage(raw) {
