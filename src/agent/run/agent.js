@@ -1676,5 +1676,5 @@ function createAgent(deps) {
   return { begin, heard, preview, cancel, active };
 }
 
-// ask.js takes the run, and the three pieces of it it uses on its own.
+// What ask.js uses: the run, and three of its pieces.
 module.exports = { createAgent, safeOpenUrl, isTaskRoute, makePost };
