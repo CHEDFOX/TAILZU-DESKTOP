@@ -2858,7 +2858,7 @@ function setupKeyHook() {
   // THE ONE KEY, and nothing else: no hold key, no double-taps, no Ask pair.
   if (cfg.oneKey) {
     // Esc still stops a question, or what Ask is doing.
-    uIOhook.on("keydown", (e) => { if (e.keycode === UiohookKey.Escape && ask) ask.escape(); });
+    uIOhook.on("keydown", (e) => { if (e.keycode === UiohookKey.Escape) escPressed(); });
     try { uIOhook.start(); uiohookRef = uIOhook; oneKeyHook = { uIOhook, UiohookKey }; } catch { oneKeyHook = null; }
     bindOneKeyNow();
     return;
@@ -2931,7 +2931,7 @@ function setupKeyHook() {
       uIOhook.on("keydown", (e) => {
         // Esc stops a question, or what Ask is doing. (The key reaches the
         // app too; nothing here can hold it back.)
-        if (e.keycode === UiohookKey.Escape && ask) ask.escape();
+        if (e.keycode === UiohookKey.Escape) escPressed();
         taps.keyDown(nameFor(e.keycode), e.keycode);
       });
       uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode), e.keycode));
@@ -3313,6 +3313,15 @@ const routing = createRouting({
   knobs: { num, bool, txt },
   log: (m) => console.log("[route] " + m),
 });
+
+/**
+ * Esc: a dictation under way is thrown away (the pill has no ✕ while Blip is in it), otherwise it stops a
+ * question, or what Ask is doing. The key reaches the app too; nothing here can hold it back.
+ */
+function escPressed() {
+  if (recording && bool("desktop.pill.escCancels", true)) { cancelDictation(); return; }
+  if (ask) ask.escape();
+}
 
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
