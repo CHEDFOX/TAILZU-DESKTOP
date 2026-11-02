@@ -508,3 +508,12 @@ test("the pill is told what Blip does with each label: sent a flip, a task he ru
   routine.elapse(); await settle();
   assert.strictEqual(routine.kinds.filter(Boolean).pop(), "done", "once it has gone, a thumbs-up");
 });
+
+test("brain: a routine that could not be saved never says saved", async () => {
+  const h = rig({ decide: () => ({ do: "routine", goal: "Every morning, news", sure: .9, by: "model" }), routine: () => null });
+  said(h, 1, "every morning news", null);
+  await settle();
+  h.elapse(); await settle();
+  assert.ok(!h.pills.some(([s, d]) => s === "routed" && d.label === "Routine saved"), JSON.stringify(h.pills));
+  assert.deepStrictEqual(h.lastPill(), ["error", { label: "Couldn't save that routine" }]);
+});

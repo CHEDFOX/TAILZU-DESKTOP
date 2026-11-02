@@ -288,12 +288,14 @@ function createRouting(d) {
       kind: "routine", sid, route: r, alt: "type", message: r.message, chunks, quiet,
       graceMs: num("desktop.route.botGraceMs", 3500),
       pending: () => {
+        // "Saved" only once it is: the label waits for the answer (found end to end: it said saved, then couldn't).
         Promise.resolve().then(() => d.routine(r.message)).then((saved) => {
-          if (saved && saved.text) { try { d.botAnswered({ name: txt("desktop.route.routineName", "Routines"), text: saved.text }); } catch { /* said nothing */ } }
-          else d.pill("error", { label: txt("desktop.route.routineFailed", "Couldn't save that routine") });
+          if (saved && saved.text) {
+            if (bool("desktop.route.labels", true)) d.pill("routed", { label: txt("desktop.route.routineSaved", "Routine saved"), alt: "", kind: "done" });
+            try { d.botAnswered({ name: txt("desktop.route.routineName", "Routines"), text: saved.text }); } catch { /* said nothing */ }
+          } else d.pill("error", { label: txt("desktop.route.routineFailed", "Couldn't save that routine") });
         }, () => d.pill("error", { label: txt("desktop.route.routineFailed", "Couldn't save that routine") }));
       },
-      done: txt("desktop.route.routineSaved", "Routine saved"),
     });
   }
 
