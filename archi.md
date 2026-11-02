@@ -3,9 +3,10 @@
 X0 Bot for Windows, macOS (and a Linux AppImage) is an Electron app in plain
 JavaScript, with no bundler. It does five things:
 
-- **Dictation on one key.** Hold the key (Fn on a Mac, Right Ctrl on Windows),
-  talk, let go: the words are cleaned by the server and pasted into the text box
-  in front, or sent to Ask, to meeting notes or to a bot, whichever was meant.
+- **Dictation on one key.** Hold the key (Right ⌘ on a Mac, Fn on one that
+  already had it; Right Ctrl on Windows and Linux), talk, let go: the words are
+  cleaned by the server and pasted into the text box in front, or sent to Ask,
+  to meeting notes, to a routine or to a bot, whichever was meant.
 - **Ask, the on-screen agent.** A question about the app in front: the guide
   rings the thing, explains it, or does a small job, asking first before
   anything that sends, deletes or pays.
@@ -44,10 +45,10 @@ src/
     testkit.js          for tests: main.js run whole with Electron faked (not shipped)
 
   dictation/            one-key dictation
-    oneKey.js           the one key: choice per OS, the Fn helper's protocol, the hold/tap gesture
+    oneKey.js           the one key: choice and first default per OS, the Fn helper's protocol, the hold/tap gesture
     tapDetector.js      double-tap on a modifier without false positives
     router.js           where the words go (type, Ask, notes, a bot), from cheap local signals
-    routing.js          doing it, session by session; undoing pastes ("Ask instead")
+    routing.js          doing it, session by session; the server's brain when on; undoing pastes ("Ask instead")
     pasteJoin.js        the space, or none, between two pasted stretches
     recorder/           the hidden recorder window (microphone, batch and live capture)
       recorder.html     the page; loads the parts below in order
@@ -62,7 +63,8 @@ src/
       heldStop.js       a full stop held at a pause until the next stretch decides
       testkit.js        for tests: recorder.html's scripts in order (not shipped)
     pill/               the dictation pill at the foot of the screen
-      pill.html         the page; core, frame, capsule, bots, pointer, start, demo in order
+      pill.html         the page; shared/blip.js, then core, frame, capsule, bots (with Blip), pointer,
+                        start, demo in order
       pillSplit.js      the split pill's geometry and spring (no drawing)
     overlay/            the live-caption strip (when the pill is off)
 
@@ -73,7 +75,7 @@ src/
   agent/                Ask
     ask.js              createAsk: the guide's window, the question's microphone, the agent's hands
     run/                the run on this computer
-      agent.js          createAgent: the loop (read the screen, ask /v1/agent, point, say, act)
+      agent.js          createAgent: the loop (read the screen, ask /v1/agent, point, say, act); long jobs, handover
       screen.js         the elements sent (coarse regions, no URL queries)
       picture.js        OCR lines as elements; the crop a picture question sends
       marks.js          what an answer draws, mapped to screen positions
@@ -151,7 +153,7 @@ src/
     testkit.js          for tests (not shipped)
 
   shared/               used by more than one window
-    blip.js             Blip, drawn in dots (guide, app window); one file, see "Contracts"
+    blip.js             Blip, drawn in dots (guide, app window, pill); one file, see "Contracts"
     speechMeter.js      voice versus breath, keys or hum (recorder, notes)
 
 native/                 helpers built per OS (not JavaScript)
@@ -189,7 +191,7 @@ holds checks of the repository as a whole.
 | Window creation and hardening | `src/main/windows.js`; each `loadFile` in `main.js` and `ask.js` |
 | Dictation hotkey | `main.js` "Dictation toggle", "Hold-to-talk", "The one key"; `src/dictation/oneKey.js`, `tapDetector.js`; `native/tzkey.swift` |
 | Recording | `src/dictation/recorder/` |
-| Where the words go | `src/dictation/router.js` (decide), `routing.js` (do) |
+| Where the words go | `src/dictation/router.js` (decide), `routing.js` (do; the brain); `main.js` "routing" (`decide`, `needGrant`) |
 | Paste | `main.js` "Paste into the focused app"; `src/dictation/pasteJoin.js` |
 | The pill / captions | `src/dictation/pill/`, `src/dictation/overlay/` |
 | App and field in front | `src/context/frontApp.js`, `screenRead.js` |
@@ -252,7 +254,8 @@ process checks which window sent each message (`isFrom` in `main.js`):
 The main process fetches `POST /v1/app/bootstrap` (knobs, the tray's words
 under `flags["desktop.shell"]`, updates under `flags["desktop.update"]`) and
 caches it; dictation uses `/v1/transcribe-clean`, `/v1/transcribe-stream` and
-`/v1/refine`; routing `/v1/shell/route` and `/v1/shell/ask`; Ask `/v1/agent`
+`/v1/refine`; routing `/v1/shell/route`, `/v1/shell/ask`, `/v1/ask/decide` (the
+brain) and `/v1/routines/draft` then `/v1/routines`; Ask `/v1/agent`
 (NDJSON) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
 `/v1/app/screen`, `/v1/live`, `/v1/files`, `/v1/connectors/:id/connect`,
 `/v1/auth/link`; the runner `/v1/code/runner/*` and a WebSocket to the jobs
