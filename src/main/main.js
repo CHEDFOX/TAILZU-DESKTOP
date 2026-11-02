@@ -1079,6 +1079,14 @@ function guardPill(on) {
   } else if (!on && pillGuard) { clearInterval(pillGuard); pillGuard = null; }
 }
 
+/** Where the pill's Blip stands on the screen (his feet): the middle of the pill's window, just above its foot.
+ *  Null while the pill is hidden, and then Blip comes up at the text box without the hop from it. */
+function pillBlipAt() {
+  if (!pillWin || pillWin.isDestroyed() || !pillWin.isVisible()) return null;
+  const b = pillWin.getBounds();
+  return { x: b.x + b.width / 2, y: b.y + b.height - num("desktop.pill.bottomPad", 14) - 2 };
+}
+
 function pillSend(m) {
   if (pillWin && !pillWin.isDestroyed() && !pillWin.webContents.isLoading()) pillWin.webContents.send("pill", m);
 }
@@ -2920,6 +2928,9 @@ function setupAsk() {
     // A look's word on Screen Recording changed: the setup card is told, so
     // it can offer the restart a granted permission still needs.
     lookPermission: () => askSetup.push(),
+    // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
+    pillBlip: pillBlipAt,
+    blipAway: (away) => pillSend({ blipAway: !!away }),
     // The person's own files (localfiles.js): planned here, shown on a card,
     // done here. A kind of change they approved once is not asked again.
     device: {

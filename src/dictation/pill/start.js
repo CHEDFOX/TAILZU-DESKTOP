@@ -18,6 +18,8 @@ function onPill(m) {
   if (m.unhover) { pointer = null; hovered = false; overCancel = false; wake(); }
   if (typeof m.hint === "string") hint = m.hint;
   if (typeof m.rest === "boolean") restShown = m.rest;
+  // Blip has gone to peek over the text box (ask.js): the pill draws him again once he is back.
+  if (typeof m.blipAway === "boolean") { blipAwayAt = m.blipAway ? clock() : 0; wake(); if (!m.state) return; }
   if (m.state === "flash") { flashAt = clock(); wake(); return; }
   if (m.state === "caption") { caption = String(m.text || ""); wake(); return; }
   if (m.state) setState(m.state, m);

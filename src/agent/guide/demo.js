@@ -144,7 +144,13 @@ function runDemo(scene) {
   function dictate(box0) {
     const typed = document.getElementById("m-typed"), caretEl = document.getElementById("m-caret");
     const caret = () => { const r = caretEl.getBoundingClientRect(); return [r.left, r.top, Math.max(2, r.width), r.height]; };
-    const peekNow = (state) => send({ type: "peek", caret: caret(), field: box(box0.field), state });
+    // The first caret of each dictation says where Blip comes from: the mock pill's middle, as main.js pillBlipAt says it.
+    let fromPill = true;
+    const peekNow = (state) => {
+      const p = pillAt(), m = { type: "peek", caret: caret(), field: box(box0.field), state };
+      if (fromPill) { m.home = [p.x + p.w / 2, p.y + p.h, 1, 1]; fromPill = false; }
+      send(m);
+    };
     const typeOut = (text, then) => {
       const ws = text.split(" ");
       ws.forEach((w, i) => later(() => {
@@ -166,7 +172,7 @@ function runDemo(scene) {
       later(() => { DICT.on = false; DICT.state = "writing"; peekNow("writing"); }, stop);
       later(() => typeOut(box0.last, () => {
         DICT.state = "done"; peekNow("done");
-        later(() => { DICT.state = "idle"; send({ type: "unpeek" }); }, 900);
+        later(() => { DICT.state = "idle"; send({ type: "unpeek" }); fromPill = true; }, 900);
       }), stop + 800);
       later(cycle, stop + 800 + 2900);
     };

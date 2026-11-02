@@ -18,6 +18,10 @@ function blipper() {
 const ROUTED_GESTURE = { done: "done", send: "send", work: "work", look: "look", listen: "listen", routine: "routine", yourTurn: "yourTurn", bot: "send", celebrate: "celebrate" };
 const lerpN = (a, b, k) => a + (b - a) * k;
 let bCapK = 0;
+// When Blip left to peek over the text box (0: he is here). Away longer than desktop.pill.blipAwayMaxMs, he is drawn
+// again all the same: a peek whose end was never told must not leave the pill empty.
+let blipAwayAt = 0;
+const blipAway = (now) => blipAwayAt > 0 && now - blipAwayAt < K.num("desktop.pill.blipAwayMaxMs", 90000);
 /** The gesture for a state the pill is put in (setState), from the one it was in. */
 function blipFor(st, data, from) {
   const p = blipper(), now = clock();
@@ -25,7 +29,7 @@ function blipFor(st, data, from) {
     // From rest he wakes first, quickly (under a second), and is listening while he does.
     if (!from || from === "rest" || from === "hidden") p.play("wake", { speed: K.num("desktop.pill.blipWakeSpeed", 2.3), then: "listen", now });
     else p.play("listen", { now });
-  } else if (st === "writing") p.play("think", { now });
+  } else if (st === "writing") p.play("write", { now });
   else if (st === "done") p.play("done", { now, then: "rest" });
   else if (st === "error") p.play("oops", { now, then: "rest" });
   else if (st === "routed") { const g = ROUTED_GESTURE[data.kind] || "done"; p.play(g, { now, then: g === "send" || g === "celebrate" ? "done" : null, again: true }); }
@@ -74,8 +78,11 @@ function botsTargets(st) {
     const cap = bCaption();
     g.h = bDisc() + 16;
     g.w = 8 + bDisc() + 12 + BOTS_BARS * 6 - 3 + 12 + (cap ? bTextW(cap, 15) + 12 : 0) + bTextW("0:00", 12) + 10 + 26 + 10;
+  } else if (st === "writing" && BLIP()) {
+    // No word while the words are finished: Blip types, and there is no white to hold one.
+    g.h = 30; g.w = 40;
   } else if (st === "writing") {
-    g.h = 40; g.w = 6 + 28 + 10 + bTextW(bWriting(), 13, true) + 16 + (BLIP() ? 10 : 0);
+    g.h = 40; g.w = 6 + 28 + 10 + bTextW(bWriting(), 13, true) + 16;
   } else if (st === "rest" || st === "ask") {
     const open = st === "rest" && hovered && restShown && !!hint;
     const blip = BLIP() && st === "rest";
@@ -105,7 +112,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
   if (st === "error" && t < 0.42) ctx.translate(Math.sin(t * 60) * 3 * (1 - t / 0.42), 0);
   // The pill: white with a line, a soft shadow that firms up once it is in use.
   bCapK = ease(bCapK, st === "listening" && bCaption() ? 1 : 0, 9, dt);
-  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" ? outCubic(bCapK) : 1;
+  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" ? outCubic(bCapK) : st === "writing" ? 0 : 1;
   ctx.globalAlpha = P.show * (0.86 + 0.14 * P.solid) * paperK;
   ctx.shadowColor = `rgba(0,0,0,${0.08 + 0.06 * P.solid})`; ctx.shadowBlur = 10 + 10 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
   ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, r); ctx.fill();
@@ -160,7 +167,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
       ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.arc(dx - 6 + i * 6, cy, 2, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = P.show * clamp(P.w / 60 - .4);
-    ctx.font = bFont(13, true); ctx.fillStyle = B.ink(); ctx.fillText(bWriting(), x0 + 6 + 28 + 10 + (blip ? 10 : 0), cy + .5);
+    if (!blip) { ctx.font = bFont(13, true); ctx.fillStyle = B.ink(); ctx.fillText(bWriting(), x0 + 6 + 28 + 10, cy + .5); }
   } else if (st === "rest" || st === "ask") {
     if (P.text > 0.01) {
       // Hovered: the way in, beside a small clay disc.
@@ -197,7 +204,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
   }
   ctx.restore();
   // Blip, over the pill's edge: feet in its left end, his head out over the top. Not clipped by it.
-  if (blip && P.show > 0.01) {
+  if (blip && P.show > 0.01 && !blipAway(now)) {
     const pf = blipper();
     if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
     let bx, bh;
