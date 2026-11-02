@@ -274,7 +274,7 @@ is killed when the session closes, on Stop, when the app quits, when the process
 or an uncaught error ends it, and, through a small watchdog process, when the app is
 killed outright (it holds a pipe to the app and kills the groups when it closes).
 
-Tests: `node --test src/runner/` (a fake Worker and room over real sockets, real bash
+Tests: `node --test src/runner/*.test.js` (a fake Worker and room over real sockets, real bash
 and git; a local bare repository stands in for GitHub; the battery source is stubbed).
 
 ## What comes from the backend
