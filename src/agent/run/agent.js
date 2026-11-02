@@ -81,6 +81,9 @@ const { readEvents, makePost } = require("./stream.js");
 const MAX_HISTORY = 16;
 /** What a device result may carry back, as the server reads it. */
 const DEVICE_DATA_MAX = 5000;
+/** A long job's plan, and the facts it keeps (the server takes the same: AgentJob). */
+const JOB_PLAN_MAX = 12;
+const JOB_NOTES_MAX = 8;
 /** Device events one run may carry out. */
 const DEVICE_PER_RUN = 6;
 /** A remembered kind of change still asks when it touches more files than this. */
@@ -99,7 +102,7 @@ const SPEECH_MAX_MS = 180000;
  *  answers 413 above it; a crop that big is not sent at all. */
 const MAX_PICTURE_BYTES = 2000000;
 
-const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve", "device"]);
+const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve", "device", "handover"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
 /** Actions that mean nothing without an element. */
 const NEEDS_ID = new Set(["press", "set", "focus"]);
@@ -545,6 +548,7 @@ function createAgent(deps) {
     // "This computer": the person's own files, offered to the planner only when this copy can do them.
     if (canDevice()) req.capabilities = ["DeviceFiles"];
     if (run.history.length) req.history = run.history.slice(-MAX_HISTORY).map((h) => Object.assign({}, h));
+    if (run.job) req.job = { goal: run.job.goal, plan: run.job.plan.slice(), done: run.job.done.slice(), notes: run.job.notes.slice() };
     return req;
   }
 
@@ -566,7 +570,89 @@ function createAgent(deps) {
 
   function showPlan(run) {
     if (!run.plan) return;
+    // A job's steps are ticked off by the planner (PROGRESS); a short plan's by each step that worked.
+    if (run.job) {
+      const done = new Set(run.job.done);
+      const next = run.plan.findIndex((_, i) => !done.has(i));
+      tell(run, "steps", run.plan.map((text, i) => ({ text, state: done.has(i) ? "done" : i === next ? "active" : "todo" })));
+      return;
+    }
     tell(run, "steps", run.plan.map((text, i) => ({ text, state: i < run.planDone ? "done" : i === run.planDone ? "active" : "todo" })));
+  }
+
+  // ---- a long job --------------------------------------------------------------
+  //
+  // A do-run whose plan has several steps keeps a ledger: the goal, the plan,
+  // which steps are finished and what it learned. It goes with every step, so
+  // the server (which keeps nothing) never loses the start of a job when the
+  // oldest history turns fall off, and the run may take a job's steps and
+  // time (desktop.agent.jobMaxSteps, jobDeadlineMs) instead of a small one's.
+
+  function startJob(run, plan, same) {
+    if (run.job) {
+      // A new plan mid-job: its steps start over; what was kept stays.
+      if (!same) { run.job.plan = plan.slice(); run.job.done = []; }
+      return;
+    }
+    run.job = { goal: clip(squash(run.goal), 1000), plan: plan.slice(), done: [], notes: [] };
+    const ms = Math.max(num("desktop.agent.deadlineMs", 60000), num("desktop.agent.jobDeadlineMs", 20 * 60000));
+    clearTimeout(run.deadlineTimer);
+    run.deadline = now() + ms;
+    run.deadlineTimer = setTimeout(() => stop(run, "deadline"), ms);
+    log(`agent ${run.tag}: a job of ${plan.length} steps`);
+  }
+
+  /** The planner's PROGRESS: plan steps finished (0-based), and a fact to keep. */
+  function progress(run, ev) {
+    if (!run.job) return;
+    for (const n of Array.isArray(ev.done) ? ev.done : []) {
+      if (Number.isInteger(n) && n >= 0 && n < run.job.plan.length && !run.job.done.includes(n)) run.job.done.push(n);
+    }
+    run.job.done.sort((a, b) => a - b);
+    const note = clip(squash(ev.note), 160);
+    if (note && !run.job.notes.includes(note)) {
+      run.job.notes.push(note);
+      while (run.job.notes.length > JOB_NOTES_MAX) run.job.notes.shift();
+    }
+    showPlan(run);
+  }
+
+  /**
+   * HANDOVER: the next part is theirs (a password, a code, a CAPTCHA, card
+   * details, a choice). The card says what to do; the run waits, its clock
+   * stopped, for Continue (desktop.agent.handoverMs, 10 minutes by default),
+   * then reads the screen afresh and goes on. Stop, or no answer, ends it.
+   */
+  async function handover(run, ev) {
+    const text = clip(squash(ev.text), 240) || TEXT.handover;
+    const showCard = guide && guide.approve;
+    pushHistory(run, { said: run.said, did: "HANDOVER", note: text });
+    if (typeof showCard !== "function") { finish(run, "done", text); return null; }
+    clearTimeout(run.deadlineTimer);
+    run.deadline = Infinity;
+    tell(run, "say", text, sayOpts(""));
+    const card = {
+      title: TEXT.yourTurn, app: appLabel(run), label: "", preview: text, note: TEXT.handoverNote,
+      buttons: [{ id: "approve", label: TEXT.handoverGo }, { id: "deny", label: TEXT.handoverStop }],
+    };
+    const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (v === "approve" ? "go" : ""), (e) => {
+      log(`agent ${run.tag}: guide.approve failed: ${errText(e)}`);
+      return "";
+    });
+    const answer = await race(run, within(asked, num("desktop.agent.handoverMs", 10 * 60000), ""));
+    if (!alive(run) || answer === ABORTED) return null;
+    if (answer !== "go") { log(`agent ${run.tag}: handover not continued`); finish(run, "done", TEXT.handoverStopped); return null; }
+    log(`agent ${run.tag}: handover continued`);
+    // Their part may have changed everything: the screen is read again before the next step.
+    const after = await race(run, takeSnapshot());
+    if (!alive(run)) return null;
+    if (!adoptChecked(run, after)) return null;
+    pushHistory(run, { did: "HANDOVER", result: "ok", note: "they did their part and pressed Continue" });
+    const ms = run.job ? Math.max(num("desktop.agent.deadlineMs", 60000), num("desktop.agent.jobDeadlineMs", 20 * 60000)) : num("desktop.agent.deadlineMs", 60000);
+    run.deadline = now() + ms;
+    run.deadlineTimer = setTimeout(() => stop(run, "deadline"), ms);
+    tell(run, "state", "thinking");
+    return {};
   }
 
   const sayOpts = (locale, append) => {
@@ -644,15 +730,20 @@ function createAgent(deps) {
         drawMark(run, ev);
         break;
       case "steps": {
-        const items = (Array.isArray(ev.items) ? ev.items : []).map((s) => clip(squash(s), 120)).filter(Boolean).slice(0, 6);
+        const items = (Array.isArray(ev.items) ? ev.items : []).map((s) => clip(squash(s), 120)).filter(Boolean).slice(0, JOB_PLAN_MAX);
         if (!items.length) break;
         // The same plan again (the model repeats it each step) keeps its
         // progress; a new one starts over.
         const same = run.plan && run.plan.length === items.length && run.plan.every((s, i) => s === items[i]);
         if (!same) { run.plan = items; run.planDone = 0; }
+        // A do-run with a plan of several steps is a LONG JOB: its ledger goes with every step from now on, and its limits are a job's.
+        if (run.mode === "do" && items.length >= 2) startJob(run, items, same);
         showPlan(run);
         break;
       }
+      case "progress":
+        progress(run, ev);
+        break;
       case "open":
         openLink(run, ev);
         break;
@@ -862,7 +953,7 @@ function createAgent(deps) {
       return null;
     }
 
-    const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run) });
+    const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run), trusted: run.trusted === true });
     const risk = maxRisk(maxRisk(a.risk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
 
     if (frame) tell(run, "point", frame);
@@ -1120,7 +1211,9 @@ function createAgent(deps) {
     const question = clip(squash(ev.text), 240);
     pushHistory(run, { said: run.said, did: "ASK", note: question });
     if (question) tell(run, "say", question, sayOpts(""));
-    tell(run, "state", "listening");
+    // Listening only when the microphone opens at once (desktop.agent.askOpensMic); otherwise the question stays
+    // up, waiting for the key, and the card does not pretend to listen.
+    tell(run, "state", bool("desktop.agent.askOpensMic", false) ? "listening" : "showing");
     let audio = null;
     try {
       if (typeof d.listen === "function") audio = await race(run, Promise.resolve().then(() => d.listen()));
@@ -1200,7 +1293,7 @@ function createAgent(deps) {
       case "look":
         return lookAgain(run, input);
       case "done": {
-        if (run.plan) { run.planDone = run.plan.length; showPlan(run); }
+        if (run.plan) { run.planDone = run.plan.length; if (run.job) run.job.done = run.plan.map((_, i) => i); showPlan(run); }
         // DONE's words are the card's whole text, in place of what it said;
         // after an answer said a sentence at a time, they come after it
         // instead. Words with no letter or digit in them ("DONE.") are none.
@@ -1219,6 +1312,8 @@ function createAgent(deps) {
         return approve(run, terminal);
       case "device":
         return device(run, terminal);
+      case "handover":
+        return handover(run, terminal);
       default:
         return act(run, terminal);
     }
@@ -1449,8 +1544,10 @@ function createAgent(deps) {
       if (!alive(run)) return;
       if (!input) { finish(run, "quiet"); return; }
       const maxSteps = Math.max(1, num("desktop.agent.maxSteps", 8));
+      // A long job may take a job's steps (startJob); everything else, a small run's.
+      const limit = () => (run.job ? Math.max(maxSteps, num("desktop.agent.jobMaxSteps", 60)) : maxSteps);
       while (alive(run)) {
-        if (run.step >= maxSteps) { stop(run, "steps"); return; }
+        if (run.step >= limit()) { stop(run, "steps"); return; }
         if (now() >= run.deadline) { stop(run, "deadline"); return; }
         const next = await step(run, input);
         if (!next || !alive(run)) return;
@@ -1469,8 +1566,9 @@ function createAgent(deps) {
    * nothing is read. Otherwise the guide starts listening and the screen is
    * read at the same time, while they are still speaking: the tree, and a
    * look at the window (its text and its picture), in parallel.
-   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number } }} [opts]
-   *        `pointer` in the driver's units (Windows: physical pixels)
+   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number }, trusted?: boolean }} [opts]
+   *        `pointer` in the driver's units (Windows: physical pixels); `trusted`: the person asked for this
+   *        task or message in so many words, so its ordinary steps are not asked about (classifyRisk)
    * @returns {boolean} whether a run began
    */
   function begin(opts) {
@@ -1499,9 +1597,11 @@ function createAgent(deps) {
       app: clip(squash(o.app), 60), firstApp: "",
       snapshot: { ok: false, error: "not read yet", elements: [] }, frames: new Map(), byId: new Map(),
       mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
-      plan: null, planDone: 0, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
+      plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
       pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
       acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0, says: 0,
+      // Asked for in so many words (the one key's brain: a task or a message, no money, nothing deleted).
+      trusted: o.trusted === true,
     };
     current = run;
     callGuide("show", ["listening", { app: run.app }]);

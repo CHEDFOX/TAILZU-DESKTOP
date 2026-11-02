@@ -29,7 +29,7 @@
 //
 // Every effect is a dependency (main.js passes its own), so the flow can be
 // run in the tests with fakes:
-//   d.on()                   routing is on (the one key, on a Mac or Windows)
+//   d.on()                   routing is on (the one key: a Mac, Windows or Linux)
 //   d.signals()              { names, askOn, notesOn, bots }
 //   d.type(sid, chunks)      paste these, in order, the usual way → Promise
 //   d.undo(times)            the app in front's own undo, `times` times → Promise
@@ -39,6 +39,19 @@
 //   d.whichBot(message, slug)  { slug, name, confidence } or null (the backend's pick)
 //   d.sendBot(message, slug) → { name, text } or null
 //   d.botAnswered(reply)     say the bot's answer (a notification)
+//   d.decide(input)          optional: the one key's brain (POST /v1/ask/decide) → its decision, or null
+//   d.routine(goal)          optional: save a routine from what was said → { text } or null
+//   d.needGrant(missing)     optional: ask for the setup card's permissions this ask needs and has not
+//                            been given (["read"], ["see"]), at this turn → true once they are on
+//
+// THE BRAIN (d.decide, desktop.route.brain, off until the server turns it on
+// with its knobs, once /v1/ask/decide is there): with it, every session's words are
+// held until the stop (none pasted as they come, unless it is our own window or
+// a private one), and the brain says what they were: write (typed), send, task
+// and answer (Ask, a task or a message trusted as asked for), routine, notes, or
+// a bot. In any language: no word list decides. Not back in brainMs, or off,
+// and the word lists below decide as before. The last three asks go with it,
+// so "send it to Dev too" is understood.
 //   d.pill(state, data)      the pill; d.pillRest() puts a label we left back to rest
 //   d.knobs                  { num, bool, txt }
 //   d.setTimeout, d.clearTimeout, d.log
@@ -53,28 +66,45 @@ function createRouting(d) {
   const sessions = new Map();   // sid → { ours, field, mode, chunks, heard, typed }
   let offer = null;             // the route the pill is offering the alternative to
   let labelTimer = null;
+  const recent = [];            // the last three asks: { said, did, to? }, for the brain's follow-ups
 
   const on = () => { try { return d.on() === true; } catch { return false; } };
   const signals = () => { try { return d.signals() || {}; } catch { return {}; } };
-  const input = (s, heard) => Object.assign({}, signals(), { heard, field: s.field, ours: s.ours });
+  const input = (s, heard) => Object.assign({}, signals(), { heard, field: s.field, ours: s.ours }, s.blind ? { blind: true } : {});
   const words = (c) => String((c && (c.heard || c.text)) || "").trim();
   const heardOf = (s) => s.heard.filter(Boolean).join(" ").trim();
 
   function session(sid) { return sessions.get(sid) || null; }
+
+  /** The brain decides this session: it is on, it can be asked, and nothing here is private. */
+  function brainFor(s) {
+    return !!s && typeof d.decide === "function" && bool("desktop.route.brain", false) && !s.ours && !s.private;
+  }
 
   /** A dictation began. Any alternative still offered is over: the next
    *  thing they said is what they meant. A bot's task or a notes command
    *  waiting out its moment goes now. */
   function start(sid, o) {
     commit();
-    sessions.set(sid, { ours: !!(o && o.ours), field: undefined, mode: null, chunks: [], heard: [], typed: 0, pasted: [] });
+    // blind: this computer cannot read a text box (Linux): the field stays unknown, whatever a read says.
+    sessions.set(sid, { ours: !!(o && o.ours), blind: !!(o && o.blind), field: undefined, mode: null, chunks: [], heard: [], typed: 0, pasted: [] });
     for (const k of sessions.keys()) if (sessions.size > 16 && k !== sid) sessions.delete(k);
+  }
+
+  /** The app in front: { label, private }. A private window or a money app
+   *  never goes to the brain: its words are routed here, on the lists. */
+  function target(sid, info) {
+    const s = session(sid);
+    if (!s || !info) return;
+    s.app = typeof info.label === "string" ? info.label.slice(0, 80) : "";
+    s.title = typeof info.title === "string" ? info.title.slice(0, 200) : "";
+    if (info.private || info.sensitive) s.private = true;
   }
 
   /** The field read answered: null (no text box), or { selection? }. */
   function field(sid, f) {
     const s = session(sid);
-    if (s && s.field === undefined) s.field = f && typeof f === "object" ? { selection: typeof f.selection === "string" ? f.selection : "" } : null;
+    if (s && !s.blind && s.field === undefined) s.field = f && typeof f === "object" ? { selection: typeof f.selection === "string" ? f.selection : "" } : null;
   }
 
   /** A stretch of a running session: "type" (paste it) or "hold". */
@@ -85,7 +115,7 @@ function createRouting(d) {
     else if (c && c.text) s.heard.push(String(c.text));
     if (s.mode === null) {
       if (!words(c)) return "type";        // nothing said yet: nothing to decide on
-      s.mode = router.firstLook(input(s, heardOf(s)));
+      s.mode = brainFor(s) ? "hold" : router.firstLook(input(s, heardOf(s)));
     }
     if (s.mode === "hold") { s.chunks.push(c); return "hold"; }
     typed(s, c);
@@ -114,7 +144,7 @@ function createRouting(d) {
     // One stretch, all of it at the stop: the same first look as a pause gets.
     if (s.mode === null) {
       if (!all) return "type";
-      s.mode = router.firstLook(input(s, all));
+      s.mode = brainFor(s) ? "hold" : router.firstLook(input(s, all));
     }
     if (s.mode === "type") {
       typed(s, c);
@@ -129,8 +159,70 @@ function createRouting(d) {
       return label({ kind: "typed", sid, route: r, alt: other, typed: s.typed, message: r.message, chunks: s.pasted }) ? "labelled" : "type";
     }
     const chunks = s.chunks.concat(c && (c.text || c.heard) ? [c] : []);
-    void perform(router.route(input(s, all)), sid, chunks, current);
+    if (brainFor(s)) void decideThen(s, sid, chunks, all, current);
+    else void perform(router.route(input(s, all)), sid, chunks, current);
     return "routed";
+  }
+
+  // ---- the brain ----------------------------------------------------------------------
+
+  /** Ask the brain, then do what it said; the lists' own route when it cannot say in time. */
+  async function decideThen(s, sid, chunks, all, current) {
+    const local = router.route(input(s, all));
+    // Said in the words the lists know for certain ("take notes"): nothing to ask.
+    if (local.to === "notesStart" || local.to === "notesStop") return perform(local, sid, chunks, current);
+    if (current) d.pill("writing");
+    let dec = null;
+    try {
+      const sig = signals();
+      dec = await within(Promise.resolve().then(() => d.decide({
+        words: all, app: s.app || undefined, title: s.title || undefined,
+        field: s.field === undefined ? undefined : s.field, notesOn: !!sig.notesOn, last: recent.slice(),
+      })), Math.max(300, num("desktop.route.brainMs", 2500)));
+    } catch (e) { dec = null; log("route: the brain could not say: " + ((e && e.message) || e)); }
+    const r = dec && typeof dec === "object" && typeof dec.do === "string" ? fromDecision(dec, local, s) : local;
+    remember(all, dec);
+    return perform(r, sid, chunks, current);
+  }
+
+  /** The brain's decision as a route this file knows how to do. */
+  function fromDecision(dec, local, s) {
+    const why = `brain:${dec.do}:${dec.by || "?"}`;
+    const goal = String(dec.goal || "").trim() || local.message;
+    const missing = Array.isArray(dec.missing) ? dec.missing.filter((g) => g === "read" || g === "see") : [];
+    const askOn = !!signals().askOn;
+    // Asked for in so many words, and nothing in it moves money or deletes.
+    const trusted = (dec.do === "task" || dec.do === "send") && (dec.risk === "none" || dec.risk === "send");
+    switch (dec.do) {
+      case "write":
+        if (s.field && s.field.selection) return Object.assign({}, local, { to: "rewrite", why });
+        return { to: "type", message: local.message, alt: askOn ? "ask" : null, close: Number(dec.sure) < 0.7, why };
+      case "answer": case "task": case "send":
+        if (!askOn) return Object.assign({}, local, { why: why + ":no-ask" });
+        return { to: "ask", message: goal, alt: "type", close: false, why, trusted, missing, kind: dec.do, risk: dec.risk || "none" };
+      case "routine":
+        if (typeof d.routine !== "function") return Object.assign({}, local, { why: why + ":no-routines" });
+        return { to: "routine", message: goal, alt: "type", close: false, why };
+      case "notes":
+        return { to: dec.notes === "stop" ? "notesStop" : "notesStart", message: local.message, alt: "type", close: false, why };
+      case "bot":
+        if (dec.bot && dec.bot.slug) return { to: "bot", message: goal, slug: dec.bot.slug, named: true, botName: dec.bot.name, alt: "type", close: false, why };
+        return local;
+      default:
+        return local;
+    }
+  }
+
+  /** The last three asks, for the next one's follow-ups. */
+  function remember(said, dec) {
+    if (!dec || typeof dec.do !== "string") return;
+    recent.push(Object.assign({ said: String(said).slice(0, 400), did: dec.do }, dec.to ? { to: String(dec.to).slice(0, 80) } : {}));
+    while (recent.length > 3) recent.shift();
+  }
+
+  function within(p, ms) {
+    let t = null;
+    return Promise.race([p, new Promise((resolve) => { t = later(() => resolve(null), ms); })]).finally(() => cancelTimer(t));
   }
 
   // ---- doing it ---------------------------------------------------------------------
@@ -156,6 +248,7 @@ function createRouting(d) {
       return;
     }
     if (r.to === "ask") return toAsk(r, sid, chunks, quiet);
+    if (r.to === "routine") return toRoutine(r, sid, chunks, quiet);
     if (r.to === "notesStart" || r.to === "notesStop") return toNotes(r, sid, chunks, quiet);
     if (r.to === "bot" || r.to === "unclear") return toBot(r, sid, chunks, quiet);
     await typeAll(sid, chunks, "");
@@ -167,8 +260,14 @@ function createRouting(d) {
     // of taking the pill from under it (main.js pillAsk asks holdsPill).
     label({ kind: "asked", sid, route: r, alt: "type", message: r.message, chunks, quiet });
     const mine = offer;
+    // A permission this ask needs and the setup card has not given: asked for
+    // now, at the turn that needs it, and never one already given.
+    if (Array.isArray(r.missing) && r.missing.length && typeof d.needGrant === "function") {
+      try { await d.needGrant(r.missing, { kind: r.kind || "answer" }); } catch { /* Ask says what it cannot do itself */ }
+      if (offer !== mine) return;
+    }
     let took = false;
-    try { took = !!(await d.ask(r.message)); } catch { took = false; }
+    try { took = !!(await d.ask(r.message, r.trusted ? { trusted: true } : undefined)); } catch { took = false; }
     // Refused (a private window, a bank, not signed in): its card says why.
     if (!took && offer === mine && mine) { offer = null; cancelTimer(labelTimer); d.pillRest(); }
   }
@@ -180,6 +279,21 @@ function createRouting(d) {
       kind: "notes", sid, route: r, alt: "type", message: r.message, chunks, quiet,
       pending: () => d.notes(start), graceMs: num("desktop.route.notesGraceMs", 2000),
       done: start ? txt("desktop.route.notesOn", "Taking notes") : txt("desktop.route.notesOff", "Notes stopped"),
+    });
+  }
+
+  function toRoutine(r, sid, chunks, quiet) {
+    // Held a moment like a bot's task, so "Type it instead" is simply not saving it.
+    label({
+      kind: "routine", sid, route: r, alt: "type", message: r.message, chunks, quiet,
+      graceMs: num("desktop.route.botGraceMs", 3500),
+      pending: () => {
+        Promise.resolve().then(() => d.routine(r.message)).then((saved) => {
+          if (saved && saved.text) { try { d.botAnswered({ name: txt("desktop.route.routineName", "Routines"), text: saved.text }); } catch { /* said nothing */ } }
+          else d.pill("error", { label: txt("desktop.route.routineFailed", "Couldn't save that routine") });
+        }, () => d.pill("error", { label: txt("desktop.route.routineFailed", "Couldn't save that routine") }));
+      },
+      done: txt("desktop.route.routineSaved", "Routine saved"),
     });
   }
 
@@ -214,10 +328,26 @@ function createRouting(d) {
   function labelText(o) {
     switch (o.kind) {
       case "typed": return o.route.to === "rewrite" ? txt("desktop.route.rewrote", "Rewrote it") : txt("desktop.route.typed", "Typed");
-      case "asked": return txt("desktop.route.asked", "Asked X0");
+      case "asked":
+        if (o.route.kind === "task") return txt("desktop.route.doing", "On it");
+        if (o.route.kind === "send") return txt("desktop.route.sending", "Sending");
+        return txt("desktop.route.asked", "Asked X0");
+      case "routine": return txt("desktop.route.routine", "Saving a routine");
       case "notes": return o.route.to === "notesStart" ? txt("desktop.route.notesOn", "Taking notes") : txt("desktop.route.notesOff", "Notes stopped");
       case "bot": return txt("desktop.route.sent", "Sent to {bot}", { bot: o.bot });
       default: return "";
+    }
+  }
+  /** What Blip does with the label (pill/bots.js ROUTED_GESTURE): typed or rewritten, done; sent, a flip; a task, he
+   *  runs; a question, he looks; notes, he listens; a routine, his little dance. */
+  function gestureOf(o) {
+    switch (o.kind) {
+      case "typed": return "done";
+      case "asked": return o.route && o.route.kind === "task" ? "work" : o.route && o.route.kind === "send" ? "send" : "look";
+      case "notes": return "listen";
+      case "bot": return "send";
+      case "routine": return "routine";
+      default: return "done";
     }
   }
   function altText(a) {
@@ -237,7 +367,7 @@ function createRouting(d) {
     if (!bool("desktop.route.labels", true) && !o.pending) return false;
     offer = Object.assign({ at: Date.now() }, o);
     const shown = offer;
-    if (bool("desktop.route.labels", true)) d.pill("routed", { label: labelText(o), alt: altText(o.alt) });
+    if (bool("desktop.route.labels", true)) d.pill("routed", { label: labelText(o), alt: altText(o.alt), kind: gestureOf(o) });
     const ms = Math.max(1000, num("desktop.route.labelMs", 5000));
     cancelTimer(labelTimer);
     if (o.pending) {
@@ -245,7 +375,7 @@ function createRouting(d) {
         if (offer !== shown) return;
         go(shown);
         // Done now: the label stays a moment longer, with nothing to take back.
-        if (bool("desktop.route.labels", true) && shown.done) d.pill("routed", { label: shown.done, alt: "" });
+        if (bool("desktop.route.labels", true) && shown.done) d.pill("routed", { label: shown.done, alt: "", kind: "done" });
       }, Math.max(0, Math.min(ms, Number(o.graceMs) || 0)));
     }
     labelTimer = later(() => {
@@ -303,7 +433,7 @@ function createRouting(d) {
   /** A session thrown away (✕, an error): forget it. */
   function forget(sid) { sessions.delete(sid); }
 
-  return { start, field, chunk, end, alternative, holdsPill, forget, commit };
+  return { start, target, field, chunk, end, alternative, holdsPill, forget, commit };
 }
 
 /**

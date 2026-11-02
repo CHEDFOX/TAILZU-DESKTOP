@@ -6,7 +6,7 @@
 // goes with you through the onboarding, whose journeys are timed here.
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekSpot, createBlip, POSES, createWalker, burst, WALKER_POSES } = require("./blip.js");
+const { peekSpot, createBlip, POSES, createWalker, burst, WALKER_POSES, BLIP_GESTURES, gesturePose, blendPose, createPerformer, GESTURE_LENGTH } = require("./blip.js");
 
 const view = { w: 1440, h: 900, top: 0 };
 const o = { height: 54, tall: 120 };
@@ -419,4 +419,57 @@ test("the confetti is 22 pieces thrown from where he lands, gone in 1.4 s, and n
   assert.strictEqual(host.kids.length, 22);
   // The stage's own colours, when it names them.
   assert.strictEqual(burst(host, 1, 1, { colors: ["#123456"], ttl: 5 })[3].style.background, "#123456");
+});
+
+// ---- the gestures: Blip's own body, wherever X0 is working -------------------------------------------------------
+
+test("every gesture draws only finite numbers, at every moment, moving or still", () => {
+  for (const reduced of [false, true]) for (const name of Object.keys(BLIP_GESTURES)) {
+    const p = createPerformer({ reduced });
+    p.play(name, { now: 0 });
+    for (const ms of [0, 120, 500, 1100, 1900, 3000]) {
+      const c = recorder();
+      p.draw(c, 200, 300, 60, ms, .6);
+      const log = c.log.join("\n");
+      assert.ok(log.length > 100, `${name} drew nothing`);
+      assert.doesNotMatch(log, /NaN|Infinity/, `${name} at ${ms} ms, reduced=${reduced}`);
+    }
+  }
+});
+
+test("no gesture holds anything: every pose is his body's own numbers", () => {
+  for (const name of Object.keys(BLIP_GESTURES)) for (const t of [0, .4, 1.2, 2]) {
+    const p = gesturePose(name, t, .5);
+    for (const [k, v] of Object.entries(p)) {
+      assert.notStrictEqual(typeof v, "function", `${name}.${k} is a function: something drawn beside him`);
+    }
+  }
+});
+
+test("a gesture that ends hands on to the next: waking up becomes listening, a flip becomes done", () => {
+  const p = createPerformer();
+  p.play("wake", { now: 0, speed: 2.3, then: "listen" });
+  p.draw(recorder(), 0, 0, 60, 500);
+  assert.strictEqual(p.name, "wake");
+  p.draw(recorder(), 0, 0, 60, Math.ceil(GESTURE_LENGTH.wake / 2.3 * 1000) + 20);
+  assert.strictEqual(p.name, "listen");
+  p.play("send", { now: 2000, then: "done" });
+  p.draw(recorder(), 0, 0, 60, 2000 + GESTURE_LENGTH.send * 1000 + 20);
+  assert.strictEqual(p.name, "done");
+  p.play("nonsense", { now: 4000 });
+  assert.strictEqual(p.name, "rest");
+});
+
+test("reduced motion: no hops and no flips, only a still of each gesture", () => {
+  const c = recorder(), p = createPerformer({ reduced: true });
+  p.play("celebrate", { now: 0 });
+  p.draw(c, 200, 300, 60, 400);
+  assert.ok(!c.log.some((l) => /^rotate\((-?6\.|3\.1)/.test(l)), "no flip");
+});
+
+test("blending two poses lands on each end, and the numbers between are between", () => {
+  const a = gesturePose("rest", 0), b = gesturePose("listen", .4, .8);
+  assert.strictEqual(blendPose(a, b, 1), b);
+  const m = blendPose(a, b, .5);
+  assert.ok(m.headLift > Math.min(a.headLift, b.headLift) - 1e-9 && m.headLift < Math.max(a.headLift, b.headLift) + 1e-9);
 });

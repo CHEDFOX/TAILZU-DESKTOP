@@ -274,3 +274,14 @@ test("the server's front-only list replaces today's", () => {
   }
   assert.strictEqual(goX("see you soon xo").to, "type", "today's again");
 });
+
+test("blind (Linux, where no text box can be read): typed at once unless the words say where they go", () => {
+  for (const said of ["Can you send me the deck?", "Book a table for eight", "Running late", "What does this error mean?"]) {
+    assert.strictEqual(look(said, UNKNOWN, { blind: true, askOn: false }), "type", said);
+  }
+  for (const said of ["Take notes", "Tailzu, what does this error mean?", "Jarvis plan my Saturday"]) {
+    assert.strictEqual(look(said, UNKNOWN, { blind: true, askOn: false }), "hold", said);
+  }
+  // Not blind, the field merely not read yet (a Mac or Windows read on its way): typed, never held for it, as before.
+  assert.strictEqual(look("Take notes", UNKNOWN), "type");
+});

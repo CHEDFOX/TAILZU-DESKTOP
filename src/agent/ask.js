@@ -62,6 +62,9 @@ function createAsk(ctx) {
   let clipTimer = null;
   let onAudio = null;      // who the next recorded question is for (begin, or an ASK's reply)
   let reply = null;        // the ASK's reply it is, when it is one
+  // An ASK said and waiting for its answer, the microphone NOT open: the next press of the one key (or Alt twice)
+  // opens it for the answer. Nobody answering in replyWaitMs: the run ends quietly.
+  let replyWait = null, replyTimer = null;
   // Counts the questions begun and thrown away, so a tap still waiting to
   // learn which app is in front can tell it has been overtaken.
   let asking = 0;
@@ -158,6 +161,10 @@ function createAsk(ctx) {
     const w = win = new BrowserWindow(Object.assign({}, bounds, {
       frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true,
       focusable: false, resizable: false, movable: false, hasShadow: false, show: false,
+      // The window is never the active one (focusable: false), so on a Mac every click on the card is a "first" click,
+      // which AppKit spends activating the window instead of handing to the button: Do it, Not now and Continue took two
+      // clicks, or none. A first click goes to the button.
+      acceptFirstMouse: true,
       ...(platform === "darwin" ? { type: "panel", enableLargerThanScreen: true } : {}),
       webPreferences: ctx.webPrefs({ backgroundThrottling: false }),
     }));
@@ -207,9 +214,12 @@ function createAsk(ctx) {
     feedCursor();
   }
 
-  // Where the pointer is, in the window's own coordinates, ten times a second
-  // while the window is up and only when it moved: the card works out from it
-  // whether it is under the pointer (guide/ TAKING CLICKS), which a pointer
+  // Where the pointer is, in the window's own coordinates, every frame or two
+  // (desktop.guide.cursorMs, 30 ms) while the window is up and only when it
+  // moved. At ten a second a quick move onto a button and a click landed
+  // before the window took clicks, and went to the app under the card. The
+  // card works out from it
+  // whether it is under the pointer (guide/messages.js TAKING CLICKS), which a pointer
   // that has not moved since the card arrived could never tell it otherwise.
   // It stops by itself once the window is hidden or gone.
   let cursorTimer = null;
@@ -226,7 +236,7 @@ function createAsk(ctx) {
         cursorLast = key;
         send({ type: "cursor", x: p.x - b.x, y: p.y - b.y });
       } catch { clearInterval(cursorTimer); cursorTimer = null; cursorLast = ""; }
-    }, 100);
+    }, Math.max(16, Math.min(200, num("desktop.guide.cursorMs", 30))));
     if (cursorTimer && cursorTimer.unref) cursorTimer.unref();
   }
 
@@ -990,12 +1000,23 @@ function createAsk(ctx) {
       const link = agentCore.safeOpenUrl(url);
       return link && typeof ctx.openExternal === "function" ? ctx.openExternal(link) : false;
     },
-    // An ASK's answer: the microphone again, its clip back to the agent;
-    // opened once the question has been said, or the microphone hears Blip
-    // ask it, and a reply in ask mode ends at its first pause.
+    // An ASK's answer. NOT the microphone at once (desktop.agent.askOpensMic, off): straight after an answer it
+    // was listening before they had decided to say anything, and it heard the room. The question stays on the card
+    // with "Hold {key} to answer"; the next press opens the microphone for the answer (tap), and a reply in ask mode
+    // ends at its first pause. Nobody answers within replyWaitMs: null, and the run ends quietly.
     listen: () => new Promise((resolve) => {
-      onAudio = reply = resolve;
-      afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
+      if (bool("desktop.agent.askOpensMic", false)) {
+        onAudio = reply = resolve;
+        afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
+        return;
+      }
+      clearTimeout(replyTimer);
+      replyWait = resolve;
+      const key = oneKeyName();
+      send({ type: "badge", text: key
+        ? txt("desktop.agent.replyHintOneKey", "Hold {key} to answer", { key })
+        : txt("desktop.agent.replyHint", "Tap {key} twice to answer", { key: str("desktop.agent.tapKey", "Alt") }) });
+      replyTimer = soft(setTimeout(() => { if (replyWait === resolve) { replyWait = null; resolve(null); } }, Math.max(5000, num("desktop.agent.replyWaitMs", 90000))));
     }),
     knob: (name, fallback) => {
       if (typeof fallback === "boolean") return bool(name, fallback);
@@ -1061,6 +1082,14 @@ function createAsk(ctx) {
     // is up means stop, as it does while a run works: a picture is never
     // sent on a pair of taps that may have been begun to stop it.
     if (permitWait) { cancel("tap"); return; }
+    // A question waiting for its answer: this press is the answer. The microphone opens for it now.
+    if (replyWait) {
+      const answer = replyWait; replyWait = null; clearTimeout(replyTimer);
+      send({ type: "badge", text: "" });
+      onAudio = reply = answer;
+      record();
+      return;
+    }
     if (listening) { stopListening(); return; }
     if (agent.active() || onAudio || naming || finalWait) { cancel("tap"); return; }
     // One microphone: while a dictation records, it keeps it.
@@ -1116,6 +1145,7 @@ function createAsk(ctx) {
     if (previewing && streamText) preview(streamText);
   }
   function cancel(reason) {
+    if (replyWait) { const w = replyWait; replyWait = null; clearTimeout(replyTimer); w(null); }
     dropListening();
     if (confirmWait) confirmWait(false);
     if (permitWait) permitWait("no");
@@ -1131,7 +1161,10 @@ function createAsk(ctx) {
    * not (a dictation still has the microphone, signed out, the window could
    * not be told, a private window or a bank: their cards say so).
    */
-  async function askHeard(text) {
+  /** `o.trusted`: the one key's brain read a task or a message they asked
+   *  for in so many words (no money, nothing deleted): its ordinary steps are
+   *  not asked about again (run/risk.js classifyRisk). */
+  async function askHeard(text, o) {
     const words = String(text || "").replace(/\s+/g, " ").trim();
     if (!words) return false;
     if (ctx.dictating && ctx.dictating()) return false;
@@ -1150,7 +1183,7 @@ function createAsk(ctx) {
       return false;
     }
     pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
-    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer });
+    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer, trusted: !!(o && o.trusted === true) });
     if (!agent.active()) return false;     // refused: a private window, a bank
     void agent.heard(null, { text: words, final: true });
     return true;

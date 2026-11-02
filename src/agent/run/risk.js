@@ -201,9 +201,10 @@ function carriesScreenSecret(text, snapshot, target, said) {
  *
  * @param {object} action   the server's action event
  * @param {object} snapshot the snapshot whose ids the action uses
- * @param {{ startApp?: string|string[], said?: string }} [ctx]  the app(s) the
- *        run began in (the snapshot's own app when not given) and everything
- *        the person said in the run (nothing, when not given)
+ * @param {{ startApp?: string|string[], said?: string, trusted?: boolean }} [ctx]  the app(s) the
+ *        run began in (the snapshot's own app when not given), everything
+ *        the person said in the run (nothing, when not given), and whether
+ *        they asked for this task in so many words (the brain's task or send)
  */
 function classifyRisk(action, snapshot, ctx) {
   if (!action || typeof action !== "object") return "free";
@@ -216,10 +217,18 @@ function classifyRisk(action, snapshot, ctx) {
   let risk = "free";
   for (const t of [target && target.label, action.text]) risk = maxRisk(risk, keywordRisk(t));
 
+  // ASKED FOR ALREADY: a task or a message the person gave in so many words
+  // (the one key's brain said task or send, and nothing in it moves money or
+  // deletes). Its ordinary steps (the Enter that sends what they asked to
+  // send, a press on a web page, opening the app the task is in) are what
+  // they asked for, and are not asked about again. Words on the target, the
+  // chords that close, quit or delete, and anything copied off the screen
+  // still are.
+  const asked = c.trusted === true;
   if (kind === "key") {
     const chord = parseChord(action.keys || action.text);
     risk = maxRisk(risk, chordRisk(chord));
-    if (chord.key === "enter" && looksLikeComposer(focused)) risk = maxRisk(risk, "confirm");
+    if (chord.key === "enter" && looksLikeComposer(focused) && !asked) risk = maxRisk(risk, "confirm");
     if (!takesText(focused) && (isPrintable(chord) || chord.key === "delete" || chord.key === "backspace")) {
       risk = maxRisk(risk, "confirm");
     }
@@ -227,11 +236,11 @@ function classifyRisk(action, snapshot, ctx) {
 
   if (kind === "type" && !takesText(focused)) risk = maxRisk(risk, "confirm");
 
-  if (kind === "press" && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
+  if (kind === "press" && !asked && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
     risk = maxRisk(risk, "confirm");
   }
 
-  if (kind === "open") {
+  if (kind === "open" && !asked) {
     const given = c.startApp != null ? [].concat(c.startApp) : [snapshot && snapshot.app && snapshot.app.name];
     const starts = given.filter((s) => typeof s === "string" && s.trim());
     if (!sameApp(action.app || action.text, starts)) risk = maxRisk(risk, "confirm");

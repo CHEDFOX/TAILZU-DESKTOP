@@ -1,6 +1,39 @@
 // The Bots look (DeskPill): the small white pill, Keylessbord's clay microphone
-// and its words, behind the server's bots.app switch.
+// and its words, behind the server's bots.app switch; with Blip
+// (desktop.pill.blip), Blip in place of the microphone, bars, time and ✕.
 "use strict";
+
+// BLIP IS THE SYMBOL (the Bots look, desktop.pill.blip): no microphone, no dots, no tick, no ✕. Blip stands in the
+// pill's left end doing what is happening with his own body (shared/blip.js BLIP_GESTURES): wakes when the key is held,
+// listens with his neck stretched, thinks, flips as something is sent, runs on a job, covers his eye for a password,
+// gives a thumbs-up when it is done. At rest he stands on his own: the white grows out from under his feet only when
+// there are words, and goes back into him when they are gone.
+const BLIP = () => BOTS() && K.bool("desktop.pill.blip", true) && !!(window.TailzuBlip && window.TailzuBlip.createPerformer);
+let blipP = null, blipQuirkAt = 0;
+function blipper() {
+  if (!blipP) blipP = window.TailzuBlip.createPerformer({ dpr: window.devicePixelRatio || 1, reduced: REDUCED() });
+  return blipP;
+}
+/** What a route's label was (routing.js `kind`), as the gesture he does with it. */
+const ROUTED_GESTURE = { done: "done", send: "send", work: "work", look: "look", listen: "listen", routine: "routine", yourTurn: "yourTurn", bot: "send", celebrate: "celebrate" };
+const lerpN = (a, b, k) => a + (b - a) * k;
+let bCapK = 0;
+/** The gesture for a state the pill is put in (setState), from the one it was in. */
+function blipFor(st, data, from) {
+  const p = blipper(), now = clock();
+  if (st === "listening") {
+    // From rest he wakes first, quickly (under a second), and is listening while he does.
+    if (!from || from === "rest" || from === "hidden") p.play("wake", { speed: K.num("desktop.pill.blipWakeSpeed", 2.3), then: "listen", now });
+    else p.play("listen", { now });
+  } else if (st === "writing") p.play("think", { now });
+  else if (st === "done") p.play("done", { now, then: "rest" });
+  else if (st === "error") p.play("oops", { now, then: "rest" });
+  else if (st === "routed") { const g = ROUTED_GESTURE[data.kind] || "done"; p.play(g, { now, then: g === "send" || g === "celebrate" ? "done" : null, again: true }); }
+  else if (st === "ask") p.play("look", { now });
+  else if (from === "writing" || from === "listening") p.play("done", { now, then: "rest" });
+  else p.play("rest", { now });
+  blipQuirkAt = now + 30000 + Math.random() * 20000;
+}
 
 // The app's white and ink, with Keylessbord's clay for what is live. Knobs like every other colour here.
 const B = {
@@ -33,19 +66,24 @@ function bCaption() {
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
 function botsTargets(st) {
   const g = { buttons: 0, show: 1, solid: 1, text: 0 };
-  if (st === "listening") {
+  if (st === "listening" && BLIP()) {
+    // Blip is the whole signal: no bars, no time, no ✕. The white comes only with the words (paperK).
+    const cap = bCaption();
+    g.h = 44; g.w = cap ? 8 + 28 + 14 + bTextW(cap, 15) + 18 : 44;
+  } else if (st === "listening") {
     const cap = bCaption();
     g.h = bDisc() + 16;
     g.w = 8 + bDisc() + 12 + BOTS_BARS * 6 - 3 + 12 + (cap ? bTextW(cap, 15) + 12 : 0) + bTextW("0:00", 12) + 10 + 26 + 10;
   } else if (st === "writing") {
-    g.h = 40; g.w = 6 + 28 + 10 + bTextW(bWriting(), 13, true) + 16;
+    g.h = 40; g.w = 6 + 28 + 10 + bTextW(bWriting(), 13, true) + 16 + (BLIP() ? 10 : 0);
   } else if (st === "rest" || st === "ask") {
     const open = st === "rest" && hovered && restShown && !!hint;
-    g.h = open ? 32 : K.num("desktop.pill.restHeight", 14);
-    g.w = open ? 7 + 18 + 8 + bTextW(hint, 13) + 14 : K.num("desktop.pill.restWidth", 46);
+    const blip = BLIP() && st === "rest";
+    g.h = open ? (blip ? 36 : 32) : blip ? 30 : K.num("desktop.pill.restHeight", 14);
+    g.w = open ? 7 + 18 + 8 + bTextW(hint, 13) + 14 + (blip ? 10 : 0) : blip ? 40 : K.num("desktop.pill.restWidth", 46);
     g.solid = open || st === "ask" ? 1 : 0; g.show = st === "ask" || restShown ? 1 : 0; g.text = open ? 1 : 0;
   } else {
-    g.h = 32; g.w = 12 + 12 + 8 + bTextW(bLabel(), 13) + 14; g.text = 1;
+    g.h = BLIP() ? 36 : 32; g.w = 12 + 12 + 8 + bTextW(bLabel(), 13) + 14 + (BLIP() ? 10 : 0); g.text = 1;
   }
   return g;
 }
@@ -66,23 +104,26 @@ function drawBots(t, now, dt, x0, y0, cy) {
   ctx.save();
   if (st === "error" && t < 0.42) ctx.translate(Math.sin(t * 60) * 3 * (1 - t / 0.42), 0);
   // The pill: white with a line, a soft shadow that firms up once it is in use.
-  ctx.globalAlpha = P.show * (0.86 + 0.14 * P.solid);
+  bCapK = ease(bCapK, st === "listening" && bCaption() ? 1 : 0, 9, dt);
+  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" ? outCubic(bCapK) : 1;
+  ctx.globalAlpha = P.show * (0.86 + 0.14 * P.solid) * paperK;
   ctx.shadowColor = `rgba(0,0,0,${0.08 + 0.06 * P.solid})`; ctx.shadowBlur = 10 + 10 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
   ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, r); ctx.fill();
   ctx.shadowColor = "transparent";
   ctx.strokeStyle = B.line(); ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(x0 + .5, y0 + .5, P.w - 1, P.h - 1, Math.max(0, r - .5)); ctx.stroke();
   ctx.globalAlpha = P.show;
+  const blip = BLIP();
   // What is in it stays in it while it grows and shrinks.
   ctx.save(); ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, r); ctx.clip();
   ctx.textBaseline = "middle";
   if (st === "listening") {
     const d = Math.max(0, P.h - 16), dx = x0 + 8 + d / 2;
-    ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, d / 2, 0, Math.PI * 2); ctx.fill();
-    if (d > 12) bMic(dx, cy, d);
+    if (!blip) { ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, d / 2, 0, Math.PI * 2); ctx.fill(); }
+    if (d > 12 && !blip) bMic(dx, cy, d);
     // The bars: the voice, low in the middle and mirrored outwards; breathing while it waits.
     const talking = now - bandsAt < 250, mid = (BOTS_BARS - 1) / 2, flashP = (now - flashAt) / 1000;
     const bx = x0 + 8 + d + 12, maxH = Math.max(6, Math.min(28, P.h - 24));
-    for (let i = 0; i < BOTS_BARS; i++) {
+    for (let i = 0; i < (blip ? 0 : BOTS_BARS); i++) {
       const dd = Math.abs(i - mid);
       const band = bands[Math.min(bands.length - 1, Math.round(dd * 1.35))] * (1 - 0.08 * ((i * 7) % 3));
       const env = 0.5 + 0.5 * Math.cos(Math.PI * dd / (mid + 1.2));
@@ -96,7 +137,9 @@ function drawBots(t, now, dt, x0, y0, cy) {
     }
     ctx.globalAlpha = P.show;
     const cap = bCaption();
-    if (cap) { ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, bx + BOTS_BARS * 6 - 3 + 12, cy + .5); }
+    if (cap && blip) { ctx.globalAlpha = P.show * clamp((bCapK - .4) / .6); ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, x0 + 8 + 28 + 14, cy + .5); ctx.globalAlpha = P.show; }
+    else if (cap) { ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, bx + BOTS_BARS * 6 - 3 + 12, cy + .5); }
+    if (blip) { /* no time, no ✕: a press on the pill finishes, Esc throws it away */ } else {
     // The time, then the ✕ (cancel; a press anywhere else finishes).
     const c = { x: x0 + P.w - 10 - 13, y: cy, r: 13 };
     // The time and the ✕ come in once the pill has grown round the bars, not over them on the way.
@@ -106,27 +149,27 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const s = 4.2;
     ctx.strokeStyle = overCancel ? B.ink() : B.meta(); ctx.lineWidth = 1.6; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(c.x - s, c.y - s); ctx.lineTo(c.x + s, c.y + s); ctx.moveTo(c.x + s, c.y - s); ctx.lineTo(c.x - s, c.y + s); ctx.stroke();
+    }
   } else if (st === "writing") {
     // The disc's three dots light in turn while the words are written.
     const dx = x0 + 6 + 14;
-    ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, 14, 0, Math.PI * 2); ctx.fill();
+    if (!blip) { ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, 14, 0, Math.PI * 2); ctx.fill(); }
     const pos = REDUCED() ? 1 : ((t * 1.5) % 1.5) * 3 - 0.75;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < (blip ? 0 : 3); i++) {
       ctx.globalAlpha = P.show * (REDUCED() ? .9 : .35 + .65 * Math.exp(-Math.pow(i - pos, 2) * 1.6));
       ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.arc(dx - 6 + i * 6, cy, 2, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = P.show * clamp(P.w / 60 - .4);
-    ctx.font = bFont(13, true); ctx.fillStyle = B.ink(); ctx.fillText(bWriting(), x0 + 6 + 28 + 10, cy + .5);
+    ctx.font = bFont(13, true); ctx.fillStyle = B.ink(); ctx.fillText(bWriting(), x0 + 6 + 28 + 10 + (blip ? 10 : 0), cy + .5);
   } else if (st === "rest" || st === "ask") {
     if (P.text > 0.01) {
       // Hovered: the way in, beside a small clay disc.
       ctx.globalAlpha = P.show * outCubic(P.text);
       const dx = x0 + 7 + 9;
-      ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, 9, 0, Math.PI * 2); ctx.fill();
-      bMic(dx, cy, 18);
-      ctx.font = bFont(13); ctx.fillStyle = B.ink(); ctx.fillText(hint, x0 + 7 + 18 + 8, cy + .5);
+      if (!blip) { ctx.fillStyle = B.clay(); ctx.beginPath(); ctx.arc(dx, cy, 9, 0, Math.PI * 2); ctx.fill(); bMic(dx, cy, 18); }
+      ctx.font = bFont(13); ctx.fillStyle = B.ink(); ctx.fillText(hint, x0 + 7 + 18 + 8 + (blip ? 10 : 0), cy + .5);
     }
-    if (P.text < 0.99) {
+    if (P.text < 0.99 && !blip) {
       // At rest: three small grey dots, the pill's way of saying it is there.
       ctx.globalAlpha = P.show * (1 - P.text) * .8;
       ctx.fillStyle = B.meta();
@@ -138,7 +181,8 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const ix = x0 + 12 + 6, s = 4.5;
     ctx.strokeStyle = B.ink(); ctx.lineWidth = 1.8; ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
-    if (st === "done" || st === "routed") {
+    if (blip) { /* Blip says it with his body: no tick, no ✕ */ }
+    else if (st === "done" || st === "routed") {
       const p = REDUCED() ? 1 : outCubic(t / 0.35);
       ctx.moveTo(ix - s, cy); ctx.lineTo(ix - s + (s * .7) * Math.min(1, p * 2), cy + s * .7 * Math.min(1, p * 2));
       if (p > .5) ctx.lineTo(ix - s * .3 + (s * 1.4) * (p - .5) * 2, cy + s * .7 - (s * 1.5) * (p - .5) * 2);
@@ -147,10 +191,25 @@ function drawBots(t, now, dt, x0, y0, cy) {
     }
     ctx.stroke();
     ctx.font = bFont(13);
-    if (st === "routed") drawRouted(x0 + 12 + 12 + 8, cy, B.meta(), B.ink());
-    else { ctx.fillStyle = B.ink(); ctx.fillText(bLabel(), x0 + 12 + 12 + 8, cy + .5); }
+    const tx = x0 + 12 + 12 + 8 + (blip ? 10 : 0);
+    if (st === "routed") drawRouted(tx, cy, B.meta(), B.ink());
+    else { ctx.fillStyle = B.ink(); ctx.fillText(bLabel(), tx, cy + .5); }
   }
   ctx.restore();
+  // Blip, over the pill's edge: feet in its left end, his head out over the top. Not clipped by it.
+  if (blip && P.show > 0.01) {
+    const pf = blipper();
+    if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
+    let bx, bh;
+    if (st === "listening") { bx = x0 + 8 + 14; bh = 52; }
+    else if (st === "rest") { bx = lerpN(W / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
+    else if (st === "ask") { bx = W / 2; bh = 40; }
+    else { bx = x0 + 6 + 16; bh = 50; }
+    const level = st === "listening" && now - bandsAt < 250 ? Math.min(1, Math.max(...bands) * 1.3) : 0;
+    ctx.globalAlpha = P.show;
+    pf.draw(ctx, bx, y0 + P.h - 2, bh, now, level);
+    moving = true;
+  }
   // Ask: the bead on the small pill's top edge, where the guide's thread leaves it. Clay while it listens.
   if (bead > 0.01) {
     const R = K.num("desktop.pill.askBead", 3.5) * bead, still = REDUCED();
