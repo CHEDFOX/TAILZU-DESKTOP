@@ -116,6 +116,8 @@ function rig(o = {}) {
   const post = fakePost(o.scripts || []);
   const knobs = Object.assign({
     "desktop.agent.settleMs": 0,
+    // These tests are of the microphone opening for an ASK's reply at once; the default waits for the key (ask.test.js).
+    "desktop.agent.askOpensMic": true,
     "desktop.agent.doneMs": 1,
     "desktop.agent.confirmMs": 500,
     "desktop.agent.snapshotTimeoutMs": 200,
