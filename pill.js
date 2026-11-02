@@ -61,6 +61,7 @@ function blipper() {
 /** What a route's label was (routing.js `kind`), as the gesture he does with it. */
 const ROUTED_GESTURE = { done: "done", send: "send", work: "work", look: "look", listen: "listen", routine: "routine", yourTurn: "yourTurn", bot: "send", celebrate: "celebrate" };
 const lerpN = (a, b, k) => a + (b - a) * k;
+let bCapK = 0;
 function blipFor(st, data, from) {
   const p = blipper(), now = clock();
   if (st === "listening") {
@@ -712,7 +713,11 @@ function bCaption() {
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
 function botsTargets(st) {
   const g = { buttons: 0, show: 1, solid: 1, text: 0 };
-  if (st === "listening") {
+  if (st === "listening" && BLIP()) {
+    // Blip is the whole signal: no bars, no time, no ✕. The white comes only with the words (paperK).
+    const cap = bCaption();
+    g.h = 44; g.w = cap ? 8 + 28 + 14 + bTextW(cap, 15) + 18 : 44;
+  } else if (st === "listening") {
     const cap = bCaption();
     g.h = bDisc() + 16;
     g.w = 8 + bDisc() + 12 + BOTS_BARS * 6 - 3 + 12 + (cap ? bTextW(cap, 15) + 12 : 0) + bTextW("0:00", 12) + 10 + 26 + 10;
@@ -746,7 +751,8 @@ function drawBots(t, now, dt, x0, y0, cy) {
   ctx.save();
   if (st === "error" && t < 0.42) ctx.translate(Math.sin(t * 60) * 3 * (1 - t / 0.42), 0);
   // The pill: white with a line, a soft shadow that firms up once it is in use.
-  const paperK = BLIP() && st === "rest" ? outCubic(P.text) : 1;
+  bCapK = ease(bCapK, st === "listening" && bCaption() ? 1 : 0, 9, dt);
+  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" ? outCubic(bCapK) : 1;
   ctx.globalAlpha = P.show * (0.86 + 0.14 * P.solid) * paperK;
   ctx.shadowColor = `rgba(0,0,0,${0.08 + 0.06 * P.solid})`; ctx.shadowBlur = 10 + 10 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
   ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, r); ctx.fill();
@@ -764,7 +770,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
     // The bars: the voice, low in the middle and mirrored outwards; breathing while it waits.
     const talking = now - bandsAt < 250, mid = (BOTS_BARS - 1) / 2, flashP = (now - flashAt) / 1000;
     const bx = x0 + 8 + d + 12, maxH = Math.max(6, Math.min(28, P.h - 24));
-    for (let i = 0; i < BOTS_BARS; i++) {
+    for (let i = 0; i < (blip ? 0 : BOTS_BARS); i++) {
       const dd = Math.abs(i - mid);
       const band = bands[Math.min(bands.length - 1, Math.round(dd * 1.35))] * (1 - 0.08 * ((i * 7) % 3));
       const env = 0.5 + 0.5 * Math.cos(Math.PI * dd / (mid + 1.2));
@@ -778,7 +784,9 @@ function drawBots(t, now, dt, x0, y0, cy) {
     }
     ctx.globalAlpha = P.show;
     const cap = bCaption();
-    if (cap) { ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, bx + BOTS_BARS * 6 - 3 + 12, cy + .5); }
+    if (cap && blip) { ctx.globalAlpha = P.show * clamp((bCapK - .4) / .6); ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, x0 + 8 + 28 + 14, cy + .5); ctx.globalAlpha = P.show; }
+    else if (cap) { ctx.font = bFont(15); ctx.fillStyle = B.ink(); ctx.fillText(cap, bx + BOTS_BARS * 6 - 3 + 12, cy + .5); }
+    if (blip) { /* no time, no ✕: a press on the pill finishes, Esc throws it away */ } else {
     // The time, then the ✕ (cancel; a press anywhere else finishes).
     const c = { x: x0 + P.w - 10 - 13, y: cy, r: 13 };
     // The time and the ✕ come in once the pill has grown round the bars, not over them on the way.
@@ -788,6 +796,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const s = 4.2;
     ctx.strokeStyle = overCancel ? B.ink() : B.meta(); ctx.lineWidth = 1.6; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(c.x - s, c.y - s); ctx.lineTo(c.x + s, c.y + s); ctx.moveTo(c.x + s, c.y - s); ctx.lineTo(c.x - s, c.y + s); ctx.stroke();
+    }
   } else if (st === "writing") {
     // The disc's three dots light in turn while the words are written.
     const dx = x0 + 6 + 14;
@@ -839,7 +848,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const pf = blipper();
     if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
     let bx, bh;
-    if (st === "listening") { const d = Math.max(0, P.h - 16); bx = x0 + 8 + d / 2; bh = P.h * 1.15; }
+    if (st === "listening") { bx = x0 + 8 + 14; bh = 52; }
     else if (st === "rest") { bx = lerpN(W / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
     else if (st === "ask") { bx = W / 2; bh = 40; }
     else { bx = x0 + 6 + 16; bh = 50; }
@@ -874,6 +883,7 @@ function inside(x, y, pad = 4) {
 }
 function onCancel(x, y) {
   if (S.name !== "listening") return false;
+  if (BLIP()) return false;
   if (BOTS()) { const c = botsCancel(); return Math.hypot(x - c.x, y - c.y) <= c.r + 2; }
   if (apart()) return SP.podAt(podsNow(), x, y, 0) === "cancel";
   const r = pillRect(); return Math.hypot(x - (r.x + r.h / 2), y - (r.y + r.h / 2)) <= r.h / 2;
