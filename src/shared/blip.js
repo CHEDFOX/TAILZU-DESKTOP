@@ -814,7 +814,6 @@
       if (last) { g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, canvas.width, canvas.height); last = null; }
     }
 
-    function setPose(name) { if (WALKER_POSES[name]) { bot.pose = name; dirty = true; wake(); } }
     function setReduced(on) { o.reduced = !!on; dirty = true; wake(); }
 
     /** Moves him along his journey to the time `ms`. */
@@ -929,8 +928,8 @@
     }
 
     return {
-      size, snap, travel, go, retarget, hide, tick, draw, frame,
-      pose: setPose, reduced: setReduced,
+      size, snap, go, retarget, hide, tick, draw, frame,
+      reduced: setReduced,
       /** The wall clock for tests: where he is and what he is doing. */
       state() {
         return {
