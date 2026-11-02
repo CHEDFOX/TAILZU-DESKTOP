@@ -14,6 +14,7 @@ async function settle() { for (let i = 0; i < 6; i++) await tick(); }
 function rig(o = {}) {
   const did = [];
   const pills = [];
+  const kinds = [];
   let timers = [];
   const knobs = Object.assign({ "desktop.route.labelMs": 5000, "desktop.route.botGraceMs": 3500, "desktop.route.notesGraceMs": 2000 }, o.decide ? { "desktop.route.brain": true } : {}, o.knobs);
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
@@ -31,7 +32,8 @@ function rig(o = {}) {
     whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan Ease", confidence: 0.9 }; },
     sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Plan Ease", text: "Saturday is planned." }; },
     botAnswered: (a) => did.push(["answered", a.name, a.text]),
-    pill: (state, data) => pills.push([state, data || {}]),
+    // What Blip does with a label (kind) is checked on its own; the rest of the data as it always was.
+    pill: (state, data) => { const { kind, ...rest } = data || {}; kinds.push(kind); pills.push([state, rest]); },
     pillRest: () => pills.push(["rest?"]),
     knobs: { num: pick, bool: pick, txt: (k, f, v) => (v ? f.replace(/\{(\w+)\}/g, (m, n) => v[n] ?? m) : f) },
     setTimeout: (f, ms) => { const t = { f, ms }; timers.push(t); return t; },
@@ -39,7 +41,7 @@ function rig(o = {}) {
   });
   /** Run the timers, shortest first (the grace before the label's end). */
   const elapse = () => { const ts = timers.slice().sort((a, b) => a.ms - b.ms); timers = []; for (const t of ts) t.f(); };
-  return { r, did, pills, elapse, timers: () => timers, lastPill: () => pills[pills.length - 1] };
+  return { r, did, pills, kinds, elapse, timers: () => timers, lastPill: () => pills[pills.length - 1] };
 }
 const BOX = { kind: "text", selection: "" };
 
@@ -491,4 +493,18 @@ test("brain: a write with text selected is the server's rewrite of it", async ()
   said(h, 1, "make this shorter", { kind: "text", selection: "a long paragraph" });
   await settle();
   assert.deepStrictEqual(h.did.find((x) => x[0] === "type"), ["type", 1, ["make this shorter"]]);
+});
+
+test("the pill is told what Blip does with each label: sent a flip, a task he runs, a routine his dance, typed done", async () => {
+  const send = rig({ decide: () => ({ do: "send", goal: "Tell Riya", risk: "send", sure: .9, by: "model", missing: [] }) });
+  said(send, 1, "tell riya", null); await settle();
+  assert.strictEqual(send.kinds.filter(Boolean).pop(), "send");
+  const task = rig({ decide: () => ({ do: "task", goal: "Unsubscribe", risk: "none", sure: .9, by: "model", missing: [] }) });
+  said(task, 1, "unsubscribe me", null); await settle();
+  assert.strictEqual(task.kinds.filter(Boolean).pop(), "work");
+  const routine = rig({ decide: () => ({ do: "routine", goal: "Every morning", sure: .9, by: "model" }), routine: () => ({ text: "saved" }) });
+  said(routine, 1, "every morning", null); await settle();
+  assert.strictEqual(routine.kinds.filter(Boolean).pop(), "routine");
+  routine.elapse(); await settle();
+  assert.strictEqual(routine.kinds.filter(Boolean).pop(), "done", "once it has gone, a thumbs-up");
 });
