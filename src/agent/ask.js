@@ -35,7 +35,7 @@
  * Kept apart from main.js, with everything it needs handed in, so the order
  * of what happens can be read in one place and tested without Electron.
  */
-const agentCore = require("./agent.js");
+const agentCore = require("./run/agent.js");
 
 // ---- the pill (main.js pillAsk) ------------------------------------------------------
 // A question grows out of the pill: its halves part, and the guide's thread

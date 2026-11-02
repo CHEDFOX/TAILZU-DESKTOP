@@ -10,7 +10,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
 const { createAsk, pillAskMove, capsuleRect, createPeekWatch, createAskSetup } = require("./ask.js");
-const agentCore = require("./agent.js");
+const agentCore = require("./run/agent.js");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(cond, ms = 2000) {
