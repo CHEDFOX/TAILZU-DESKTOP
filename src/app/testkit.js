@@ -9,13 +9,19 @@ function appScripts() {
   return [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => path.resolve(__dirname, m[1]));
 }
 
-/** The files behind `names`, the scripts' own file names ("knobs.js", "sdui.js"), in the order given. */
+/**
+ * The files behind `names`, the scripts' own file names ("knobs.js",
+ * "sdui.js"), in the order given. "sdui.js" stands for the renderer, which
+ * app.html loads as the files in src/app/sdui/, in its order.
+ */
 function pageFiles(names) {
   const all = appScripts();
-  return names.map((name) => {
+  const sdui = path.join(__dirname, "sdui") + path.sep;
+  return names.flatMap((name) => {
+    if (name === "sdui.js") return all.filter((f) => f.startsWith(sdui));
     const f = all.find((p) => path.basename(p) === name);
     if (!f) throw new Error(`app.html loads no ${name}`);
-    return f;
+    return [f];
   });
 }
 
