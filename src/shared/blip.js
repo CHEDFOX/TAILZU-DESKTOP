@@ -1021,6 +1021,40 @@
     float: (t) => { const k = io(clamp(t / .7)); return { headLift: .42 * k + .03 * Math.sin(t * 3), tilt: .15 * Math.sin(t * 2), ra: [2.2, .3], la: [2.2, .3], eye: "wide", lid: 0, brows: 1, look: [0, 1], antSpin: .3 * Math.sin(t * 2.5), mouth: "o", mouthOpen: .4 }; },
     jelly: (t) => { const w = Math.sin(t * 22) * Math.exp(-t * 1.5); return { sqx: 1 + .14 * w, sqy: 1 - .14 * w, tilt: .1 * w, antSpin: .8 * w, ra: [.5 + .5 * w, .2], la: [.5 - .5 * w, .2], mouth: "grin", lid: .2 }; },
     dizzy: (t) => ({ antSpin: t * 10, antLen: 1.3, tilt: .14 * Math.sin(t * 4), spin: .05 * Math.sin(t * 3), ra: [.6, .4], la: [.6, .4], eye: t > .8 ? "spiral" : "wide", lid: 0, mouth: "o", mouthOpen: .5, look: [Math.sin(t * 10), -1] }),
+
+    // ---- In a conversation, and at random: odder moves, still nothing but his body.
+    // talk: answering out loud; his mouth and the antenna's ball keep time with the words.
+    talk: (t) => { const w = Math.abs(Math.sin(t * 11)) * (Math.sin(t * 2.7) > -.6 ? 1 : .2); return { mouth: "o", mouthOpen: .25 + .75 * w, ra: [.9 + .25 * Math.sin(t * 2.1), -.9], la: [.3, .2], tilt: -.05 + .05 * Math.sin(t * 1.7), brows: .55, lid: .12, glow: .3 + .4 * w, bob: .006 * w }; },
+    // laugh: doubled over, shaking, eye squeezed shut.
+    laugh: (t) => { const s = Math.sin(t * 34); return { spin: .3 + .03 * s, sqy: .94 + .02 * s, ra: [.6, -1.6], la: [.6, -1.6], lid: .85, mouth: "grin", tilt: .15 + .04 * s, bob: .01 * Math.abs(s), antSpin: .3 * s, brows: .9 }; },
+    // facepalm: one hand over his great eye, head down, a slow shake.
+    facepalm: (t) => ({ handsOver: true, ra: [2.95, 1.35], la: [.2, .15], tilt: .18 + .06 * Math.sin(t * 3), headLift: -.03, brows: -.5, mouth: "flat", antSpin: 1.1 }),
+    // sneeze: the build-up, then a jolt that throws his antennae and his head back.
+    sneeze: (t) => {
+      if (t < .7) { const k = t / .7; return { tilt: -.25 * k, headLift: .04 * k, lid: .5 * k, mouth: "o", mouthOpen: .3 + .4 * k, brows: .9, ra: [.4, .2], la: [.4, .2] }; }
+      const k = clamp((t - .7) / .5), j = Math.exp(-k * 5) * Math.cos(k * 18);
+      return { tilt: .35 * j, headLift: .08 * j, antSpin: 2.2 * j, antLen: 1 + .3 * Math.abs(j), lid: .9, mouth: "o", mouthOpen: 1, hop: .06 * Math.max(0, j), ra: [.9, .3], la: [.9, .3] };
+    },
+    // moonwalk: gliding backwards while his feet step forwards.
+    moonwalk: (t) => { const r = run(t, 7); return { legs: r.legs, spin: -.08, ra: [.3 + .2 * r.a, .2], la: [2.4, -.2], tilt: -.12, lid: .3, mouth: "grin", look: [-1, 0], bob: .01 * Math.abs(r.a) }; },
+    // headbang: fast nods, antennae whipping.
+    headbang: (t) => { const n = Math.sin(t * 22); return { tilt: .3 * n, headLift: -.02 + .03 * Math.abs(n), antSpin: -1.2 * n, ra: [2.7, -.2], la: [.3, .2], lid: .7, mouth: "o", mouthOpen: .6, bob: .015 * Math.abs(n) }; },
+    // shy: hands over his eye, twisting on the spot, one peek through his fingers.
+    shy: (t) => { const peek = (t % 2.4) > 1.6 && (t % 2.4) < 2.0; return { handsOver: true, ra: [2.95, 1.35], la: peek ? [1.9, .6] : [2.95, 1.35], spin: .06 * Math.sin(t * 2.5), tilt: -.12, sqy: .97, legs: [{ th: .15 * Math.sin(t * 2.5), lift: 0 }, { th: -.1, lift: 0 }], mouth: "flat" }; },
+    // nope: crossed arms, a fast shake of the head, eye shut.
+    nope: (t) => ({ ra: [1.35, -1.9], la: [1.35, -1.9], tilt: .22 * Math.sin(t * 18) * Math.exp(-(t % 1.2) * 2), lid: .9, mouth: "flat", brows: -.6 }),
+    // shiver: cold, every part of him trembling, arms wrapped round.
+    shiver: (t) => { const j = Math.sin(t * 60); return { ra: [1.3, -2.1], la: [1.3, -2.1], sqx: 1 + .015 * j, sqy: .97 - .01 * j, tilt: .03 * j, antSpin: .2 * j, lid: .4, mouth: "flat", headLift: -.03 }; },
+    // tiptoe: a big careful sneak, crouched, looking both ways.
+    tiptoe: (t) => { const r = run(t, 4); return { legs: r.legs.map((l) => ({ th: l.th * 1.4, lift: l.lift * 2.2 })), sqy: .9, ra: [1.6, -1.2], la: [1.6, -1.2], look: [Math.sin(t * 1.5), -.2], eye: "wide", lid: 0, mouth: "flat", bob: .02 * Math.abs(r.a) }; },
+    // balance: on one leg, arms out, wobbling, nearly over.
+    balance: (t) => { const w = Math.sin(t * 2.3) + .4 * Math.sin(t * 5.1); return { legs: [{ th: 0, lift: 0 }, { th: -.9, lift: .14 }], spin: .12 * w, ra: [1.62, .1 * w], la: [1.62, -.1 * w], tilt: -.1 * w, eye: "wide", lid: 0, mouth: "o", mouthOpen: .3 }; },
+    // peekaboo: hands over his eye, then thrown open, eye wide.
+    peekaboo: (t) => { const open = (t % 1.6) > 1.0; return open ? { ra: [2.5, -.2], la: [2.5, -.2], eye: "wide", lid: 0, mouth: "grin", hop: .05, brows: 1 } : { handsOver: true, ra: [2.95, 1.35], la: [2.95, 1.35], mouth: "flat", sqy: .97 }; },
+    // propeller: both antennae spun up, a little lift off the ground, legs dangling.
+    propeller: (t) => ({ antSpin: t * 18, antLen: 1.25, hop: .12 + .03 * Math.sin(t * 6), legs: [{ th: .2 * Math.sin(t * 5), lift: 0 }, { th: -.2 * Math.sin(t * 5), lift: 0 }], ra: [1.62, .1], la: [1.62, .1], eye: "wide", lid: 0, mouth: "grin" }),
+    // ponder: the deep think for a hard question: hand on chin, eye rolling up, antennae circling slowly.
+    ponder: (t) => ({ ra: [1.9, 2.75], la: [1.2, -1.9], tilt: .2 + .05 * Math.sin(t), look: [.3 * Math.sin(t * .8), -1], lid: .25, brows: .95, antSpin: t * 1.6, antLen: 1.15, glow: .3 + .3 * Math.abs(Math.sin(t * 2)) }),
   };
   const NUM = ["tilt", "brows", "headLift", "headSpin", "antSpin", "antLen", "lid", "sqx", "sqy", "spin", "hop", "bob", "glow", "mouthOpen", "antWob", "thumb", "point"];
   const DEF = { tilt: -.03, brows: .45, headLift: 0, headSpin: 0, antSpin: 0, antLen: 1, lid: .18, sqx: 1, sqy: 1, spin: 0, hop: 0, bob: 0, glow: 0, mouthOpen: 0, antWob: 0, thumb: 0, point: 0 };
@@ -1038,8 +1072,10 @@
   }
 
   /** How long a gesture plays before it is over (the ones that end); the rest loop. */
-  const GESTURE_LENGTH = { wake: 2.1, send: 1.15, done: 1.4, celebrate: 1.05, oops: 1.1, melt: 1.35, float: 2.2, jelly: 1.6, dizzy: 2.2 };
-  const QUIRKS = ["melt", "float", "jelly", "dizzy"];
+  const GESTURE_LENGTH = { wake: 2.1, send: 1.15, done: 1.4, celebrate: 1.05, oops: 1.1, melt: 1.35, float: 2.2, jelly: 1.6, dizzy: 2.2,
+    laugh: 1.8, sneeze: 1.4, moonwalk: 2.4, headbang: 1.6, nope: 1.2, shiver: 1.6, tiptoe: 2.4, balance: 2.6, peekaboo: 2.4, propeller: 2.2 };
+  // What he does at random while he waits.
+  const QUIRKS = ["melt", "float", "jelly", "dizzy", "sneeze", "moonwalk", "headbang", "shiver", "tiptoe", "balance", "peekaboo", "propeller"];
 
   /**
    * A Blip that plays gestures: play(name, { speed, then }) switches to one (blended in over 220 ms; `then` follows
