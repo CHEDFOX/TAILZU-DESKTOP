@@ -3085,7 +3085,8 @@ const routing = createRouting({
   // given comes back, and is asked for only then (needGrant).
   decide: (i) => apiJson("/v1/ask/decide", {
     method: "POST",
-    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined })),
+    // tz: the person's offset from UTC in minutes, for the context the server keeps (src/context there).
+    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined, tz: -new Date().getTimezoneOffset() })),
   }),
   // A routine, saved from what was said: the server's draft, then the routine.
   routine: async (goal) => {
