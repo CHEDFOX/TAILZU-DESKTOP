@@ -946,8 +946,12 @@ const ALWAYS_WORDS = words([
   "order", "check-?out", "transfer", "subscribe", "cancel\\s+(?:my\\s+|your\\s+|the\\s+)?subscription",
 ]);
 
-function keywordRisk(text) {
-  const t = str(text);
+/** The words of plain sending: what a message they asked for is sent with. Asked for in so many words (trusted), these are their
+ *  yes already; reply-all, share, invite, publish and the rest still ask, and paying or deleting always does. */
+const SEND_WORDS = words(["send", "post", "submit"]);
+
+function keywordRisk(text, asked) {
+  const t = asked === true ? str(text).replace(new RegExp(SEND_WORDS.source, "giu"), " ") : str(text);
   if (!t) return "free";
   if (ALWAYS_WORDS.test(t)) return "always";
   if (CONFIRM_WORDS.test(t)) return "confirm";
@@ -1129,6 +1133,14 @@ function carriesScreenSecret(text, snapshot, target, said) {
  *        the person said in the run (nothing, when not given), and whether
  *        they asked for this task in so many words (the brain's task or send)
  */
+/** The risk in an action's words alone: its target's label and its text (keywordRisk). */
+function wordsRisk(action, snapshot, asked) {
+  if (!action || typeof action !== "object") return "free";
+  const els = elementsOf(snapshot);
+  const named = action.id != null ? els.find((e) => e.id === String(action.id)) || null : null;
+  return maxRisk(keywordRisk(named && named.label, asked), keywordRisk(action.text, asked));
+}
+
 function classifyRisk(action, snapshot, ctx) {
   if (!action || typeof action !== "object") return "free";
   const c = ctx || {};
@@ -1138,7 +1150,10 @@ function classifyRisk(action, snapshot, ctx) {
   const named = action.id != null ? els.find((e) => e.id === String(action.id)) || null : null;
   const target = named || (kind === "type" || kind === "key" ? focused : null);
   let risk = "free";
-  for (const t of [target && target.label, action.text]) risk = maxRisk(risk, keywordRisk(t));
+  // A message they asked for, typed into a message box: its words are what they want said ("the checkout mockups are
+  // ready" pays for nothing); the press that sends it is checked on its own. A command typed anywhere else still is.
+  const messageWords = c.trusted === true && (kind === "type" || kind === "set") && looksLikeComposer(target);
+  for (const t of [target && target.label, messageWords ? "" : action.text]) risk = maxRisk(risk, keywordRisk(t, c.trusted === true));
 
   // ASKED FOR ALREADY: a task or a message the person gave in so many words
   // (the one key's brain said task or send, and nothing in it moves money or
@@ -2093,7 +2108,12 @@ function createAgent(deps) {
     }
 
     const mine = classifyRisk(a, run.snapshot, { startApp: startApps(run), said: saidSoFar(run), trusted: run.trusted === true });
-    const risk = maxRisk(maxRisk(a.risk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
+    // ASKED FOR ALREADY, the server's side too: the send they asked to send is marked "confirm" by the server as every send
+    // is. A task or a message they gave in so many words (trusted) takes that as their yes, unless the words on the target or
+    // in the text are themselves risky (pay, delete…) or the server says "always". Found end to end: a trusted message still
+    // asked "Send to #design: …?" before the one press they had asked for.
+    const serverRisk = run.trusted === true && a.risk === "confirm" && wordsRisk(a, run.snapshot, true) === "free" ? "free" : a.risk;
+    const risk = maxRisk(maxRisk(serverRisk, mine), bool("desktop.agent.confirmAll", false) ? "confirm" : "free");
 
     if (frame) tell(run, "point", frame);
     if (risk !== "free") {
