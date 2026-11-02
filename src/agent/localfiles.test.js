@@ -12,7 +12,8 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createLocalFiles, createFolderSettings, higher, RISK, MAX_FILES, fill, EN_WORDS } = require("./localfiles.js");
+const { createLocalFiles, higher, RISK, MAX_FILES, fill, EN_WORDS } = require("./localfiles.js");
+const { createFolderSettings } = require("./folderSettings.js");
 
 // ---- fixtures ---------------------------------------------------------------
 

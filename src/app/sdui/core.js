@@ -122,7 +122,7 @@ const SYSTEM_AUDIO = "DeskSystemAudio";
  *  permission states only the main process can read. */
 const ASK_SETUP_CARD = "DeskAskSetup";
 /** The allowed-folders row under Ask (Settings): which folders Ask may work in,
- *  kept by the main process (localfiles.js createFolderSettings). Declared with
+ *  kept by the main process (folderSettings.js). Declared with
  *  the setup card, in the same copies that have Ask. */
 const FOLDERS_CARD = "DeskFolders";
 /** This window shows the assistant's side: Connected apps in Settings, the
