@@ -1653,16 +1653,6 @@ function createAgent(deps) {
     return loop(run, { audio: clipIn, text, final: o.final === true });
   }
 
-  /** The same, with typed words instead of a recording. */
-  function typed(text) {
-    const run = current;
-    if (!run || run.started) { log("agent: typed with no run waiting for it"); return Promise.resolve(); }
-    const words = clip(squash(text), 1000);
-    if (!words) { finish(run, "quiet"); return Promise.resolve(); }
-    run.goal = words;
-    return loop(run, { utterance: words });
-  }
-
   /** Esc, the card's ×, Alt twice while running — whatever the integrator
    *  wires to it. Only ever called on purpose: the key hook cannot tell this
    *  run's own synthetic keys and clicks from the person's, so "they started
@@ -1683,7 +1673,7 @@ function createAgent(deps) {
 
   function active() { return !!current; }
 
-  return { begin, heard, typed, preview, cancel, active };
+  return { begin, heard, preview, cancel, active };
 }
 
 // ask.js takes the run, and the three pieces of it it uses on its own.

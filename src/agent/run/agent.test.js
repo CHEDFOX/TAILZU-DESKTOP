@@ -328,18 +328,6 @@ test("a do run over two steps: history carried, the change noted, the new screen
   assert.strictEqual(r.agent.active(), false);
 });
 
-test("typed words go as the utterance, on step 0 and again after", async () => {
-  const AFTER = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e1" });
-  const r = rig({ snaps: [SLACK, AFTER], scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]] });
-  r.agent.begin({ app: "Slack" });
-  await r.agent.typed("  export  ");
-  const [a, b] = r.post.requests;
-  assert.strictEqual(a.audio, null);
-  assert.strictEqual(a.req.utterance, "export");
-  assert.strictEqual(b.req.utterance, "export");
-  assert.strictEqual(b.req.history[0].said, "export");
-});
-
 // ---- confirmation -------------------------------------------------------------
 
 const AFTER_SEND = snap([EXPORT, COMPOSER, SEND, HEADING, { id: "e5", role: "text", label: "hi", frame: [100, 400, 100, 20] }], { focused: "e2" });
@@ -1018,15 +1006,12 @@ test("a guide that throws everywhere does not break the run", async () => {
   assert.ok(r.logs.some((l) => /guide\.\w+ threw/.test(l)));
 });
 
-test("empty audio, or empty words, ends the run quietly", async () => {
+test("empty audio ends the run quietly", async () => {
   const r = rig();
   r.agent.begin({ app: "Slack" });
   await r.agent.heard({ mime: "audio/webm", data: Buffer.alloc(0) });
   assert.strictEqual(r.post.requests.length, 0);
   assert.strictEqual(r.agent.active(), false);
-  r.agent.begin({ app: "Slack" });
-  await r.agent.typed("   ");
-  assert.strictEqual(r.post.requests.length, 0);
 });
 
 test("a post given as an async function returning the stream works the same", async () => {
