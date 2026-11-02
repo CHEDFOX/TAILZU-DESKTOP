@@ -105,7 +105,7 @@ notarization worked.
 
 ## Updates
 
-From 0.2.2 a build installs its own updates (updater.js). Publishing records
+From 0.2.2 a build installs its own updates (src/main/updater.js). Publishing records
 the installer's SHA-512 beside it (receive-download.sh, backend), and the
 window's update card gets an "Update now" button: it downloads the new build
 from our site (x0bot.com; tailzu.space for builds up to 0.4.4, which trust no
@@ -158,9 +158,9 @@ never sent), and when it cannot tell which window is in front it does not
 look. It never watches your input to stop itself (the key
 hook cannot tell its keys from yours) and never puts an old clipboard back.
 
-The explanation box is redesigned with it (`guide.html`): ink and pale with
+The explanation box is redesigned with it (`src/agent/guide/guide.html`): ink and pale with
 the films' dots under it, a mono eyebrow with the state, what you said in
-the serif, the answer in the sans. The live-caption strip (`overlay.html`)
+the serif, the answer in the sans. The live-caption strip (`src/dictation/overlay/overlay.html`)
 is restyled to match. While Ask is on, **Alt twice asks** and **Ctrl twice
 dictates**; `desktop.agent.enabled` turns Ask off (Alt dictates again).
 `guide.html?demo` shows every state. Needs the Accessibility permission the
@@ -168,7 +168,7 @@ auto-paste already asks for. Linux has no driver yet, so no Ask.
 
 **Instant answers.** A question records on the live stream, so its words
 arrive while it is still being said. The device matches them against what
-is on screen itself (`resolver.js`, the server's matcher ported), and a
+is on screen itself (`src/agent/resolver.js`, the server's matcher ported), and a
 confident "where's export?" rings the button as the word is said, a thinner
 dotted ring that firms up when the question ends. A question that is only
 "where is X" makes no Ask request at all; its words still come from the
@@ -263,7 +263,7 @@ Select a paragraph, say "make this bullet points" (or "shorter", "more
 formal", "in Hindi"), and the paragraph is rewritten that way and put back
 in its place. It used to write the instruction itself over the selection:
 the selection never left this computer, so the server took what was said as
-a dictation. The field read at the press (frontApp.js) now reads what is
+a dictation. The field read at the press (src/context/frontApp.js) now reads what is
 selected too (AXSelectedText on a Mac; UI Automation's TextPattern selection
 on Windows, only in a field that can be written in), and it goes with the
 session's first request (`selection` on `/v1/transcribe-clean` and on the
@@ -297,7 +297,7 @@ window swapped the page that was up for "Loading…" on the legacy ground, which
 is black — a dark slab across the desk's paper until the next page landed. Now
 the page that is up **stays up**, under a veil of its own paper colour and out
 of reach, and a thin amber line runs along the top of the window until the
-next one lands (`#main[data-wait]` in app.html, set by `paint()` in sdui.js).
+next one lands (`#main[data-wait]` in src/app/app.html, set by `paint()` in src/app/sdui/navigation.js).
 The line's delay is a new knob, `desktop.screen.waitMs` (700 ms). The old
 `desktop.screen.slowMs` only timed the black sheet, so the server now holds it
 at a minute: builds before 0.3.12 stop showing the sheet without an update and
@@ -309,7 +309,7 @@ Today, Insights and Notes need no build at all.
 ### 0.3.11 — the pill is pulled apart and pulled home on a thread
 
 The split pill's separation is no longer paced on a clock — it is a **damped
-spring** (pillSplit.js), so the thread between the two halves reads as a
+spring** (src/dictation/pill/pillSplit.js), so the thread between the two halves reads as a
 physical thing. Coming apart, the halves ease out and the thread stretches
 taut. On stop, the thread's tension **pulls both halves home**: a stiffer,
 lighter-damped yank that accelerates them inward and overshoots the join a
@@ -358,7 +358,7 @@ On macOS the first capture shows the system's Screen Recording prompt
 once; Windows shows none. Knobs: `desktop.ocr.read` (on),
 `desktop.ocr.minChars` (the thin threshold, 80), `desktop.ocr.maxSide`,
 `desktop.ocr.timeoutMs`, `desktop.ocr.cacheMs`. CI builds the Vision helper
-and runs both OCR engines against a known test image (nativeCheck.js). Not
+and runs both OCR engines against a known test image (scripts/nativeCheck.js). Not
 yet tried in real apps on a real machine; `desktop.ocr.read` turns it off.
 
 ### 0.3.8 — it reads the screen around the field
@@ -387,7 +387,7 @@ or empty read costs nothing but the help — the mic starts regardless. It
 is one shared blob, cleaned and cut to 2000 characters from the newest
 lines. Knobs: `desktop.surroundings.read` (on), `desktop.surroundings.chars`,
 `desktop.surroundings.timeoutMs`. CI runs the Windows walk for real and
-compiles the Mac gather (nativeCheck.js). Not yet tried in real apps on a
+compiles the Mac gather (scripts/nativeCheck.js). Not yet tried in real apps on a
 real machine; the knob disables it instantly if it ever misbehaves.
 
 ### 0.3.7 — it knows the field it is writing into
@@ -415,7 +415,7 @@ read or described. On a Mac, Electron and Chromium apps are asked to build
 their accessibility tree (AXManualAccessibility), which changes nothing
 else about them. Linux reads no field yet. `desktop.field.read` turns it
 off; `desktop.field.chars` and `desktop.field.timeoutMs` bound it. CI now
-runs the Windows reader for real and compiles the Mac one (nativeCheck.js).
+runs the Windows reader for real and compiles the Mac one (scripts/nativeCheck.js).
 
 ### 0.3.6 — the pill comes apart while it listens
 
@@ -475,10 +475,10 @@ and in the account's own voice (no tone is sent; the server uses the
 account's, as it does for the phone). A pause writes a paragraph, not a
 phrase: short dictations are written whole when they stop. Nothing without
 a voice in it is uploaded — the meter reads every sample and tells a voice
-from a breath, a keyboard, a fan or a hum (speechMeter.js) — so silence no
+from a breath, a keyboard, a fan or a hum (src/shared/speechMeter.js) — so silence no
 longer comes back as "Thank you.". Stretches go one after another, each with
 exactly what was written before it, and join with one space or none as the
-script and punctuation want (the server's `joinWithSpace`, or pasteJoin.js).
+script and punctuation want (the server's `joinWithSpace`, or src/dictation/pasteJoin.js).
 Each request gets a fresh token, and a refused one is renewed and resent. A
 live dictation sends the second engine's reading to the refine step; a
 failed refine is said as a failure, not pasted raw.

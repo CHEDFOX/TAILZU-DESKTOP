@@ -6,14 +6,15 @@
 // "Cannot find module", which is how 0.3.3 reached the Store and x0bot.com
 // without frontApp.js. So this walks what the app loads at run time, from
 // package.json's main through every require, loadFile, preload, page script,
-// font and frame, and holds three things:
+// font and frame, and holds four things:
 //
 //   - every relative path in the source resolves to a file (requires, page
 //     scripts and fonts, loadFile, __dirname joins, package.json's scripts,
 //     the CI workflow's);
 //   - everything the app loads is shipped (build.files, or extraResources);
 //   - everything shipped from src/ is loaded by something, and no test,
-//     fixture or test kit is shipped.
+//     fixture or test kit is shipped;
+//   - the docs (README.md, RELEASE.md, archi.md) name only paths that exist.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -173,4 +174,16 @@ test("everything shipped from src/ is loaded, and no test, fixture or test kit i
   for (const f of pkg.build.files.filter((p) => !p.includes("*") && !p.startsWith("!"))) {
     assert.ok(isFile(path.join(ROOT, f)), `build.files names ${f}, which is not there`);
   }
+});
+
+test("the docs name only paths that exist", () => {
+  const gone = [];
+  for (const doc of ["README.md", "RELEASE.md", "archi.md"]) {
+    const text = read(path.join(ROOT, doc));
+    for (const m of text.matchAll(/(?<![\w/.-])((?:src|native|scripts|test|assets|docs)\/[\w./-]*[\w/])/g)) {
+      const p = m[1].replace(/\/$/, "");
+      if (!fs.existsSync(path.join(ROOT, p))) gone.push(`${doc}: ${m[1]}`);
+    }
+  }
+  assert.deepStrictEqual(gone, [], "paths in the docs that are not in the repo:\n  " + gone.join("\n  "));
 });
