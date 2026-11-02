@@ -45,6 +45,11 @@ const { setupLiveViews } = require("../app/liveViewMain.js");
 // The server's values for everything below that used to be a literal. Each
 // call names its key and keeps the old literal as the fallback — see knobs.js.
 const { setKnobs, txt, num, bool, str, color, list, obj } = require("../../knobs.js");
+// Parts of the main process with no state of their own, each in its own file.
+const { SHELL_DEFAULTS, mergeShell, shellOf } = require("./shell.js");
+const { SUPABASE_URL, SUPABASE_ANON_KEY, redirectUrl, loopbackUrl, awaitLoopbackCode, b64url, authorizeUrl, exchangeCode } = require("./oauth.js");
+const { webPrefs, fitToDisplay, hardenWindow, overlayBounds, pillBounds, setBoundsExactly } = require("./windows.js");
+const { screenFromLink } = require("./links.js");
 
 // ---- The Microsoft Store copy keeps its own folder ----------------------------
 // A Store (MSIX) app's NEW files under %APPDATA% go to a private per-app place
@@ -93,12 +98,6 @@ const configPath = app.isPackaged
 const sessionPath = app.isPackaged
   ? path.join(app.getPath("userData"), "session.json")
   : path.join(__dirname, "..", "..", "session.json");
-
-// The public client credential, same pair the window and the phones use. It is
-// the anon key: safe in a distributable, useless without a user's own tokens.
-const SUPABASE_URL = "https://merzyohecmyfvlyahxaz.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lcnp5b2hlY215ZnZseWFoeGF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIyMjU1MzAsImV4cCI6MjA5NzgwMTUzMH0.scDhHeRU20wRIgKBFL8GouIEp8bJG8w8aIsySUkePHY";
 
 function loadSession() {
   try { return JSON.parse(fs.readFileSync(sessionPath, "utf8")); } catch { return null; }
@@ -177,81 +176,6 @@ function knobsPayload() {
 const shellPath = app.isPackaged
   ? path.join(app.getPath("userData"), "shell.json")
   : path.join(__dirname, "..", "..", "shell.json");
-
-const SHELL_DEFAULTS = {
-  tray: {
-    dictate: "Dictate",
-    listening: "◉ Listening — {key} stops",
-    signInToDictate: "Sign in to dictate…",
-    open: "Open X0 Bot",
-    tone: "Tone",
-    toneThisDevice: "this device",
-    liveCaptions: "Live captions while dictating",
-    startAtLogin: "Start at login",
-    hotkey: "Hotkey",
-    holdToTalk: "Hold-to-talk: hold",
-    holdUnavailable: "unavailable",
-    holdOff: "Hold-to-talk: off (set \"hold\": true in config)",
-    tapToTalk: "Double-tap {key} to dictate",
-    backend: "Backend",
-    signedIn: "Signed in — dictation lands on your account",
-    editConfig: "Edit config…",
-    quit: "Quit X0 Bot",
-    tooltipReady: "X0 Bot — ready",
-    tooltipListening: "X0 Bot — listening…",
-    tooltipSignIn: "X0 Bot — sign in to dictate",
-    notesStop: "◉ Taking notes {time} — click to stop",
-    notesTooltip: "X0 Bot — taking notes, {time}",
-  },
-  notify: {
-    title: "X0 Bot",
-    signIn: "Sign in to dictate — your words belong to your account.",
-    holdUnavailable: "Hold-to-talk unavailable (uiohook-napi didn't load) — using the toggle hotkey.",
-    micBlockedWindows: "microphone blocked — Settings → Privacy & security → Microphone → let desktop apps access",
-    micBlockedMac: "microphone blocked — System Settings → Privacy & Security → Microphone → X0 Bot",
-    micMissing: "no microphone found — plug one in, then try again",
-    micBusy: "microphone is in use by another app",
-    noSpeech: "no speech detected — check your microphone",
-    unknownHoldKey: "Unknown holdKey \"{key}\" — use a key name like F9, F10, F12.",
-    tapUnavailable: "Double-tap unavailable (uiohook-napi didn't load) — using the hotkey.",
-    unknownTapKey: "Unknown tapKey \"{key}\" — use Ctrl, Alt, Shift or Meta.",
-    dictationFailed: "Dictation failed: {message}",
-    hotkeyTaken: "{taken} is taken by another app, so dictation is on {bound}. Change it under Edit config.",
-    noHotkey: "No hotkey could be registered. Use Dictate in the tray menu, and set a free one under Edit config.",
-    notesStarted: "Taking notes. Nothing is typed anywhere. Press {key} to stop.",
-    notesReady: "Notes ready: {title}",
-    notesHotkeyTaken: "{taken} is taken by another app, so notes are on {bound}.",
-  },
-};
-
-/** Defaults under the server's answer, one level into each section — EVERY
- *  section the server sends, not only the two this process draws (gate, rail
- *  and gateLayout ride in the same block). A string wins only when it is not
- *  blank: a key the server omits, or sends blank, keeps the built-in word
- *  rather than painting an empty menu row. Anything else the server sends (a
- *  number, a switch) is taken as it is, unless it would replace a word. */
-function mergeShell(base, incoming) {
-  const out = {};
-  const from = incoming && typeof incoming === "object" ? incoming : {};
-  const sections = new Set(Object.keys(base).concat(Object.keys(from)));
-  for (const section of sections) {
-    const defaults = base[section] || {};
-    out[section] = { ...defaults };
-    const src = from[section];
-    if (!src || typeof src !== "object" || Array.isArray(src)) continue;
-    for (const [k, v] of Object.entries(src)) {
-      if (typeof v === "string") { if (v.trim()) out[section][k] = v; }
-      else if (v != null && typeof defaults[k] !== "string") out[section][k] = v;
-    }
-  }
-  return out;
-}
-
-/** The `desktop.shell` block out of a bootstrap, if it carries one. */
-function shellOf(boot) {
-  const s = boot && boot.flags && boot.flags["desktop.shell"];
-  return s && typeof s === "object" ? s : null;
-}
 
 // The cached bootstrap first; shell.json is the cache an older build wrote,
 // read only so the first launch after an upgrade is not a launch with none.
@@ -750,106 +674,11 @@ async function setAccountTone(tone) {
 function currentTone() { return accountTone || cfg.tone; }
 
 // ---- Apple / Google ---------------------------------------------------------
-//
-// The phone signs in with Apple and Google natively: the OS hands the app an
-// identity token and Supabase trades it for a session. A desktop has no such
-// OS service, so this is the web flow — the provider's own consent page, in a
-// window we own, with PKCE so the authorization code is useless to anyone who
-// intercepts it.
-//
-// Nothing is caught by loading the redirect. The moment the browser tries to
-// GO to it we read the code off the URL and cancel the request, so the page at
-// the redirect URL is never fetched and does not have to exist. It only has to
-// be on the provider's allow-list, which is why it is a real https URL on a
-// domain that is ours rather than a localhost port or a custom scheme.
-function redirectUrl() { return str("desktop.oauth.redirectUrl", "https://x0bot.com/auth/callback"); }
-
-// GOOGLE WILL NOT SIGN YOU IN INSIDE A WINDOW WE OWN.
-//
-// Their policy is disallowed_useragent: an OAuth consent screen loaded in an
-// embedded browser is refused, by design, because the app hosting it can read
-// everything typed into it. Apple is less strict but heading the same way. So
-// the window above works for one provider and fails for the other, and the
-// failure arrives as Google's own "this browser may not be secure" page, which
-// reads as our bug.
-//
-// The way a desktop app is supposed to do this: send the person to their REAL
-// browser, where they are probably already signed in, and catch the redirect on
-// a loopback address only this machine can reach.
-//
-// Google never sees this address. The provider redirects to Supabase, and
-// Supabase redirects to `redirect_to` — so the only allow-list this has to be
-// on is Supabase's own, under URL Configuration.
-function loopbackPort() { return num("desktop.oauth.loopbackPort", 8788); }
-function loopbackUrl() { return "http://127.0.0.1:" + loopbackPort() + "/cb"; }
-
-const escHtml = (s) =>
-  String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-/** The page the browser shows once it has handed the code over. */
-function closePage() {
-  return "<!doctype html><meta charset=utf-8><title>" + escHtml(txt("desktop.oauth.pageTitle", "X0 Bot")) + "</title>" +
-    "<body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;" +
-    "background:" + escHtml(color("desktop.oauth.pageBg", "#0b0b0f")) +
-    ";color:" + escHtml(color("desktop.oauth.pageText", "rgba(255,255,255,.85)")) +
-    ";font:15px -apple-system,Segoe UI,system-ui,sans-serif\">" +
-    "<p>" + escHtml(txt("desktop.oauth.pageBody", "Signed in. You can close this tab and go back to X0 Bot.")) + "</p>";
-}
-
-/**
- * The system-browser half of the flow. Resolves with the authorization code.
- *
- * One request, then the server is gone. It binds to 127.0.0.1 rather than
- * 0.0.0.0 so nothing off this machine can reach it even for the seconds it is
- * up, and it times out rather than listening forever for a person who wandered
- * off mid sign-in.
- */
-function awaitLoopbackCode(openUrl) {
-  const http = require("http");
-  const port = loopbackPort();
-  const base = loopbackUrl();
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const server = http.createServer((req, res) => {
-      let u;
-      try { u = new URL(req.url, base); } catch { u = null; }
-      if (!u || u.pathname !== "/cb") { res.writeHead(404).end(); return; }
-      // Connection: close, or the browser's keep-alive socket holds the
-      // server open after close() for as long as the browser likes.
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", Connection: "close" });
-      res.end(closePage());
-      const err = u.searchParams.get("error_description") || u.searchParams.get("error");
-      const code = u.searchParams.get("code");
-      done(err ? new Error(err) : code ? null : new Error(txt("desktop.oauth.noCode", "no authorization code")), code);
-    });
-    const done = (err, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { server.close(); } catch { /* already closing */ }
-      err ? reject(err) : resolve(value);
-    };
-    const timer = setTimeout(
-      () => done(new Error(txt("desktop.oauth.timedOut", "timed out waiting for the browser"))),
-      num("desktop.oauth.timeoutMs", 300000));
-    server.on("error", (e) => done(e));
-    server.listen(port, "127.0.0.1", () => {
-      shell.openExternal(openUrl).catch((e) => done(e));
-    });
-  });
-}
-
-const b64url = (buf) => buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+// The web sign-in: the person's own browser with a loopback first, our own
+// window when the loopback port is taken. Why it works this way, and the parts
+// that need no window, are in oauth.js.
 
 /** Run one provider sign-in. Resolves with a Supabase session, or throws. */
-function authorizeUrl(provider, challenge, redirect) {
-  return SUPABASE_URL + "/auth/v1/authorize" +
-    "?provider=" + encodeURIComponent(provider) +
-    "&redirect_to=" + encodeURIComponent(redirect) +
-    "&code_challenge=" + challenge +
-    "&code_challenge_method=s256";
-}
-
 async function oauthSignIn(provider) {
   if (provider !== "apple" && provider !== "google") {
     throw new Error(txt("desktop.oauth.unsupported", "unsupported provider"));
@@ -923,21 +752,6 @@ function oauthEmbedded(provider, verifier, challenge) {
   });
 }
 
-/** Trade the authorization code for a session. PKCE: the verifier proves the
- *  code came back to the same process that asked for it. */
-async function exchangeCode(code, verifier) {
-  const res = await fetch(SUPABASE_URL + "/auth/v1/token?grant_type=pkce", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
-    body: JSON.stringify({ auth_code: code, code_verifier: verifier }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.access_token) {
-    throw new Error(json.error_description || json.msg || json.error || txt("desktop.oauth.failed", "sign-in failed"));
-  }
-  return json;
-}
-
 let tray = null;
 let trayLive = false;   // which of the tray's two dots it is showing (see trayIcon)
 let recorderWin = null;
@@ -958,13 +772,6 @@ let oneKeyBound = "";
 // the user's words); only STATE changes are gated.
 let sessionSeq = 0;
 let activeSession = 0;
-
-/** What every window of ours runs with: the bridge in preload.js and nothing
- *  else — no Node, an isolated world, Chromium's sandbox. */
-const webPrefs = (extra) => Object.assign({
-  preload: path.join(__dirname, "preload.js"),
-  contextIsolation: true, nodeIntegration: false, sandbox: true,
-}, extra);
 
 // ---- Hidden recorder window --------------------------------------------------
 // getUserMedia + MediaRecorder/WebAudio live in a renderer (Chromium), so we
@@ -1085,37 +892,8 @@ function openAppWindow(screenId) {
   appWin.loadFile("src/app/app.html");
 }
 
-/** A window no bigger than the display it opens on, and placed inside it.
- *  Sizes are in points, and a 1080p laptop at Windows' recommended 150% has
- *  1280×720 of them, 672 above the taskbar — so the 1120×780 window opened
- *  with its foot below the screen's edge, and whatever sat there could not be
- *  reached. (Microsoft Store certification, policy 10.1.2.10, at 150%.) The
- *  display is the one the pointer is on, like the pill's. */
-function fitToDisplay(width, height) {
-  const margin = num("desktop.window.screenMargin", 24);
-  let wa;
-  try { wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea; } catch { wa = null; }
-  if (!wa || !(wa.width > 0) || !(wa.height > 0)) return { width, height };
-  const w = Math.max(320, Math.min(width, wa.width - margin));
-  const h = Math.max(400, Math.min(height, wa.height - margin));
-  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2), y: Math.round(wa.y + (wa.height - h) / 2) };
-}
-
 // Every webview is the app window's, and every one is locked down (liveViewMain.js).
 setupLiveViews({ app, session, path, isAppWindow: (c) => !!appWin && !appWin.isDestroyed() && c === appWin.webContents });
-
-/** Deny navigation + popups on our local windows — they only ever load our own
- *  files, so anything else is a bug or an injection attempt. */
-function hardenWindow(win) {
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  // A reload is a navigation to the page's own URL, and the guard was
-  // swallowing it too — so "Sign out", which clears the session and reloads
-  // the window to land on the gate, cleared the session and did nothing
-  // anyone could see. The page may go back to itself; nowhere else.
-  win.webContents.on("will-navigate", (e, url) => {
-    if (url !== win.webContents.getURL()) e.preventDefault();
-  });
-}
 
 /** Send an IPC message to the recorder, deferring until the page has loaded.
  *  webContents.send on a still-loading window is silently dropped — that turned
@@ -1129,19 +907,6 @@ function sendToRecorder(channel, payload) {
   } else {
     wc.send(channel, payload);
   }
-}
-
-// ---- Live-caption overlay ----------------------------------------------------
-// A small always-on-top strip near the bottom of the screen that shows the
-// words as you speak (live mode). Click-through + non-focusable so it can never
-// steal the paste target.
-/** Near the foot of the display the pointer is on, like the pill. It was
- *  always the primary display, wherever the person was writing. */
-function overlayBounds() {
-  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  const w = num("desktop.overlay.width", 560), h = num("desktop.overlay.height", 84);
-  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
-    y: wa.y + wa.height - num("desktop.overlay.bottomOffset", 120) };
 }
 function showOverlay() {
   if (!overlayWin || overlayWin.isDestroyed()) {
@@ -1224,36 +989,6 @@ function pillHint() {
     return txt("desktop.pill.hintTap", "Tap {key} twice to talk", { key: keys[0] });
   }
   return txt("desktop.pill.hintKey", "Press {key} to talk", { key: prettyKey(cfg.hotkey) });
-}
-
-/** Bottom-centre of a display's work area, so above the taskbar or the Dock
- *  wherever they sit: by default the display the pointer is on, where the
- *  person is. */
-function pillBounds(display) {
-  const wa = (display || screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea;
-  // AS WIDE AS THE SCREEN when the pill comes apart while it listens: ✕ to
-  // one edge, ✓ to the other, the thread between (pill.js, pillSplit.js).
-  // Transparent and click-through everywhere but the pill or its two halves,
-  // so the strip it spans stays the app's below it. A cap keeps it from
-  // reaching across an ultrawide; 0 is the whole work area.
-  const cap = num("desktop.pill.splitMaxWidth", 0);
-  const w = bool("desktop.pill.split", true) ? Math.round(cap > 0 ? Math.min(wa.width, cap) : wa.width)
-    : num("desktop.pill.windowWidth", 420);
-  const h = num("desktop.pill.windowHeight", 132);
-  return { width: w, height: h, x: Math.round(wa.x + (wa.width - w) / 2),
-    y: Math.round(wa.y + wa.height - h - num("desktop.pill.bottomOffset", 4)) };
-}
-
-/** setBounds, checked. On Windows a move between two monitors at different
- *  scaling (a laptop at 150% beside a monitor at 100%) can land the window
- *  at the size it had in the old monitor's pixels; asked again from the new
- *  monitor, it lands right. */
-function setBoundsExactly(w, b) {
-  try {
-    w.setBounds(b);
-    const got = w.getBounds();
-    if (got.x !== b.x || got.y !== b.y || got.width !== b.width || got.height !== b.height) w.setBounds(b);
-  } catch { /* keep its place */ }
 }
 
 let pillRebuiltAt = 0;
@@ -3404,29 +3139,7 @@ if (!primaryInstance) {
   });
 }
 
-// ---- tulmi:// links ---------------------------------------------------------------------
-// The page a browser lands on after someone connects an app (the server's
-// /v1/connectors/callback) has an "Open Tailzu" button that is a tulmi:// link,
-// the scheme the phone app already answers. A computer answers it too: the
-// window comes up, on Connected apps. Only a screen id is ever taken from a
-// link, and only the ones below: anything else just brings the window up.
-// A space's invite (its page's "Open in Tailzu": tulmi://screen/bots.spaces?join=CODE)
-// opens Spaces at joining, with the code and nothing else from the link.
-const LINK_SCREENS = { assistant_apps: "desk_settings", assistant_tasks: "desk_tasks" };
-const JOIN_SCREEN = "bots.spaces";
-const JOIN_CODE = /^[A-Z0-9]{6,16}$/;
-function screenFromLink(raw) {
-  try {
-    const u = new URL(String(raw || ""));
-    if (u.protocol !== "tulmi:" || u.hostname !== "screen") return null;
-    const id = u.pathname.replace(/^\//, "");
-    if (id === JOIN_SCREEN) {
-      const join = String(u.searchParams.get("join") || "").toUpperCase();
-      return JOIN_CODE.test(join) ? { screenId: JOIN_SCREEN, params: { join } } : null;
-    }
-    return Object.prototype.hasOwnProperty.call(LINK_SCREENS, id) ? LINK_SCREENS[id] : null;
-  } catch { return null; }
-}
+// ---- tulmi:// links (which screen a link may open: links.js) -----------------
 let pendingLink = null;
 function openFromLink(raw) {
   if (!app.isReady()) { pendingLink = raw; return; }

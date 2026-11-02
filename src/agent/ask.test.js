@@ -3103,17 +3103,28 @@ function mainProcess(o = {}) {
   const req = (id) => {
     if (Object.prototype.hasOwnProperty.call(fakes, id)) return fakes[id];
     if (id === "uiohook-napi") throw new Error("no key hook in tests");
-    return require(id.startsWith(".") ? path.join(path.dirname(MAIN_JS), id) : id);
+    if (!id.startsWith(".")) return require(id);
+    // main.js's own files beside it (src/main/) run as it does, fakes and all.
+    const file = require.resolve(path.join(path.dirname(MAIN_JS), id));
+    return path.dirname(file) === path.dirname(MAIN_JS) ? load(file) : require(file);
   };
   // Its timers never keep the tests alive, and all of them go with it.
   const T = (set) => (f, ms, ...a) => { const t = set(f, ms, ...a); if (t && t.unref) t.unref(); timers.add(t); return t; };
-  const src = o.source || fs.readFileSync(MAIN_JS, "utf8");
-  const wrapped = vm.runInThisContext("(function (exports, require, module, __filename, __dirname, setTimeout, setInterval, fetch) {" + src + "\n})", { filename: MAIN_JS });
-  const mod = { exports: {} };
+  // Each file once per main process, with the fakes above, these timers and a fetch that never answers.
+  const loaded = new Map();
+  function load(file, source) {
+    if (loaded.has(file)) return loaded.get(file).exports;
+    const mod = { exports: {} };
+    loaded.set(file, mod);
+    const src = source || fs.readFileSync(file, "utf8");
+    const wrapped = vm.runInThisContext("(function (exports, require, module, __filename, __dirname, setTimeout, setInterval, fetch) {" + src + "\n})", { filename: file });
+    wrapped(mod.exports, req, mod, file, path.dirname(file), T(setTimeout), T(setInterval), async () => new Response("{}", { status: 503 }));
+    return mod.exports;
+  }
   const quiet = { log: console.log, warn: console.warn };
   console.warn = () => {}; console.log = () => {};
   try {
-    wrapped(mod.exports, req, mod, MAIN_JS, path.dirname(MAIN_JS), T(setTimeout), T(setInterval), async () => new Response("{}", { status: 503 }));
+    load(MAIN_JS, o.source);
   } finally { Object.assign(console, quiet); }
   const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
   const from = (file) => ({ sender: win(file).webContents });
