@@ -1050,7 +1050,7 @@
   function createPerformer(opts) {
     const o = Object.assign({ dpr: 1, reduced: false, dot: "#F3E2C6", sticker: "#151311", glow: "#E8A23C" }, opts || {});
     const render = walkerDots({ dot: o.dot, sticker: o.sticker, glowRgb: hexRgb(o.glow, [232, 162, 60]) });
-    let cur = { name: "rest", at: -1e9, speed: 1, then: null }, prev = null, last = 0;
+    let cur = { name: "rest", at: -1e9, speed: 1, then: null }, prev = null;
     const localT = (s, now) => Math.max(0, (now - s.at) / 1000 * s.speed);
     function play(name, p) {
       const q = p || {};
@@ -1061,7 +1061,6 @@
       cur = { name, at: now, speed: q.speed || 1, then: q.then || null };
     }
     function draw(g, x, y, H, now, v) {
-      last = now;
       const len = GESTURE_LENGTH[cur.name];
       if (cur.then && len && localT(cur, now) >= len) play(cur.then, { now });
       const still = o.reduced;
@@ -1075,5 +1074,5 @@
     return { play, draw, get name() { return cur.name; }, quirk: () => QUIRKS[Math.floor(Math.random() * QUIRKS.length)] };
   }
 
-  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, walkerFigure, walkerDots, BLIP_GESTURES, gesturePose, blendPose, poseState, createPerformer, GESTURE_LENGTH };
+  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, BLIP_GESTURES, gesturePose, blendPose, createPerformer, GESTURE_LENGTH };
 });

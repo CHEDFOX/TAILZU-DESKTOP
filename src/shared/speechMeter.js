@@ -149,7 +149,6 @@
     }
 
     return {
-      frameMs: ms,
       /** Read `samples` (a Float32Array, or any array of -1..1). `voicedMs`
        *  can be negative: a tone first counted as voice and then found to be
        *  a machine's is taken back from the total. */
@@ -186,5 +185,5 @@
     };
   }
 
-  return { createSpeechMeter, periodicity };
+  return { createSpeechMeter };
 });

@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { verdict, createQueue, worthSending, elapsed } = require("./notesCore.js");
+const { verdict, createQueue, worthSending } = require("./notesCore.js");
 
 const noSleep = () => Promise.resolve();
 
@@ -69,10 +69,7 @@ test("a stretch that is refused on its own is skipped, and the next still goes",
   assert.equal(b.ok, true);
 });
 
-test("silence is not sent, and the clock reads like a clock", () => {
+test("silence is not sent", () => {
   assert.equal(worthSending(399, 400), false);
   assert.equal(worthSending(400, 400), true);
-  assert.equal(elapsed(5), "0:05");
-  assert.equal(elapsed(605), "10:05");
-  assert.equal(elapsed(3729), "1:02:09");
 });

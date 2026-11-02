@@ -91,13 +91,5 @@
   /** A stretch worth sending: someone spoke in it for at least `minMs`. */
   function worthSending(voicedMs, minMs) { return voicedMs >= (minMs == null ? 400 : minMs); }
 
-  /** "4:05", "1:02:09" — how long the note has run. */
-  function elapsed(sec) {
-    const t = Math.max(0, Math.floor(sec));
-    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
-    const two = (n) => (n < 10 ? "0" : "") + n;
-    return h ? h + ":" + two(m) + ":" + two(s) : m + ":" + two(s);
-  }
-
-  return { verdict, createQueue, worthSending, elapsed };
+  return { verdict, createQueue, worthSending };
 });
