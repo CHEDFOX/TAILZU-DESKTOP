@@ -1984,12 +1984,10 @@ ipcMain.handle("app:env", (e) => {
   return {
     baseUrl: cfg.baseUrl,
     session: forWindow(authSession),
-    tone: cfg.tone,
-    language: cfg.language,
     // The key that is actually bound, so the window can name it rather than
     // say "your hotkey" to someone whose first choice was taken.
     hotkey: oneKeyShown() || prettyKey(cfg.hotkey),
-    // The note-taker is here (the window declares DeskNotes) and its key.
+    // The note-taker is here (the window declares DeskNotes).
     notes: true,
     // A Mac can open the permission for the computer's sound from a note.
     systemAudioSettings: process.platform === "darwin",
@@ -1998,8 +1996,6 @@ ipcMain.handle("app:env", (e) => {
     askSetup: askOn(),
     // Tailzu Code on this computer is here: the window declares its card (DeskRunner) on bots.computer.
     runner: !!runner,
-    // The notes chord, when there is one: with the one key none is bound (notes go by "take notes" with it held).
-    notesHotkey: cfg.oneKey ? "" : prettyKey(cfg.notesHotkey),
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
@@ -2812,7 +2808,7 @@ const localFiles = createLocalFiles({
 function deviceKinds() {
   return Array.isArray(localState.askDeviceOk) ? localState.askDeviceOk.filter((k) => typeof k === "string") : [];
 }
-const askFolders = createFolderSettings({
+createFolderSettings({
   ipcMain, fromApp, dialog, window: () => (appWin && !appWin.isDestroyed() ? appWin : undefined),
   files: localFiles, localState, saveLocalState, home: app.getPath("home"),
   send: (state) => {

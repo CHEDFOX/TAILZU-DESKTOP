@@ -195,7 +195,7 @@ const ACTIONS = [
  */
 const K = window.TailzuKnobs;
 
-let ENV = null;          // baseUrl, tone, language, appVersion, launchCount, knobs
+let ENV = null;          // baseUrl, session, appVersion, launchCount, knobs, ...
 let SESSION = null;      // { access_token, refresh_token, expires_at }
 let BOOT = null;
 let TABS = [];
