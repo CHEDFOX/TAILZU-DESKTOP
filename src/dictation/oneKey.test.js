@@ -9,25 +9,49 @@ const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
 const k = require("./oneKey.js");
 
-test("the keys: Fn on a Mac and Right Ctrl on Windows by default, the person's pick when the system has it, none on Linux", () => {
-  assert.deepStrictEqual(k.choices("darwin").map((c) => c.id), ["fn", "rightOption", "rightCommand"]);
+test("the keys: Right ⌘ on a Mac and Right Ctrl on Windows and Linux by default, the person's pick when the system has it", () => {
+  assert.deepStrictEqual(k.choices("darwin").map((c) => c.id), ["rightCommand", "fn", "rightOption"]);
   assert.deepStrictEqual(k.choices("win32").map((c) => c.id), ["rightCtrl", "rightAlt"]);
-  assert.deepStrictEqual(k.choices("linux"), []);
-  assert.strictEqual(k.defaultKey("darwin"), "fn");
+  assert.deepStrictEqual(k.choices("linux").map((c) => c.id), ["rightCtrl", "rightAlt", "rightSuper"]);
+  assert.deepStrictEqual(k.choices("freebsd"), []);
+  assert.strictEqual(k.defaultKey("darwin"), "rightCommand");
   assert.strictEqual(k.defaultKey("win32"), "rightCtrl");
-  assert.strictEqual(k.defaultKey("linux"), null);
+  assert.strictEqual(k.defaultKey("linux"), "rightCtrl");
+  assert.strictEqual(k.defaultKey("freebsd"), null);
+  assert.strictEqual(k.pickKey("darwin", "fn"), "fn", "Fn is still a Mac's choice");
   assert.strictEqual(k.pickKey("darwin", "rightCommand"), "rightCommand");
-  assert.strictEqual(k.pickKey("darwin", "rightCtrl"), "fn", "a PC's key on a Mac is the Mac's default");
+  assert.strictEqual(k.pickKey("darwin", "rightCtrl"), "rightCommand", "a PC's key on a Mac is the Mac's default");
   assert.strictEqual(k.pickKey("win32", "fn"), "rightCtrl");
   assert.strictEqual(k.pickKey("win32", undefined), "rightCtrl");
+  assert.strictEqual(k.pickKey("win32", "rightSuper"), "rightCtrl", "Right Super is Linux's");
   assert.strictEqual(k.pickKey("darwin", "off"), null, "config.json can turn it off");
-  assert.strictEqual(k.pickKey("linux", "fn"), null, "Linux keeps its keys");
+  assert.strictEqual(k.pickKey("linux", "rightSuper"), "rightSuper");
+  assert.strictEqual(k.pickKey("linux", "fn"), "rightCtrl", "a Mac's key on Linux is Linux's default");
+  assert.strictEqual(k.pickKey("linux", "off"), null);
   assert.strictEqual(k.keyLabel("rightOption", "darwin"), "Right ⌥");
   assert.strictEqual(k.keyLabel("rightAlt", "win32"), "Right Alt");
+  assert.strictEqual(k.keyLabel("rightSuper", "linux"), "Right Super");
   assert.strictEqual(k.keyLabel("fn", "win32"), "");
   // A copy each time: nobody can change the list from outside.
   k.choices("darwin")[0].id = "x";
-  assert.strictEqual(k.choices("darwin")[0].id, "fn");
+  assert.strictEqual(k.choices("darwin")[0].id, "rightCommand");
+});
+
+test("the first default is kept: a Mac that had launched before keeps Fn, a new Mac gets Right ⌘", () => {
+  assert.strictEqual(k.firstDefault("darwin", 0), "rightCommand");
+  assert.strictEqual(k.firstDefault("darwin", 12), "fn");
+  assert.strictEqual(k.firstDefault("win32", 12), "rightCtrl", "Windows' key did not change");
+  assert.strictEqual(k.firstDefault("linux", 3), "rightCtrl");
+  assert.strictEqual(k.firstDefault("freebsd", 0), null);
+});
+
+test("a Linux session: Wayland or X11 from its environment; nothing elsewhere", () => {
+  assert.strictEqual(k.linuxSession("linux", { XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" }), "wayland");
+  assert.strictEqual(k.linuxSession("linux", { XDG_SESSION_TYPE: "x11" }), "x11");
+  assert.strictEqual(k.linuxSession("linux", { WAYLAND_DISPLAY: "wayland-0" }), "wayland");
+  assert.strictEqual(k.linuxSession("linux", { DISPLAY: ":1" }), "x11");
+  assert.strictEqual(k.linuxSession("linux", {}), "");
+  assert.strictEqual(k.linuxSession("darwin", { XDG_SESSION_TYPE: "wayland" }), "");
 });
 
 test("the hook's codes: the right-hand modifiers; Fn has none (the helper watches it)", () => {
@@ -292,4 +316,36 @@ test("lines: split across chunks, blank ones skipped, a runaway one dropped", ()
   const feed = k.lineReader((l) => got.push(l));
   feed("a\n\nb"); feed("c\r\n"); feed("x".repeat(400)); feed("\nd\n");
   assert.deepStrictEqual(got, ["a", "bc", "d"]);
+});
+
+test("Linux: Right Ctrl and Right Super through the hook; Right Alt's left Ctrl is a real chord there; Wayland refuses", () => {
+  const U = { AltRight: 3640, MetaRight: 3676, CtrlRight: 3613, Ctrl: 29 };
+  assert.strictEqual(k.hookCode("rightSuper", U), 3676);
+  const run = (key, platform, session) => {
+    const uIOhook = new EventEmitter();
+    const seen = [];
+    const said = [];
+    const watch = k.bindOneKey({
+      key, platform, session, hook: { uIOhook, UiohookKey: U },
+      gesture: { down: () => seen.push("down"), up: () => seen.push("up"), other: () => seen.push("other") },
+      bound: () => said.push("bound"), failed: (why) => said.push(why),
+    });
+    return { uIOhook, seen, said, watch };
+  };
+  const x = run("rightCtrl", "linux", "x11");
+  assert.deepStrictEqual(x.said, ["bound"]);
+  x.uIOhook.emit("keydown", { keycode: 3613 }); x.uIOhook.emit("keydown", { keycode: 46 }); x.uIOhook.emit("keyup", { keycode: 3613 });
+  assert.deepStrictEqual(x.seen, ["down", "other", "up"]);
+  const alt = run("rightAlt", "linux", "x11");
+  alt.uIOhook.emit("keydown", { keycode: 3640 }); alt.uIOhook.emit("keydown", { keycode: 29 });
+  assert.deepStrictEqual(alt.seen, ["down", "other"], "no Windows AltGr Ctrl on Linux: a left Ctrl is a chord");
+  const win = run("rightAlt", "win32", "");
+  win.uIOhook.emit("keydown", { keycode: 3640 }); win.uIOhook.emit("keydown", { keycode: 29 });
+  assert.deepStrictEqual(win.seen, ["down"], "Windows keeps AltGr's own Ctrl quiet, as before");
+  const way = run("rightCtrl", "linux", "wayland");
+  assert.deepStrictEqual(way.said, ["wayland"]);
+  way.uIOhook.emit("keydown", { keycode: 3613 });
+  assert.deepStrictEqual(way.seen, [], "nothing is listened to under Wayland");
+  const mac = run("rightCommand", "darwin", "");
+  assert.deepStrictEqual(mac.said, ["bound"], "the Mac's new default needs no helper");
 });

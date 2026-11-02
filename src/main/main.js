@@ -338,6 +338,21 @@ function checkForUpdate() {
 }
 
 let configError = null; // surfaced as a notification once the app is ready
+/**
+ * The one key for someone who never picked one, decided at the first launch of a copy that has it and kept (oneKey.js
+ * firstDefault): a Mac that had launched before keeps Fn, the default it had; a new one gets Right ⌘. launchCount is still
+ * the launches BEFORE this one here (it is counted when the app is ready).
+ */
+function oneKeyFirstDefault() {
+  if (!localState.oneKeyDefault) {
+    const first = oneKey.firstDefault(process.platform, Number(localState.launchCount) || 0);
+    if (!first) return null;
+    localState.oneKeyDefault = first;
+    saveLocalState();
+  }
+  return localState.oneKeyDefault;
+}
+
 function loadConfig() {
   let file = {};
   try {
@@ -424,12 +439,16 @@ function loadConfig() {
     runnerImage: typeof file.runnerImage === "string" ? file.runnerImage.trim() : "",
     runnerName: typeof file.runnerName === "string" ? file.runnerName.trim().slice(0, 80) : "",
     // THE ONE KEY (oneKey.js): hold to talk, tap for hands-free, and the words
-    // go where they are meant (routing.js). Fn on a Mac, Right Ctrl on
-    // Windows, or the one picked in Settings; null on Linux, or with "off"
-    // here, or the server's switch off: the old keys, as they were.
-    oneKey: bool("desktop.oneKey.enabled", true)
+    // go where they are meant (routing.js). Right ⌘ on a new Mac (Fn on one
+    // that already had it: oneKeyFirstDefault), Right Ctrl on Windows and
+    // Linux, or the one picked in Settings; null with "off" here, or the
+    // server's switch off: the old keys, as they were.
+    // A Linux Wayland session keeps its old keys: a key hook there hears only X11 windows (oneKey.linuxSession).
+    oneKey: bool("desktop.oneKey.enabled", true) && oneKey.linuxSession(process.platform, process.env) !== "wayland"
       ? oneKey.pickKey(process.platform, typeof file.oneKey === "string" ? file.oneKey
-        : process.platform === "darwin" ? str("desktop.oneKey.default.mac", "fn") : str("desktop.oneKey.default.windows", "rightCtrl"))
+        : process.platform === "darwin" ? str("desktop.oneKey.default.mac", oneKeyFirstDefault() || "rightCommand")
+        : process.platform === "linux" ? str("desktop.oneKey.default.linux", "rightCtrl")
+        : str("desktop.oneKey.default.windows", "rightCtrl"))
       : null,
   };
 }
@@ -2282,7 +2301,8 @@ function toggleDictation() {
     const focused = BrowserWindow.getFocusedWindow();
     const ours = !!focused && focused === appWin;
     // Where its words go is decided on what it says (routing.js).
-    routing.start(sid, { ours });
+    // On Linux no text box can be read (frontApp.focusedField answers null there): the field is unknown, not absent.
+    routing.start(sid, { ours, blind: process.platform === "linux" });
     const named = ours ? Promise.resolve({ label: "X0 Bot" }) : frontApp.frontInfo();
     named
       .then((info) => {
@@ -2291,6 +2311,7 @@ function toggleDictation() {
         // not read — not its text around the field, not the field's own text.
         // The request is marked private so the server keeps nothing either.
         const off = !!info.private || !!info.sensitive;
+        routing.target(sid, info);
         sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off });
         // No field will be read: the recorder is told at once, so a short
         // first stretch does not wait for one (a private window says so
@@ -2512,8 +2533,9 @@ function bindOneKeyNow() {
   // an answer for a binding since replaced is not this one's.
   const watch = oneKeyMark = {};
   oneKeyWatch = oneKey.bindOneKey({
-    key, platform: process.platform, gesture: oneKeyGesture, hook: oneKeyHook,
-    helper: { path: tzkeyPath(), exists: (f) => fs.existsSync(f), spawn },
+    key, platform: process.platform, session: oneKey.linuxSession(process.platform, process.env), gesture: oneKeyGesture, hook: oneKeyHook,
+    // The Fn helper only for Fn: no other key, on any system, looks for it.
+    helper: oneKey.needsHelper(key) ? { path: tzkeyPath(), exists: (f) => fs.existsSync(f), spawn } : null,
     bound: () => {
       if (oneKeyMark !== watch) return;
       oneKeyState = "bound";
@@ -2536,6 +2558,7 @@ function bindOneKeyNow() {
         localState.oneKeyWarned = said;
         saveLocalState();
         notify(!bound ? txt("desktop.notify.oneKeyNone", "{key} can't be used here, and no other key was free. Use Dictate in the tray menu.", { key: label })
+          : why === "wayland" ? txt("desktop.notify.oneKeyWayland", "{key} can't be heard in a Wayland session, so talk with {bound}. An X11 session gives you {key}.", { key: label, bound: prettyKey(bound) })
           : why === "denied" ? txt("desktop.notify.oneKeyDenied", "X0 Bot can't use {key} until it's allowed in Privacy & Security › Accessibility. Talk with {bound} for now.", { key: label, bound: prettyKey(bound) })
           : txt("desktop.notify.oneKeyUnavailable", "{key} can't be used on this computer, so talk with {bound}. Pick another key in Settings.", { key: label, bound: prettyKey(bound) }));
       }
@@ -2574,7 +2597,7 @@ function setupKeyHook() {
   // THE ONE KEY, and nothing else: no hold key, no double-taps, no Ask pair.
   if (cfg.oneKey) {
     // Esc still stops a question, or what Ask is doing.
-    uIOhook.on("keydown", (e) => { if (e.keycode === UiohookKey.Escape && ask) ask.escape(); });
+    uIOhook.on("keydown", (e) => { if (e.keycode === UiohookKey.Escape) escPressed(); });
     try { uIOhook.start(); uiohookRef = uIOhook; oneKeyHook = { uIOhook, UiohookKey }; } catch { oneKeyHook = null; }
     bindOneKeyNow();
     return;
@@ -2647,7 +2670,7 @@ function setupKeyHook() {
       uIOhook.on("keydown", (e) => {
         // Esc stops a question, or what Ask is doing. (The key reaches the
         // app too; nothing here can hold it back.)
-        if (e.keycode === UiohookKey.Escape && ask) ask.escape();
+        if (e.keycode === UiohookKey.Escape) escPressed();
         taps.keyDown(nameFor(e.keycode), e.keycode);
       });
       uIOhook.on("keyup", (e) => taps.keyUp(nameFor(e.keycode), e.keycode));
@@ -2948,6 +2971,39 @@ ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn
 // went and one tap to have them typed instead. On wherever the one key is
 // (a Mac, Windows), the chord standing in for it included; off on Linux.
 const withinMs = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error("timed out")), ms))]);
+/** The setup card's state, as the brain reads it: read, see, pictures. */
+function grantsNow() {
+  try { const st = askSetup.state(); return { read: st.read, see: st.see, pictures: st.pictures }; } catch { return undefined; }
+}
+
+/**
+ * ASKED AT THE TURN THAT NEEDS IT. The setup card is answered once; what it
+ * has not allowed and this ask needs ("read": using the apps, "see": the
+ * screen) is asked for now: the Mac's own page for it opens, the pill says
+ * why, and the ask waits (desktop.route.grantWaitMs) until it is on. Given
+ * already, or a system with no such permission: nothing is asked. True once
+ * they are all on; false when the wait ran out (Ask then does what it can).
+ */
+async function needGrant(missing) {
+  const want = (Array.isArray(missing) ? missing : []).filter((g) => g === "read" || g === "see");
+  const off = () => { const g = grantsNow() || {}; return want.filter((k) => g[k] !== "on" && g[k] !== "na"); };
+  let left = off();
+  if (!left.length) return true;
+  const first = left[0];
+  pill("routed", { label: first === "read"
+    ? txt("desktop.route.needRead", "Your turn: let X0 use your apps")
+    : txt("desktop.route.needSee", "Your turn: let X0 see your screen"), alt: "", kind: "yourTurn" });
+  try { askSetup.act({ kind: first === "read" ? "openAccessibility" : "openScreenRecording" }); } catch { /* the card in the app still asks */ }
+  askSetup.push();
+  const until = Date.now() + Math.max(5000, num("desktop.route.grantWaitMs", 90000));
+  while (Date.now() < until) {
+    await new Promise((r) => setTimeout(r, 1000));
+    left = off();
+    if (!left.length) { askSetup.push(); return true; }
+  }
+  return false;
+}
+
 const routing = createRouting({
   on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
   signals: () => ({ names: wakeNames(), askOn: askOn(), notesOn: !!notes }),
@@ -2959,7 +3015,23 @@ const routing = createRouting({
     return pasting;
   },
   undo: undoPastes,
-  ask: (message) => (ask && askOn() ? ask.askHeard(message) : false),
+  ask: (message, o) => (ask && askOn() ? ask.askHeard(message, o) : false),
+  // THE ONE KEY'S BRAIN (POST /v1/ask/decide): what was meant, in any language.
+  // The setup card's state goes with it, so what it needs and has not been
+  // given comes back, and is asked for only then (needGrant).
+  decide: (i) => apiJson("/v1/ask/decide", {
+    method: "POST",
+    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined })),
+  }),
+  // A routine, saved from what was said: the server's draft, then the routine.
+  routine: async (goal) => {
+    const tz = -new Date().getTimezoneOffset();
+    const dr = await apiJson("/v1/routines/draft", { method: "POST", body: JSON.stringify({ message: String(goal).slice(0, 2000), tz }) });
+    if (!dr || !dr.draft || !dr.draft.token) return null;
+    const made = await apiJson("/v1/routines", { method: "POST", body: JSON.stringify({ token: dr.draft.token, tz }) });
+    return made && made.routine ? { text: [made.routine.task, made.routine.when].filter(Boolean).join(" · ") || txt("desktop.route.routineSaved", "Routine saved") } : null;
+  },
+  needGrant: (missing) => needGrant(missing),
   askCancel: () => { if (ask) ask.cancel("route"); },
   notes: (start) => {
     if (start && !notes) void startNotes();
@@ -2980,6 +3052,15 @@ const routing = createRouting({
   knobs: { num, bool, txt },
   log: (m) => console.log("[route] " + m),
 });
+
+/**
+ * Esc: a dictation under way is thrown away (the pill has no ✕ while Blip is in it), otherwise it stops a
+ * question, or what Ask is doing. The key reaches the app too; nothing here can hold it back.
+ */
+function escPressed() {
+  if (recording && bool("desktop.pill.escCancels", true)) { cancelDictation(); return; }
+  if (ask) ask.escape();
+}
 
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.

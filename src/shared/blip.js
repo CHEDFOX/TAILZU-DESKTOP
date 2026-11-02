@@ -500,6 +500,22 @@
    */
   function walkerFigure(g, W, H, st, t) {
     const cx = W / 2, bob = st.bob, sway = Math.sin(t * TAU * .45) * .025 * st.swayK, drop = st.drop;
+    // THE BODY'S OWN TRICKS (the gestures, BLIP_GESTURES): squashed or stretched from the feet (sqx, sqy), turned
+    // about his middle (spin: a flip), the head lifted on a neck that stretches (headLift, of H) or turned right
+    // round (headSpin), the curled antenna spun (antSpin) or stretched (antLen), the heavy lid down (lid 0..1),
+    // the eye wide, tiny, shut or spiralled (eye), the mouth an "o" or flat, the hands over the head (handsOver).
+    // None of them set: the figure as it always was.
+    const sqx = st.sqx == null ? 1 : st.sqx, sqy = st.sqy == null ? 1 : st.sqy, spin = st.spin || 0;
+    const base = (sqx !== 1 || sqy !== 1 || spin) && typeof g.getTransform === "function" ? g.getTransform() : null;
+    g.save();
+    if (sqx !== 1 || sqy !== 1) { g.translate(cx, H); g.scale(sqx, sqy); g.translate(-cx, -H); }
+    if (spin) { g.translate(cx, .5 * H); g.rotate(spin); g.translate(-cx, -.5 * H); }
+    const placed = (p) => {
+      if (!base) return p;
+      const m = base.inverse().multiply(g.getTransform());
+      return [m.a * p[0] + m.c * p[1] + m.e, m.b * p[0] + m.d * p[1] + m.f];
+    };
+    const headLift = (st.headLift || 0) * H;
     [-1, 1].forEach((s, i) => {
       const L = st.legs[i], hx = cx + s * .06 * H, hy = .72 * H + drop, len = .21 * H;
       const ax = hx + Math.sin(L.th) * len + s * .012 * H, ay = hy + Math.cos(L.th) * len - L.lift;
@@ -539,14 +555,17 @@
     arm(g, H, cx - .1 * H, top + .035 * H, -1, st.la[0], st.la[1]);
     // The neck.
     g.strokeStyle = grey(.72); g.lineWidth = .028 * H; g.lineCap = "round";
-    g.beginPath(); g.moveTo(cx, top + .01 * H); g.quadraticCurveTo(cx + .035 * H, .49 * H + bob + drop, cx, .44 * H + bob + drop); g.stroke();
-    const hx = cx, hy = .3 * H + bob + drop, R = .16 * H, rot = st.tilt + sway;
+    g.beginPath(); g.moveTo(cx, top + .01 * H); g.quadraticCurveTo(cx + .035 * H + headLift * .25, .49 * H + bob + drop - headLift * .5, cx, .44 * H + bob + drop - headLift); g.stroke();
+    const hx = cx, hy = .3 * H + bob + drop - headLift, R = .16 * H, rot = st.tilt + sway + (st.headSpin || 0);
     g.save(); g.translate(hx, hy + R); g.rotate(rot); g.translate(-hx, -(hy + R));
     // The two antennae: one curled with a ball, one bent at a knee.
     const wob = Math.sin(t * TAU * 1.6) * .025 * H + st.antWob;
     g.strokeStyle = grey(.55); g.lineWidth = .012 * H;
-    g.beginPath(); g.moveTo(hx - .05 * H, hy - R * .9); g.quadraticCurveTo(hx - .11 * H, hy - R * 1.35, hx - .065 * H + wob, hy - R * 1.55); g.stroke();
-    g.fillStyle = grey(.96); g.beginPath(); g.arc(hx - .065 * H + wob, hy - R * 1.55, .024 * H, 0, TAU); g.fill();
+    const aL = st.antLen == null ? 1 : st.antLen, aS = st.antSpin || 0, ac = Math.cos(aS), as = Math.sin(aS);
+    const aT = (dx, dy) => [hx - .05 * H + (dx * ac - dy * as) * aL, hy - R * .9 + (dx * as + dy * ac) * aL];
+    const [acx, acy] = aT(-.06 * H, -R * .45), [abx, aby] = aT(-.015 * H + wob, -R * .65);
+    g.beginPath(); g.moveTo(hx - .05 * H, hy - R * .9); g.quadraticCurveTo(acx, acy, abx, aby); g.stroke();
+    g.fillStyle = grey(.96); g.beginPath(); g.arc(abx, aby, .024 * H, 0, TAU); g.fill();
     g.beginPath(); g.moveTo(hx + .055 * H, hy - R * .88); g.lineTo(hx + .09 * H, hy - R * 1.22); g.lineTo(hx + .135 * H, hy - R * 1.16); g.stroke();
     const sg = g.createRadialGradient(hx - .06 * H, hy - .06 * H, 0, hx, hy, R * 1.3);
     sg.addColorStop(0, grey(.93)); sg.addColorStop(.6, grey(.75)); sg.addColorStop(1, grey(.46));
@@ -554,14 +573,25 @@
     g.fillStyle = grey(.5);
     [-1, 1].forEach((s) => { rr(g, hx + s * R * 1.1 - .012 * H, hy - .015 * H, .024 * H, .03 * H, .006 * H); g.fill(); });
     // The one great eye, and its blink every 3.1 s.
-    const blink = ((t * 1000 + 300) % 3100) < 130, ex = hx - .005 * H, ey = hy - .012 * H, er = .082 * H;
+    const shut = st.eye === "shut" || (st.lid != null && st.lid > .94);
+    const blink = shut || (!st.noBlink && ((t * 1000 + 300) % 3100) < 130), ex = hx - .005 * H, ey = hy - .012 * H, er = .082 * H;
     g.fillStyle = grey(.1); g.beginPath(); g.arc(ex, ey, er + .011 * H, 0, TAU); g.fill();
     if (!blink) {
       g.fillStyle = grey(.99); g.beginPath(); g.arc(ex, ey, er, 0, TAU); g.fill();
       const lx = st.look[0] * .034 * H, ly = .004 * H + st.look[1] * .026 * H;
-      g.fillStyle = grey(.05); g.beginPath(); g.arc(ex + lx, ey + ly, .036 * H, 0, TAU); g.fill();
-      g.fillStyle = grey(.99); g.beginPath(); g.arc(ex + lx - .011 * H, ey + ly - .012 * H, .009 * H, 0, TAU); g.fill();
-      g.fillStyle = grey(.62); g.beginPath(); g.arc(ex, ey, er + .002 * H, Math.PI * 1.1, Math.PI * 1.9); g.closePath(); g.fill();
+      if (st.eye === "spiral") {
+        g.strokeStyle = grey(.05); g.lineWidth = .011 * H; g.beginPath();
+        for (let a = 0; a < 15; a += .25) { const r = .0042 * H * a, q = a - t * 7; g.lineTo(ex + Math.cos(q) * r, ey + Math.sin(q) * r); }
+        g.stroke();
+      } else {
+        const pr = st.eye === "wide" ? .05 * H : st.eye === "tiny" ? .02 * H : .036 * H;
+        g.fillStyle = grey(.05); g.beginPath(); g.arc(ex + lx, ey + ly, pr, 0, TAU); g.fill();
+        g.fillStyle = grey(.99); g.beginPath(); g.arc(ex + lx - .011 * H, ey + ly - .012 * H, .009 * H, 0, TAU); g.fill();
+      }
+      if (st.lid != null) {
+        // The heavy lid, as far down as it is: 0 open (no lid at all), .18 its resting droop, 1 shut.
+        if (st.lid > .01) { g.save(); g.beginPath(); g.arc(ex, ey, er + .002 * H, 0, TAU); g.clip(); g.fillStyle = grey(.62); g.fillRect(ex - er - 1, ey - er - 1, er * 2 + 2, er * 2 * st.lid + 1); g.restore(); }
+      } else { g.fillStyle = grey(.62); g.beginPath(); g.arc(ex, ey, er + .002 * H, Math.PI * 1.1, Math.PI * 1.9); g.closePath(); g.fill(); }
     } else {
       g.fillStyle = grey(.62); g.beginPath(); g.arc(ex, ey, er, 0, TAU); g.fill();
       g.strokeStyle = grey(.1); g.lineWidth = .013 * H; g.beginPath(); g.moveTo(ex - er * .8, ey + .01 * H); g.lineTo(ex + er * .8, ey + .01 * H); g.stroke();
@@ -571,7 +601,12 @@
     g.fillStyle = grey(.3);
     [[.075, .055], [.095, .07], [.07, .08]].forEach(([dx, dy]) => { g.beginPath(); g.arc(hx + dx * H, hy + dy * H, .006 * H, 0, TAU); g.fill(); });
     const mx = hx + .035 * H, my = hy + .105 * H;
-    if (st.mouth === "grin") {
+    if (st.mouth === "o") {
+      const k = st.mouthOpen == null ? 1 : st.mouthOpen;
+      g.fillStyle = grey(.08); g.beginPath(); g.ellipse(mx - .005 * H, my - .004 * H, .022 * H + .008 * H * k, .012 * H + .03 * H * k, 0, 0, TAU); g.fill();
+    } else if (st.mouth === "flat") {
+      g.strokeStyle = grey(.1); g.lineWidth = .014 * H; g.beginPath(); g.moveTo(mx - .035 * H, my - .004 * H); g.lineTo(mx + .03 * H, my - .01 * H); g.stroke();
+    } else if (st.mouth === "grin") {
       g.fillStyle = grey(.08); g.beginPath(); g.ellipse(mx, my, .05 * H, .03 * H, -.15, 0, Math.PI); g.fill();
       g.fillStyle = grey(.97); g.fillRect(mx - .012 * H, my - .002 * H, .02 * H, .014 * H);
     } else {
@@ -579,9 +614,16 @@
       g.fillStyle = grey(.97); g.fillRect(mx - .004 * H, my + .012 * H, .014 * H, .012 * H);
     }
     g.restore();
+    // Hands over his head (his eye covered): the arms again, in front of it.
+    if (st.handsOver) {
+      arm(g, H, cx + .1 * H, top + .035 * H, 1, st.ra[0], st.ra[1]);
+      arm(g, H, cx - .1 * H, top + .035 * H, -1, st.la[0], st.la[1]);
+    }
     // Where the antenna's ball is on the page, once the head's tilt has moved it.
-    const bx = hx - .065 * H + wob - hx, by = hy - R * 1.55 - (hy + R), c = Math.cos(rot), sn = Math.sin(rot);
-    return { hand, ball: [hx + bx * c - by * sn, hy + R + bx * sn + by * c] };
+    const bx = abx - hx, by = aby - (hy + R), c = Math.cos(rot), sn = Math.sin(rot);
+    const ball = placed([hx + bx * c - by * sn, hy + R + bx * sn + by * c]), handAt = placed(hand);
+    g.restore();
+    return { hand: handAt, ball };
   }
 
   const hexRgb = (hex, fallback) => {
@@ -612,8 +654,8 @@
     // The glow's heart is the colour lightened a third of the way to white.
     const heart = [gr, gg, gb].map((v) => Math.round(v + (255 - v) * .31));
     return function (g, o) {
-      const H = o.H, W = H * .84, cell = o.cell, PX = o.padX || 0, st = o.st, TOP = .14 * H;
-      const bw = Math.ceil((W + PX * 2) / cell), bh = Math.ceil((H + TOP) / cell) + 1, lift = o.lift || 0;
+      const H = o.H, W = H * .84, cell = o.cell, PX = o.padX || 0, PY = o.padY || 0, st = o.st, TOP = .14 * H + PY;
+      const bw = Math.ceil((W + PX * 2) / cell), bh = Math.ceil((H + TOP + PY) / cell) + 1, lift = o.lift || 0;
       if (!buf || buf.width !== bw || buf.height !== bh) { buf = scratch(bw, bh); on = new Uint8Array(bw * bh); }
       const fg = buf.getContext("2d", { willReadFrequently: true });
       fg.setTransform(1, 0, 0, 1, 0, 0); fg.clearRect(0, 0, bw, bh);
@@ -929,5 +971,109 @@
     for (const k in tg) { const x = S[k], v = V[k] || 0, acc = (tg[k] - x) * 150 - v * 17; V[k] = v + acc * h; S[k] = x + V[k] * h; }
   }
 
-  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, walkerFigure };
+
+  // ---- THE GESTURES: Blip's own body, every moment ----------------------------------------------------------------
+  //
+  // Wherever X0 is working, Blip shows what it is doing with his body alone: nothing held, nothing beside him. His
+  // long neck, his one great eye under its heavy lid, his antennae and his noodle arms carry all of it, and some of it
+  // is plainly odd (his head floats up on his neck; he melts). Each gesture is (t seconds, v voice 0..1) to a pose,
+  // lengths in fractions of his height; gesturePose fills in the rest, blendPose eases one into the next, poseState
+  // turns it into walkerFigure's state at a height, and createPerformer plays them on any canvas.
+  //
+  //   rest sleep wake listen think write send look point read work yourTurn done celebrate call plan routine travel
+  //   code oops, and the quirks he does at random while he waits: melt float jelly dizzy
+  const io2 = (k) => (k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
+  const io = io2;
+  const boing = (k) => Math.cos(k * 16) * Math.exp(-k * 4.5);
+  const run = (t, sp = 16) => { const a = Math.sin(t * sp); return { a, legs: [{ th: a * .5, lift: Math.max(0, Math.cos(t * sp)) * .05 }, { th: -a * .5, lift: Math.max(0, -Math.cos(t * sp)) * .05 }] }; };
+  const BLIP_GESTURES = {
+    rest: (t) => ({ ra: [.28, .2], la: [.22, .16], look: [.7 * Math.sin(t * .5), -.1], lid: .18, bob: .006 * Math.sin(t * 2), brows: .4 }),
+    sleep: (t) => ({ ra: [.1, .05], la: [.1, .05], tilt: .42, headLift: -.05, lid: 1, antSpin: 1.3, brows: .1, mouth: "flat", sqy: .96 + .015 * Math.sin(t * 1.6), sqx: 1.03, glow: 0, noBlink: true }),
+    wake: (t) => {
+      if (t < .35) return BLIP_GESTURES.sleep(t);
+      if (t < .85) { const k = (t - .35) / .5, b = boing(k); return { ra: [.5, .2], la: [.5, .2], tilt: lerp(.42, 0, io(clamp(k * 2.5))), headLift: .1 * clamp(k * 3) + .06 * b, eye: "tiny", lid: 0, brows: 1, antSpin: 1.1 * b, antLen: 1 + .25 * Math.abs(b), hop: .07 * Math.sin(Math.PI * k), mouth: "o", mouthOpen: .5, glow: clamp(k * 2) }; }
+      if (t < 1.35) { const k = io((t - .85) / .5), y = Math.sin(Math.PI * clamp((t - .85) / .5)); return { ra: [lerp(.5, 2.55, k), lerp(.2, -.25, k)], la: [lerp(.5, 2.55, k), lerp(.2, -.25, k)], sqy: 1 + .1 * y, sqx: 1 - .06 * y, mouth: "o", mouthOpen: y, lid: .55 * y, headLift: .06 * y, tilt: -.06 * y, glow: .6 }; }
+      if (t < 1.65) { const k = (t - 1.35) / .3, w = Math.sin(k * 30) * (1 - k); return { ra: [.6 + .4 * w, .1], la: [.6 - .4 * w, .1], tilt: .22 * w, antSpin: .8 * w, sqx: 1 + .07 * w, sqy: 1 - .07 * w, mouth: "grin", lid: .1, glow: .7 }; }
+      const k = clamp((t - 1.65) / .45);
+      if (k < .35) { const c = io(k / .35); return { ra: [lerp(.6, -.1, c), .2], la: [lerp(.6, -.1, c), .2], sqy: 1 - .16 * c, sqx: 1 + .1 * c, lid: .3, brows: .7, glow: .8 }; }
+      return { ra: [2.4, -.2], la: [2.4, -.2], hop: .3 * Math.sin(Math.PI * (k - .35) / .65), eye: "wide", lid: 0, brows: .9, mouth: "grin", glow: .9 };
+    },
+    listen: (t, v) => ({ headLift: .1 + .02 * v, tilt: -.18 + .05 * Math.sin(t * 3) - .04 * Math.max(0, v - .5), ra: [2.45, 1.15], la: [.25, .18], brows: .85, eye: "wide", lid: 0, look: [-.5, -.2], glow: .35 + .65 * v, antWob: .025 * v * Math.sin(t * 40), mouth: "o", mouthOpen: .2 + .3 * v }),
+    think: (t) => ({ tilt: .16 + .07 * Math.sin(t * 1.6), headLift: .03, ra: [1.9, 2.75], la: [.25, .18], brows: .9, lid: .3, look: [.6, -.8], antSpin: t * 2.4, antLen: 1.1, glow: .3 + .25 * Math.sin(t * 3) }),
+    write: (t) => { const a = Math.sin(t * 30), b = Math.sin(t * 30 + Math.PI), sc = ((t * .9) % 1) * 2 - 1; return { ra: [.75 + .1 * a, -1.25], la: [.75 + .1 * b, -1.25], tilt: .06, lid: .35, look: [sc, .7], mouth: "flat", headLift: -.02, bob: .004 * Math.abs(a) }; },
+    send: (t) => {
+      if (t < .35) { const c = io(t / .35); return { ra: [lerp(.3, -.1, c), .2], la: [lerp(.3, -.1, c), .2], sqy: 1 - .2 * c, sqx: 1 + .12 * c, lid: .4, brows: .6, antSpin: .6 * c }; }
+      const k = clamp((t - .35) / .75); return { ra: [2.9, 0], la: [2.9, 0], hop: .45 * Math.sin(Math.PI * k), spin: TAU * io(k), mouth: "grin", eye: "wide", lid: 0, antLen: 1.2 };
+    },
+    look: (t) => { const sw = Math.sin(t * 2.2); return { headLift: .2, tilt: .14 + .05 * sw, spin: .1, eye: "wide", lid: 0, brows: 1, look: [.3 + .6 * sw, .5], antLen: 1.3, antSpin: .5, ra: [.2, -.3], la: [.2, -.3], glow: .6 }; },
+    point: (t) => ({ spin: .32, ra: [1.62, 0], point: 1, la: [.3, .2], headLift: .08, tilt: -.25, look: [1, .1], brows: .6, eye: "wide", lid: .05, antSpin: .7, glow: .5 + .3 * Math.sin(t * 8) }),
+    read: (t) => { const p = (t * .7) % 1, x = p < .85 ? lerp(-1, 1, p / .85) : lerp(1, -1, (p - .85) / .15); return { look: [x, .6], tilt: .1 * x, headLift: .03, lid: .3, ra: [.2, -.4], la: [.2, -.4], brows: .55, antSpin: -.3 * x }; },
+    work: (t) => { const r = run(t); return { legs: r.legs, ra: [.9 + .6 * r.a, -1.4], la: [.9 - .6 * r.a, -1.4], hop: .03 * Math.abs(r.a), antSpin: t * 12, brows: -.4, lid: .25, mouth: "flat", glow: .7, look: [.6, 0], spin: .06 }; },
+    yourTurn: (t) => { const peek = (t % 3) > 1.7 && (t % 3) < 2.2; return { handsOver: true, ra: [2.9, 1.37], la: peek ? [2.0, .7] : [2.9, 1.37], tilt: .06 * Math.sin(t * 2), brows: .3, mouth: "flat", sqy: .98, look: [-.6, 0], antSpin: .4 * Math.sin(t * 1.5) }; },
+    done: (t) => { if (t < .45) { const k = Math.sin(Math.PI * clamp(t / .45)); return { ra: [2.2, -.3], la: [2.2, -.3], hop: .14 * k, mouth: "grin", eye: "wide", lid: 0 }; } return { ra: [.62, 1.92], thumb: 1, la: [.2, .16], mouth: "grin", lid: .3, brows: .7, tilt: -.06 }; },
+    celebrate: (t) => { const k = clamp(t / .95); return { ra: [2.7, .2], la: [2.7, .2], hop: .5 * Math.sin(Math.PI * k), spin: -TAU * io(k), mouth: "grin", eye: "wide", lid: 0, brows: 1, glow: .9, antSpin: .8 * Math.sin(t * 9) }; },
+    call: (t) => ({ antLen: 1.9, antWob: .02 * Math.sin(t * 7), antSpin: .25 * Math.sin(t * 4), ra: [2.6, 1.1], la: [.25, .18], mouth: "o", mouthOpen: Math.abs(Math.sin(t * 9)), headLift: .05, tilt: -.1 + .04 * Math.sin(t * 5), glow: .6 + .4 * Math.sin(t * 12), look: [-.3, -.1] }),
+    plan: (t) => { const tap = Math.max(0, Math.sin(t * 3 * TAU)); return { ra: [1.05 + .14 * tap, -1.3], la: [1.15, -1.2], bob: -.01 * tap, tilt: -.1 + .06 * (Math.floor(t * 3) % 2), look: [.5, -.9], brows: .75, lid: .1, glow: .4 + .5 * tap }; },
+    routine: (t) => { const p = (t * .8) % 1; if (p < .6) { const s = Math.sin(p / .6 * TAU); return { spin: .22 * s, ra: [1.5 + .8 * s, -.3], la: [1.5 - .8 * s, -.3], tilt: -.15 * s, mouth: "grin", antSpin: .6 * s, hop: .04 * Math.abs(s) }; } const k = (p - .6) / .4; return { spin: TAU * io(k), hop: .18 * Math.sin(Math.PI * k), ra: [2.6, 0], la: [2.6, 0], mouth: "grin" }; },
+    travel: (t) => { const r = run(t, 7); return { legs: r.legs, ra: [2.75, 1.3], la: [.8 + .4 * r.a, -.6], look: [1, -.4], lid: .35, tilt: -.06, brows: .7 }; },
+    code: (t) => { const a = Math.sin(t * 32), b = Math.sin(t * 32 + Math.PI); return { ra: [.75 + .1 * a, -1.25], la: [.75 + .1 * b, -1.25], lid: .45, mouth: "flat", brows: -.2, look: [((t * 1.2) % 1) * 2 - 1, .8], antSpin: .2 * a }; },
+    oops: (t) => { const k = io(clamp(t / .3)); return { ra: [lerp(.3, 1.6, k), lerp(.2, -1.3, k)], la: [lerp(.3, 1.6, k), lerp(.2, -1.3, k)], tilt: .2 * k + (t > .3 && t < 1 ? Math.sin(t * 22) * .07 : 0), brows: -.8, mouth: "flat", lid: .34 }; },
+    melt: (t) => { const k = Math.sin(Math.PI * clamp(t / 1.3)); return { sqy: 1 - .5 * k, sqx: 1 + .5 * k, ra: [.2 + 1.3 * k, .1], la: [.2 + 1.3 * k, .1], tilt: .1 * k, antSpin: 1.6 * k, eye: k > .5 ? "wide" : undefined, mouth: k > .5 ? "o" : "smile", look: [0, .8 * k] }; },
+    float: (t) => { const k = io(clamp(t / .7)); return { headLift: .42 * k + .03 * Math.sin(t * 3), tilt: .15 * Math.sin(t * 2), ra: [2.2, .3], la: [2.2, .3], eye: "wide", lid: 0, brows: 1, look: [0, 1], antSpin: .3 * Math.sin(t * 2.5), mouth: "o", mouthOpen: .4 }; },
+    jelly: (t) => { const w = Math.sin(t * 22) * Math.exp(-t * 1.5); return { sqx: 1 + .14 * w, sqy: 1 - .14 * w, tilt: .1 * w, antSpin: .8 * w, ra: [.5 + .5 * w, .2], la: [.5 - .5 * w, .2], mouth: "grin", lid: .2 }; },
+    dizzy: (t) => ({ antSpin: t * 10, antLen: 1.3, tilt: .14 * Math.sin(t * 4), spin: .05 * Math.sin(t * 3), ra: [.6, .4], la: [.6, .4], eye: t > .8 ? "spiral" : "wide", lid: 0, mouth: "o", mouthOpen: .5, look: [Math.sin(t * 10), -1] }),
+  };
+  const NUM = ["tilt", "brows", "headLift", "headSpin", "antSpin", "antLen", "lid", "sqx", "sqy", "spin", "hop", "bob", "glow", "mouthOpen", "antWob", "thumb", "point"];
+  const DEF = { tilt: -.03, brows: .45, headLift: 0, headSpin: 0, antSpin: 0, antLen: 1, lid: .18, sqx: 1, sqy: 1, spin: 0, hop: 0, bob: 0, glow: 0, mouthOpen: 0, antWob: 0, thumb: 0, point: 0 };
+  function gesturePose(name, t, v) { return Object.assign({ ra: [.28, .2], la: [.22, .16], look: [.6, -.1], mouth: "smile", legs: [{ th: 0, lift: 0 }, { th: 0, lift: 0 }] }, DEF, (BLIP_GESTURES[name] || BLIP_GESTURES.rest)(t, v || 0)); }
+  function blendPose(a, b, k) {
+    if (k >= 1) return b; const o = Object.assign({}, k < .5 ? a : b);
+    for (const f of NUM) o[f] = lerp(a[f] == null ? DEF[f] : a[f], b[f] == null ? DEF[f] : b[f], k);
+    for (const f of ["ra", "la", "look"]) o[f] = [lerp(a[f][0], b[f][0], k), lerp(a[f][1], b[f][1], k)];
+    o.legs = [0, 1].map((i) => ({ th: lerp(a.legs[i].th, b.legs[i].th, k), lift: lerp(a.legs[i].lift, b.legs[i].lift, k) }));
+    return o;
+  }
+  /** walkerFigure's state for a pose, at height H: lengths into pixels. */
+  function poseState(p, H) {
+    return Object.assign({}, p, { bob: p.bob * H, drop: 0, swayK: 0, walkK: 0, antWob: p.antWob * H, legs: p.legs.map((l) => ({ th: l.th, lift: l.lift * H })), lid: p.lid, eye: p.eye });
+  }
+
+  /** How long a gesture plays before it is over (the ones that end); the rest loop. */
+  const GESTURE_LENGTH = { wake: 2.1, send: 1.15, done: 1.4, celebrate: 1.05, oops: 1.1, melt: 1.35, float: 2.2, jelly: 1.6, dizzy: 2.2 };
+  const QUIRKS = ["melt", "float", "jelly", "dizzy"];
+
+  /**
+   * A Blip that plays gestures: play(name, { speed, then }) switches to one (blended in over 220 ms; `then` follows
+   * when it is over), draw(g, x, y, H, nowMs, v) paints him with his feet at (x, y), H tall, in CSS pixels of a
+   * context already scaled for the display. Reduced motion: every gesture is a still of itself, no hops, no flips.
+   */
+  function createPerformer(opts) {
+    const o = Object.assign({ dpr: 1, reduced: false, dot: "#F3E2C6", sticker: "#151311", glow: "#E8A23C" }, opts || {});
+    const render = walkerDots({ dot: o.dot, sticker: o.sticker, glowRgb: hexRgb(o.glow, [232, 162, 60]) });
+    let cur = { name: "rest", at: -1e9, speed: 1, then: null }, prev = null, last = 0;
+    const localT = (s, now) => Math.max(0, (now - s.at) / 1000 * s.speed);
+    function play(name, p) {
+      const q = p || {};
+      if (!BLIP_GESTURES[name]) name = "rest";
+      if (cur.name === name && !q.again) { cur.then = q.then || null; return; }
+      const now = typeof q.now === "number" ? q.now : nowMs();
+      prev = { name: cur.name, speed: cur.speed, at: cur.at, frozen: localT(cur, now), switched: now };
+      cur = { name, at: now, speed: q.speed || 1, then: q.then || null };
+    }
+    function draw(g, x, y, H, now, v) {
+      last = now;
+      const len = GESTURE_LENGTH[cur.name];
+      if (cur.then && len && localT(cur, now) >= len) play(cur.then, { now });
+      const still = o.reduced;
+      const lt = still ? Math.min(.6, (len || 1) * .5) : localT(cur, now);
+      let p = gesturePose(cur.name, lt, v || 0);
+      const since = now - (prev ? prev.switched : -1e9);
+      if (prev && since < 220 && !still) p = blendPose(gesturePose(prev.name, prev.frozen, v || 0), p, io2(since / 220));
+      if (still) { p.hop = 0; p.spin = 0; }
+      return render(g, { H, cell: Math.max(1, Math.round(H / 46 * o.dpr) / o.dpr), x, y, st: poseState(p, H), t: (now - cur.at) / 1000, glow: p.glow || 0, padX: H * .5, padY: H * .55, lift: (p.hop || 0) * H });
+    }
+    return { play, draw, get name() { return cur.name; }, quirk: () => QUIRKS[Math.floor(Math.random() * QUIRKS.length)] };
+  }
+
+  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, walkerFigure, walkerDots, BLIP_GESTURES, gesturePose, blendPose, poseState, createPerformer, GESTURE_LENGTH };
 });

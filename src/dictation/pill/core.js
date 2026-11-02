@@ -112,6 +112,7 @@ const bands = new Float32Array(32);
 let bandsAt = -1e9;
 
 function setState(name, data) {
+  const asked = name, from = S && S.name;
   // NO "✓ 12 words", and no joined listening pill: neither is needed.
   // Written, the pill goes straight back to rest; the words are in the
   // field to be seen.
@@ -122,6 +123,7 @@ function setState(name, data) {
   if (name === "ask" && S.name === "ask" && data && data.phase === S.data.phase) { wake(); return; }
   S = { name, at: clock(), data: data || {} };
   if (name !== "listening") caption = "";
+  if (BLIP()) blipFor(asked, data || {}, from);
   wake();
 }
 

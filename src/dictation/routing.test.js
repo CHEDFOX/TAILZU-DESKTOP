@@ -14,21 +14,26 @@ async function settle() { for (let i = 0; i < 6; i++) await tick(); }
 function rig(o = {}) {
   const did = [];
   const pills = [];
+  const kinds = [];
   let timers = [];
-  const knobs = Object.assign({ "desktop.route.labelMs": 5000, "desktop.route.botGraceMs": 3500, "desktop.route.notesGraceMs": 2000 }, o.knobs);
+  const knobs = Object.assign({ "desktop.route.labelMs": 5000, "desktop.route.botGraceMs": 3500, "desktop.route.notesGraceMs": 2000 }, o.decide ? { "desktop.route.brain": true } : {}, o.knobs);
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
   const r = createRouting({
     on: () => o.on !== false,
     signals: () => ({ names: ["X0", "Blip"], askOn: o.askOn !== false, notesOn: !!o.notesOn }),
     type: (sid, chunks) => { did.push(["type", sid, chunks.map((c) => c.text)]); return Promise.resolve(); },
     undo: (n) => { did.push(["undo", n]); return Promise.resolve(); },
-    ask: (m) => { did.push(["ask", m]); return o.askTakes !== false; },
+    ask: (m, opt) => { did.push(opt ? ["ask", m, opt] : ["ask", m]); return o.askTakes !== false; },
+    ...(o.decide ? { decide: async (i) => { did.push(["decide", i.words, i.last.length]); return o.decide(i); } } : {}),
+    ...(o.routine ? { routine: async (g) => { did.push(["routine", g]); return o.routine(g); } } : {}),
+    ...(o.needGrant ? { needGrant: async (m) => { did.push(["needGrant", m]); return o.needGrant(m); } } : {}),
     askCancel: () => did.push(["askCancel"]),
     notes: (start) => did.push(["notes", start]),
     whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan Ease", confidence: 0.9 }; },
     sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Plan Ease", text: "Saturday is planned." }; },
     botAnswered: (a) => did.push(["answered", a.name, a.text]),
-    pill: (state, data) => pills.push([state, data || {}]),
+    // What Blip does with a label (kind) is checked on its own; the rest of the data as it always was.
+    pill: (state, data) => { const { kind, ...rest } = data || {}; kinds.push(kind); pills.push([state, rest]); },
     pillRest: () => pills.push(["rest?"]),
     knobs: { num: pick, bool: pick, txt: (k, f, v) => (v ? f.replace(/\{(\w+)\}/g, (m, n) => v[n] ?? m) : f) },
     setTimeout: (f, ms) => { const t = { f, ms }; timers.push(t); return t; },
@@ -36,11 +41,11 @@ function rig(o = {}) {
   });
   /** Run the timers, shortest first (the grace before the label's end). */
   const elapse = () => { const ts = timers.slice().sort((a, b) => a.ms - b.ms); timers = []; for (const t of ts) t.f(); };
-  return { r, did, pills, elapse, timers: () => timers, lastPill: () => pills[pills.length - 1] };
+  return { r, did, pills, kinds, elapse, timers: () => timers, lastPill: () => pills[pills.length - 1] };
 }
 const BOX = { kind: "text", selection: "" };
 
-test("off (Linux, or the server's switch): every stretch typed, nothing held, nothing said", () => {
+test("off (config.json's \"off\", a Wayland session, or the server's switch): every stretch typed, nothing held, nothing said", () => {
   const h = rig({ on: false });
   h.r.start(1, {});
   h.r.field(1, null);
@@ -335,4 +340,171 @@ test("nothing was typed (the writer wrote nothing): no label offering to take it
   h.r.chunk(1, { text: "", heard: "hmm" });
   assert.strictEqual(h.r.end(1, { text: "", heard: "okay" }, true), "type");
   assert.deepStrictEqual(h.pills, []);
+});
+
+// ---- Linux: no text box can be read, so the field is unknown, never "none" ----------------------
+
+test("Linux (blind): plain words, questions and commands are typed as they come, whatever the field read said", async () => {
+  const h = rig({ askOn: false });
+  h.r.start(1, { blind: true });
+  h.r.field(1, null);   // frontApp.focusedField answers null on Linux: not "no text box"
+  assert.strictEqual(h.r.chunk(1, { text: "Can you send me the deck?", heard: "can you send me the deck" }), "type");
+  assert.strictEqual(h.r.chunk(1, { text: "Book a table for eight.", heard: "book a table for eight" }), "type");
+  assert.strictEqual(h.r.end(1, { text: "Thanks!", heard: "thanks" }, true), "type");
+  await settle();
+  assert.deepStrictEqual(h.did, [], "nothing was held, routed or taken back");
+});
+
+test("Linux (blind): words that say where they go still go there: notes, X0 by name, a bot by name", async () => {
+  const notes = rig({ askOn: false, knobs: { "desktop.route.notesGraceMs": 0 } });
+  notes.r.start(1, { blind: true });
+  notes.r.field(1, null);
+  assert.strictEqual(notes.r.chunk(1, { text: "Take notes.", heard: "take notes" }), "hold");
+  assert.strictEqual(notes.r.end(1, null, true), "routed");
+  await settle();
+  notes.elapse();
+  assert.deepStrictEqual(notes.did.filter((d) => d[0] === "notes"), [["notes", true]]);
+
+  const bot = rig({ askOn: false, knobs: { "desktop.route.botGraceMs": 0 } });
+  bot.r.start(2, { blind: true });
+  assert.strictEqual(bot.r.chunk(2, { text: "X0, plan my Saturday.", heard: "X0 plan my Saturday" }), "hold");
+  assert.strictEqual(bot.r.end(2, null, true), "routed");
+  await settle();
+  bot.elapse();
+  await settle();
+  assert.ok(bot.did.some((d) => d[0] === "sendBot"), "a bot's task, through the backend's pick");
+  assert.ok(!bot.did.some((d) => d[0] === "type"), "nothing typed");
+});
+
+test("a Mac or Windows field read still decides there (blind is Linux's alone)", () => {
+  const h = rig();
+  h.r.start(1, {});
+  h.r.field(1, null);
+  assert.strictEqual(h.r.chunk(1, { text: "Book a table for eight.", heard: "book a table for eight" }), "hold", "no text box on a Mac: a task is held, as before");
+});
+
+// ---- the one key's brain ------------------------------------------------------------
+
+const said = (h, sid, words, field) => {
+  h.r.start(sid, {});
+  h.r.target(sid, { label: "WhatsApp" });
+  if (field !== undefined) h.r.field(sid, field);
+  return h.r.end(sid, { text: words, heard: words }, true);
+};
+
+test("brain: every session's words are held for it, even with a text box in front", async () => {
+  const h = rig({ decide: () => ({ do: "write", sure: 0.95, by: "model" }) });
+  h.r.start(1, {});
+  h.r.target(1, { label: "WhatsApp" });
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "Running late,", heard: "running late" }), "hold");
+  assert.strictEqual(h.r.end(1, { text: "be there in ten.", heard: "be there in ten" }, true), "routed");
+  await settle();
+  assert.deepStrictEqual(h.did, [["decide", "running late be there in ten", 0], ["type", 1, ["Running late,", "be there in ten."]]]);
+});
+
+test("brain: off unless the server turns it on (desktop.route.brain): the lists decide, typed as it comes", async () => {
+  const h = rig({ decide: () => { throw new Error("must not be asked"); }, knobs: { "desktop.route.brain": false } });
+  h.r.start(1, {});
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "Running late,", heard: "running late" }), "type");
+});
+
+test("brain: a private window or a money app never goes to it; the lists decide, typed as it comes", async () => {
+  const h = rig({ decide: () => { throw new Error("must not be asked"); } });
+  h.r.start(1, {});
+  h.r.target(1, { label: "HDFC", sensitive: true });
+  h.r.field(1, BOX);
+  assert.strictEqual(h.r.chunk(1, { text: "hello", heard: "hello" }), "type");
+  assert.strictEqual(h.r.end(1, { text: "there", heard: "there" }, true), "type");
+  await settle();
+  assert.ok(!h.did.some((x) => x[0] === "decide"));
+});
+
+test("brain: a message to send goes to Ask, trusted, with the goal made whole", async () => {
+  const h = rig({ decide: () => ({ do: "send", goal: "Tell Riya the mockups are ready", to: "Riya", risk: "send", sure: 0.9, by: "model", missing: [] }) });
+  assert.strictEqual(said(h, 1, "tell Riya the mockups are ready", null), "routed");
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "Tell Riya the mockups are ready", { trusted: true }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sending", alt: "Type it instead" }]);
+});
+
+test("brain: a task that moves money is not trusted, so every step that matters is confirmed", async () => {
+  const h = rig({ decide: () => ({ do: "task", goal: "Pay the electricity bill", risk: "money", sure: 0.9, by: "model", missing: [] }) });
+  said(h, 1, "pay the electricity bill", null);
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "Pay the electricity bill"]);
+  assert.strictEqual(h.lastPill()[1].label, "On it");
+});
+
+test("brain: a permission the card has not given is asked for first, at this turn, then Ask goes on", async () => {
+  const h = rig({ decide: () => ({ do: "answer", goal: "What should I do here?", screen: true, risk: "none", sure: 0.9, by: "model", missing: ["see"] }), needGrant: () => true });
+  said(h, 1, "what should I do here", null);
+  await settle();
+  const order = h.did.map((x) => x[0]);
+  assert.deepStrictEqual(order.slice(-2), ["needGrant", "ask"]);
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "needGrant"), ["needGrant", ["see"]]);
+});
+
+test("brain: nothing missing, nothing asked", async () => {
+  const h = rig({ decide: () => ({ do: "answer", goal: "Why is December high?", risk: "none", sure: 0.9, by: "model", missing: [] }), needGrant: () => true });
+  said(h, 1, "why is december so high", null);
+  await settle();
+  assert.ok(!h.did.some((x) => x[0] === "needGrant"));
+});
+
+test("brain: a routine is held a moment, then saved, and said", async () => {
+  const h = rig({ decide: () => ({ do: "routine", goal: "Every morning at 8, tell me the top tech news", sure: 0.9, by: "model" }), routine: () => ({ text: "Top tech news · Every day at 8:00" }) });
+  said(h, 1, "every morning at 8 tell me the top tech news", null);
+  await settle();
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Saving a routine", alt: "Type it instead" }]);
+  assert.ok(!h.did.some((x) => x[0] === "routine"), "not before its moment");
+  h.elapse();
+  await settle();
+  assert.deepStrictEqual(h.did.slice(-2), [["routine", "Every morning at 8, tell me the top tech news"], ["answered", "Routines", "Top tech news · Every day at 8:00"]]);
+});
+
+test("brain: one of their bots, by the brain's pick", async () => {
+  const h = rig({ decide: () => ({ do: "bot", goal: "Plan my Saturday", bot: { slug: "plan", name: "Plan Ease" }, sure: 0.9, by: "model" }) });
+  said(h, 1, "plan my saturday", null);
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "whichBot"), ["whichBot", "Plan my Saturday", "plan"]);
+});
+
+test("brain: down or slow, and the word lists decide as before", async () => {
+  const h = rig({ decide: () => new Promise(() => {}), knobs: { "desktop.route.brainMs": 300 } });
+  said(h, 1, "what does this error mean", null);
+  await settle();
+  h.elapse();
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "ask"), ["ask", "what does this error mean"]);
+});
+
+test("brain: the last three asks go with the next, so a follow-up is understood", async () => {
+  let n = 0;
+  const h = rig({ decide: () => ({ do: "send", goal: `message ${++n}`, to: "Riya", risk: "send", sure: 0.9, by: "model", missing: [] }) });
+  for (let i = 1; i <= 5; i++) { said(h, i, `tell riya ${i}`, null); await settle(); }
+  const counts = h.did.filter((x) => x[0] === "decide").map((x) => x[2]);
+  assert.deepStrictEqual(counts, [0, 1, 2, 3, 3]);
+});
+
+test("brain: a write with text selected is the server's rewrite of it", async () => {
+  const h = rig({ decide: () => ({ do: "write", sure: 0.9, by: "model" }) });
+  said(h, 1, "make this shorter", { kind: "text", selection: "a long paragraph" });
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "type"), ["type", 1, ["make this shorter"]]);
+});
+
+test("the pill is told what Blip does with each label: sent a flip, a task he runs, a routine his dance, typed done", async () => {
+  const send = rig({ decide: () => ({ do: "send", goal: "Tell Riya", risk: "send", sure: .9, by: "model", missing: [] }) });
+  said(send, 1, "tell riya", null); await settle();
+  assert.strictEqual(send.kinds.filter(Boolean).pop(), "send");
+  const task = rig({ decide: () => ({ do: "task", goal: "Unsubscribe", risk: "none", sure: .9, by: "model", missing: [] }) });
+  said(task, 1, "unsubscribe me", null); await settle();
+  assert.strictEqual(task.kinds.filter(Boolean).pop(), "work");
+  const routine = rig({ decide: () => ({ do: "routine", goal: "Every morning", sure: .9, by: "model" }), routine: () => ({ text: "saved" }) });
+  said(routine, 1, "every morning", null); await settle();
+  assert.strictEqual(routine.kinds.filter(Boolean).pop(), "routine");
+  routine.elapse(); await settle();
+  assert.strictEqual(routine.kinds.filter(Boolean).pop(), "done", "once it has gone, a thumbs-up");
 });

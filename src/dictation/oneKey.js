@@ -6,15 +6,29 @@
 // chord with a hold key and double-taps beside it, Ask's Alt twice, and the
 // meeting notes chord): Ask and notes are reached by saying so.
 //
-// Which key: Fn on a Mac, Right Ctrl on Windows, by default; the person can
-// pick another single key in Settings (choices below). Linux keeps the keys
-// it had: there is no text box to read there, so nothing to route by.
+// Which key, by default: Right ⌘ on a Mac (Fn on a Mac that already had Fn:
+// firstDefault), Right Ctrl on Windows and on Linux; the person can pick
+// another single key in Settings (choices below).
 //
-// Right ⌥, Right ⌘, Right Ctrl and Right Alt come through the key hook
-// (uiohook-napi). Fn does not: the hook cannot see it on a Mac, and neither
-// can Electron's shortcuts, so a small helper watches it (native/tzkey.swift,
-// built into build/tzkey). Either one failing (no hook, no helper, macOS
-// saying no) and main.js falls back to the talk chord, and says so once.
+// Right ⌘ alone means nothing to macOS or to any common app, every Mac
+// keyboard has it under the right thumb, and it needs no helper. Fn is a
+// choice still: tapped alone it can be the Globe key's emoji, input source or
+// dictation, many keyboards that are not Apple's have none, and other
+// dictation apps listen to it too.
+//
+// On Linux the text box cannot be read (frontApp.focusedField answers null
+// there), so routing.js is told the field is unknown rather than absent: the
+// words are typed as they come, as dictation always was, unless they say
+// where they go ("Tailzu, …", "take notes", a bot by name). Under Wayland a
+// key hook hears only X11 windows, so the key is not bound there at all
+// ("wayland"), and the talk chord stands in, said once.
+//
+// Right ⌥, Right ⌘, Right Ctrl, Right Alt and Right Super come through the key
+// hook (uiohook-napi). Fn does not: the hook cannot see it on a Mac, and
+// neither can Electron's shortcuts, so a small helper watches it
+// (native/tzkey.swift, built into build/tzkey). Either one failing (no hook,
+// no helper, macOS saying no, Wayland) and main.js falls back to the talk
+// chord, and says so once.
 //
 // A modifier is a modifier first: Right Ctrl+C is a copy, Fn+← is Home. A
 // press only becomes talking once it has been down a moment alone (armMs);
@@ -24,12 +38,16 @@
 
 const knobs = require("../../knobs.js");
 
+// The first of each list is that system's default.
 const CHOICES = {
-  darwin: [{ id: "fn", label: "Fn" }, { id: "rightOption", label: "Right ⌥" }, { id: "rightCommand", label: "Right ⌘" }],
+  darwin: [{ id: "rightCommand", label: "Right ⌘" }, { id: "fn", label: "Fn" }, { id: "rightOption", label: "Right ⌥" }],
   win32: [{ id: "rightCtrl", label: "Right Ctrl" }, { id: "rightAlt", label: "Right Alt" }],
+  // Right Super is the Windows key on the right: GNOME opens its overview on
+  // the LEFT one only, so the right one alone is free there.
+  linux: [{ id: "rightCtrl", label: "Right Ctrl" }, { id: "rightAlt", label: "Right Alt" }, { id: "rightSuper", label: "Right Super" }],
 };
 // The key hook's names for each (UiohookKey). Fn has none: the helper watches it.
-const HOOK = { rightOption: "AltRight", rightCommand: "MetaRight", rightCtrl: "CtrlRight", rightAlt: "AltRight" };
+const HOOK = { rightOption: "AltRight", rightCommand: "MetaRight", rightCtrl: "CtrlRight", rightAlt: "AltRight", rightSuper: "MetaRight" };
 
 /** A key's name as the person reads it: the server's label (desktop.oneKey.label.*), the one above as the fallback. */
 function named(c) {
@@ -39,15 +57,35 @@ function named(c) {
     rightCommand: knobs.txt("desktop.oneKey.label.rightCommand", "Right ⌘"),
     rightCtrl: knobs.txt("desktop.oneKey.label.rightCtrl", "Right Ctrl"),
     rightAlt: knobs.txt("desktop.oneKey.label.rightAlt", "Right Alt"),
+    rightSuper: knobs.txt("desktop.oneKey.label.rightSuper", "Right Super"),
   }[c.id];
   return typeof said === "string" && said.trim() ? said : c.label;
 }
-/** The keys this system can use as the one key: [{ id, label }]. None on Linux. */
+/** The keys this system can use as the one key: [{ id, label }]. None elsewhere. */
 function choices(platform) { return (CHOICES[platform] || []).map((c) => Object.assign({}, c, { label: named(c) })); }
 /** Whether this system has the one key at all. */
 function supported(platform) { return Object.hasOwn(CHOICES, platform); }
-/** Fn on a Mac, Right Ctrl on Windows; null elsewhere. */
+/** Right ⌘ on a Mac, Right Ctrl on Windows and Linux; null elsewhere. */
 function defaultKey(platform) { return supported(platform) ? CHOICES[platform][0].id : null; }
+/**
+ * The key someone who never picked one is given, decided once and kept (main.js keeps it in its local state). A Mac that had
+ * launched before had Fn, the default then, and keeps it: the key under their fingers does not change with an update. A new
+ * Mac gets Right ⌘.
+ */
+function firstDefault(platform, launchesBefore) {
+  if (!supported(platform)) return null;
+  if (platform === "darwin" && Number(launchesBefore) > 0) return "fn";
+  return defaultKey(platform);
+}
+/** "wayland", "x11" or "" for a Linux session (from its environment); "" elsewhere. */
+function linuxSession(platform, env) {
+  if (platform !== "linux") return "";
+  const e = env || {};
+  const type = String(e.XDG_SESSION_TYPE || "").toLowerCase();
+  if (type === "wayland" || type === "x11") return type;
+  if (e.WAYLAND_DISPLAY) return "wayland";
+  return e.DISPLAY ? "x11" : "";
+}
 /** The key to use: the one asked for when this system has it, else the default.
  *  "off" (config.json) is no one key at all: the old keys, as on Linux. */
 function pickKey(platform, wanted) {
@@ -181,9 +219,11 @@ function lineReader(onLine) {
  * Bind the one key to a gesture (createHoldTap). Answers through o.bound()
  * once the key is live, or o.failed(reason) when it cannot be: "hook" (the
  * key hook did not load), "helper" (the Fn helper is not there or would not
- * start), "denied" (macOS would not let it listen), "exited" (it stopped).
+ * start), "denied" (macOS would not let it listen), "exited" (it stopped),
+ * "wayland" (a Linux Wayland session, where a key hook hears only X11 windows).
  *
  *   o.key, o.platform
+ *   o.session            linuxSession(): "wayland" refuses on Linux
  *   o.gesture            createHoldTap's { down, up, other }
  *   o.hook               { uIOhook, UiohookKey } or null
  *   o.helper             { path, exists(path), spawn(path, args, opts) } (Fn)
@@ -223,14 +263,18 @@ function bindOneKey(o) {
     return { stop };
   }
 
-  // Right ⌥ / Right ⌘ / Right Ctrl / Right Alt: the key hook.
+  // A key that works only while an X11 window is in front is no key: refused, and the chord stands in.
+  if (o.platform === "linux" && o.session === "wayland") { fail("wayland"); return { stop }; }
+
+  // Right ⌥ / Right ⌘ / Right Ctrl / Right Alt / Right Super: the key hook.
   const hook = o.hook;
   const code = hook ? hookCode(o.key, hook.UiohookKey) : null;
   if (!hook || code == null) { fail("hook"); return { stop }; }
   // Right Alt is AltGr on many Windows layouts, which Windows sends with a
   // left Ctrl of its own, again with every repeat while it is held: that
   // Ctrl is part of the key, not a chord.
-  const quiet = o.key === "rightAlt" ? [hook.UiohookKey.Ctrl].filter((c) => typeof c === "number") : [];
+  // (Windows only: on Linux AltGr comes alone, and a left Ctrl with it is a real chord.)
+  const quiet = o.key === "rightAlt" && o.platform === "win32" ? [hook.UiohookKey.Ctrl].filter((c) => typeof c === "number") : [];
   const onDown = (e) => { if (e.keycode === code) g.down(); else if (!quiet.includes(e.keycode)) g.other(); };
   const onUp = (e) => { if (e.keycode === code) g.up(); };
   const onMouse = () => g.other();
@@ -246,4 +290,4 @@ function bindOneKey(o) {
   return { stop };
 }
 
-module.exports = { choices, supported, defaultKey, pickKey, keyLabel, hookCode, needsHelper, createHoldTap, bindOneKey, lineReader };
+module.exports = { choices, supported, defaultKey, firstDefault, linuxSession, pickKey, keyLabel, hookCode, needsHelper, createHoldTap, bindOneKey, lineReader };

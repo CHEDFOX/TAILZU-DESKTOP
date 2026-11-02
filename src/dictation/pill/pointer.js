@@ -13,6 +13,7 @@ function inside(x, y, pad = 4) {
 }
 function onCancel(x, y) {
   if (S.name !== "listening") return false;
+  if (BLIP()) return false;
   if (BOTS()) { const c = botsCancel(); return Math.hypot(x - c.x, y - c.y) <= c.r + 2; }
   if (apart()) return SP.podAt(podsNow(), x, y, 0) === "cancel";
   const r = pillRect(); return Math.hypot(x - (r.x + r.h / 2), y - (r.y + r.h / 2)) <= r.h / 2;
