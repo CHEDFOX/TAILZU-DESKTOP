@@ -25,7 +25,9 @@ Where everything lives, and how the parts connect: [archi.md](archi.md).
 - **src/dictation/recorder/** — hidden window: batch (MediaRecorder→webm)
   and live (WebAudio→16 kHz PCM→WebSocket) capture paths.
 - **src/dictation/overlay/** — the floating live-caption strip.
-- **src/dictation/pill/** — the dictation pill at the foot of the screen.
+- **src/dictation/pill/** — the dictation pill at the foot of the screen. In
+  the Bots look, Blip (**src/shared/blip.js** `createPerformer`) stands in it
+  and shows each moment with his own body (`desktop.pill.blip`).
 - **src/shared/speechMeter.js** — tells a voice from a breath, a keyboard or a
   hum, so a pause writes only speech and silence is never uploaded (node --test).
 - **src/dictation/pasteJoin.js** — the space (or none) between two pasted stretches.
@@ -108,7 +110,7 @@ Dictation needs an account, the same as on the phones — open the window from
 the tray and sign in. The hotkey answers a signed-out machine by opening that
 window rather than recording into a history no account owns.
 
-- **The one key** (Mac and Windows): hold it to talk, let go to finish; a quick
+- **The one key** (Mac, Windows, and Linux under X11): hold it to talk, let go to finish; a quick
   tap keeps it listening until it is tapped again. What was said goes where it
   is meant (src/dictation/routing.js, router.js): typed into the text box in focus; Ask for
   "Tailzu, …", a question about the screen, or a question with no text box in
@@ -116,9 +118,19 @@ window rather than recording into a history no account owns.
   बंद करो"); a bot for a bot's task (the backend's `/v1/shell/route` picks which,
   `/v1/shell/ask` sends it). The pill says where it went, with one tap for the
   other choice ("Typed · Ask instead", "Sent to Plan Ease · Type it instead").
+  With the server's brain on (`desktop.route.brain`, `POST /v1/ask/decide`),
+  the words are held to the stop and the server says what they were, in any
+  language: typed, a message to send, a task, an answer, a routine, notes or a
+  bot (a private window or a money app never goes to it; slow or down, the
+  word lists decide). A message or task asked for in so many words, with no
+  money and nothing deleted, is not asked about again at its ordinary steps.
+  A permission Ask needs and the setup card has not given (using the apps,
+  seeing the screen) is asked for at that turn, never before. On Linux no text
+  box can be read, so the words are typed as they come unless they say where
+  they go. Esc throws a dictation away (`desktop.pill.escCancels`).
   Fn is watched by `native/tzkey.swift` (`npm run tzkey`); the others by the key
   hook. A key that cannot be bound falls back to the toggle hotkey, said once.
-- **Toggle** (Linux, or `oneKey: "off"`): press the hotkey → speak → press again.
+- **Toggle** (a Linux Wayland session, or `oneKey: "off"`): press the hotkey → speak → press again.
 - **Hold-to-talk** (`hold: true`, without the one key): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you
   talk; the final polished text pastes when you stop. Captions are display-only —
@@ -134,7 +146,13 @@ window rather than recording into a history no account owns.
     and out loud.
   - **Small jobs**: "open #design and tell them the mockups are ready". It does
     them step by step and stops before anything risky with **Do it / Not
-    now** (or tap Alt twice). Esc or the card's ✕ stops it.
+    now** (or tap Alt twice). Esc or the card's ✕ stops it. A longer job
+    (a plan of several steps) ticks its steps off on the card and may run to
+    `desktop.agent.jobMaxSteps` steps and `jobDeadlineMs`; a password, code or
+    card details is handed back with **Your turn** (Continue / Stop), and
+    nothing is typed for you. A question back waits on the card ("Hold
+    {key} to answer") until the one key, or Alt twice, is pressed
+    (`desktop.agent.askOpensMic` opens the microphone at once instead).
   - **Instant**: the question streams as it is said, and a plain "where's
     X" is matched on the device (`src/agent/resolver.js`) and ringed before the
     question ends, with no Ask request. Its words still come from the
