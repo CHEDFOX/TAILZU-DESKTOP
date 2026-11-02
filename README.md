@@ -18,52 +18,56 @@ hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
         → cleaned text → clipboard → paste keystroke into the focused app
 ```
 
-- **main.js** — tray app, global hotkey, hold-to-talk hook, tone menu,
+Where everything lives, and how the parts connect: [archi.md](archi.md).
+
+- **src/main/main.js** — tray app, global hotkey, hold-to-talk hook, tone menu,
   caption overlay, clipboard + paste, config.
-- **recorder.html** + **recorder.js** — hidden window: batch (MediaRecorder→webm)
+- **src/dictation/recorder/** — hidden window: batch (MediaRecorder→webm)
   and live (WebAudio→16 kHz PCM→WebSocket) capture paths.
-- **overlay.html** + **overlay.js** — the floating live-caption strip.
-- **pill.html** + **pill.js** — the dictation pill at the foot of the screen.
-- **speechMeter.js** — tells a voice from a breath, a keyboard or a hum, so a
-  pause writes only speech and silence is never uploaded (node --test).
-- **pasteJoin.js** — the space (or none) between two pasted stretches.
-- **app.html** + **sdui.js** — the app window, drawn from the server's screens.
+- **src/dictation/overlay/** — the floating live-caption strip.
+- **src/dictation/pill/** — the dictation pill at the foot of the screen.
+- **src/shared/speechMeter.js** — tells a voice from a breath, a keyboard or a
+  hum, so a pause writes only speech and silence is never uploaded (node --test).
+- **src/dictation/pasteJoin.js** — the space (or none) between two pasted stretches.
+- **src/app/app.html** + **src/app/sdui/** — the app window, drawn from the
+  server's screens.
   - The onboarding is two node types the server sends (`OnboardStage`,
-    `BlipSpot`) and one friend who is not a node: **blip.js** `createWalker`
-    draws Blip on `#blipStage`, over both the sign-in gate and the app, and
-    walks him to wherever the step on show says he stands. Only the steps'
-    content glides; he, the bar and his bubble stay put (`html[data-onboard]`
-    is that hold). Its two faces are bundled (`assets/fonts`): the window's
-    policy loads fonts from its own files only.
+    `BlipSpot`) and one friend who is not a node: **src/shared/blip.js**
+    `createWalker` draws Blip on `#blipStage`, over both the sign-in gate and
+    the app, and walks him to wherever the step on show says he stands. Only
+    the steps' content glides; he, the bar and his bubble stay put
+    (`html[data-onboard]` is that hold). Its two faces are bundled
+    (`assets/fonts`): the window's policy loads fonts from its own files only.
 - **Ask** — tap Alt twice and ask about the app in front:
-  - **ask.js** wires it in the main process: the question's microphone, the
-    guide's window, the agent's hands.
-  - **agent.js** is the run loop. It reads the screen through the driver, asks
-    `POST /v1/agent`, points, says, and acts. It asks first before anything
-    that sends, deletes or pays (node --test). **resolver.js** matches a
-    question to the screen on the device, for the instant answers.
-  - **driver.js** picks **axDriver.js** + `native/tzax.swift` on a Mac (the
-    accessibility tree) or **uiaDriver.js** on Windows (UI Automation). Each
-    is a warm helper speaking JSON lines.
-  - **guide.html** + **guide.js** + **blip.js** draw the card, the ring on
+  - **src/agent/ask.js** wires it in the main process: the question's
+    microphone, the guide's window, the agent's hands.
+  - **src/agent/run/agent.js** is the run loop. It reads the screen through the
+    driver, asks `POST /v1/agent`, points, says, and acts. It asks first before
+    anything that sends, deletes or pays (node --test). **src/agent/resolver.js**
+    matches a question to the screen on the device, for the instant answers.
+  - **src/agent/driver/driver.js** picks **axDriver.js** + `native/tzax.swift`
+    on a Mac (the accessibility tree) or **uiaDriver.js** on Windows (UI
+    Automation). Each is a warm helper speaking JSON lines.
+  - **src/agent/guide/** + **src/shared/blip.js** draw the card, the ring on
     the target, the thread from the pill, the marks Ask draws while it
-    explains, and Blip, the one-eyed dotted presenter, peeking over the
-    card and pointing. **pill.js** parts the pill for the thread.
+    explains, and Blip, the one-eyed dotted presenter, peeking over the card
+    and pointing. The pill parts for the thread.
   - `guide.html?demo` is a review page.
 
-Every page carries a Content-Security-Policy that runs only this folder's own
-script files, which is why no page has an inline script (neuralField.html's
-one is allowed by hash, written by gen-field.js).
-- **runner/** — Tailzu Code on this computer: the person's own computer as a
-  runner for Xode's live sessions (see the section of that name).
-- **preload.js** — the tiny IPC bridge.
+Every page carries a Content-Security-Policy that runs only the app's own
+script files, which is why no page has an inline script
+(src/app/neuralField.html's one is allowed by hash, written by
+scripts/gen-field.js).
+- **src/runner/** — Tailzu Code on this computer: the person's own computer as
+  a runner for Xode's live sessions (see the section of that name).
+- **src/main/preload.js** — the tiny IPC bridge.
 - **knobs.js** — the server's values for everything above (see below).
 
 ## Run it (dev)
 
 ```
 npm install
-npm run icon          # generate the tray icons (one-time; the app icons are committed, see gen-app-icon.py)
+npm run icon          # generate the tray icons (one-time; the app icons are committed, see scripts/gen-app-icon.py)
 cp config.example.json config.json   # optional — only baseUrl is needed
 npm start
 ```
@@ -106,7 +110,7 @@ window rather than recording into a history no account owns.
 
 - **The one key** (Mac and Windows): hold it to talk, let go to finish; a quick
   tap keeps it listening until it is tapped again. What was said goes where it
-  is meant (routing.js, router.js): typed into the text box in focus; Ask for
+  is meant (src/dictation/routing.js, router.js): typed into the text box in focus; Ask for
   "Tailzu, …", a question about the screen, or a question with no text box in
   front; meeting notes for "take notes" / "stop notes" (and "notes lo", "नोट्स
   बंद करो"); a bot for a bot's task (the backend's `/v1/shell/route` picks which,
@@ -132,7 +136,7 @@ window rather than recording into a history no account owns.
     them step by step and stops before anything risky with **Do it / Not
     now** (or tap Alt twice). Esc or the card's ✕ stops it.
   - **Instant**: the question streams as it is said, and a plain "where's
-    X" is matched on the device (`resolver.js`) and ringed before the
+    X" is matched on the device (`src/agent/resolver.js`) and ringed before the
     question ends, with no Ask request. Its words still come from the
     server's live transcription, as every question's do.
   - **Pictures**: "what's this graph saying?", "solve this". The window is
@@ -162,7 +166,7 @@ window rather than recording into a history no account owns.
     change in one of those apps, the stream's `approve` event carries the
     server's own confirm card (its words, its Approve / Edit / Not now, the
     route each calls). The guide draws it as sent, and the button's route is
-    called through `authorizedFetch` (agent.js `approve`, ask.js `call`: a
+    called through `authorizedFetch` (src/agent/run/agent.js `approve`, src/agent/ask.js `call`: a
     task's own approve or deny, nothing else). Alt twice is Approve, on the
     same `desktop.agent.confirmTapMs` wait as any confirm card; Edit says no
     to that one and asks what to change; no answer leaves it waiting in
@@ -181,8 +185,8 @@ window rather than recording into a history no account owns.
 Xode works on a project's code and needs somewhere to run commands (tests,
 builds, installs). Its first choice is the person's own computer, if they have said
 it may: free, and fast, because nothing waits for a cloud computer to start. This
-app speaks the backend's runner protocol for that (`docs/desktop-runner-session.md`
-in the backend repository; the code is `runner/`).
+app speaks the backend's runner protocol for that
+(`TAILZU-BACKEND/docs/desktop-runner-session.md`; the code is `src/runner/`).
 
 **It is off until the person turns it on** (tray: *Use this computer for Tailzu Code*,
 which says what it means the first time; or *Tailzu Code activity…*, the window).
@@ -270,7 +274,7 @@ is killed when the session closes, on Stop, when the app quits, when the process
 or an uncaught error ends it, and, through a small watchdog process, when the app is
 killed outright (it holds a pipe to the app and kills the groups when it closes).
 
-Tests: `node --test runner/*.test.js` (a fake Worker and room over real sockets, real bash
+Tests: `node --test src/runner/` (a fake Worker and room over real sockets, real bash
 and git; a local bare repository stands in for GitHub; the battery source is stubbed).
 
 ## What comes from the backend
@@ -344,8 +348,8 @@ SmartScreen, and run.
 ```
 npm install
 npm run icon
-npm run dist:win      # Windows: dist/Tailzu Setup 0.1.0.exe (NSIS, one-click)
-npm run dist:mac      # macOS:  dist/Tailzu-0.1.0.dmg (needs a Mac)
+npm run dist:win      # Windows: dist/Tailzu-Setup.exe (NSIS, one-click)
+npm run dist:mac      # macOS:  dist/Tailzu.dmg (needs a Mac)
 npm run dist          # current OS
 ```
 
