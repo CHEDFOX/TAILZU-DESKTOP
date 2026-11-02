@@ -89,4 +89,4 @@ async function changesAgainst(baseSha, cwd, git, fs = nodeFs) {
   return collectChanges(parseNameStatus(r.stdout), readFromTree(cwd, fs));
 }
 
-module.exports = { changesAgainst, collectChanges, parseNameStatus, skippedNote, FILE_MAX_BYTES, TOTAL_MAX_BYTES, FILES_MAX };
+module.exports = { changesAgainst, skippedNote };

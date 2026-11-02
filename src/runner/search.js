@@ -82,4 +82,4 @@ async function gitGlob(m, cwd, git, fs = nodeFs) {
   return { ok: true, text: paths.join("\n"), paths, total: all.length, partial: all.length > paths.length };
 }
 
-module.exports = { gitGrep, gitGlob, secretish };
+module.exports = { gitGrep, gitGlob };

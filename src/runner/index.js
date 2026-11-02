@@ -109,7 +109,6 @@ function createRunner(o) {
     onChange: () => { sync(); },
   });
 
-  const listeners = new Set();
   let job = null;
   let docker = { installed: false, running: false, version: "", reason: "", at: 0 };
   let dockerAsking = null;
@@ -119,7 +118,6 @@ function createRunner(o) {
 
   const computerName = () => String(config.name || o.hostname || nodeOs.hostname() || "This computer").replace(/\.local$/i, "").trim().slice(0, 80) || "This computer";
   function changed() {
-    for (const f of listeners) { try { f(); } catch { /* the window's own */ } }
     try { if (o.onChange) o.onChange(); } catch { /* the tray's own */ }
   }
   activity.onChange(changed);
@@ -463,7 +461,6 @@ function createRunner(o) {
       sync();
     },
     status,
-    on(f) { listeners.add(f); return () => listeners.delete(f); },
     /** The switch. */
     setEnabled(on) {
       settings.enabled = !!on;
@@ -545,7 +542,6 @@ function createRunner(o) {
     },
     // for the tests
     _internals: { presence, power, allow, audit, activity, workspaces, procs, paths, git, handleOffer, getTicket, get job() { return job; } },
-    deviceId: settings.deviceId,
     auditDir: paths.audit,
   };
 }

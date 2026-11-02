@@ -10,7 +10,6 @@
 "use strict";
 
 const childProcess = require("child_process");
-const nodeOs = require("os");
 
 const PASS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR"];
 
@@ -66,7 +65,7 @@ function createGit({ execFile = childProcess.execFile, real = process.env, home,
     version.older = version.found && (version.major < 2 || (version.major === 2 && version.minor < 31));
     return version;
   }
-  return { run, detect, home: () => home || nodeOs.homedir() };
+  return { run, detect };
 }
 
-module.exports = { createGit, gitEnv, basicHeader, SAFE };
+module.exports = { createGit, gitEnv, basicHeader };

@@ -177,5 +177,4 @@ function helloFrame({ deviceId, name, allowRun, projects, busy, app }) {
 
 module.exports = {
   SESSION_COMMAND, isSessionCommands, isId, isDeviceId, isPreviewPath, parseToRunner, parseToDevice, parseOffer, helloFrame,
-  CLOSE_REASONS, HTTP_METHODS,
 };

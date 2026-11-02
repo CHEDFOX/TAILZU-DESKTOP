@@ -75,7 +75,6 @@ function createProcs({ platform = process.platform, kill = process.kill.bind(pro
     /** Tells the watchdog it may leave, once nothing is running. */
     release() { if (!live.size && watchdog) watchdog.close(); },
     get size() { return live.size; },
-    pids() { return [...live.keys()]; },
   };
 }
 

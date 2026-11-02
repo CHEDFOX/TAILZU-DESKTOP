@@ -56,7 +56,6 @@ test("it ROTATES: a new file each day, and files older than seven days are delet
   audit.log({ event: "y" });
   assert.ok(fs.existsSync(path.join(dir, "audit-" + dayOf(clock) + ".log")));
   assert.ok(!fs.existsSync(path.join(dir, "audit-" + dayOf(today - 7 * DAY) + ".log")));
-  assert.strictEqual(audit.files()[0], "audit-" + dayOf(clock) + ".log");
   t.remove();
 });
 
@@ -106,6 +105,4 @@ test("the activity list shows a command running, then its exit code and time; ne
   a.settleRunning(130);
   assert.ok(a.list().every((r) => r.state !== "running"));
   assert.ok(seen.length >= 5, "the window is told of each change");
-  a.clear();
-  assert.deepStrictEqual(a.list(), []);
 });

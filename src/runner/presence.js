@@ -215,7 +215,6 @@ function createPresence(o) {
     },
     get state() { return state; },
     get online() { return state === "online"; },
-    get connected() { return !!conn; },
   };
 }
 

@@ -149,7 +149,6 @@ function createWorkspaces({ root, git, fs = nodeFs, urlPolicy = defaultUrlPolicy
   }
 
   return {
-    dirOf,
     /**
      * Makes the workspace ready for a job: clones or fetches, and checks out the branch at the commit.
      * Resolves { ok: true, dir, sha, how: "fetch" | "cached" | "tarball" } or { ok: false, error }.
@@ -205,4 +204,4 @@ function tarExtract(file, folder, { spawn = childProcess.spawn } = {}) {
   });
 }
 
-module.exports = { createWorkspaces, tarExtract, defaultUrlPolicy, branchOk, PROJECT_ID, SHA };
+module.exports = { createWorkspaces, tarExtract, defaultUrlPolicy, branchOk };

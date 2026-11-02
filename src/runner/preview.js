@@ -237,4 +237,4 @@ function createPreview(o) {
   };
 }
 
-module.exports = { createPreview, detectPorts, stripAnsi, freePort, probe };
+module.exports = { createPreview, detectPorts };

@@ -124,4 +124,4 @@ function cappedSender(send, { headBytes = 1024 * 1024, tailBytes = 16 * 1024 } =
   };
 }
 
-module.exports = { redact, tailOf, secretValues, lineStreamer, cappedSender, TAIL_BYTES, PATTERNS };
+module.exports = { redact, tailOf, secretValues, lineStreamer, cappedSender, TAIL_BYTES };

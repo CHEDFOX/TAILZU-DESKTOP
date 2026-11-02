@@ -74,11 +74,6 @@ function createAudit(o) {
       }
     },
     prune,
-    /** The files, newest first. */
-    files() {
-      try { return fs.readdirSync(o.dir).filter((n) => NAME.test(n)).sort().reverse(); } catch { return []; }
-    },
-    dir: o.dir,
   };
 }
 

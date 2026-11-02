@@ -41,7 +41,6 @@ function createActivity({ max = 200, now = Date.now } = {}) {
     },
     list() { return rows.map((r) => Object.assign({}, r)); },
     onChange(f) { listeners.add(f); return () => listeners.delete(f); },
-    clear() { rows = []; changed(); },
   };
 }
 

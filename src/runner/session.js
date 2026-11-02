@@ -24,7 +24,7 @@
 
 const { parseToRunner } = require("./protocol.js");
 const { lineStreamer, cappedSender } = require("./redact.js");
-const { layOverlay, overlayPathOk } = require("./overlay.js");
+const { layOverlay } = require("./overlay.js");
 const { runCommands, firstRefusal } = require("./exec.js");
 const { createPreview } = require("./preview.js");
 const { gitGrep, gitGlob } = require("./search.js");
@@ -261,10 +261,6 @@ function createSession(o) {
         closeSocket(1000, "stopped");
       }
     },
-    /** What the window shows. */
-    status() { return { commands, busy: !!busy, preview: preview.alive(), ended }; },
-    get commands() { return commands; },
-    overlayPathOk,
   };
 }
 

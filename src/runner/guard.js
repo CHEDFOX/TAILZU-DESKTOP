@@ -619,9 +619,9 @@ function makeContext(o) {
   const tmp = o.tmpDirs || [nodeOs.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"];
   const runnerHomeCanon = o.runnerHome ? canon(o.runnerHome) : "";
   return {
-    workspace, workspaceCanon: canon(realish(workspace, realpath)), commandHome, personHome,
+    workspace, workspaceCanon: canon(realish(workspace, realpath)), commandHome,
     homesCanon: homes, tmpCanon: tmp.filter(Boolean).map((d) => canon(d)), realpath, cwd: workspace,
-    runnerDirCanon: runnerDir ? canon(runnerDir) : "\u0000", runnerHomeCanon: runnerHomeCanon || "\u0000",
+    runnerDirCanon: runnerDir ? canon(runnerDir) : "\u0000",
     // Inside the runner's own home a dotfile is still a dotfile: writing ~/.bashrc is refused even there.
     runnerHomeDotfile: (p) => !!runnerHomeCanon && underDir(p, runnerHomeCanon) && /^\./.test(p.slice(runnerHomeCanon.length).replace(/^\//, "")),
     protectedCanon: (o.protectedDirs || []).map((d) => canon(d)),
@@ -787,4 +787,4 @@ function checkPathInside(root, rel, o) {
   return { ok: true, abs };
 }
 
-module.exports = { checkCommand, checkPathInside, makeContext, parseCommand, commandOf, canon, underDir, catastrophic, writeProblem, walk };
+module.exports = { checkCommand, checkPathInside, makeContext, parseCommand };

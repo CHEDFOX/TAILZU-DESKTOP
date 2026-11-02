@@ -81,7 +81,6 @@ function createLoginPath({ execFile, real, platform = process.platform, timeoutM
       cached = fromShell || fallback();
       return cached;
     },
-    forget() { cached = null; },
   };
 }
 

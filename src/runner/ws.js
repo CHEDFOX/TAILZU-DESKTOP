@@ -237,4 +237,4 @@ function acceptWs(req, socket, head, { maxPayload = 8 * 1024 * 1024 } = {}) {
   return conn;
 }
 
-module.exports = { connectWs, acceptWs, WsConn, encodeFrame, createFrameReader };
+module.exports = { connectWs, acceptWs, encodeFrame, createFrameReader };

@@ -76,7 +76,6 @@ function createWatchdog({ spawn = childProcess.spawn, execPath = process.execPat
       if (!c) return;
       try { if (c.stdin && !c.stdin.destroyed) { c.stdin.write("exit\n"); c.stdin.end(); } } catch { /* gone */ }
     },
-    get running() { return !!child; },
   };
 }
 

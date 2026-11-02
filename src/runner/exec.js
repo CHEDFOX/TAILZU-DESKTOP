@@ -164,4 +164,4 @@ function firstRefusal(commands, guardOpts, check = checkCommand) {
   return null;
 }
 
-module.exports = { runCommands, runOne, createSpawner, hostShell, firstRefusal, HOLD_CHARS };
+module.exports = { runCommands, createSpawner, hostShell, firstRefusal };
