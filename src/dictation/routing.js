@@ -207,7 +207,8 @@ function createRouting(d) {
         return { to: dec.notes === "stop" ? "notesStop" : "notesStart", message: local.message, alt: "type", close: false, why };
       case "bot":
         if (dec.bot && dec.bot.slug) return { to: "bot", message: goal, slug: dec.bot.slug, named: true, botName: dec.bot.name, alt: "type", close: false, why };
-        return local;
+        // No bot named (a reminder, a to-do, an event for the day: their bots keep X0 Bot's own calendar and to-dos): the server says which.
+        return { to: "bot", message: goal, named: false, alt: "type", close: false, why };
       default:
         return local;
     }
