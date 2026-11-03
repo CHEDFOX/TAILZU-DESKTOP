@@ -78,11 +78,25 @@ function bTail(text) {
   while (s.length > 1 && bTextW("…" + s, 15) > maxW) s = s.slice(1);
   return "…" + s.trimStart();
 }
+// With Blip, your own words are not shown as you say them: he listens, and they land where they go (a text box,
+// Ask, his answer). desktop.pill.heardWords brings them back.
+const HEARD = () => !BLIP() || K.bool("desktop.pill.heardWords", false);
 /** The words so far, while it listens. */
-function bCaption() { return bTail(caption); }
-/** Talk mode's words: theirs while they speak and he thinks (grey), his as he answers (ink). */
+function bCaption() { return HEARD() ? bTail(caption) : ""; }
+/** Talk mode's words: his as he answers (ink); theirs while they speak (grey) only with desktop.pill.heardWords. */
 const talkAnswering = () => S.data.phase === "answer" || S.data.phase === "act";
-function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : S.data.heard || ""); }
+function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : HEARD() ? S.data.heard || "" : ""); }
+// Hovered at rest, he does something (one that ends) instead of opening a hint: once a hover, never more than every 1.2 s.
+const HOVER_GESTURES = ["jelly", "peekaboo", "laugh", "sneeze", "propeller", "dizzy", "headbang", "celebrate"];
+let hoverGestureAt = 0;
+function blipHover() {
+  if (!BLIP() || S.name !== "rest" || blipResting || REDUCED()) return;
+  const now = clock();
+  if (now - hoverGestureAt < 1200) return;
+  hoverGestureAt = now;
+  blipper().play(HOVER_GESTURES[Math.floor(Math.random() * HOVER_GESTURES.length)], { now, then: "rest", again: true });
+  wake();
+}
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
 // ---- Strolling (roam.js) ------------------------------------------------------------------------------------
 // While nothing is asked of him (at rest, no hint open) he walks the bottom of the screen and now and then does
@@ -170,7 +184,7 @@ function botsTargets(st) {
   } else if (st === "writing") {
     g.h = 40; g.w = 6 + 28 + 10 + bTextW(bWriting(), 13, true) + 16;
   } else if (st === "rest" || st === "ask") {
-    const open = st === "rest" && hovered && restShown && !!hint;
+    const open = st === "rest" && hovered && restShown && !!hint && !BLIP();
     const blip = BLIP() && st === "rest";
     g.h = open ? (blip ? 36 : 32) : blip ? 30 : K.num("desktop.pill.restHeight", 14);
     g.w = open ? 7 + 18 + 8 + bTextW(hint, 13) + 14 + (blip ? 10 : 0) : blip ? 40 : K.num("desktop.pill.restWidth", 46);

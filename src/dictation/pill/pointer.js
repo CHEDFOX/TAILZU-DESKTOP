@@ -24,6 +24,7 @@ function setHover(v) {
   if (v === hovered) return;
   hovered = v;
   if (bridge && bridge.pillHover) bridge.pillHover(v);
+  if (v && BOTS()) blipHover();
   wake();
 }
 let pointer = null;   // where the pointer was last seen over this window
