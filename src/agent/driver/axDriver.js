@@ -12,6 +12,9 @@
 // And, while a dictation records, where the text cursor is (caret), for Blip
 // to peek over the text box: two rectangles and the app, never any text.
 //
+// And the whole page (page): the focused window's text, the parts out of
+// sight included, for understanding it (pageRead.js); never acted on.
+//
 // Every call here answers, and in time: a promise that always resolves (never
 // rejects), within the call's own timeout, `{ ok:false, error:"timeout" }`
 // when the helper was too slow. A helper that dies is started again by the
@@ -20,6 +23,7 @@
 const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { pageShape, pageOptions } = require("./page.js");
 
 /** The default time each call waits for its answer. A look takes a picture
  *  and reads it, slower than anything else, so it has its own. */
@@ -30,6 +34,9 @@ const LOOK_MS = 2500;
  *  every few hundred milliseconds while the user dictates, and a peek that
  *  comes late is worth nothing (peek-spec §A, desktop.dictation.peekBudgetMs). */
 const CARET_MS = 250;
+/** What a page read spends outside its walk's budget: the answer, which can
+ *  be a hundred thousand characters, written and read. */
+const PAGE_MARGIN_MS = 600;
 /** After a call timed out, how long the helper may stay silent before it is
  *  taken for hung and killed (its own watchdog answers before the caller
  *  gives up, so a silent helper is a stuck one). */
@@ -138,6 +145,7 @@ function caretShape(rest) {
 function shape(cmd, msg) {
   const { id: _id, ...rest } = msg;
   if (cmd === "caret") return caretShape(rest);
+  if (cmd === "page") return pageShape(rest, "points");
   if (typeof rest.ok !== "boolean") return { ok: false, error: "bad_answer" };
   if (!rest.ok) return { ...rest, error: typeof rest.error === "string" && rest.error ? rest.error : "failed" };
   if (cmd === "trusted") return { ok: true, trusted: rest.trusted === true };
@@ -352,6 +360,12 @@ function createAxDriver(opts = {}) {
       if (!child) return refuse("unavailable");
       const opt = o && typeof o === "object" ? o : {};
       return call("caret", {}, clampInt(opt.budgetMs != null ? opt.budgetMs : opt.timeoutMs, 100, 2000, CARET_MS));
+    }),
+    // The whole page's text (page.js), on the helper's main queue like a
+    // snapshot, within its own budget.
+    page: safe((o) => {
+      const { chars, budgetMs, timeoutMs } = pageOptions(o, PAGE_MARGIN_MS);
+      return call("page", { chars, budgetMs }, timeoutMs);
     }),
     look: safe((o) => {
       const opt = o && typeof o === "object" ? o : {};

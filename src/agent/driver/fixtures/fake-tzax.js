@@ -33,6 +33,13 @@
 //                        never get through (a value, a selection, a title)
 //   caret timeoutMs 995  answers after 400 ms
 //   caret timeoutMs 994  answers an error that is not a word
+//   page            the whole page, like the real helper's: its text with the
+//                   headings marked, the headings, where the person is
+//   page chars 999  answers with junk to be cleaned: headings that are not,
+//                   too many of them, an offset past the text, extra fields
+//   page chars 998  never answers
+//   page chars 997  answers not_trusted
+//   page chars 1234 answers with the command it was sent as its text
 // Every answer carries `got` (the command as received) and `pid`, so a test
 // can see what was sent and whether the helper was started again.
 const readline = require("readline");
@@ -131,6 +138,30 @@ function caret(req, base) {
   }
 }
 
+const PAGE_TEXT = [
+  "# Q3 plan", "Revenue grew in every region.", "## Risks", "Hiring is behind.", "Churn is flat.", "## Next", "Ship the export.",
+].join("\n");
+
+function page(req, base) {
+  const good = {
+    ...base, ok: true, app: { name: "Fake", pid: 4242 }, window: { title: "Q3 plan.txt — Fake", frame: [100, 80, 800, 600] },
+    text: PAGE_TEXT, headings: [{ level: 1, text: "Q3 plan" }, { level: 2, text: "Risks" }, { level: 2, text: "Next" }],
+    approxWhere: "Hiring is behind.", whereOffset: PAGE_TEXT.indexOf("Hiring"), truncated: false, ms: 9,
+  };
+  switch (req.chars) {
+    case 999: return send({
+      ...base, ok: true, text: "x".repeat(120000), app: "Fake", window: { title: 7, frame: [0, 0, 0, 10] }, elements: [{ id: "e1" }],
+      headings: [null, { level: 9, text: "Deep" }, { level: "2", text: "  Spaced  " }, { text: "" }, { level: 1 },
+        ...Array.from({ length: 250 }, (_, i) => ({ level: 2, text: "h" + i }))],
+      approxWhere: 42, whereOffset: 500000, truncated: "yes", ms: "soon",
+    });
+    case 998: return;
+    case 997: return send({ ...base, ok: false, error: "not_trusted" });
+    case 1234: return send({ ...good, text: JSON.stringify(req), whereOffset: -1 });
+    default: return send(good);
+  }
+}
+
 function answer(req) {
   const base = { id: req.id, got: req, pid: process.pid };
   switch (req.cmd) {
@@ -173,6 +204,8 @@ function answer(req) {
       return look(req, base);
     case "caret":
       return caret(req, base);
+    case "page":
+      return page(req, base);
     case "click":
     case "setValue":
     case "focus":

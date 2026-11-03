@@ -16,6 +16,10 @@
 // password field (nulls), "badcaret" junk with text in it that must never get
 // through, "hangcaret" never, and "slowwarm" answers everything, but its
 // warm-up ping only after 700 ms (a helper still loading its assemblies).
+// Every mode answers a page as the real helper does; "onehead" writes its one
+// heading as an object, not a list of one (Windows PowerShell's way), and
+// "badpage" fails with an error that is not one of the helper's words, and
+// "echopage" answers with the line it was sent as its text.
 const fs = require("fs");
 const readline = require("readline");
 
@@ -102,7 +106,20 @@ function caretAnswer(msg) {
   return good;
 }
 
+// A page in the helper's shape, its options echoed for the tests.
+function pageAnswer(msg) {
+  if (mode === "badpage") return { id: msg.id, ok: false, error: "Exception calling GetText: the page said hello" };
+  const text = mode === "echopage" ? JSON.stringify(msg) : "# Inbox\nLunch on Friday?\n## Older\nInvoice 42";
+  const headings = [{ level: 1, text: "Inbox" }, { level: 2, text: "Older" }];
+  return {
+    id: msg.id, ok: true, app: { name: "Fake", pid: 42 }, window: { title: "Inbox - Fake", frame: [-1820, 50, 800, 600] }, text,
+    headings: mode === "onehead" ? headings[0] : headings,
+    approxWhere: "Lunch on Friday?", whereOffset: text.indexOf("Lunch"), truncated: false, ms: 5,
+  };
+}
+
 function answer(msg) {
+  if (msg.cmd === "page") return pageAnswer(msg);
   if (msg.cmd === "ping") return { id: msg.id, ok: true, pong: true };
   if (msg.cmd === "caret") return caretAnswer(msg);
   if (msg.cmd === "snapshot") return snapshotAnswer(msg);

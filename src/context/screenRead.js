@@ -82,6 +82,22 @@ function captureBlocked() {
 }
 
 /**
+ * The focused window's text read out of its picture now, on the device, with
+ * no cache: pageRead.js reads a page a screen at a time, and each screen is a
+ * new picture. `info` is the front window (its title matches the window to
+ * capture). "" when it cannot be read.
+ */
+async function ocrWindow(info, opts = {}) {
+  const { maxSide = 1600, timeoutMs = 3000 } = opts;
+  if (captureBlocked()) return "";
+  const png = await raceTimeout(captureWindowPng((info && info.title) || "", maxSide), timeoutMs, null);
+  if (!png) return "";
+  const text = await raceTimeout(runOcr(png), timeoutMs, "");
+  fs.promises.unlink(png).catch(() => {});
+  return text || "";
+}
+
+/**
  * The screen around the field as one bounded blob: the accessibility read,
  * plus OCR of the window when that read was empty or thin. `info` is the
  * front window (frontApp.frontInfo) — its title matches the window to
@@ -112,4 +128,4 @@ async function readScreen(info, opts = {}) {
   return frontApp.mergeScreen(ax, ocrText, axChars);
 }
 
-module.exports = { readScreen };
+module.exports = { readScreen, ocrWindow };

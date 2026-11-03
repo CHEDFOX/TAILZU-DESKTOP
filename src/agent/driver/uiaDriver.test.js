@@ -359,7 +359,7 @@ test("a helper that cannot be spawned resolves unavailable, never throws", async
 });
 
 test("the module is the §1 API and start/stop are idempotent", () => {
-  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"]) {
+  for (const name of ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret", "page"]) {
     assert.strictEqual(typeof defaultExport[name], "function", `exports.${name}`);
   }
   // Idempotent and non-throwing even on a platform with no helper.
@@ -1180,11 +1180,72 @@ test("nativeCheck asks the real Windows helper for the caret, and its ping must 
   assert.match(win, /'\{"id":4,"cmd":"caret","budgetMs":3000\}'/);
   assert.match(win, /if \(ping\.caret !== true\)/);
   assert.match(win, /caret\.scale !== "pixels"/);
-  assert.match(win, /byId\.has\(1\) && byId\.has\(2\) && byId\.has\(3\) && byId\.has\(4\)/);
+  assert.match(win, /byId\.has\(1\) && byId\.has\(2\) && byId\.has\(3\) && byId\.has\(4\) && byId\.has\(5\)/);
+  assert.match(win, /'\{"id":5,"cmd":"page","chars":4000,"budgetMs":3000\}'/);
 });
 
 test("the helper ends cleanly as command text", () => {
   // Run with -EncodedCommand, the exit code is the last statement's $? unless
   // the script says; nativeCheck wants 0 for a clean end.
   assert.match(PS_TEXT(), /\nexit 0\s*$/);
+});
+
+// ---- page: the whole page's text ---------------------------------------------------
+
+test("a page comes back in its shape, a heading written as an object read as a list of one", async () => {
+  const d = fakeDriver("normal");
+  try {
+    const r = await d.page();
+    assert.deepStrictEqual(r, {
+      ok: true, text: "# Inbox\nLunch on Friday?\n## Older\nInvoice 42",
+      headings: [{ level: 1, text: "Inbox" }, { level: 2, text: "Older" }],
+      approxWhere: "Lunch on Friday?", whereOffset: 8, truncated: false, ms: 5,
+      app: { name: "Fake", pid: 42 }, window: { title: "Inbox - Fake", frame: [-1820, 50, 800, 600] }, scale: "pixels",
+    });
+  } finally { d.stop(); }
+  const one = fakeDriver("onehead");
+  try {
+    assert.deepStrictEqual((await one.page()).headings, [{ level: 1, text: "Inbox" }]);
+  } finally { one.stop(); }
+});
+
+test("a page is asked with its budgets, and a refusal that is not one of the helper's words is only failed", async () => {
+  const d = fakeDriver("echopage");
+  try {
+    const sent = async (o) => { const { id, ...rest } = JSON.parse((await d.page(o)).text); return rest; };
+    assert.deepStrictEqual(await sent(), { cmd: "page", chars: 20000, budgetMs: 1200 });
+    assert.deepStrictEqual(await sent({ chars: 3, budgetMs: 99999 }), { cmd: "page", chars: 500, budgetMs: 6000 });
+    assert.deepStrictEqual(await sent({ chars: 40000, budgetMs: 2000, timeoutMs: 1500 }), { cmd: "page", chars: 40000, budgetMs: 700 });
+  } finally { d.stop(); }
+  const bad = fakeDriver("badpage");
+  try {
+    assert.deepStrictEqual(await bad.page(), { ok: false, error: "failed" });
+  } finally { bad.stop(); }
+  const never = fakeDriver("timeout");
+  try {
+    assert.deepStrictEqual(await never.page({ budgetMs: 100, timeoutMs: 400 }), { ok: false, error: "timeout" });
+  } finally { never.stop(); }
+});
+
+test("page: the helper reads a document's text in one call, else walks the tree with off-screen text, and never a password", () => {
+  const ps = PS_TEXT();
+  const page = psFunction(ps, "TzPage");
+  assert.match(page, /function TzPage\(\[int\]\$chars, \[int\]\$budget\)/);
+  assert.match(page, /\$tp\.DocumentRange\.GetText\(\$chars \+ 1\)/);
+  assert.match(page, /\$tp\.GetVisibleRanges\(\)/);
+  // Off-screen elements are read: the walk never drops one for it, it only
+  // uses the flag to say where the person is.
+  assert.ok(!/IsOffscreen\) \{ continue \}|-not \$onScreen/.test(page));
+  assert.match(page, /if \(\$whereAt -lt 0\) \{\s*\$off = \$false/);
+  assert.match(page, /if \(\(TzGP \$el \$AE::IsPasswordProperty\) -eq \$true\) \{ continue \}/);
+  assert.match(psFunction(ps, "TzIsPageDoc"), /if \(\(TzGP \$el \$AE::IsPasswordProperty\) -eq \$true\) \{ return \$false \}/);
+  // Bounded by characters, nodes and time.
+  assert.match(page, /if \(\$total -ge \$chars -or \$visited -ge \$MAX_NODES -or \$sw\.ElapsedMilliseconds -ge \$budget\) \{ \$truncated = \$true; break \}/);
+  // Headings marked by level.
+  assert.match(page, /\('#' \* \$lvl\) \+ ' '/);
+  // It reads, it never acts.
+  assert.ok(!/SetFocus|Invoke\(|SendInput|SetValue|Wheel/.test(page));
+  // The command clamps what it is sent and answers through TzReplyPage, whose headings are always a list.
+  assert.match(ps, /'page' \{[\s\S]*?TzReplyPage \$id \(TzPage \$pageChars \$budget\)/);
+  assert.match(psFunction(ps, "TzReplyPage"), /'\[' \+ \(\$hs -join ','\) \+ '\]'/);
 });

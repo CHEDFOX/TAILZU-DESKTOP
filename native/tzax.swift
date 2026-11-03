@@ -25,6 +25,8 @@
 //   {"id":4,"cmd":"key","chord":"cmd+k"}         {"id":4,"ok":true}
 //   {"id":5,"cmd":"look","maxSide":1600}         {"id":5,"ok":true,"window":{…},"lines":[…],"image":{…},…}
 //   {"id":6,"cmd":"caret","timeoutMs":250}       {"id":6,"ok":true,"caret":[x,y,w,h]|null,"field":[x,y,w,h]|null,"app":{…},"scale":"points",…}
+//   {"id":7,"cmd":"page","chars":20000,"budgetMs":1200}
+//                                                {"id":7,"ok":true,"text":"…","headings":[{"level":1,"text":"…"}],"approxWhere":"…","whereOffset":n,"truncated":false,…}
 //   anything that fails                          {"id":4,"ok":false,"error":"not_trusted"}
 //
 // It needs Accessibility, which macOS grants to the app that started it
@@ -46,6 +48,10 @@
 // over the box while the user dictates: two rectangles and the app, never a
 // word of the text. It is asked every few hundred milliseconds for as long as
 // a dictation lasts, so it too has a queue of its own, and a small budget.
+//
+// "page" is the whole text of what the window shows, off-screen parts
+// included, for understanding the page; it is never acted on. It runs on the
+// main queue like a snapshot, within its own budget.
 import AppKit
 import ApplicationServices
 import Carbon
@@ -1684,6 +1690,247 @@ func look(_ req: [String: Any], _ deadline: DispatchTime) -> Reply {
   return r
 }
 
+// MARK: - The whole page
+//
+// For understanding, never for acting: the focused window's readable text in
+// reading order, the parts scrolled out of sight included, without scrolling.
+// The walk starts at the page's own area (the first web area met breadth
+// first, else the largest text area, else the largest scroll area, else the
+// window) and goes depth first through every child, not only the visible
+// ones. Headings are marked "#" by level and listed; a table's row is one
+// line, its cells joined by " | ". A password is never read. Bounded by a
+// character budget and a time budget: what was read by then comes back,
+// truncated:true. Nothing here is listed or given an id.
+
+/// What a page read asks of every node, in one message.
+let pageAttrNames = ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPosition", "AXSize", "AXChildren"]
+let pageAttrList = pageAttrNames as CFArray
+enum PA {
+  static let role = 0, subrole = 1, title = 2, desc = 3, value = 4, pos = 5, size = 6, children = 7
+}
+/// What finding the page's area asks: no values, which can be a whole book.
+let pageFindNames = ["AXRole", "AXSubrole", "AXPosition", "AXSize", "AXChildren"]
+let pageFindList = pageFindNames as CFArray
+enum PF {
+  static let role = 0, subrole = 1, pos = 2, size = 3, children = 4
+}
+/// Nodes looked at to find the page's area, and in the whole read.
+let pageFindMax = 600
+let pageMaxVisited = 30000
+/// One piece of text, one heading, and how many headings are listed.
+let pageLineMax = 4000
+let pageHeadingMax = 300
+let pageHeadingsMax = 200
+
+struct PageRoot {
+  let el: AXUIElement
+  let role: String
+  let frame: CGRect?
+}
+
+/// A step of the depth-first walk: a node to read, or the end of a heading
+/// or a row whose text was gathered from part `from` on.
+enum PageStep {
+  case node(AXUIElement)
+  case heading(Int, Int, String, CGRect?)
+  case row(Int)
+}
+
+/// Where the page is in the window, breadth first.
+func pageRoot(_ win: AXUIElement, stopAt: DispatchTime) -> PageRoot {
+  var queue: [AXUIElement] = [win]
+  var head = 0
+  var text: PageRoot? = nil
+  var scroller: PageRoot? = nil
+  func area(_ r: PageRoot?) -> CGFloat {
+    guard let f = r?.frame else { return 0 }
+    return f.width * f.height
+  }
+  while head < queue.count && head < pageFindMax && DispatchTime.now() < stopAt {
+    let el = queue[head]
+    head += 1
+    let (err, v) = fetch(el, pageFindList, count: pageFindNames.count, timeout: messageTimeout)
+    if err != .success { continue }
+    let role = (v[PF.role] as? String) ?? ""
+    let here = PageRoot(el: el, role: role, frame: frameOf(v[PF.pos], v[PF.size]))
+    if role == "AXWebArea" { return here }
+    if role == "AXTextArea" && (v[PF.subrole] as? String) != "AXSecureTextField" && area(here) > area(text) { text = here }
+    if role == "AXScrollArea" && area(here) > area(scroller) { scroller = here }
+    for k in elements(v[PF.children]).prefix(200) { queue.append(k) }
+  }
+  return text ?? scroller ?? PageRoot(el: win, role: "AXWindow", frame: liveFrame(win))
+}
+
+func page(chars: Int, budgetMs: Int, deadline: DispatchTime) -> Reply {
+  let started = DispatchTime.now()
+  let stopAt = min(deadline - .milliseconds(80), started + .milliseconds(budgetMs))
+  guard let front = frontApp() else { return fail("no_app") }
+  let pid = front.processIdentifier
+  let app = timed(AXUIElementCreateApplication(pid))
+  wake(app, pid: pid, engine: engineOf(front))
+
+  var winRef: CFTypeRef?
+  let winErr = AXUIElementCopyAttributeValue(app, "AXFocusedWindow" as CFString, &winRef)
+  if winErr == .apiDisabled { return fail("not_trusted") }
+  var window = element(winRef)
+  if window == nil && winErr != .cannotComplete { window = element(copyAttr(app, "AXMainWindow")) }
+  guard let win = window else { return fail(winErr == .cannotComplete ? "app_busy" : "no_window") }
+  let winFrame = liveFrame(win)
+  // For the device's own check (a private window), as a snapshot's is.
+  let title = clean(copyAttr(win, "AXTitle") as? String, 200)
+
+  let root = pageRoot(win, stopAt: stopAt)
+  // What can be seen of the page: the window, cut by the page's own area.
+  var visible = winFrame ?? .infinite
+  if let rf = root.frame {
+    let cut = visible.intersection(rf)
+    if !cut.isNull && cut.width > 0 && cut.height > 0 { visible = cut }
+  }
+
+  var parts: [String] = []
+  var headings: [J] = []
+  var total = 0
+  var truncated = false
+  /// The first part on screen: where the person is.
+  var whereAt = -1
+
+  func add(_ s: String, _ f: CGRect?) {
+    if s.isEmpty { return }
+    if total >= chars { truncated = true; return }
+    let line = s.utf16.count > chars - total ? clean(s, max(2, chars - total)) : s
+    if whereAt < 0, let f = f, f.width > 0, f.height > 0, f.intersects(visible) { whereAt = parts.count }
+    parts.append(line)
+    total += line.utf16.count + 1
+  }
+  /// The parts from `from` on, taken out and made one.
+  func gather(_ from: Int, _ sep: String) -> String {
+    guard from < parts.count else { return "" }
+    let joined = parts[from...].joined(separator: sep)
+    for p in parts[from...] { total -= p.utf16.count + 1 }
+    parts.removeSubrange(from...)
+    if whereAt > from { whereAt = from }
+    return joined
+  }
+
+  if root.role == "AXTextArea" {
+    // A text area's value is all of its text; where the person is, is its
+    // visible range's start.
+    if let s = copyAttr(root.el, "AXValue") as? String {
+      var start = -1
+      if let rv = axValue(copyAttr(root.el, "AXVisibleCharacterRange")), AXValueGetType(rv) == .cfRange {
+        var r = CFRange(location: 0, length: 0)
+        if AXValueGetValue(rv, .cfRange, &r) { start = r.location }
+      }
+      var at = 0
+      for raw in s.components(separatedBy: .newlines) {
+        if total >= chars || DispatchTime.now() >= stopAt { truncated = true; break }
+        let end = at + raw.utf16.count
+        let line = clean(raw, pageLineMax)
+        if !line.isEmpty {
+          if whereAt < 0 && start >= 0 && end >= start { whereAt = parts.count }
+          add(line, nil)
+        }
+        at = end + 1
+      }
+    }
+  } else {
+    var stack: [PageStep] = [.node(root.el)]
+    var visited = 0
+    var stalls = 0
+    reading: while let step = stack.popLast() {
+      if total >= chars || visited >= pageMaxVisited || DispatchTime.now() >= stopAt { truncated = true; break }
+      switch step {
+      case .heading(let level, let from, let own, let f):
+        var t = clean(gather(from, " "), pageHeadingMax)
+        if t.isEmpty { t = own }
+        if t.isEmpty { continue reading }
+        if headings.count < pageHeadingsMax {
+          let h: J = .obj([("level", .int(level)), ("text", .str(t))])
+          headings.append(h)
+        }
+        add(String(repeating: "#", count: level) + " " + t, f)
+      case .row(let from):
+        add(gather(from, " | "), nil)
+      case .node(let el):
+        visited += 1
+        let (err, v) = fetch(el, pageAttrList, count: pageAttrNames.count, timeout: messageTimeout)
+        if err != .success {
+          if err == .cannotComplete {
+            stalls += 1
+            if stalls >= 3 { truncated = true; break reading }
+          }
+          continue reading
+        }
+        stalls = 0
+        let role = (v[PA.role] as? String) ?? ""
+        if (v[PA.subrole] as? String) == "AXSecureTextField" { continue reading }
+        let f = frameOf(v[PA.pos], v[PA.size])
+        switch role {
+        case "AXStaticText":
+          var t = clean(v[PA.value] as? String, pageLineMax)
+          if t.isEmpty { t = clean(v[PA.title] as? String, pageLineMax) }
+          add(t, f)
+          continue reading
+        case "AXTextArea":
+          // Its value is its text, line by line; its children say it again.
+          if let s = v[PA.value] as? String {
+            var first = true
+            for raw in s.components(separatedBy: .newlines) {
+              let line = clean(raw, pageLineMax)
+              if line.isEmpty { continue }
+              add(line, first ? f : nil)
+              first = false
+            }
+          }
+          continue reading
+        case "AXTextField", "AXSearchField", "AXComboBox", "AXImage", "AXMenuBar", "AXMenu":
+          // A box to type in, a picture, a menu: not the page's text.
+          continue reading
+        case "AXHeading":
+          let level = max(1, min(6, (v[PA.value] as? NSNumber)?.intValue ?? 1))
+          var own = clean(v[PA.title] as? String, pageHeadingMax)
+          if own.isEmpty { own = clean(v[PA.desc] as? String, pageHeadingMax) }
+          stack.append(.heading(level, parts.count, own, f))
+        case "AXRow":
+          stack.append(.row(parts.count))
+        default:
+          break
+        }
+        // Children last first, so the first is read next: reading order.
+        let kids = elements(v[PA.children])
+        if stack.count + kids.count < 40000 {
+          for k in kids.reversed() { stack.append(.node(k)) }
+        }
+      }
+    }
+  }
+
+  if whereAt >= parts.count { whereAt = parts.count - 1 }
+  var whereText = ""
+  var whereOffset = -1
+  if whereAt >= 0 {
+    whereText = clean(parts[whereAt], 200)
+    whereOffset = 0
+    for p in parts[..<whereAt] { whereOffset += p.utf16.count + 1 }
+  }
+  let ms = Int((DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000)
+  let appInfo: Reply = [("name", .str(front.localizedName ?? "")), ("pid", .int(Int(pid)))]
+  // The window's frame, for the device to tell whether a scroll under the
+  // pointer would reach this window; neither it nor the title is sent.
+  var windowInfo: Reply = [("title", .str(title))]
+  if let f = winFrame { windowInfo.append(("frame", frameJ(f))) }
+  var r = ok()
+  r.append(("app", .obj(appInfo)))
+  r.append(("window", .obj(windowInfo)))
+  r.append(("text", .str(parts.joined(separator: "\n"))))
+  r.append(("headings", .arr(headings)))
+  r.append(("approxWhere", .str(whereText)))
+  r.append(("whereOffset", .int(whereOffset)))
+  r.append(("truncated", .bool(truncated)))
+  r.append(("ms", .int(ms)))
+  return r
+}
+
 // MARK: - Where the caret is
 //
 // For the peek (Blip over the text box while the user dictates): where the
@@ -1877,7 +2124,7 @@ func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply
     return ok([("trusted", .bool(AXIsProcessTrustedWithOptions(opts)))])
   case "open":
     return openApp((req["app"] as? String) ?? "", deadline)
-  case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret":
+  case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret", "page":
     break
   default:
     return fail("unknown_command")
@@ -1893,6 +2140,9 @@ func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply
     return key((req["chord"] as? String) ?? "", deadline)
   case "caret":
     return caret(deadline)
+  case "page":
+    return page(chars: clampInt(req["chars"], 500, 100_000, 20_000), budgetMs: clampInt(req["budgetMs"], 50, 6000, 1200),
+                deadline: deadline)
   case "scroll":
     var target: Entry? = nil
     if let el = req["el"] as? String {
@@ -1935,7 +2185,7 @@ func receive(_ line: String) {
     DispatchQueue.main.async { _ = out.answer(key, id, fail("bad_request")) }
     return
   }
-  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : (cmd == "look" ? 2500 : (cmd == "caret" ? 250 : 1200)))
+  let limit = clampInt(req["timeoutMs"], 100, 8000, cmd == "snapshot" ? 1500 : (cmd == "look" ? 2500 : (cmd == "caret" ? 250 : (cmd == "page" ? 2000 : 1200))))
   // A moment before the caller gives up, so it hears "timeout" from here.
   let deadline = got + .milliseconds(limit - 40)
   out.watch(key, id, at: deadline)

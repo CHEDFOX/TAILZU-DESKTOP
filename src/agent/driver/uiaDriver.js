@@ -20,6 +20,7 @@
 const { spawn: nodeSpawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { pageShape, pageOptions } = require("./page.js");
 
 const DEFAULTS = { snapshotTimeout: 1500, actionTimeout: 1200, openTimeout: 6000, lookTimeout: 2500, warmupMs: 8000 };
 
@@ -27,6 +28,9 @@ const DEFAULTS = { snapshotTimeout: 1500, actionTimeout: 1200, openTimeout: 6000
  *  it is asked every few hundred milliseconds while the user dictates, and a
  *  peek that comes late is worth nothing. */
 const CARET_MS = 250;
+/** What a page read spends outside its walk's budget: the wait behind
+ *  another line, and an answer up to a hundred thousand characters long. */
+const PAGE_MARGIN_MS = 800;
 
 /** What a look spends outside the helper's own budget: the capture and the
  *  JPEG, which the budget does not cut short, and an answer a few hundred KB
@@ -344,6 +348,16 @@ function createUiaDriver(opts = {}) {
     },
     key(chord) { return send("key", { chord }, cfg.actionTimeout); },
     open(appName) { return send("open", { app: appName }, cfg.openTimeout); },
+    // The whole page's text (page.js), read on the helper's one thread like a
+    // snapshot, within its own budget.
+    page(o) {
+      try {
+        const { chars, budgetMs, timeoutMs } = pageOptions(o, PAGE_MARGIN_MS);
+        return send("page", { chars, budgetMs }, timeoutMs).then((r) => pageShape(r, "pixels"), () => ({ ok: false, error: "failed" }));
+      } catch {
+        return Promise.resolve({ ok: false, error: "failed" });
+      }
+    },
     // Where the caret and its text box are, for the peek (peek-spec §A):
     // exactly { ok, caret, field, app, scale }, or { ok:false, error }, and
     // "unavailable" at once when the helper is not running (see sendCaret).
@@ -390,7 +404,7 @@ function createUiaDriver(opts = {}) {
 // The default instance is the real Windows driver. Its methods are spread onto
 // the exports so the module itself is the §1 API (available, start, stop,
 // trusted, snapshot, press, click, setValue, focus, scroll, key, open, look,
-// and caret for the peek).
+// page, and caret for the peek).
 const instance = createUiaDriver();
 module.exports = {
   available: instance.available,
@@ -406,6 +420,7 @@ module.exports = {
   key: instance.key,
   open: instance.open,
   look: instance.look,
+  page: instance.page,
   caret: instance.caret,
   createUiaDriver,
   scriptPath,

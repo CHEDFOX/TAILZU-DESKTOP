@@ -7,6 +7,8 @@
 # The protocol, one JSON object per line each way:
 #   in   {"id":n,"cmd":"snapshot","max":250}
 #   out  {"id":n,"ok":true,"app":{...},"elements":[...], ...}
+#   in   {"id":n,"cmd":"page","chars":20000,"budgetMs":1200}
+#   out  {"id":n,"ok":true,"text":"...","headings":[{"level":1,"text":"..."}],"approxWhere":"...","whereOffset":n,"truncated":false, ...}
 # Every line is answered, in the order asked, even when UI Automation throws;
 # a line that is not JSON is answered {"ok":false,"error":"malformed"}. The
 # exceptions to the order are "look" (the window's pixels and the text in them)
@@ -2139,6 +2141,255 @@ function TzCaretBegin($id, $msg) {
   return $null
 }
 
+# ---- Page -----------------------------------------------------------------------
+# The whole text of what the window in front shows, the parts scrolled out of
+# sight included, without scrolling: for understanding the page, never acted
+# on. A document's TextPattern gives it in one call (DocumentRange.GetText);
+# where there is none, the tree is walked depth first, in reading order,
+# off-screen elements included. Headings are marked "#" by level and listed.
+# Bounded by $chars and by $budget (ms): what was read by then comes back,
+# truncated. A password is never read.
+$PAGE_CHARS = 20000
+$PAGE_BUDGET_MS = 1200
+$PAGE_LINE_MAX = 4000
+$PAGE_FIND_MAX = 400
+$PAGE_HEADINGS_MAX = 200
+
+# A browser marks a heading by its ARIA role; its level is in the ARIA
+# properties ("level=2"). The managed API has no HeadingLevel, so 1 without.
+function TzIsHeading($el) {
+  if ("$(TzGP $el $AE::AriaRoleProperty)" -eq 'heading') { return $true }
+  return ("$(TzGP $el $AE::LocalizedControlTypeProperty)" -eq 'heading')
+}
+function TzHeadingLevel($el) {
+  $ap = "$(TzGP $el $AE::AriaPropertiesProperty)"
+  if ($ap -match '(?:^|;)\s*level=(\d)') {
+    $n = [int]$Matches[1]
+    if ($n -ge 1 -and $n -le 6) { return $n }
+  }
+  return 1
+}
+
+# A document whose whole text one call can give: a Document, or a tall Edit
+# (old Notepad), with a TextPattern, and never a password.
+function TzIsPageDoc($el) {
+  $ctName = ''
+  try { $ctName = $el.Cached.ControlType.ProgrammaticName } catch {}
+  if ($ctName -ne 'ControlType.Document' -and $ctName -ne 'ControlType.Edit') { return $false }
+  if ($ctName -eq 'ControlType.Edit') {
+    $rect = TzRect $el
+    if ($rect -eq $null -or -not ($rect.Height -gt 40)) { return $false }
+  }
+  if ((TzGP $el $AE::IsPasswordProperty) -eq $true) { return $false }
+  return ((TzGP $el $AE::IsTextPatternAvailableProperty) -eq $true)
+}
+
+function TzPage([int]$chars, [int]$budget) {
+  $o = [ordered]@{ ok = $false }
+  if (-not $uia) { $o.error = 'no_uia'; return $o }
+  if ($chars -le 0) { $chars = $PAGE_CHARS }
+  if ($budget -le 0) { $budget = $PAGE_BUDGET_MS }
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+  $h = [TzAgent]::GetForegroundWindow()
+  if ($h -eq [IntPtr]::Zero) { $o.error = 'no_window'; return $o }
+  [uint32]$procId = 0
+  [void][TzAgent]::GetWindowThreadProcessId($h, [ref]$procId)
+  # For the device's own check (a private window), as a snapshot's is.
+  $title = ''
+  try { $title = TzClean ([TzAgent]::WindowTitle($h)) $TITLE_READ } catch {}
+  $root = $null
+  try { $root = $AE::FromHandle($h) } catch {}
+  if ($root -eq $null) { $o.error = 'no_window'; return $o }
+
+  $cr = New-Object System.Windows.Automation.CacheRequest
+  $cr.AutomationElementMode = [System.Windows.Automation.AutomationElementMode]::Full
+  $cr.TreeScope = $TS::Element
+  foreach ($p in @(
+    $AE::NameProperty, $AE::ControlTypeProperty, $AE::BoundingRectangleProperty, $AE::IsOffscreenProperty,
+    $AE::IsPasswordProperty, $AE::IsTextPatternAvailableProperty, $AE::ProcessIdProperty,
+    $AE::LocalizedControlTypeProperty, $AE::AriaRoleProperty, $AE::AriaPropertiesProperty
+  )) { if ($null -ne $p) { $cr.Add($p) } }
+  $cond = $AUTO::ControlViewCondition
+
+  $parts = New-Object System.Collections.Generic.List[string]
+  $heads = New-Object System.Collections.Generic.List[object]
+  $total = 0
+  $truncated = $false
+  $whereAt = -1
+  $winRect = $null
+
+  $cr.Push()
+  try {
+    $rootC = $root.GetUpdatedCache($cr)
+    $winRect = TzRect $rootC
+
+    # The page's own document: the focused element when it is one, else the
+    # first one met breadth first (a browser's page, Word's, Notepad's).
+    $doc = $null
+    try {
+      $fe = $AE::FocusedElement
+      if ($fe -ne $null) {
+        $fc = $fe.GetUpdatedCache($cr)
+        if ((TzElPid $fc) -eq $procId -and (TzIsPageDoc $fc)) { $doc = $fc }
+      }
+    } catch {}
+    if ($doc -eq $null) {
+      $queue = New-Object System.Collections.Generic.Queue[object]
+      $queue.Enqueue($rootC)
+      $seen = 0
+      while ($queue.Count -gt 0 -and $seen -lt $PAGE_FIND_MAX -and $sw.ElapsedMilliseconds -lt ($budget / 3)) {
+        $el = $queue.Dequeue()
+        $seen++
+        $ctName = ''
+        try { $ctName = $el.Cached.ControlType.ProgrammaticName } catch {}
+        if ($ctName -eq 'ControlType.Document' -and (TzIsPageDoc $el)) { $doc = $el; break }
+        try {
+          $kids = $el.FindAll($TS::Children, $cond)
+          if ($kids -ne $null) { foreach ($k in $kids) { $queue.Enqueue($k) } }
+        } catch {}
+      }
+    }
+
+    if ($doc -ne $null) {
+      $tp = $null
+      if ($doc.TryGetCurrentPattern($TXP::Pattern, [ref]$tp)) {
+        $all = "$($tp.DocumentRange.GetText($chars + 1))"
+        if ($all.Length -gt $chars) { $all = $all.Substring(0, $chars); $truncated = $true }
+        # Word ends a paragraph with CR and a line with VT.
+        foreach ($ln in ($all -split "`r`n|[`r`n`v]")) {
+          $t = TzClean $ln $PAGE_LINE_MAX
+          if (-not $t) { continue }
+          $parts.Add($t)
+          $total += $t.Length + 1
+        }
+        # Where the person is: the first line of what is on screen.
+        $first = ''
+        try {
+          $vis = $tp.GetVisibleRanges()
+          if ($vis -ne $null -and $vis.Length -gt 0) {
+            foreach ($ln in ("$($vis[0].GetText(1000))" -split "`r`n|[`r`n`v]")) {
+              $t = TzClean $ln 200
+              if ($t) { $first = $t; break }
+            }
+          }
+        } catch {}
+        if ($first) {
+          $key = $first.Substring(0, [Math]::Min(40, $first.Length))
+          for ($i = 0; $i -lt $parts.Count; $i++) { if ($parts[$i].StartsWith($key)) { $whereAt = $i; break } }
+        }
+        # Its headings, from its own elements while time is left: each marks
+        # the first line after the last one marked that reads the same.
+        $stack = New-Object System.Collections.Generic.Stack[object]
+        $stack.Push($doc)
+        $visited = 0
+        $from = 0
+        while ($stack.Count -gt 0 -and $visited -lt $MAX_NODES -and $sw.ElapsedMilliseconds -lt $budget -and $heads.Count -lt $PAGE_HEADINGS_MAX) {
+          $el = $stack.Pop()
+          $visited++
+          if (TzIsHeading $el) {
+            $t = ''
+            try { $t = TzClean "$($el.Cached.Name)" $PAGE_LINE_MAX } catch {}
+            if ($t) {
+              $lvl = TzHeadingLevel $el
+              $heads.Add([ordered]@{ level = $lvl; text = (TzClean $t 300) })
+              for ($i = $from; $i -lt $parts.Count; $i++) {
+                if ($parts[$i] -ieq $t) { $parts[$i] = ('#' * $lvl) + ' ' + $parts[$i]; $total += $lvl + 1; $from = $i + 1; break }
+              }
+            }
+            continue
+          }
+          try {
+            $kids = $el.FindAll($TS::Children, $cond)
+            if ($kids -ne $null) { for ($i = $kids.Count - 1; $i -ge 0; $i--) { $stack.Push($kids[$i]) } }
+          } catch {}
+        }
+      }
+    }
+
+    # No document with a text pattern, or an empty one: the tree, depth
+    # first, off-screen elements included; a text's name is its text.
+    if ($parts.Count -eq 0) {
+      $wl = if ($winRect) { $winRect.Left } else { -1e9 }
+      $wt = if ($winRect) { $winRect.Top } else { -1e9 }
+      $wr = if ($winRect) { $winRect.Right } else { 1e9 }
+      $wb = if ($winRect) { $winRect.Bottom } else { 1e9 }
+      $stack = New-Object System.Collections.Generic.Stack[object]
+      $stack.Push($rootC)
+      $visited = 0
+      while ($stack.Count -gt 0) {
+        if ($total -ge $chars -or $visited -ge $MAX_NODES -or $sw.ElapsedMilliseconds -ge $budget) { $truncated = $true; break }
+        $el = $stack.Pop()
+        $visited++
+        if ((TzGP $el $AE::IsPasswordProperty) -eq $true) { continue }
+        $ctName = ''
+        try { $ctName = $el.Cached.ControlType.ProgrammaticName } catch {}
+        $name = ''
+        try { $name = "$($el.Cached.Name)" } catch {}
+        $line = ''
+        $leaf = $false
+        if (TzIsHeading $el) {
+          $t = TzClean $name 300
+          if ($t) {
+            $lvl = TzHeadingLevel $el
+            if ($heads.Count -lt $PAGE_HEADINGS_MAX) { $heads.Add([ordered]@{ level = $lvl; text = $t }) }
+            $line = ('#' * $lvl) + ' ' + $t
+            $leaf = $true
+          }
+        } elseif ($ctName -eq 'ControlType.Text') {
+          $line = TzClean $name $PAGE_LINE_MAX
+          $leaf = $true
+        }
+        if ($line -and $title -and $ctName -eq 'ControlType.Text' -and $line -ieq $title) { $line = '' }
+        if ($line -and -not ($parts.Count -gt 0 -and $parts[$parts.Count - 1] -eq $line)) {
+          if ($total + $line.Length -gt $chars) { $line = $line.Substring(0, [Math]::Max(1, $chars - $total)); $truncated = $true }
+          if ($whereAt -lt 0) {
+            $off = $false
+            try { $off = [bool]$el.Cached.IsOffscreen } catch {}
+            $rect = TzRect $el
+            if (-not $off -and $rect -ne $null -and $rect.Width -gt 0 -and $rect.Height -gt 0 -and
+                -not ($rect.Right -lt $wl -or $rect.Left -gt $wr -or $rect.Bottom -lt $wt -or $rect.Top -gt $wb)) { $whereAt = $parts.Count }
+          }
+          $parts.Add($line)
+          $total += $line.Length + 1
+        }
+        if (-not $leaf) {
+          try {
+            $kids = $el.FindAll($TS::Children, $cond)
+            if ($kids -ne $null) { for ($i = $kids.Count - 1; $i -ge 0; $i--) { $stack.Push($kids[$i]) } }
+          } catch {}
+        }
+      }
+    }
+  } catch {} finally { $cr.Pop() }
+
+  $whereText = ''
+  $whereOffset = -1
+  if ($whereAt -ge 0 -and $whereAt -lt $parts.Count) {
+    $whereText = TzClean $parts[$whereAt] 200
+    $whereOffset = 0
+    for ($i = 0; $i -lt $whereAt; $i++) { $whereOffset += $parts[$i].Length + 1 }
+  }
+  $sw.Stop()
+  $o.ok = $true
+  $o.app = @{ name = (TzAppName $h $procId); pid = [int]$procId }
+  # The window's frame, for the device to tell whether a scroll under the
+  # pointer would reach this window; neither it nor the title is sent.
+  $frame = $null
+  if ($winRect) { $frame = @([int][math]::Round($winRect.X), [int][math]::Round($winRect.Y), [int][math]::Round($winRect.Width), [int][math]::Round($winRect.Height)) }
+  $o.window = [ordered]@{ title = (TzTitleCap "$title"); frame = $frame }
+  # A heading's marks are added after the text was cut, so it is cut again.
+  $text = ($parts -join "`n")
+  if ($text.Length -gt $chars) { $text = $text.Substring(0, $chars); $truncated = $true }
+  $o.text = $text
+  $o.headings = $heads
+  $o.approxWhere = $whereText
+  $o.whereOffset = $whereOffset
+  $o.truncated = $truncated
+  $o.ms = [int]$sw.ElapsedMilliseconds
+  return $o
+}
+
 # ---- The loop -------------------------------------------------------------------
 function TzReply($obj) {
   $json = ''
@@ -2162,6 +2413,21 @@ function TzReplySnapshot($id, $snap) {
   $parts = foreach ($e in $els) { ConvertTo-Json -InputObject $e -Compress -Depth 4 }
   $arr = '[' + ($parts -join ',') + ']'
   $body = $body.Replace('"' + $tok + '"', $arr)
+  [Console]::Out.WriteLine($body)
+  [Console]::Out.Flush()
+}
+
+# A page answers the same way, so its headings are always a JSON array.
+function TzReplyPage($id, $pg) {
+  if (-not $pg.ok) { $pg.id = $id; TzReply $pg; return }
+  $tok = '@@HEADS_' + [guid]::NewGuid().ToString('N') + '@@'
+  $resp = [ordered]@{
+    id = $id; ok = $true; app = $pg.app; window = $pg.window; text = $pg.text; headings = $tok
+    approxWhere = $pg.approxWhere; whereOffset = $pg.whereOffset; truncated = $pg.truncated; ms = $pg.ms
+  }
+  $body = ConvertTo-Json -InputObject $resp -Compress -Depth 6
+  $hs = foreach ($x in $pg.headings) { ConvertTo-Json -InputObject $x -Compress -Depth 3 }
+  $body = $body.Replace('"' + $tok + '"', '[' + ($hs -join ',') + ']')
   [Console]::Out.WriteLine($body)
   [Console]::Out.Flush()
 }
@@ -2200,6 +2466,20 @@ while ($true) {
         if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
         if ($budget -lt 50) { $budget = 50 } elseif ($budget -gt 30000) { $budget = 30000 }
         TzReplySnapshot $id (TzSnapshot $max $budget)
+        break
+      }
+
+      'page' {
+        # The whole text of the window, for understanding; never acted on.
+        $pageChars = $PAGE_CHARS
+        $c = 0
+        if ($msg.chars -ne $null -and [int]::TryParse("$($msg.chars)", [ref]$c) -and $c -gt 0) { $pageChars = $c }
+        if ($pageChars -lt 500) { $pageChars = 500 } elseif ($pageChars -gt 100000) { $pageChars = 100000 }
+        $budget = $PAGE_BUDGET_MS
+        $b = 0
+        if ($msg.budgetMs -ne $null -and [int]::TryParse("$($msg.budgetMs)", [ref]$b) -and $b -gt 0) { $budget = $b }
+        if ($budget -lt 50) { $budget = 50 } elseif ($budget -gt 6000) { $budget = 6000 }
+        TzReplyPage $id (TzPage $pageChars $budget)
         break
       }
 
