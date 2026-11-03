@@ -130,6 +130,15 @@ window rather than recording into a history no account owns.
   they go. Esc throws a dictation away (`desktop.pill.escCancels`).
   Fn is watched by `native/tzkey.swift` (`npm run tzkey`); the others by the key
   hook. A key that cannot be bound falls back to the toggle hotkey, said once.
+- **Talk mode** (the one key tapped twice, `desktop.talk.enabled`): a conversation
+  with Blip. The microphone opens, a pause ends the turn, the words go to
+  `POST /v1/talk`, and the answer is shown in the pill and said as it streams;
+  then the microphone opens again. Holding the key takes the turn at once (what
+  Blip is saying stops); a tap, Esc, a press on the pill, `desktop.talk.quietMs`
+  of silence after an answer or `desktop.talk.maxMs` ends it. An answer can hand
+  off to Ask, type into the box in front, save a routine, start or stop notes,
+  or send to a bot. A private window or a money app sends no screen content
+  (src/dictation/talk.js).
 - **Toggle** (a Linux Wayland session, or `oneKey: "off"`): press the hotkey → speak → press again.
 - **Hold-to-talk** (`hold: true`, without the one key): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you

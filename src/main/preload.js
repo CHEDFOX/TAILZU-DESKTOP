@@ -44,12 +44,18 @@ contextBridge.exposeInMainWorld("tailzu", {
   token: (renew) => ipcRenderer.invoke("recorder:token", !!renew),
   // main → pill: its state, and the voice's level while it listens.
   onPill: (cb) => ipcRenderer.on("pill", (_e, m) => cb(m)),
+  // The rest window (dictation/rest/): shown, and whether to duck from the pointer.
+  onRest: (cb) => ipcRenderer.on("rest", (_e, m) => cb(m)),
   onLevel: (cb) => ipcRenderer.on("pill-level", (_e, p) => cb(p)),
   // pill → main: the pointer is over it (take clicks) or not (let them
   // through), and what a click on it asks for: start, finish or cancel, or
   // askCancel while a question has it (main puts the question away).
   pillHover: (on) => ipcRenderer.send("pill:hover", !!on),
   pillAction: (a) => ipcRenderer.send("pill:action", String(a || "")),
+  // pill → main: talk mode's sentence `id` has been said (pill/voice.js).
+  pillSpoken: (id) => ipcRenderer.send("pill:spoken", Number(id) || 0),
+  // pill → main: where Blip stands along the pill's window (px from its middle), as he walks it (pill/bots.js).
+  pillSpot: (s) => ipcRenderer.send("pill:spot", { blip: Number(s && s.blip) || 0 }),
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
   // The server's knobs ({ labels, flags } of the last bootstrap), for a page

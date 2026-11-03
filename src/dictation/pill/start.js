@@ -18,6 +18,22 @@ function onPill(m) {
   if (m.unhover) { pointer = null; hovered = false; overCancel = false; wake(); }
   if (typeof m.hint === "string") hint = m.hint;
   if (typeof m.rest === "boolean") restShown = m.rest;
+  // Blip has gone to peek over the text box (ask.js): the pill draws him again once he is back.
+  // At rest Blip is at the edge of the screen (dictation/rest/): the pill shows him only once it is in use.
+  if (typeof m.restAway === "boolean") { blipRestAway(m.restAway, Number(m.walkMs) || 0); wake(); if (!m.state) return; }
+  if (typeof m.blipAway === "boolean") { blipAwayAt = m.blipAway ? clock() : 0; wake(); if (!m.state) return; }
+  // Talk mode's voice (voice.js).
+  if (m.hush) hushVoice();
+  if (m.say && typeof m.say === "object") sayVoice(m.say);
+  if ((m.hush || m.say) && !m.state) return;
+  // Talk mode without Blip: listening while they speak (their words the caption), writing while he answers.
+  if (m.state === "talk" && !BLIP()) {
+    const as = m.phase === "listen" ? "listening" : "writing";
+    if (S.name !== as) setState(as, m);
+    if (as === "listening") caption = String(m.heard || "");
+    wake();
+    return;
+  }
   if (m.state === "flash") { flashAt = clock(); wake(); return; }
   if (m.state === "caption") { caption = String(m.text || ""); wake(); return; }
   if (m.state) setState(m.state, m);

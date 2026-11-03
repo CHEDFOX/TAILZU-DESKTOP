@@ -471,6 +471,13 @@ test("brain: one of their bots, by the brain's pick", async () => {
   assert.deepStrictEqual(h.did.find((x) => x[0] === "whichBot"), ["whichBot", "Plan my Saturday", "plan"]);
 });
 
+test("brain: a reminder with no bot named goes to their bots, and the server says which", async () => {
+  const h = rig({ decide: () => ({ do: "bot", goal: "remind me to call mom at 6", sure: 0.9, by: "model" }) });
+  said(h, 1, "remind me to call mom at 6", null);
+  await settle();
+  assert.deepStrictEqual(h.did.find((x) => x[0] === "whichBot"), ["whichBot", "remind me to call mom at 6", undefined]);
+});
+
 test("brain: down or slow, and the word lists decide as before", async () => {
   const h = rig({ decide: () => new Promise(() => {}), knobs: { "desktop.route.brainMs": 300 } });
   said(h, 1, "what does this error mean", null);

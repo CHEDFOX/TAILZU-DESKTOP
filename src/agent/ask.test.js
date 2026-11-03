@@ -11,7 +11,7 @@ const assert = require("node:assert");
 const { EventEmitter } = require("node:events");
 const { createAsk } = require("./ask.js");
 const { pillAskMove, capsuleRect } = require("./pillAsk.js");
-const { createPeekWatch } = require("./peek.js");
+const { createPeekWatch, PEEK_GONE_MS, PEEK_HOME_MS } = require("./peek.js");
 const { createAskSetup } = require("./askSetup.js");
 const agentCore = require("./run/agent.js");
 const { mainProcess } = require("../main/testkit.js");
@@ -180,6 +180,8 @@ function harness(opts = {}) {
     paste: async () => {},
     openExternal: opts.openExternal,
     screenSettings: opts.screenSettings,
+    pillBlip: opts.pillBlip,
+    blipAway: opts.blipAway,
   });
   return { setPoint: (f) => { screenPoint = f; }, ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
     heardCalls: () => calls.filter((c) => c[0] === "heard"),
@@ -3065,4 +3067,44 @@ test("an ASK nobody answers ends quietly after replyWaitMs; Esc puts it away at 
   await sleep(20);
   assert.strictEqual(h.ask.active(), false);
   assert.strictEqual(h.starts(), 1);
+});
+
+
+// ---- one Blip: the pill's goes to the text box and comes back ---------------------------------------------------
+
+test("peek: the pill's Blip is the one that peeks, from where he stands in the pill, and is given back after the hop home", async () => {
+  const away = [];
+  const h = harness({ pillBlip: () => ({ x: WORK.x + 700, y: WORK.y + WORK.height - 20 }), blipAway: (v) => away.push(v) });
+  h.ask.peek(CARET, FIELD, "listening");
+  h.ask.peek(CARET, FIELD, "writing");
+  await loaded();
+  const [first, second] = peeks(h);
+  assert.deepStrictEqual(first.home, [700, WORK.height - 20, 1, 1], "the first peek says where he comes from, in the guide's coordinates");
+  assert.strictEqual(second.home, undefined, "later carets do not");
+  assert.deepStrictEqual(away, [true]);
+  h.ask.unpeek();
+  await sleep(PEEK_GONE_MS + 20);
+  assert.deepStrictEqual(away, [true], "not before he has hopped back");
+  await sleep(PEEK_HOME_MS + 20);
+  assert.deepStrictEqual(away, [true, false]);
+});
+
+test("peek: no pill to come from, and he simply comes up at the box", async () => {
+  const away = [];
+  const h = harness({ pillBlip: () => null, blipAway: (v) => away.push(v) });
+  h.ask.peek(CARET, FIELD, "listening");
+  await loaded();
+  assert.strictEqual(peeks(h)[0].home, undefined);
+  h.ask.unpeek();
+  assert.deepStrictEqual(away, []);
+});
+
+test("peek: a question taking the guide gives Blip back to the pill at once", async () => {
+  const away = [];
+  const h = harness({ pillBlip: () => ({ x: WORK.x + 700, y: WORK.y + 600 }), blipAway: (v) => away.push(v) });
+  h.ask.peek(CARET, FIELD, "listening");
+  await loaded();
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  assert.deepStrictEqual(away, [true, false]);
 });

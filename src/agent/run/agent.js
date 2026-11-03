@@ -40,6 +40,13 @@
 //               as the utterance when there are some, so the server has
 //               nothing to transcribe.
 //
+// And the whole page, for understanding it (deps.page, context/pageRead.js):
+// the window's text with the parts out of sight, read from the tree while
+// they speak, after the snapshot; and, when that is thin and the question is
+// about the whole thing ("summarise this"), read a screen at a time before
+// the first step. It goes with step 0 only, as `page`, and is never acted on:
+// only the snapshot's elements are.
+//
 // The answer may draw while it explains, the way a teacher uses a pen: a
 // circle on part of a diagram, an arrow from a label to what it names, the
 // places to click numbered in order. A mark names what it is on the way a
@@ -76,6 +83,7 @@ const { describeChange, focusMoved, focusLandedOn, titleOf } = require("./change
 const { maxRisk, sameApp, classifyRisk, wordsRisk } = require("./risk.js");
 const { actionLine, fingerprint, confirmText, acting } = require("./actions.js");
 const { makePost } = require("./stream.js");
+const { needsWhole } = require("../../context/pageRead.js");
 
 /** History the server takes, oldest first. Older turns fall off the front. */
 const MAX_HISTORY = 16;
@@ -98,6 +106,9 @@ const SPEECH_MAX_MS = 180000;
 /** The server takes a picture up to this size (AGENT_IMAGE_MAX_BYTES) and
  *  answers 413 above it; a crop that big is not sent at all. */
 const MAX_PICTURE_BYTES = 2000000;
+/** What step 0's page may carry, whatever deps.page gave back. */
+const PAGE_TEXT_MAX = 20000;
+const PAGE_OUTLINE_MAX = 200;
 
 const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve", "device", "handover"]);
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
@@ -186,6 +197,10 @@ function pressMayHaveHappened(r) {
  * @param {() => Promise<void>} [deps.afterSpeech]  settles once everything the guide
  *        has been given to say so far has been said. A finished run's card stays up
  *        for it, and doneMs after. Without it, doneMs from the moment the run ends.
+ * @param {(o: { question: string, needWhole: boolean }) => Promise<{ outline: string[], text: string, where: string, source: string, truncated: boolean }|null>} [deps.page]
+ *        the whole page in front (pageRead.readPage): with needWhole false the tree's
+ *        read only; with true, the read a screen at a time when the tree has little.
+ *        Without it, step 0 carries no page.
  */
 function createAgent(deps) {
   const d = deps || {};
@@ -546,6 +561,17 @@ function createAgent(deps) {
     if (canDevice()) req.capabilities = ["DeviceFiles"];
     if (run.history.length) req.history = run.history.slice(-MAX_HISTORY).map((h) => Object.assign({}, h));
     if (run.job) req.job = { goal: run.job.goal, plan: run.job.plan.slice(), done: run.job.done.slice(), notes: run.job.notes.slice() };
+    // The whole page, on step 0 only, and never from a screen that must not be read.
+    if (run.step === 0 && input.page && !refusal(snap)) {
+      const p = input.page;
+      const page = {};
+      const outline = Array.isArray(p.outline) ? p.outline.filter((l) => typeof l === "string" && l.trim()).slice(0, PAGE_OUTLINE_MAX).map((l) => clip(squash(l), 300)) : [];
+      if (outline.length) page.outline = outline;
+      if (typeof p.text === "string" && p.text) page.text = stripUrls(p.text).slice(0, PAGE_TEXT_MAX);
+      if (typeof p.where === "string" && p.where.trim()) page.where = clip(stripUrls(squash(p.where)), 200);
+      if (p.source === "tree" || p.source === "scroll") page.source = p.source;
+      if (page.text || page.outline) req.page = page;
+    }
     return req;
   }
 
@@ -1516,6 +1542,39 @@ function createAgent(deps) {
     return audio ? { audio } : null;
   }
 
+  /** deps.page, never throwing; null for nothing. */
+  async function askPage(o) {
+    try {
+      const p = await d.page(o);
+      return p && typeof p === "object" && typeof p.text === "string" ? p : null;
+    } catch (e) {
+      log(`agent: page failed: ${errText(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Step 0's page: the tree's read begun at Alt twice, waited for a short
+   * while; and when that has little and the question is about the whole
+   * thing, the read a screen at a time (pageRead.js). Null when there is
+   * none, or the screen must not be read.
+   */
+  async function firstPage(run, input) {
+    if (!run.pagePromise || refusal(run.snapshot)) return null;
+    let p = await race(run, within(run.pagePromise, num("desktop.agent.pageWaitMs", 1500), null));
+    if (p === ABORTED || !alive(run)) return null;
+    const question = input.utterance || run.goal || "";
+    const thin = !p || p.text.length < num("desktop.page.minChars", 400);
+    if (thin && question && needsWhole(question)) {
+      const more = await race(run, within(askPage({ question, needWhole: true }), num("desktop.agent.pageScrollMs", 20000), null));
+      if (more === ABORTED || !alive(run)) return null;
+      if (more && (!p || more.text.length > p.text.length)) p = more;
+    }
+    if (!p || (!p.text && !(Array.isArray(p.outline) && p.outline.length))) return null;
+    log(`agent ${run.tag}: page (${clip(squash(p.source), 10)}, ${p.text.length} chars)`);
+    return p;
+  }
+
   async function loop(run, first) {
     run.started = true;
     tell(run, "state", "thinking");
@@ -1545,6 +1604,9 @@ function createAgent(deps) {
       let input = await firstInput(run, first);
       if (!alive(run)) return;
       if (!input) { finish(run, "quiet"); return; }
+      const page = await firstPage(run, input);
+      if (!alive(run)) return;
+      if (page) input = Object.assign({}, input, { page });
       const maxSteps = Math.max(1, num("desktop.agent.maxSteps", 8));
       // A long job may take a job's steps (startJob); everything else, a small run's.
       const limit = () => (run.job ? Math.max(maxSteps, num("desktop.agent.jobMaxSteps", 60)) : maxSteps);
@@ -1599,7 +1661,7 @@ function createAgent(deps) {
       app: clip(squash(o.app), 60), firstApp: "",
       snapshot: { ok: false, error: "not read yet", elements: [] }, frames: new Map(), byId: new Map(),
       mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
-      plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null,
+      plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null, pagePromise: null,
       pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
       acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0, says: 0,
       // Asked for in so many words (the one key's brain: a task or a message, no money, nothing deleted).
@@ -1610,6 +1672,12 @@ function createAgent(deps) {
     // Kept as they arrive, for preview(), which cannot wait for them.
     run.snapPromise = takeSnapshot().then((s) => { run.snapSeen = s; return s; });
     run.lookPromise = takeLook(run).then((l) => { run.lookSeen = l; return l; });
+    // The whole page, from the tree, after the snapshot: the helper does one
+    // thing at a time, and the snapshot is what the first step waits on. Not
+    // read at all from a screen that must not be.
+    if (typeof d.page === "function" && bool("desktop.agent.page", true)) {
+      run.pagePromise = run.snapPromise.then((snap) => (alive(run) && !refusal(snap) ? askPage({ question: "", needWhole: false }) : null));
+    }
     log(`agent ${run.tag}: begun`);
     return true;
   }

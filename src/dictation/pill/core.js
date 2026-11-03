@@ -121,6 +121,14 @@ function setState(name, data) {
   // puts up). The same phase again is not a new one: its clock, and the
   // closing hold above all, runs from when it began.
   if (name === "ask" && S.name === "ask" && data && data.phase === S.data.phase) { wake(); return; }
+  // Talk mode (talk.js) sends its words and gestures as they change: the same state, its clock kept.
+  if (name === "talk" && S.name === "talk") {
+    const was = S.data.gesture;
+    S.data = data || {};
+    if (BLIP() && S.data.gesture !== was) talkGesture(blipper(), S.data, "talk", clock());
+    wake();
+    return;
+  }
   S = { name, at: clock(), data: data || {} };
   if (name !== "listening") caption = "";
   if (BLIP()) blipFor(asked, data || {}, from);

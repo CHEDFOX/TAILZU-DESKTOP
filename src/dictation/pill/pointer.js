@@ -2,10 +2,12 @@
 "use strict";
 
 // Parted for a question, the pill is the gap wider (askGapPx; 0 otherwise).
-function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2 - askGapPx / 2, y: bottom - P.h, w: P.w + askGapPx, h: P.h }; }
+function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: (BOTS() ? pillCX : W / 2) - P.w / 2 - askGapPx / 2, y: bottom - P.h, w: P.w + askGapPx, h: P.h }; }
 function podsNow() { return SP.pods(podSeed(), W, clamp(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
+  // Hidden (Blip over a text box, or no rest pill), it takes nothing: the app under it keeps its clicks.
+  if (P.show < 0.5) return false;
   // Apart, only the two halves take the pointer: the thread and the screen
   // between them stay the app's, clicks and all.
   if (apart()) return !!SP.podAt(podsNow(), x, y, pad);
@@ -22,6 +24,7 @@ function setHover(v) {
   if (v === hovered) return;
   hovered = v;
   if (bridge && bridge.pillHover) bridge.pillHover(v);
+  if (v && BOTS()) blipHover();
   wake();
 }
 let pointer = null;   // where the pointer was last seen over this window
@@ -42,6 +45,8 @@ window.addEventListener("mousedown", (e) => {
     // already going.
     : S.name === "ask" ? (S.data.phase === "closing" ? null : "askCancel")
     // A route's label: its alternative, when it has one.
-    : S.name === "routed" ? (S.data.alt ? "alt" : null) : null;
+    : S.name === "routed" ? (S.data.alt ? "alt" : null)
+    // Talk mode: a press ends it.
+    : S.name === "talk" ? "talkEnd" : null;
   if (act && bridge && bridge.pillAction) bridge.pillAction(act);
 });

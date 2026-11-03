@@ -28,12 +28,16 @@ const { createTapDetector } = require("../dictation/tapDetector.js");
 // The one key (hold to talk, tap for hands-free) and where its words go (oneKey.js, router.js, routing.js).
 const oneKey = require("../dictation/oneKey.js");
 const { createRouting, undoCommand } = require("../dictation/routing.js");
+// Talk mode: two taps of the one key, a conversation with Blip (talk.js).
+const { createTalk } = require("../dictation/talk.js");
+const restSpot = require("../dictation/restSpot.js");
 const { joinStretch } = require("../dictation/pasteJoin.js");
 const updater = require("./updater.js");
 const frontApp = require("../context/frontApp.js");
 const screenRead = require("../context/screenRead.js");
 const driver = require("../agent/driver/driver.js");
-const { createAsk } = require("../agent/ask.js");
+const pageRead = require("../context/pageRead.js");
+const { createAsk, voiceOf } = require("../agent/ask.js");
 const { pillAskMove, capsuleRect } = require("../agent/pillAsk.js");
 const { createPeekWatch } = require("../agent/peek.js");
 const { createAskSetup } = require("../agent/askSetup.js");
@@ -823,6 +827,7 @@ function createRecorderWindow() {
     if (activeSession) { if (peekWatch) peekWatch.end(activeSession); settleSession(activeSession); pill("error", { label: pillError("") }); }
     // A question it was recording will not come back either.
     if (ask) ask.recorderGone();
+    talk.recorderGone();
   });
   recorderWin.loadFile("src/dictation/recorder/recorder.html");
 }
@@ -1079,6 +1084,86 @@ function guardPill(on) {
   } else if (!on && pillGuard) { clearInterval(pillGuard); pillGuard = null; }
 }
 
+/** Where the pill's Blip stands on the screen (his feet): the middle of the pill's window, just above its foot.
+ *  Null while the pill is hidden, and then Blip comes up at the text box without the hop from it. */
+// Where Blip stands along the pill's window, from its middle (pill:spot): he walks the bottom of the screen.
+let pillSpotX = 0;
+function pillBlipAt() {
+  if (!pillWin || pillWin.isDestroyed() || !pillWin.isVisible()) return null;
+  const b = pillWin.getBounds();
+  return { x: b.x + b.width / 2 + pillSpotX, y: b.y + b.height - num("desktop.pill.bottomPad", 14) - 2 };
+}
+
+// ---- Blip at rest (dictation/restSpot.js, dictation/rest/) ------------------------------------------------
+// Between dictations Blip rests against the right edge of the screen in a window of his own, and the pill leaves him
+// out (restAway). Only in the Bots look with Blip in the pill; desktop.rest.edge turns it off.
+let restWin = null, restWatch = null, restShown = false, restDuck = false;
+// Not at once: he goes to the edge only after desktop.rest.afterMs with no command (the pill at rest all that time),
+// walking off the bottom of the screen first (desktop.rest.walkMs). Until then he strolls the bottom (pill/roam.js).
+let restSince = Date.now(), restLater = null, restWalk = null;
+const restOn = () => bool("bots.app", false) && bool("desktop.pill.blip", true) && bool("desktop.rest.edge", true);
+function restSend(m) {
+  if (restWin && !restWin.isDestroyed() && !restWin.webContents.isLoading()) restWin.webContents.send("rest", m);
+}
+function createRestWindow(bounds) {
+  if (restWin && !restWin.isDestroyed()) return restWin;
+  const win = restWin = new BrowserWindow(Object.assign({}, bounds, {
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false,
+    maximizable: false, fullscreenable: false, skipTaskbar: true, focusable: false,
+    hasShadow: false, alwaysOnTop: true, show: false,
+    ...(process.platform === "darwin" ? { type: "panel" } : {}),
+    webPreferences: webPrefs({ backgroundThrottling: false }),
+  }));
+  // Every space, but not over a full-screen app (video, a game, a presentation): there he is out of sight.
+  try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false, skipTransformProcessType: true }); } catch { /* one space */ }
+  // In no screen share or recording.
+  try { win.setContentProtection(true); } catch { /* the system has none */ }
+  win.setIgnoreMouseEvents(true);
+  hardenWindow(win);
+  win.webContents.on("did-finish-load", () => { if (restShown) restSend({ shown: true, duck: restDuck }); });
+  win.on("closed", () => { if (restWin === win) restWin = null; });
+  win.loadFile("src/dictation/rest/rest.html");
+  return win;
+}
+/** Shown while he rests, hidden otherwise; the pill told whether he is with it. */
+function updateRest() {
+  clearTimeout(restLater); restLater = null;
+  const afterMs = Math.max(0, num("desktop.rest.afterMs", 45000));
+  const s = { on: restOn(), pillOn: pillOn(), pillState, idleMs: Date.now() - restSince, afterMs };
+  const rests = restSpot.restsNow(s);
+  // At rest, not idle long enough yet: looked at again when it will be.
+  if (!rests && restSpot.restsNow(Object.assign({}, s, { idleMs: Infinity }))) restLater = setTimeout(updateRest, afterMs - s.idleMs + 50);
+  if (rests === restShown) return;
+  restShown = rests;
+  clearTimeout(restWalk); restWalk = null;
+  const walkMs = rests ? Math.max(0, num("desktop.rest.walkMs", 2400)) : 0;
+  pillSend({ restAway: rests, walkMs });
+  if (!rests) {
+    clearInterval(restWatch); restWatch = null;
+    if (restWin && !restWin.isDestroyed() && restWin.isVisible()) restWin.hide();
+    return;
+  }
+  // He walks off the strip first; the edge has him once he is gone from it.
+  if (walkMs) restWalk = setTimeout(() => { restWalk = null; if (restShown) showRest(); }, walkMs);
+  else showRest();
+}
+function showRest() {
+  const display = pillWin && !pillWin.isDestroyed() ? screen.getDisplayMatching(pillWin.getBounds()) : screen.getPrimaryDisplay();
+  const bounds = restSpot.restBounds(display.workArea, { h: num("desktop.rest.windowHeight", restSpot.REST_H) });
+  const w = createRestWindow(bounds);
+  setBoundsExactly(w, bounds);
+  restDuck = false;
+  restSend({ shown: true, duck: false });
+  w.showInactive();
+  // The pointer near him: he ducks out of its way, and comes back once it has gone.
+  clearInterval(restWatch);
+  restWatch = setInterval(() => {
+    if (!restWin || restWin.isDestroyed()) return;
+    const near = restSpot.pointerNear(screen.getCursorScreenPoint(), restWin.getBounds(), num("desktop.rest.nearPx", restSpot.NEAR_PX));
+    if (near !== restDuck) { restDuck = near; restSend({ duck: near }); }
+  }, Math.max(100, num("desktop.rest.watchMs", 200)));
+}
+
 function pillSend(m) {
   if (pillWin && !pillWin.isDestroyed() && !pillWin.webContents.isLoading()) pillWin.webContents.send("pill", m);
 }
@@ -1100,20 +1185,24 @@ function hidePill() {
 /** Move the pill to a state. `caption` and `flash` are moments, not states. */
 function pill(state, data) {
   const moment = state === "caption" || state === "flash";
+  const was = pillState;
   if (!moment) {
+    // Any state but rest is a command (or its answer): the clock to the edge starts again from its end.
+    if (state !== "rest" || was !== "rest") restSince = Date.now();
     pillState = state; pillData = data || {};
     // Held on top for as long as it is listening or writing, and never
     // past it: every other state ends the guard, a switched-off pill too
     // (its interval used to run on for the rest of the launch). And while a
     // question has it: the guide's window is shown over the pill's, and the
     // guard puts the pill back over it (see raiseGuide).
-    guardPill(pillOn() && (state === "listening" || state === "writing" || state === "ask"));
+    guardPill(pillOn() && (state === "listening" || state === "writing" || state === "ask" || state === "talk"));
   }
+  if (!moment) updateRest();
   // Switched off, by the tray or by the server: hidden, not left on screen
   // showing whatever it showed last.
   if (!pillOn()) { hidePill(); return; }
   const w = createPillWindow();
-  if (state === "listening") setBoundsExactly(w, pillBounds());
+  if (state === "listening" || (state === "talk" && was !== "talk")) setBoundsExactly(w, pillBounds());
   pillSend(Object.assign({ state, hint: pillHint(), rest: bool("desktop.pill.rest", true) }, data || {}));
   if (!w.isVisible()) { if (!w.webContents.isLoading()) showPill(w); }
   // A change of state reclaims the top. Captions and flashes (several a
@@ -1145,7 +1234,7 @@ function pillAsk(phase, first) {
   const w = createPillWindow();
   if (move === "take") setBoundsExactly(w, pillBounds());
   pill("ask", { phase });
-  try { return capsuleRect(w.getBounds(), { num, bool }); } catch { return null; }
+  try { return capsuleRect(w.getBounds(), { num, bool }, pillSpotX); } catch { return null; }
 }
 
 /**
@@ -1235,6 +1324,13 @@ function cancelDictation() {
 // may touch the session, the settings, the browser or the updater.
 const isFrom = (e, w) => !!w && !w.isDestroyed() && e.sender === w.webContents;
 const fromPill = (e) => isFrom(e, pillWin);
+ipcMain.on("pill:spot", (e, m) => {
+  if (!fromPill(e) || !m || !Number.isFinite(m.blip)) return;
+  const b = pillWin && !pillWin.isDestroyed() ? pillWin.getBounds() : null;
+  const half = b ? b.width / 2 : 4000;
+  pillSpotX = Math.max(-half, Math.min(half, m.blip));
+});
+
 ipcMain.on("pill:hover", (e, on) => {
   if (!fromPill(e)) return;
   // Over the pill: it takes the click. Anywhere else: the click goes through
@@ -1252,7 +1348,11 @@ ipcMain.on("pill:action", (e, a) => {
   else if (a === "askCancel" && ask && pillState === "ask") ask.cancel("pill");
   // A route's label: its alternative ("Ask instead", "Type it instead").
   else if (a === "alt" && pillState === "routed" && !recording) void routing.alternative();
+  // Talk mode: a press on the pill ends it.
+  else if (a === "talkEnd") talk.end("pill");
 });
+// Talk mode's voice: the pill has said a sentence (pill/voice.js).
+ipcMain.on("pill:spoken", (e, id) => { if (fromPill(e)) talkSpoken(id); });
 // The token for one request from the recorder. It was handed one token at
 // the start of a dictation and used it for every stretch, so a dictation
 // that outlived it (an hour's token, a press in its last minutes) was
@@ -1267,6 +1367,11 @@ ipcMain.handle("recorder:token", async (e, renew) => {
 });
 // The voice's level, band by band, from the recorder to the pill.
 ipcMain.on("dictation-level", (e, p) => {
+  // A talk turn's voice moves Blip in the pill while they speak.
+  if (isFrom(e, recorderWin) && talk.level(p)) {
+    if (talk.phase() === "listening" && pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
+    return;
+  }
   // A question's voice moves the guide's dots, not the pill.
   if (isFrom(e, recorderWin) && ask && ask.level(p)) return;
   if (!isFrom(e, recorderWin) || !p || p.session !== activeSession || !recording) return;
@@ -2287,6 +2392,7 @@ function toggleDictation() {
   // puts away a finished answer's card, which may still be saying it: the
   // microphone would write its voice into what they are about to say.
   if (!recording && ask && (ask.active() || ask.shown())) ask.cancel("dictation");
+  if (!recording) talk.end("dictation");
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
@@ -2501,6 +2607,13 @@ const oneKeyGesture = oneKey.createHoldTap({
   tapOn: () => cfg.tap !== false,
   armMs: () => num("desktop.oneKey.armMs", 200),
   tapMs: () => num("desktop.oneKey.tapMs", 300),
+  // Two taps: talk mode (talk.js). While it is on, the key is talk's: held, their turn; a tap ends it.
+  double: () => startTalk(),
+  doubleMs: () => (talkOn() ? num("desktop.talk.doubleTapMs", 400) : 0),
+  inTalk: () => talk.active(),
+  talkHold: () => talk.bargeIn("key"),
+  talkRelease: () => talk.release(),
+  talkTap: () => talk.end("tap"),
 });
 /** The key went down alone: talk. A question up (its card's Do it, a reply it
  *  listens for, a run at work) is answered instead, as Ask's pair did. */
@@ -2859,6 +2972,11 @@ function wakeNames() {
   return (own.length ? own : ["X0", "Blip", "Tailzu"]).concat(accountNickname ? [accountNickname] : []);
 }
 
+/** What the recorder is started with for a question or a talk turn (its "ask" mode). */
+function recorderStart(sid) {
+  return { baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language, session: sid, strings: SHELL.notify, knobs: knobsPayload() };
+}
+
 function setupAsk() {
   if (ask) return;
   ask = createAsk({
@@ -2875,10 +2993,7 @@ function setupAsk() {
     // Questions take their ids from the same count as dictations, so the
     // recorder never mistakes one for the other's late answer.
     nextSession: () => ++sessionSeq,
-    recorderStart: (sid) => ({
-      baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language, session: sid,
-      strings: SHELL.notify, knobs: knobsPayload(),
-    }),
+    recorderStart,
     frontInfo: () => frontApp.frontInfo(),
     // A dictation recording keeps the microphone; a question waits its turn.
     dictating: () => recording,
@@ -2920,6 +3035,10 @@ function setupAsk() {
     // A look's word on Screen Recording changed: the setup card is told, so
     // it can offer the restart a granted permission still needs.
     lookPermission: () => askSetup.push(),
+    // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
+    pillBlip: pillBlipAt,
+    page: (o) => pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), o),
+    blipAway: (away) => pillSend({ blipAway: !!away }),
     // The person's own files (localfiles.js): planned here, shown on a card,
     // done here. A kind of change they approved once is not asked again.
     device: {
@@ -2954,10 +3073,11 @@ function setupAsk() {
   });
   if (askOn()) driver.start();
 }
-ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.audioIn(p); });
-ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.paused(p); });
+// A talk turn is recorded as a question is: talk.js takes its own sessions first.
+ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && !talk.audioIn(p) && ask) ask.audioIn(p); });
+ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && !talk.paused(p) && ask) ask.paused(p); });
 // The live stream's final text for a question, after (or before) its clip.
-ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && ask) ask.textIn(p); });
+ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && !talk.textIn(p) && ask) ask.textIn(p); });
 
 // ---- Where the one key's words go (routing.js, router.js) ---------------------------
 // A text box in focus: typed as they come, as dictation always was. "Tailzu,
@@ -3000,6 +3120,38 @@ async function needGrant(missing) {
   return false;
 }
 
+/** A routine, saved from what was said: the server's draft, then the routine. */
+async function saveRoutine(goal) {
+  const tz = -new Date().getTimezoneOffset();
+  const dr = await apiJson("/v1/routines/draft", { method: "POST", body: JSON.stringify({ message: String(goal).slice(0, 2000), tz }) });
+  if (!dr || !dr.draft || !dr.draft.token) return null;
+  const made = await apiJson("/v1/routines", { method: "POST", body: JSON.stringify({ token: dr.draft.token, tz }) });
+  return made && made.routine ? { text: [made.routine.task, made.routine.when].filter(Boolean).join(" · ") || txt("desktop.route.routineSaved", "Routine saved") } : null;
+}
+/** Meeting notes started (true) or stopped (false). */
+function notesTo(start) {
+  if (start && !notes) void startNotes();
+  else if (!start && notes && notes.state === "recording") stopNotes();
+}
+/** Which bot answers (the backend's pick, "Ask any bot"'s), told the one named. */
+function whichBot(message, slug) {
+  return withinMs(apiJson("/v1/shell/route", {
+    method: "POST", body: JSON.stringify(Object.assign({ message: String(message).slice(0, 2000) }, slug ? { bot: slug } : {})),
+  }), num("desktop.route.whichMs", 4000));
+}
+/** A task for a bot → { name, text, needs } or null. */
+function sendBot(message, slug) {
+  return apiJson("/v1/shell/ask", {
+    method: "POST", body: JSON.stringify({ message: String(message).slice(0, 2000), bot: slug, device: "desktop", mode: "voice" }),
+  }).then((j) => (j && j.shell ? { name: (j.shell.bot && j.shell.bot.name) || "", text: String(j.shell.text || ""), needs: Number(j.shell.needs) || 0 } : null));
+}
+/** The bot's answer, said; a click opens it among the rest (Activity). */
+function botAnswered(r) {
+  notify(r.text
+    ? txt("desktop.route.botAnswer", "{bot}: {text}", { bot: r.name, text: r.text.length > 180 ? r.text.slice(0, 179) + "…" : r.text })
+    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(bool("bots.app", false) ? "bots.activity" : undefined));
+}
+
 const routing = createRouting({
   on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
   signals: () => ({ names: wakeNames(), askOn: askOn(), notesOn: !!notes }),
@@ -3017,32 +3169,16 @@ const routing = createRouting({
   // given comes back, and is asked for only then (needGrant).
   decide: (i) => apiJson("/v1/ask/decide", {
     method: "POST",
-    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined })),
+    // tz: the person's offset from UTC in minutes, for the context the server keeps (src/context there).
+    body: JSON.stringify(Object.assign({}, i, { words: String(i.words || "").slice(0, 2000), grants: askOn() ? grantsNow() : undefined, tz: -new Date().getTimezoneOffset() })),
   }),
-  // A routine, saved from what was said: the server's draft, then the routine.
-  routine: async (goal) => {
-    const tz = -new Date().getTimezoneOffset();
-    const dr = await apiJson("/v1/routines/draft", { method: "POST", body: JSON.stringify({ message: String(goal).slice(0, 2000), tz }) });
-    if (!dr || !dr.draft || !dr.draft.token) return null;
-    const made = await apiJson("/v1/routines", { method: "POST", body: JSON.stringify({ token: dr.draft.token, tz }) });
-    return made && made.routine ? { text: [made.routine.task, made.routine.when].filter(Boolean).join(" · ") || txt("desktop.route.routineSaved", "Routine saved") } : null;
-  },
+  routine: saveRoutine,
   needGrant: (missing) => needGrant(missing),
   askCancel: () => { if (ask) ask.cancel("route"); },
-  notes: (start) => {
-    if (start && !notes) void startNotes();
-    else if (!start && notes && notes.state === "recording") stopNotes();
-  },
-  whichBot: (message, slug) => withinMs(apiJson("/v1/shell/route", {
-    method: "POST", body: JSON.stringify(Object.assign({ message: String(message).slice(0, 2000) }, slug ? { bot: slug } : {})),
-  }), num("desktop.route.whichMs", 4000)),
-  sendBot: (message, slug) => apiJson("/v1/shell/ask", {
-    method: "POST", body: JSON.stringify({ message: String(message).slice(0, 2000), bot: slug, device: "desktop", mode: "voice" }),
-  }).then((j) => (j && j.shell ? { name: (j.shell.bot && j.shell.bot.name) || "", text: String(j.shell.text || ""), needs: Number(j.shell.needs) || 0 } : null)),
-  // The bot's answer, said; a click opens it among the rest (Activity).
-  botAnswered: (r) => notify(r.text
-    ? txt("desktop.route.botAnswer", "{bot}: {text}", { bot: r.name, text: r.text.length > 180 ? r.text.slice(0, 179) + "…" : r.text })
-    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(bool("bots.app", false) ? "bots.activity" : undefined)),
+  notes: notesTo,
+  whichBot,
+  sendBot,
+  botAnswered,
   pill: (state, data) => pill(state, data),
   pillRest: () => { if (!recording && (pillState === "routed" || pillState === "writing" || pillState === "done")) pill("rest"); },
   knobs: { num, bool, txt },
@@ -3050,13 +3186,129 @@ const routing = createRouting({
 });
 
 /**
- * Esc: a dictation under way is thrown away (the pill has no ✕ while Blip is in it), otherwise it stops a
- * question, or what Ask is doing. The key reaches the app too; nothing here can hold it back.
+ * Esc: talk mode ends; a dictation under way is thrown away (the pill has no ✕ while Blip is in it), otherwise it
+ * stops a question, or what Ask is doing. The key reaches the app too; nothing here can hold it back.
  */
 function escPressed() {
+  // Talk mode ends, and what Ask is doing for it stops too; never on the agent's own Esc.
+  if (talk.active() && !(ask && ask.ownEsc())) { talk.end("esc"); if (ask) ask.escape(); return; }
   if (recording && bool("desktop.pill.escCancels", true)) { cancelDictation(); return; }
   if (ask) ask.escape();
 }
+
+// ---- Talk mode (talk.js) ----------------------------------------------------------
+// Two taps of the one key: a conversation with Blip, turn after turn, until a
+// tap, Esc, a press on the pill, a long quiet or desktop.talk.maxMs ends it.
+// Each turn is recorded as a question is (the recorder's "ask" mode,
+// streamed, ended by the first real pause), sent to POST /v1/talk, and said
+// through the pill (pill/voice.js). Off until the server turns it on
+// (desktop.talk.enabled), once /v1/talk is there.
+function talkOn() { return !!cfg.oneKey && bool("desktop.talk.enabled", false); }
+
+/** Two taps: a dictation the first tap started is already thrown away (oneKey.js); a question up gives way. */
+function startTalk() {
+  if (!talkOn()) return false;
+  if (recording) cancelDictation();
+  if (ask && (ask.active() || ask.shown())) ask.cancel("talk");
+  return talk.start();
+}
+
+/**
+ * THE PAGE in front, for a talk turn's `page` ({ outline, text, where, source }): the whole of it, not only what is
+ * on screen (src/context/pageRead.js). The turn's words decide whether a page drawn as pixels may be scrolled through.
+ * talk.js never asks it for a private window or a sensitive app.
+ */
+function pageFor(_info, words) {
+  return pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), { question: String(words || "") });
+}
+
+// What the pill is saying for talk mode, and what waits for each sentence to be said.
+let talkSaid = 0;
+const talkSaying = new Map();   // id → done
+/** Say it through the pill (made if it is not there, hidden when the pill is off): resolves once said, or
+ *  after desktop.talk.voiceWaitMs, so a sentence the pill never reports holds nothing up for good. */
+function talkPlay(m) {
+  const id = ++talkSaid;
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); talkSaying.delete(id); resolve(); };
+    const timer = setTimeout(done, Math.max(1000, num("desktop.talk.voiceWaitMs", 20000)));
+    talkSaying.set(id, done);
+    const w = createPillWindow();
+    const send = () => { if (!w.isDestroyed()) w.webContents.send("pill", { say: Object.assign({ id }, m) }); };
+    if (w.webContents.isLoading()) w.webContents.once("did-finish-load", send); else send();
+  });
+}
+function talkSpoken(id) { const done = talkSaying.get(Number(id)); if (done) done(); }
+function talkHush() {
+  pillSend({ hush: true });
+  for (const done of [...talkSaying.values()]) done();
+}
+
+const talk = createTalk({
+  id: () => crypto.randomUUID(),
+  nextSession: () => ++sessionSeq,
+  // One clip per turn, as a question's: streamed for its words, ended by the first real pause. A watch
+  // (desktop.talk.bargeVoice) is only its level: not streamed, and thrown away.
+  record: async (sid, o) => {
+    if (tokenStale()) await refreshSession();
+    if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
+    sendToRecorder("start-recording", Object.assign(recorderStart(sid), {
+      live: !(o && o.watch), pauseFlush: false, mode: "ask", pauseEndMs: num("desktop.talk.pauseEndMs", 1200),
+    }));
+  },
+  stopRecording: (sid) => sendToRecorder("stop-recording", { session: sid }),
+  cancelRecording: (sid) => sendToRecorder("cancel-recording", { session: sid }),
+  front: () => {
+    const focused = BrowserWindow.getFocusedWindow();
+    return focused && focused === appWin ? Promise.resolve({ label: "X0 Bot" }) : frontApp.frontInfo();
+  },
+  ours: () => { const focused = BrowserWindow.getFocusedWindow(); return !!focused && focused === appWin; },
+  field: () => {
+    if (!bool("desktop.field.read", true)) return Promise.resolve(null);
+    return frontApp.focusedField({ chars: num("desktop.field.chars", 1000), timeoutMs: num("desktop.field.timeoutMs", 1200) })
+      .then((f) => (f ? (bool("desktop.field.selection", true) && f.selection ? { selection: f.selection } : {}) : null));
+  },
+  pageFor,
+  grants: () => (askOn() ? grantsNow() : undefined),
+  post: (p, body, o) => authorizedFetch(p, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: o && o.signal,
+  }),
+  voice: (text, o) => voiceOf({ authorizedFetch, num, bool }, text, { locale: (o && o.lang) || "" }),
+  play: talkPlay,
+  hush: talkHush,
+  // Updates while it is already up go straight to the page: several a second while they speak.
+  pill: (state, data) => {
+    if (pillState !== state) { pill(state, data); return; }
+    pillData = data || {};
+    if (pillOn()) pillSend(Object.assign({ state }, data || {}));
+  },
+  pillRest: () => { if (pillState === "talk") pill("rest"); },
+  ask: (goal, o) => (ask && askOn() ? ask.askHeard(goal, o) : false),
+  askBusy: () => !!ask && (ask.active() || ask.shown()),
+  type: (text) => { paste(text); return pasting; },
+  routine: saveRoutine,
+  notes: notesTo,
+  // The bot the server named, or the backend's pick when it named none.
+  bot: async (goal, bot) => {
+    let slug = bot && bot.slug, name = bot && bot.name;
+    if (!slug) {
+      const who = await whichBot(goal).catch(() => null);
+      if (!who || !who.slug || who.slug === "tailzu") return null;
+      slug = who.slug; name = who.name;
+    }
+    const r = await sendBot(goal, slug);
+    return r ? Object.assign({}, r, { name: r.name || name || slug }) : null;
+  },
+  told: botAnswered,
+  requireAccount: () => requireAccount() && requireWords(),
+  failed: (p) => {
+    const message = String((p && p.message) || "");
+    pill("error", { label: pillError(message) });
+    notify(fmt("notify.dictationFailed", { message }));
+  },
+  knobs: { num, bool, txt },
+  log: (m) => console.log("[talk] " + m),
+});
 
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
@@ -3149,6 +3401,7 @@ ipcMain.on("dictation-idle", (e, payload) => {
 ipcMain.on("dictation-error", (e, payload) => {
   const p = fromRecorder(e, payload);
   if (!p) return;
+  if (talk.error(p)) return;
   // A question's failure is said on the guide's card, not as a toast.
   if (ask && ask.error(p)) return;
   const { session, code } = p, message = String(p.message || ""), detail = String(p.detail || "");
@@ -3183,6 +3436,7 @@ ipcMain.on("dictation-error", (e, payload) => {
 // they are still being said; they are never captions, and never typed.
 ipcMain.on("live-partial", (e, payload) => {
   const p = fromRecorder(e, payload);
+  if (p && talk.partial(p)) return;
   if (p && ask && ask.partial(p)) return;
   if (!p || p.session !== activeSession) return;
   if (pillOn()) pill("caption", { text: p.text });

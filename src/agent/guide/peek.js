@@ -18,6 +18,9 @@
 const PEEK_RISE = 280;   // ms: up over the edge, as over the card
 const PEEK_DUCK = 300;   // ms: back down; ask.js hides the window about then
 const PEEK_HOP = 560;    // ms: done's hop, before the duck (about 900 in all)
+// ms: the hop between the pill and the text box. The pill's Blip is the one that peeks: he comes from the pill
+// (the peek's `home`) and goes back to it, and the pill shows him again once he is there (ask.js PEEK_HOME_MS).
+const PEEK_HOME = 440;
 // ms: a peek nothing has been heard about for this long goes by itself.
 // While the microphone is open the caret and the voice come several times
 // a second, and the words are written in seconds; a lost unpeek (a window
@@ -27,9 +30,13 @@ const PEEK_HOP = 560;    // ms: done's hop, before the duck (about 900 in all)
 const PEEK_STALE = 60000;
 let peekH = K.num("desktop.guide.peekHeight", 54);
 const peekBlip = window.TailzuBlip.createBlip({ height: peekH });
+// The whole Blip, on his way between the pill and the text box.
+let tripBlip = null;
+const tripper = () => tripBlip || (tripBlip = window.TailzuBlip.createPerformer({ dpr, reduced }));
 const PK = {
   on: false,           // peeking: Blip-only, until it is down again
-  phase: "down",       // rising, up, ducking, down
+  phase: "down",       // coming (from the pill), rising, up, ducking, going (back to the pill), down
+  home: null,          // [x, y]: where he stands in the pill, when he came from it
   at: 0,               // ms: when it began to rise, or to duck
   state: "listening",  // listening, writing, done
   doneAt: 0,           // ms: when it was told the words have landed
@@ -94,7 +101,15 @@ function peek(m) {
     PK.on = true; PK.next = null;
     // A new dictation's voice, not the last one's: its antenna starts dark.
     PK.level = 0; PK.levelTo = 0;
-    riseAt(spot, ms);
+    PK.home = Array.isArray(m.home) && Number.isFinite(m.home[0]) && Number.isFinite(m.home[1]) ? [m.home[0], m.home[1]] : null;
+    if (PK.home && !reduced) {
+      PK.spot = spot; PK.cur = { x: spot.x, y: spot.y, side: spot.side, look: spot.look.slice() };
+      PK.phase = "coming"; PK.at = ms;
+      tripper().play("travel", { now: ms });
+    } else riseAt(spot, ms);
+  } else if (PK.phase === "coming") {
+    // Still on his way: he lands where the cursor is now.
+    PK.spot = spot; PK.cur = { x: spot.x, y: spot.y, side: spot.side, look: spot.look.slice() };
   } else if (PK.phase === "ducking") {
     // On its way down (an unpeek, done's own duck, or a far jump): it
     // comes up again here once it is down.
@@ -129,16 +144,18 @@ function unpeek() {
 }
 /** Gone, now: a question is coming up in its place. */
 function endPeek() {
-  PK.on = false; PK.phase = "down"; PK.next = null;
+  PK.on = false; PK.phase = "down"; PK.next = null; PK.home = null;
   peekBlip.pose("hidden"); peekBlip.snap();
 }
 /** One frame of the peek. False once it is over. */
 function drawPeek(ms, t, dt) {
   if (!PK.on) return false;
+  if (PK.phase === "coming" || PK.phase === "going") return drawTrip(ms);
   // Done: the hop, then down. And one nothing has been said of for a
   // minute: down (PEEK_STALE).
   if (PK.phase !== "ducking" && ((PK.state === "done" && ms - PK.doneAt >= PEEK_HOP) || ms - PK.heard >= PEEK_STALE)) { PK.next = null; duckNow(ms); }
   if (PK.phase === "ducking" && ms - PK.at >= (reduced ? 200 : PEEK_DUCK)) {
+    if (!PK.next && PK.home && !reduced) { PK.phase = "going"; PK.at = ms; tripper().play("travel", { now: ms }); return drawTrip(ms); }
     if (!PK.next) { endPeek(); return false; }
     const s = PK.next;
     PK.next = null;
@@ -190,6 +207,24 @@ function drawPeek(ms, t, dt) {
   const dx = c.look[0] - c.x, dy = c.look[1] - c.y;
   peekBlip.lookAt(c.side === "right" ? [dy, -dx] : c.side === "left" ? [-dy, dx] : [dx, dy]);
   peekBlip.draw(ctx, 0, sink, t, dpr);
+  ctx.restore();
+  return true;
+}
+
+/** He hops between the pill and the text box, along an arc; landed at the box he rises over its edge, back at the pill he is gone. */
+function drawTrip(ms) {
+  const coming = PK.phase === "coming", k = clamp((ms - PK.at) / PEEK_HOME);
+  const from = coming ? PK.home : [PK.cur.x, PK.cur.y], to = coming ? [PK.spot.x, PK.spot.y] : PK.home;
+  if (k >= 1) {
+    if (coming) { riseAt(PK.spot, ms); return true; }
+    endPeek(); return false;
+  }
+  const e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+  const dist = Math.hypot(to[0] - from[0], to[1] - from[1]);
+  const x = from[0] + (to[0] - from[0]) * e;
+  const y = from[1] + (to[1] - from[1]) * e - Math.sin(Math.PI * k) * Math.max(50, dist * .3);
+  ctx.save();
+  tripper().draw(ctx, snap(x), snap(y), K.num("desktop.guide.tripHeight", 52), ms, 0);
   ctx.restore();
   return true;
 }

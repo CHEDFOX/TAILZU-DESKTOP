@@ -6,7 +6,8 @@ JavaScript, with no bundler. It does five things:
 - **Dictation on one key.** Hold the key (Right ⌘ on a Mac, Fn on one that
   already had it; Right Ctrl on Windows and Linux), talk, let go: the words are
   cleaned by the server and pasted into the text box in front, or sent to Ask,
-  to meeting notes, to a routine or to a bot, whichever was meant.
+  to meeting notes, to a routine or to a bot, whichever was meant. Tapped
+  twice, it is talk mode: a spoken conversation with Blip, turn after turn.
 - **Ask, the on-screen agent.** A question about the app in front: the guide
   rings the thing, explains it, or does a small job, asking first before
   anything that sends, deletes or pays.
@@ -45,10 +46,11 @@ src/
     testkit.js          for tests: main.js run whole with Electron faked (not shipped)
 
   dictation/            one-key dictation
-    oneKey.js           the one key: choice and first default per OS, the Fn helper's protocol, the hold/tap gesture
+    oneKey.js           the one key: choice and first default per OS, the Fn helper's protocol, the hold/tap/two-tap gesture
     tapDetector.js      double-tap on a modifier without false positives
     router.js           where the words go (type, Ask, notes, a bot), from cheap local signals
     routing.js          doing it, session by session; the server's brain when on; undoing pastes ("Ask instead")
+    talk.js             talk mode: the conversation's turns, /v1/talk's stream, the voice, barge-in, handoffs
     pasteJoin.js        the space, or none, between two pasted stretches
     recorder/           the hidden recorder window (microphone, batch and live capture)
       recorder.html     the page; loads the parts below in order
@@ -62,15 +64,20 @@ src/
       live.js           WebAudio, 16 kHz PCM, WS /v1/transcribe-stream (captions)
       heldStop.js       a full stop held at a pause until the next stretch decides
       testkit.js        for tests: recorder.html's scripts in order (not shipped)
+    restSpot.js         where Blip rests (the screen's right edge) and when: after a while with no command
+    rest/               the rest window: Blip behind the edge, his antennae out, peeking now and then (some on his long neck), ducking from the pointer
     pill/               the dictation pill at the foot of the screen
       pill.html         the page; shared/blip.js, then core, frame, capsule, bots (with Blip), pointer,
-                        start, demo in order
+                        voice (talk mode's voice), start, demo in order
       pillSplit.js      the split pill's geometry and spring (no drawing)
+      roam.js           Blip strolling the bottom of the screen: idle, while a task runs, off to the edge (no drawing)
     overlay/            the live-caption strip (when the pill is off)
 
   context/              what the person is looking at
     frontApp.js         the app in front, the focused field, the text around it (AppleScript / PowerShell)
     screenRead.js       the screen's text: accessibility first, on-device OCR to fill the gaps
+    pageRead.js         the whole page, off-screen parts included, for understanding (never acted on):
+                        the helper's page read, a screen at a time when that is thin; cut for the server
 
   agent/                Ask
     ask.js              createAsk: the guide's window, the question's microphone, the agent's hands
@@ -97,6 +104,7 @@ src/
       driver.js         picks the driver for this platform
       axDriver.js       macOS: talks to native/tzax.swift (accessibility, look, caret)
       uiaDriver.js      Windows: talks to native/uia-agent.ps1 (UI Automation, OCR, caret)
+      page.js           a "page" answer (the window's whole text) as callers see it, from either helper
       fixtures/         fake helpers the driver tests run against
     guide/              the guide window: card, ring, thread, Blip, marks
       guide.html        the page; core, placement, card, ring, tether, peek, pen, frame, speech,
@@ -186,17 +194,19 @@ holds checks of the repository as a whole.
 
 | What | Where |
 | --- | --- |
-| Main process entry | `src/main/main.js` (sections, in order: Store folder, Config, Session, Bootstrap, Server-drawn chrome, Updates, Tone, Apple/Google, recorder window, app window, pill, tray, Notes, runner, app-window IPC, Dictation toggle, Hold-to-talk, the one key, Paste, Ask, routing, recorder IPC, lifecycle, links) |
+| Main process entry | `src/main/main.js` (sections, in order: Store folder, Config, Session, Bootstrap, Server-drawn chrome, Updates, Tone, Apple/Google, recorder window, app window, pill, tray, Notes, runner, app-window IPC, Dictation toggle, Hold-to-talk, the one key, Paste, Ask, routing, talk mode, recorder IPC, lifecycle, links) |
 | Preload bridges | `src/main/preload.js` |
 | Window creation and hardening | `src/main/windows.js`; each `loadFile` in `main.js` and `ask.js` |
 | Dictation hotkey | `main.js` "Dictation toggle", "Hold-to-talk", "The one key"; `src/dictation/oneKey.js`, `tapDetector.js`; `native/tzkey.swift` |
 | Recording | `src/dictation/recorder/` |
 | Where the words go | `src/dictation/router.js` (decide), `routing.js` (do; the brain); `main.js` "routing" (`decide`, `needGrant`) |
+| Talk mode | `src/dictation/talk.js`; `oneKey.js` createHoldTap (two taps, the key in talk mode); `main.js` "Talk mode" (`pageFor`, the voice through the pill); `pill/bots.js`, `pill/voice.js` |
 | Paste | `main.js` "Paste into the focused app"; `src/dictation/pasteJoin.js` |
 | The pill / captions | `src/dictation/pill/`, `src/dictation/overlay/` |
 | App and field in front | `src/context/frontApp.js`, `screenRead.js` |
 | Ask (agent) | `src/agent/ask.js`, `src/agent/run/agent.js`, `src/agent/guide/` |
 | Reading and acting on the screen | `src/agent/driver/`, `native/tzax.swift`, `native/uia-agent.ps1` |
+| The whole page (understanding, not acting) | `src/context/pageRead.js`; the helpers' "page" command and `src/agent/driver/page.js`; step 0's `page` in `src/agent/run/agent.js` |
 | Ask's file operations | `src/agent/localfiles.js`, `folderSettings.js` |
 | Notes | `src/notes/`; `main.js` "Notes"; `native/audiotap.swift` |
 | Server-drawn app window | `src/app/app.html`, `src/app/sdui/` (node kinds: `sdui/core.js` COMPONENTS) |
@@ -216,7 +226,7 @@ helpers and the runner. Every window is a sandboxed renderer with context
 isolation and no Node; each page loads only its own files (CSP `script-src
 'self'`), as classic scripts in a fixed order. Code shared between the main
 process, pages and tests is written as small UMD modules (`knobs.js`,
-`botTiles.js`, `botLooks.js`, `shared/*.js`, `notesCore.js`, `pillSplit.js`,
+`botTiles.js`, `botLooks.js`, `shared/*.js`, `notesCore.js`, `pillSplit.js`, `roam.js`,
 `heldStop.js`): `require()`d in Node, `window.Tailzu*` in a page.
 
 **Windows.** Hidden recorder (`dictation/recorder`), pill (`dictation/pill`),
@@ -233,7 +243,10 @@ process checks which window sent each message (`isFrom` in `main.js`):
   `cancel-recording`, `dictation-segment`, `dictation-result`,
   `dictation-idle`, `dictation-error`, `dictation-level`, `live-partial`,
   `ask-audio`, `ask-pause`, `ask-text`, `recorder:token`; `pill`,
-  `pill-level`, `pill:hover`, `pill:action`; `overlay-text`; `app:knobs`, `knobs`.
+  `pill-level`, `pill:hover`, `pill:action`, `pill:spoken`; `overlay-text`;
+  `app:knobs`, `knobs`. A talk turn is recorded in the recorder's "ask" mode,
+  so its `ask-*`, `live-partial`, `dictation-level` and `dictation-error` go
+  to talk.js first (main.js), by session.
 - `window.tailzuApp` (app window): `app:env`, `app:config`, `app:setConfig`,
   `app:session`, `app:setSession`, `app:oauth`, `app:boot`, `app:navigate`,
   `app:dictate`, `app:dictated`, `app:notes`, `app:changed`,
@@ -255,8 +268,9 @@ The main process fetches `POST /v1/app/bootstrap` (knobs, the tray's words
 under `flags["desktop.shell"]`, updates under `flags["desktop.update"]`) and
 caches it; dictation uses `/v1/transcribe-clean`, `/v1/transcribe-stream` and
 `/v1/refine`; routing `/v1/shell/route`, `/v1/shell/ask`, `/v1/ask/decide` (the
-brain) and `/v1/routines/draft` then `/v1/routines`; Ask `/v1/agent`
-(NDJSON) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
+brain) and `/v1/routines/draft` then `/v1/routines`; talk mode `/v1/talk`
+(NDJSON) and `/v1/talk/stop`, its voice `/v1/speak` when the server's voice is on; Ask `/v1/agent`
+(NDJSON; step 0 may carry the whole page as `page`) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
 `/v1/app/screen`, `/v1/live`, `/v1/files`, `/v1/connectors/:id/connect`,
 `/v1/auth/link`; the runner `/v1/code/runner/*` and a WebSocket to the jobs
 Worker (protocol: `TAILZU-BACKEND/docs/desktop-runner-session.md`). Accounts

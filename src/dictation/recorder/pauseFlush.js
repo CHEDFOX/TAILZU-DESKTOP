@@ -96,8 +96,10 @@ function watchLevel(sid, pausing) {
     if (r.loudMs > 0) lastSoundAt = now;
     if (r.voicedMs > 0) { speaking = true; lastSpeechAt = now; return; }
     // A question is over at its first real pause: the main process stops it.
+    // A talk turn (talk.js) says how long that pause is (cfg.pauseEndMs).
     if (asks.has(sid)) {
-      if (speaking && !askEnded && now - lastSpeechAt > K.num("desktop.agent.pauseEndMs", 1200)) {
+      const endMs = typeof cfg.pauseEndMs === "number" ? cfg.pauseEndMs : K.num("desktop.agent.pauseEndMs", 1200);
+      if (speaking && !askEnded && now - lastSpeechAt > endMs) {
         askEnded = true;
         if (window.tailzu.askPause) window.tailzu.askPause({ session: sid });
       }

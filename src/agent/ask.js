@@ -37,12 +37,34 @@
  * of what happens can be read in one place and tested without Electron.
  */
 const agentCore = require("./run/agent.js");
-const { PEEK_STATES, PEEK_GONE_MS, peekFrame } = require("./peek.js");
+const { PEEK_STATES, PEEK_GONE_MS, PEEK_HOME_MS, peekFrame } = require("./peek.js");
 
 // What the guide can draw (guide/ draw).
 const MARKS = new Set(["box", "circle", "underline", "highlight", "arrow", "number", "label", "path"]);
 // The ones drawn round (or under, or over) a frame.
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
+
+/** A sentence out loud, as a message for the guide (or the pill, talk.js). The
+ *  built-in voice with a real locale, by default: the server's voice
+ *  (/v1/speak, the read-aloud voice chosen in Settings) counts its words
+ *  against the month's, and Ask must never use up what dictation needs.
+ *  Where the server turns it on, and it fails, the built-in voice still
+ *  speaks. `c`: { authorizedFetch, num, bool }. */
+async function voiceOf(c, text, opts) {
+  const rate = c.num("desktop.agent.voiceRate", 1.04);
+  if (c.bool("desktop.agent.serverVoice", false)) {
+    try {
+      const res = await c.authorizedFetch("/v1/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, format: "mp3" }),
+        signal: AbortSignal.timeout(Math.max(1000, c.num("desktop.agent.voiceFetchMs", 8000))),
+      });
+      if (res.ok) return { type: "voice", audio: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
+    } catch { /* the built-in voice */ }
+  }
+  return { type: "voice", text, speak: true, locale: (opts && opts.locale) || "", rate };
+}
 
 function createAsk(ctx) {
   const { BrowserWindow, screen, ipcMain, knobs: K } = ctx;
@@ -97,6 +119,13 @@ function createAsk(ctx) {
   // THE PEEK, while a dictation records: Blip is up (or ducking) over a text
   // box in the guide's window, and the window's going once it has ducked.
   let peeking = false;
+  // The pill's Blip is the one over the text box: he left the pill for it (ctx.blipAway) and is given back when the peek is over.
+  let blipOut = false;
+  function blipHome() {
+    if (!blipOut) return;
+    blipOut = false;
+    try { if (typeof ctx.blipAway === "function") ctx.blipAway(false); } catch { /* the pill shows him again on its own */ }
+  }
   let peekGone = null;
   // The last look said the Mac has not let Tailzu see the screen
   // (no_screen_permission), until a look says otherwise: the setup card's
@@ -185,7 +214,7 @@ function createAsk(ctx) {
       win = null; ready = false; bounds = null; shown = false; queue.length = 0;
       clearTimeout(goneTimer); goneTimer = null;
       // A peek in it went with it; the next caret builds a new one.
-      peeking = false; clearTimeout(peekGone); peekGone = null;
+      peeking = false; clearTimeout(peekGone); peekGone = null; blipHome();
       try { w.destroy(); } catch { /* already gone */ }
       // Nothing is left to fold back into the pill: it is given back at once.
       cancel("guide gone");
@@ -429,7 +458,7 @@ function createAsk(ctx) {
       offered = null;
       // A question has the guide now: the guide ends any peek itself on show,
       // and the window stays for the card.
-      peeking = false; clearTimeout(peekGone); peekGone = null;
+      peeking = false; clearTimeout(peekGone); peekGone = null; blipHome();
       // A new card: whatever the last one was still saying stops.
       quiet();
       // THE CARD GROWS OUT OF THE PILL. The pill first: main parts it on the
@@ -655,26 +684,7 @@ function createAsk(ctx) {
     const s = speech;
     return s.then(() => (speech === s ? undefined : allSaid()));
   }
-  /** The sentence out loud, as a message for the guide. The built-in voice
-   *  with a real locale, by default: the server's voice (/v1/speak, the
-   *  read-aloud voice chosen in Settings) counts its words against the
-   *  month's, and Ask must never use up what dictation needs. Where the
-   *  server turns it on, and it fails, the built-in voice still speaks. */
-  async function voice(text, opts) {
-    const rate = num("desktop.agent.voiceRate", 1.04);
-    if (bool("desktop.agent.serverVoice", false)) {
-      try {
-        const res = await ctx.authorizedFetch("/v1/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, format: "mp3" }),
-          signal: AbortSignal.timeout(Math.max(1000, num("desktop.agent.voiceFetchMs", 8000))),
-        });
-        if (res.ok) return { type: "voice", audio: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
-      } catch { /* the built-in voice */ }
-    }
-    return { type: "voice", text, speak: true, locale: opts.locale || "", rate };
-  }
+  function voice(text, opts) { return voiceOf({ authorizedFetch: ctx.authorizedFetch, num, bool }, text, opts); }
 
   // ---- the picture ---------------------------------------------------------------
   // A question about something drawn (an equation, a chart, a photo) is
@@ -973,6 +983,8 @@ function createAsk(ctx) {
     // "This computer": the person's own files, done here by localfiles.js and
     // only inside the folders they allowed (main.js hands it in).
     device: ctx.device,
+    // The whole page in front for step 0 (src/context/pageRead.js, handed in by main.js).
+    ...(typeof ctx.page === "function" ? { page: ctx.page } : {}),
     // The server's confirm card's buttons: a task's yes or no, with the
     // account's token the way every call here is made. Those two routes and
     // nothing else, whatever the card named.
@@ -1225,8 +1237,16 @@ function createAsk(ctx) {
     // nothing of the pill changes (main.js pillAsk).
     if (goneTimer) { clearTimeout(goneTimer); goneTimer = null; letPill(); }
     showWindow();
+    // The first caret of a peek: Blip comes from the pill (where he stands there, ctx.pillBlip), and the pill lets him go.
+    let home = null;
+    if (!peeking && typeof ctx.pillBlip === "function") {
+      const at = ctx.pillBlip();
+      // Already in screen DIP (the pill's window bounds), unlike the driver's frames.
+      const h = at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { x: at.x, y: at.y, w: 1, h: 1 } : null;
+      if (h && local(h)) { home = local(h); blipOut = true; try { if (typeof ctx.blipAway === "function") ctx.blipAway(true); } catch { /* he still peeks */ } }
+    }
     peeking = true;
-    send({ type: "peek", caret: local(c), field: local(f), state: PEEK_STATES.has(state) ? state : "listening" });
+    send(Object.assign({ type: "peek", caret: local(c), field: local(f), state: PEEK_STATES.has(state) ? state : "listening" }, home ? { home } : {}));
     return true;
   }
   /** The voice's level (0..1) for Blip's antenna, while it peeks. */
@@ -1245,11 +1265,13 @@ function createAsk(ctx) {
     peeking = false;
     send({ type: "unpeek" });
     clearTimeout(peekGone);
+    // Down, then the hop back to the pill when he came from it; the window goes once he is home.
     peekGone = soft(setTimeout(() => {
       peekGone = null;
+      blipHome();
       if (peeking || goneTimer || questionUp()) return;
       if (win && !win.isDestroyed()) { win.setIgnoreMouseEvents(true, { forward: true }); win.hide(); }
-    }, PEEK_GONE_MS));
+    }, PEEK_GONE_MS + (blipOut ? PEEK_HOME_MS : 0)));
   }
 
   // ---- from the guide window ---------------------------------------------------------
@@ -1317,6 +1339,8 @@ function createAsk(ctx) {
     /** The last look was refused for want of Screen Recording (and none
      *  since has been let through). */
     screenDenied: () => screenDenied,
+    /** An Esc now is the agent's own (talk mode leaves it be). */
+    ownEsc: () => Date.now() < selfEscUntil,
     escape() {
       // The agent's own Escape, heard by the same hook: for a moment after
       // it sends one, an Esc is its, not theirs.
@@ -1329,4 +1353,4 @@ function createAsk(ctx) {
   };
 }
 
-module.exports = { createAsk };
+module.exports = { createAsk, voiceOf };

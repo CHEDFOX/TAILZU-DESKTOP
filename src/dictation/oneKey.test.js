@@ -73,6 +73,7 @@ function rig(o = {}) {
   let timers = [];
   const did = [];
   let recording = false;
+  let inTalk = false;
   const g = k.createHoldTap({
     now: () => clock,
     setTimeout: (f, ms) => { const t = { f, at: clock + ms }; timers.push(t); return t; },
@@ -88,6 +89,15 @@ function rig(o = {}) {
     talking: () => recording,
     tapOn: () => o.tapOn !== false,
     armMs: 200, tapMs: 300,
+    // Two taps and talk mode (talk.js), only when the test asks for them.
+    ...(o.talk ? {
+      double: () => { did.push("double"); inTalk = true; },
+      doubleMs: () => o.doubleMs ?? 400,
+      inTalk: () => inTalk,
+      talkHold: () => did.push("talkHold"),
+      talkRelease: () => did.push("talkRelease"),
+      talkTap: () => { did.push("talkTap"); inTalk = false; },
+    } : {}),
   });
   const wait = (ms) => {
     const until = clock + ms;
@@ -200,6 +210,69 @@ test("a press that goes to something else (Ask's card) or is refused: nothing mo
   const t = rig({ press: () => "none" });
   t.g.down(); t.wait(50); t.g.up();
   assert.strictEqual(t.g.state(), "idle");
+});
+
+test("two taps: the first one's hands-free is thrown away and talk mode starts", () => {
+  const r = rig({ talk: true });
+  r.g.down(); r.wait(80); r.g.up();
+  assert.deepStrictEqual(r.did, ["press"], "the first tap starts hands-free, as it always has");
+  r.wait(150);
+  r.g.down();
+  assert.deepStrictEqual(r.did, ["press"], "not stopped on the press: it may be the second tap");
+  r.wait(80); r.g.up();
+  assert.deepStrictEqual(r.did, ["press", "cancel", "double"]);
+  assert.strictEqual(r.rec(), false);
+  assert.strictEqual(r.g.state(), "idle");
+});
+
+test("two taps: a second press held long stops the hands-free as before; one too late is a press of its own", () => {
+  const r = rig({ talk: true });
+  r.g.down(); r.wait(80); r.g.up();
+  r.wait(100); r.g.down(); r.wait(300);
+  assert.deepStrictEqual(r.did, ["press", "finish"]);
+  r.wait(200); r.g.up();
+  assert.deepStrictEqual(r.did, ["press", "finish"]);
+  const late = rig({ talk: true });
+  late.g.down(); late.wait(80); late.g.up();
+  late.wait(600); late.g.down();
+  assert.deepStrictEqual(late.did, ["press", "finish"], "past doubleMs: the press stops the hands-free at once");
+  late.wait(80); late.g.up();
+  assert.deepStrictEqual(late.did, ["press", "finish"]);
+});
+
+test("two taps with taps off, and with two taps off (doubleMs 0)", () => {
+  const r = rig({ talk: true, tapOn: false });
+  r.g.down(); r.wait(80); r.g.up();
+  r.wait(150); r.g.down(); r.wait(80); r.g.up();
+  assert.deepStrictEqual(r.did, ["double"], "nothing had started: no cancel");
+  const off = rig({ talk: true, doubleMs: 0 });
+  off.g.down(); off.wait(80); off.g.up();
+  off.wait(150); off.g.down(); off.wait(80); off.g.up();
+  assert.deepStrictEqual(off.did, ["press", "finish"]);
+});
+
+test("in talk mode the key is talk's: held is their turn until it comes up, a tap ends it, a chord is a release", () => {
+  const r = rig({ talk: true });
+  r.g.down(); r.wait(80); r.g.up(); r.wait(100); r.g.down(); r.wait(80); r.g.up();
+  r.did.length = 0;
+  r.wait(2000);
+  r.g.down(); r.wait(150);
+  assert.deepStrictEqual(r.did, []);
+  r.wait(100);
+  assert.deepStrictEqual(r.did, ["talkHold"]);
+  r.g.down();
+  r.wait(3000); r.g.up();
+  assert.deepStrictEqual(r.did, ["talkHold", "talkRelease"]);
+  r.g.down(); r.wait(400); r.g.other(); r.g.up();
+  assert.deepStrictEqual(r.did, ["talkHold", "talkRelease", "talkHold", "talkRelease"]);
+  r.g.down(); r.wait(50); r.g.other(); r.g.up();
+  assert.deepStrictEqual(r.did.length, 4, "a chord before it is held: nothing");
+  r.g.down(); r.wait(80); r.g.up();
+  assert.deepStrictEqual(r.did.slice(-1), ["talkTap"]);
+  // Talk mode over: the key dictates again.
+  r.wait(1000);
+  r.g.down(); r.wait(250);
+  assert.deepStrictEqual(r.did.slice(-1), ["press"]);
 });
 
 test("reset forgets a gesture half made (the key was rebound)", () => {

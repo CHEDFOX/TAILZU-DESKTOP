@@ -16,7 +16,7 @@ const axDriver = require("./axDriver.js");
 const { createAxDriver } = axDriver;
 
 const FAKE = path.join(__dirname, "fixtures", "fake-tzax.js");
-const API = ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"];
+const API = ["available", "start", "stop", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret", "page"];
 
 /** A driver on the fake helper, as if on a Mac. */
 function fake(extra = {}) {
@@ -458,7 +458,7 @@ test("the helper reads the caret on a queue of its own, with Accessibility, in i
   assert.match(perform, /let reply = run\("caret", req, deadline\)/, "through run, behind its Accessibility check");
   const run = swiftFunc(swift, "func run(_ cmd: String, _ req: [String: Any], _ deadline: DispatchTime) -> Reply {");
   const trustAt = run.indexOf('guard AXIsProcessTrusted() else { return fail("not_trusted") }');
-  assert.match(run, /case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret":\s*break/);
+  assert.match(run, /case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret", "page":\s*break/);
   assert.ok(trustAt > 0 && run.indexOf("return caret(deadline)") > trustAt);
   // A stuck read is a stuck helper, and one asked as stdin closes is still answered.
   assert.match(code, /busy\.stuck\(\) \|\| lookBusy\.stuck\(\) \|\| caretBusy\.stuck\(\)/);
@@ -555,6 +555,8 @@ test("nativeCheck asks the built Mac helper for the caret and takes only the spe
   assert.match(mac, /\{"id":6,"cmd":"caret","timeoutMs":1000\}/);
   assert.match(mac, /const CARET_REFUSALS = \["not_trusted", "no_focus", "app_busy"\]/);
   assert.match(mac, /caret\.scale !== "points"/);
+  assert.match(mac, /\{"id":7,"cmd":"page","chars":4000,"budgetMs":1500,"timeoutMs":3000\}/);
+  assert.match(mac, /const PAGE_REFUSALS = \["not_trusted", "no_app", "no_window", "app_busy"\]/);
 });
 
 test("look on a machine without the helper resolves, never rejects", async () => {
@@ -618,11 +620,11 @@ test("start is idempotent and stop answers what was waiting", async () => {
 // here.
 test("the Swift helper knows every command the driver sends", () => {
   const swift = fs.readFileSync(path.join(__dirname, "..", "..", "..", "native", "tzax.swift"), "utf8");
-  for (const cmd of ["ping", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret"]) {
+  for (const cmd of ["ping", "trusted", "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "open", "look", "caret", "page"]) {
     assert.ok(swift.includes(`case "${cmd}"`), `tzax.swift has no case "${cmd}"`);
   }
   for (const field of ['"el"', '"text"', '"dir"', '"lines"', '"chord"', '"app"', '"max"', '"budgetMs"', '"timeoutMs"', '"prompt"',
-    '"maxSide"', '"quality"', '"ocr"', '"image"']) {
+    '"maxSide"', '"quality"', '"ocr"', '"image"', '"chars"']) {
     assert.ok(swift.includes(field), `tzax.swift never reads ${field}`);
   }
 });
@@ -809,4 +811,93 @@ test("the helper is built and shipped with the Mac app", () => {
   assert.match(pkg.build.mac.x64ArchFiles, /\*\*\/tzax\b/);
   const ci = fs.readFileSync(path.join(__dirname, "..", "..", "..", ".github", "workflows", "build.yml"), "utf8");
   assert.match(ci, /npm run tzax/);
+});
+
+// ---- page: the whole page's text ---------------------------------------------------
+
+test("a page comes back with its text, its headings and where the person is, and nothing else", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  const r = await d.page();
+  assert.deepStrictEqual(Object.keys(r).sort(), ["app", "approxWhere", "headings", "ms", "ok", "scale", "text", "truncated", "whereOffset", "window"]);
+  assert.strictEqual(r.ok, true);
+  assert.match(r.text, /^# Q3 plan\nRevenue grew/);
+  assert.deepStrictEqual(r.headings, [{ level: 1, text: "Q3 plan" }, { level: 2, text: "Risks" }, { level: 2, text: "Next" }]);
+  assert.strictEqual(r.approxWhere, "Hiring is behind.");
+  assert.strictEqual(r.text.slice(r.whereOffset, r.whereOffset + 6), "Hiring");
+  assert.strictEqual(r.truncated, false);
+  assert.deepStrictEqual(r.window, { title: "Q3 plan.txt — Fake", frame: [100, 80, 800, 600] });
+  assert.strictEqual(r.scale, "points");
+  assert.deepStrictEqual(r.app, { name: "Fake", pid: 4242 });
+});
+
+test("a page is asked in the helper's words, its budgets clamped and inside the call's time", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  const sent = (r) => { const { id, ...rest } = JSON.parse(r.text); return rest; };
+  assert.deepStrictEqual(sent(await d.page({ chars: 1234 })), { cmd: "page", chars: 1234, budgetMs: 1200, timeoutMs: 1800 });
+  assert.deepStrictEqual(sent(await d.page({ chars: 1234, budgetMs: 99999 })), { cmd: "page", chars: 1234, budgetMs: 6000, timeoutMs: 6600 });
+  assert.deepStrictEqual(sent(await d.page({ chars: 1234, budgetMs: 2000, timeoutMs: 1000 })), { cmd: "page", chars: 1234, budgetMs: 400, timeoutMs: 1000 });
+  // The default chars, and junk for options.
+  const plain = await d.page("whatever");
+  assert.strictEqual(plain.ok, true);
+});
+
+test("a page answer is cleaned: headings that are not go, an offset past the text is none, no other field gets through", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  const r = await d.page({ chars: 999 });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.text.length, 100000);
+  assert.strictEqual(r.truncated, true);
+  assert.strictEqual(r.headings.length, 200);
+  assert.deepStrictEqual(r.headings.slice(0, 2), [{ level: 1, text: "Deep" }, { level: 2, text: "Spaced" }]);
+  assert.deepStrictEqual([r.approxWhere, r.whereOffset, r.ms], ["", -1, 0]);
+  assert.deepStrictEqual(r.app, { name: "", pid: 0 });
+  assert.deepStrictEqual(r.window, { title: "", frame: null });
+  assert.strictEqual("elements" in r, false);
+});
+
+test("a page the helper refuses is its error alone; one it never answers is a timeout in the page's time", async (t) => {
+  const d = fake();
+  t.after(() => d.stop());
+  assert.deepStrictEqual(await d.page({ chars: 997 }), { ok: false, error: "not_trusted" });
+  const t0 = Date.now();
+  assert.deepStrictEqual(await d.page({ chars: 998, budgetMs: 100, timeoutMs: 700 }), { ok: false, error: "timeout" });
+  assert.ok(Date.now() - t0 < 1500);
+  const linux = createAxDriver({ bin: process.execPath, args: [FAKE], platform: "linux" });
+  assert.deepStrictEqual(await linux.page(), { ok: false, error: "unavailable" });
+  const { pick } = require("./driver.js");
+  assert.deepStrictEqual(await pick("linux").page(), { ok: false, error: "unsupported" });
+  assert.strictEqual(pick("darwin").page, axDriver.page);
+});
+
+/** tzax.swift's page section: from its mark to the next. */
+function pageSection(swift) {
+  const at = swift.indexOf("// MARK: - The whole page");
+  assert.ok(at > 0, "the page section");
+  return swift.slice(at, swift.indexOf("// MARK: - Where the caret is", at));
+}
+
+test("the helper's page walks every child, not only the visible ones, in reading order, within its budgets", () => {
+  const swift = fs.readFileSync(path.join(__dirname, "..", "..", "..", "native", "tzax.swift"), "utf8");
+  const sec = swiftCode(pageSection(swift));
+  assert.ok(!/AXVisibleChildren|AXVisibleRows/.test(sec), "only what is on screen");
+  assert.match(sec, /let pageAttrNames = \[[^\]]*"AXChildren"\]/);
+  assert.match(sec, /for k in kids\.reversed\(\) \{ stack\.append\(\.node\(k\)\) \}/);
+  // The page's own area first: a web area, else a text area, a scroll area, the window.
+  assert.match(sec, /if role == "AXWebArea" \{ return here \}/);
+  assert.match(sec, /return text \?\? scroller \?\? PageRoot\(el: win, role: "AXWindow"/);
+  // Bounded by characters, nodes and time; a password never read.
+  assert.match(sec, /if total >= chars \|\| visited >= pageMaxVisited \|\| DispatchTime\.now\(\) >= stopAt \{ truncated = true; break \}/);
+  assert.match(sec, /if \(v\[PA\.subrole\] as\? String\) == "AXSecureTextField" \{ continue reading \}/);
+  // Headings marked by level and listed; a row is one line.
+  assert.match(sec, /add\(String\(repeating: "#", count: level\) \+ " " \+ t, f\)/);
+  assert.match(sec, /add\(gather\(from, " \| "\), nil\)/);
+  // It reads, it never acts.
+  assert.ok(!/AXUIElementPerformAction|AXUIElementSetAttributeValue|CGEvent/.test(sec));
+  // The command needs Accessibility, and takes what the driver sends.
+  const code = swiftCode(swift);
+  assert.match(code, /case "snapshot", "press", "click", "setValue", "focus", "scroll", "key", "caret", "page":/);
+  assert.match(code, /case "page":\s*return page\(chars: clampInt\(req\["chars"\], 500, 100_000, 20_000\), budgetMs: clampInt\(req\["budgetMs"\], 50, 6000, 1200\),/);
 });

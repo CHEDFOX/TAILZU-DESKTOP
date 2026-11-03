@@ -171,7 +171,8 @@ function frame() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, W, H);
   if (P.show < 0.01) return !moving;
-  const cx = W / 2, bottom = H - K.num("desktop.pill.bottomPad", 14);
+  // The Bots look's pill is wherever Blip is (bots.js botsCenter); the others are in the middle.
+  const cx = BOTS() ? botsCenter(now, dt) : W / 2, bottom = H - K.num("desktop.pill.bottomPad", 14);
   const x0 = cx - P.w / 2, y0 = bottom - P.h, cy = bottom - P.h / 2;
   ctx.globalAlpha = P.show;
   if (BOTS()) {

@@ -137,7 +137,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
-    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open,
+    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -3318,4 +3318,94 @@ test("classifyRisk, trusted: a message's own words in a message box are not risk
   const send = snap([{ id: "e4", role: "button", label: "Send", frame: [1, 1, 9, 9] }, { id: "e6", role: "button", label: "Share", frame: [1, 1, 9, 9] }]);
   assert.strictEqual(classifyRisk({ kind: "press", id: "e4" }, send, { trusted: true }), "free");
   assert.strictEqual(classifyRisk({ kind: "press", id: "e6" }, send, { trusted: true }), "confirm", "share still asks");
+});
+
+// ---- the whole page ----------------------------------------------------------------
+
+/** A deps.page that records what it was asked, answering `thin` for the
+ *  tree's read and `whole` for the read a screen at a time. */
+function fakePage(thin, whole) {
+  const asked = [];
+  const page = async (o) => { asked.push(o); return o.needWhole ? whole : thin; };
+  page.asked = asked;
+  return page;
+}
+const TREE_PAGE = { outline: ["# Q3 plan", "## Risks"], text: "# Q3 plan\nRevenue grew.\n## Risks\nHiring is behind. See https://x.example/a?token=secret", where: "Hiring is behind.", source: "tree", truncated: false };
+
+test("step 0 carries the whole page; the steps after it do not", async () => {
+  const AFTER = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e2" });
+  const page = fakePage(TREE_PAGE, null);
+  const r = rig({
+    snaps: [SLACK, AFTER],
+    page,
+    scripts: [[heardDo("export this"), press("e1")], [heardDo("export this"), { t: "done", text: "Done." }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  const [req0, req1] = r.post.reqs();
+  assert.deepStrictEqual(req0.page, {
+    outline: ["# Q3 plan", "## Risks"],
+    text: "# Q3 plan\nRevenue grew.\n## Risks\nHiring is behind. See https://x.example/a",
+    where: "Hiring is behind.", source: "tree",
+  });
+  assert.strictEqual(req1.step, 1);
+  assert.strictEqual(req1.page, undefined);
+  // The tree's read only, after the snapshot; no question needed the rest.
+  assert.deepStrictEqual(page.asked, [{ question: "", needWhole: false }]);
+  // The page is for understanding: only the snapshot's ids are acted on.
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]]);
+});
+
+test("a thin page and a question about the whole of it: the read a screen at a time, before step 0", async () => {
+  const thin = { outline: [], text: "Untitled", where: "", source: "tree", truncated: false };
+  const whole = { outline: [], text: "Line one\nLine two\n" + "words ".repeat(100), where: "Line one", source: "scroll", truncated: false };
+  const page = fakePage(thin, whole);
+  const r = rig({ page, scripts: [[heardShow("summarise this page"), { t: "done", text: "It says…" }]] });
+  r.agent.begin({ app: "Docs" });
+  await r.agent.heard(AUDIO, { text: "summarise this page", final: true });
+  assert.deepStrictEqual(page.asked, [{ question: "", needWhole: false }, { question: "summarise this page", needWhole: true }]);
+  assert.strictEqual(r.post.reqs()[0].page.source, "scroll");
+  assert.match(r.post.reqs()[0].page.text, /^Line one\nLine two/);
+
+  // A question that is not about the whole page leaves the thin one as it is.
+  const page2 = fakePage(thin, whole);
+  const r2 = rig({ page: page2, scripts: [[heardShow("where's export?"), { t: "done" }]] });
+  r2.agent.begin({ app: "Docs" });
+  await r2.agent.heard(AUDIO, { text: "what does export do", final: true });
+  assert.deepStrictEqual(page2.asked, [{ question: "", needWhole: false }]);
+  assert.deepStrictEqual(r2.post.reqs()[0].page, { text: "Untitled", source: "tree" });
+});
+
+test("no page from a private or sensitive screen, with the knob off, or when there is none", async () => {
+  const PRIV = snap([EXPORT], { window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
+  const p1 = fakePage(TREE_PAGE, null);
+  const r1 = rig({ snaps: [PRIV], page: p1, scripts: [[{ t: "done" }]] });
+  r1.agent.begin({ app: "Chrome" });
+  await r1.agent.heard(AUDIO);
+  assert.strictEqual(r1.post.requests.length, 0, "a private first screen sends nothing at all");
+  assert.deepStrictEqual(p1.asked, [], "nor is its page read");
+
+  const p2 = fakePage(TREE_PAGE, null);
+  const r2 = rig({ page: p2, knobs: { "desktop.agent.page": false }, scripts: [[{ t: "done" }]] });
+  r2.agent.begin({ app: "Slack" });
+  await r2.agent.heard(AUDIO);
+  assert.deepStrictEqual(p2.asked, []);
+  assert.strictEqual(r2.post.reqs()[0].page, undefined);
+
+  for (const bad of [null, { text: "" }, async () => { throw new Error("no"); }]) {
+    const page = typeof bad === "function" ? bad : async () => bad;
+    const r = rig({ page, scripts: [[{ t: "done" }]] });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    assert.strictEqual(r.post.reqs()[0].page, undefined);
+  }
+});
+
+test("a page slower than its wait does not hold step 0 up", async () => {
+  const page = async () => new Promise(() => {});
+  const r = rig({ page, knobs: { "desktop.agent.pageWaitMs": 20 }, scripts: [[{ t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.strictEqual(r.post.reqs()[0].page, undefined);
 });

@@ -10,6 +10,9 @@ const PEEK_STATES = new Set(["listening", "writing", "done"]);
 // PEEK_DUCK, 300 ms, and a frame or two for its loop to finish): the window
 // is hidden once it has, not while Blip is still going down in it.
 const PEEK_GONE_MS = 340;
+// How long Blip takes to hop between the pill and the text box (guide/peek.js
+// PEEK_HOME). The pill shows him again once he is back.
+const PEEK_HOME_MS = 440;
 /** A caret or field frame as the driver gave it, [x, y, w, h], or null when
  *  it is not one: numbers that are not finite, or far past any screen (a
  *  helper's garbage), a negative width, no height. */
@@ -223,4 +226,4 @@ function createPeekWatch(o) {
   };
 }
 
-module.exports = { PEEK_STATES, PEEK_GONE_MS, peekFrame, createPeekWatch };
+module.exports = { PEEK_STATES, PEEK_GONE_MS, PEEK_HOME_MS, peekFrame, createPeekWatch };
