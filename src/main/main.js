@@ -36,6 +36,7 @@ const updater = require("./updater.js");
 const frontApp = require("../context/frontApp.js");
 const screenRead = require("../context/screenRead.js");
 const driver = require("../agent/driver/driver.js");
+const pageRead = require("../context/pageRead.js");
 const { createAsk, voiceOf } = require("../agent/ask.js");
 const { pillAskMove, capsuleRect } = require("../agent/pillAsk.js");
 const { createPeekWatch } = require("../agent/peek.js");
@@ -3010,6 +3011,7 @@ function setupAsk() {
     lookPermission: () => askSetup.push(),
     // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
     pillBlip: pillBlipAt,
+    page: (o) => pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), o),
     blipAway: (away) => pillSend({ blipAway: !!away }),
     // The person's own files (localfiles.js): planned here, shown on a card,
     // done here. A kind of change they approved once is not asked again.
@@ -3186,10 +3188,13 @@ function startTalk() {
 }
 
 /**
- * THE PAGE in front, for a talk turn's `page` ({ outline, text, where, source }). src/context/pageRead.js
- * answers here once it is in; null until then. talk.js never asks it for a private window or a sensitive app.
+ * THE PAGE in front, for a talk turn's `page` ({ outline, text, where, source }): the whole of it, not only what is
+ * on screen (src/context/pageRead.js). The turn's words decide whether a page drawn as pixels may be scrolled through.
+ * talk.js never asks it for a private window or a sensitive app.
  */
-function pageFor(_info) { return null; }
+function pageFor(_info, words) {
+  return pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), { question: String(words || "") });
+}
 
 // What the pill is saying for talk mode, and what waits for each sentence to be said.
 let talkSaid = 0;

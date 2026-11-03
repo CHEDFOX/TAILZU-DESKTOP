@@ -983,6 +983,8 @@ function createAsk(ctx) {
     // "This computer": the person's own files, done here by localfiles.js and
     // only inside the folders they allowed (main.js hands it in).
     device: ctx.device,
+    // The whole page in front for step 0 (src/context/pageRead.js, handed in by main.js).
+    ...(typeof ctx.page === "function" ? { page: ctx.page } : {}),
     // The server's confirm card's buttons: a task's yes or no, with the
     // account's token the way every call here is made. Those two routes and
     // nothing else, whatever the card named.

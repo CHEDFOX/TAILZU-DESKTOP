@@ -37,7 +37,7 @@
 //   d.front()                  the window in front: { label, title, private, sensitive } or null
 //   d.field()                  optional: the focused field, { selection } or null
 //   d.ours()                   our own window is in front
-//   d.pageFor(info)            the page in front for `page`, or null (main.js; never asked for a private window)
+//   d.pageFor(info, words)     the page in front for `page`, or null (main.js; never asked for a private window)
 //   d.grants()                 optional: the setup card's state
 //   d.post(path, body, { signal })  the account's authorised fetch → Response
 //   d.voice(text, { lang })    the sentence's audio, fetched as soon as it is written → a message for d.play
@@ -244,7 +244,7 @@ function createTalk(d) {
       const f = await me.fieldP;
       body.field = f && typeof f === "object" ? (typeof f.selection === "string" && f.selection ? { selection: f.selection.slice(0, 4000) } : {}) : null;
       let page = null;
-      try { page = await d.pageFor(info); } catch { page = null; }
+      try { page = await d.pageFor(info, words); } catch { page = null; }
       if (page && typeof page === "object") body.page = page;
     }
     const grants = typeof d.grants === "function" ? call(() => d.grants(), undefined) : undefined;
