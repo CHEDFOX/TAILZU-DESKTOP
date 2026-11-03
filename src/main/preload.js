@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld("tailzu", {
   // askCancel while a question has it (main puts the question away).
   pillHover: (on) => ipcRenderer.send("pill:hover", !!on),
   pillAction: (a) => ipcRenderer.send("pill:action", String(a || "")),
+  // pill → main: talk mode's sentence `id` has been said (pill/voice.js).
+  pillSpoken: (id) => ipcRenderer.send("pill:spoken", Number(id) || 0),
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
   // The server's knobs ({ labels, flags } of the last bootstrap), for a page

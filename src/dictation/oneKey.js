@@ -2,7 +2,8 @@
 //
 // Hold it: talk while it is down, and what was said goes where it is meant
 // when it comes up (routing.js). Tap it: hands-free, until it is tapped
-// again. That is the whole gesture. It replaces the three there were (a talk
+// again. Tap it twice: talk mode, a conversation with Blip (talk.js). That is
+// the whole gesture. It replaces the three there were (a talk
 // chord with a hold key and double-taps beside it, Ask's Alt twice, and the
 // meeting notes chord): Ask and notes are reached by saying so.
 //
@@ -130,6 +131,16 @@ function option(v, fallback) {
  * o.tapOn()       a quick tap keeps it listening (the "tap" setting)
  * o.armMs         how long the key is down alone before it talks (200)
  * o.tapMs         a press shorter than this is a tap (300)
+ *
+ * Two taps (talk mode, talk.js), when o.double is given:
+ * o.double()      the second of two taps: the first one's hands-free (if it
+ *                 started one) is thrown away (o.cancel) first
+ * o.doubleMs      the second press starts within this of the first one's
+ *                 release (400; 0 turns two taps off)
+ * While talk mode is on (o.inTalk()), the key is talk's:
+ * o.talkHold()    held: their turn now
+ * o.talkRelease() the hold let go: their turn is over
+ * o.talkTap()     a tap: talk mode ends
  */
 function createHoldTap(o) {
   const now = o.now || Date.now;
@@ -145,9 +156,16 @@ function createHoldTap(o) {
   // closing   down again, to stop hands-free: waiting for it to come up
   // chord     down with another key: nothing until it comes up
   // used      down, the press went to something else: nothing until it comes up
+  // second    down again soon after a tap that went hands-free: two taps if it comes up quickly
+  // talkArmed talk mode: down, alone, not held long enough yet
+  // talkHeld  talk mode: held, their turn
   let state = "idle";
   let downAt = 0;
   let timer = null;
+  let tapAt = -Infinity;   // when the last tap came up
+  let paired = false;      // this press began soon enough after a tap to be the second of two
+  const doubleMs = () => (typeof o.double === "function" ? option(o.doubleMs, 400) : 0);
+  const soonAfterTap = () => doubleMs() > 0 && now() - tapAt <= doubleMs();
 
   function arm() {
     timer = null;
@@ -156,44 +174,96 @@ function createHoldTap(o) {
     state = r === "talk" ? "held" : "used";
   }
 
+  function talkArm() {
+    timer = null;
+    if (state !== "talkArmed") return;
+    state = "talkHeld";
+    call(() => o.talkHold());
+  }
+
+  /** A long second press after a hands-free tap: it stops the hands-free, as a press always did. */
+  function secondHeld() {
+    timer = null;
+    if (state !== "second") return;
+    state = "closing";
+    call(() => o.finish());
+  }
+
   function down() {
+    // Talk mode: the key is talk's.
+    if (state === "idle" && call(() => o.inTalk && o.inTalk(), false) === true) {
+      state = "talkArmed";
+      downAt = now();
+      cancelTimer(timer);
+      timer = later(talkArm, armMs());
+      return;
+    }
+    const pair = soonAfterTap();
     // Hands-free that ended elsewhere (the pill's ✓, a long silence, an
     // error): this press starts again.
     if (state === "free" && !call(() => o.talking(), false)) state = "idle";
-    if (state === "free") { state = "closing"; call(() => o.finish()); return; }
+    if (state === "free") {
+      // Down again right after the tap that started it: it may be the second of two.
+      if (pair) { state = "second"; downAt = now(); cancelTimer(timer); timer = later(secondHeld, tapMs()); return; }
+      state = "closing"; call(() => o.finish()); return;
+    }
     if (state !== "idle") return;                     // a repeat, or a press not yet released
     // Talking that something else started (the tray, the pill): this press stops it.
     if (call(() => o.talking(), false)) { state = "closing"; call(() => o.finish()); return; }
     state = "armed";
+    paired = pair;
     downAt = now();
     cancelTimer(timer);
     timer = later(arm, armMs());
   }
 
+  /** Two taps: talk mode. */
+  function double() {
+    paired = false;
+    tapAt = -Infinity;
+    call(() => o.double());
+  }
+
   function up() {
     const was = state;
     state = "idle";
+    if (was === "talkArmed") { cancelTimer(timer); timer = null; call(() => o.talkTap()); return; }
+    if (was === "talkHeld") { call(() => o.talkRelease()); return; }
+    if (was === "second") { cancelTimer(timer); timer = null; call(() => o.cancel()); double(); return; }
+    const short = now() - downAt < tapMs();
+    if ((was === "armed" || was === "held") && paired && short) {
+      // The second of two taps, the first having started nothing (taps off, or refused).
+      if (was === "armed") { cancelTimer(timer); timer = null; } else call(() => o.cancel());
+      double();
+      return;
+    }
+    paired = false;
     if (was === "armed") {
       // Down and up before it armed: a tap. Hands-free, when taps are on.
       cancelTimer(timer); timer = null;
+      tapAt = now();
       if (call(() => o.tapOn(), true) !== false && call(() => o.press(), "none") === "talk") state = "free";
       return;
     }
     if (was === "held") {
       // A short press is a tap: it keeps listening. Held, it was talk-while-held.
-      if (now() - downAt < tapMs() && call(() => o.tapOn(), true) !== false && call(() => o.talking(), false)) { state = "free"; return; }
+      if (short && call(() => o.tapOn(), true) !== false && call(() => o.talking(), false)) { state = "free"; tapAt = now(); return; }
       call(() => o.finish());
     }
     // closing, chord, used, idle: the gesture is over.
   }
 
   function other() {
-    if (state === "armed") { cancelTimer(timer); timer = null; state = "chord"; return; }
+    if (state === "armed" || state === "talkArmed") { cancelTimer(timer); timer = null; state = "chord"; paired = false; return; }
     if (state === "held") { state = "chord"; call(() => o.cancel()); }
+    // Talk mode, held: a chord ends the turn as a release would.
+    if (state === "talkHeld") { state = "chord"; call(() => o.talkRelease()); }
+    // Down again after a hands-free tap, with another key: a chord; the hands-free goes on.
+    if (state === "second") { cancelTimer(timer); timer = null; state = "chord"; }
     // Hands-free, the hands are free: typing while it listens is not a chord.
   }
 
-  function reset() { cancelTimer(timer); timer = null; state = "idle"; }
+  function reset() { cancelTimer(timer); timer = null; state = "idle"; paired = false; tapAt = -Infinity; }
 
   return { down, up, other, reset, state: () => state };
 }

@@ -38,6 +38,13 @@
                the seam and the halves click shut. Without the capsule: the
                small pill, solid, the bead on its top edge. A press puts the
                question away
+    talk       talk mode (talk.js): Blip listens, thinks and answers, doing
+               the gesture of each mood; their words in grey while they
+               speak, his in ink as he answers, the white only when there
+               are words, and a faint clay ring behind him while it is on
+               (desktop.talk.sign). The answer is said through voice.js. A
+               press ends it. Without Blip: listening while they speak,
+               writing while he answers
 
   Drawn on a canvas so it is exact at any scale. Every size, colour, timing
   and word is a knob (desktop.pill.*); the literals below are only for the
@@ -69,7 +76,8 @@
   on a job, covers his eye when it is your turn, a thumbs-up when it is done.
   The white grows out from under him only when there are words. A press on
   the pill finishes; Esc throws a dictation away. The review page also takes
-  a state of its own: window.__pill({ state, label, alt, kind }).
+  a state of its own: window.__pill({ state, label, alt, kind }), and talk
+  mode's: window.__pill({ state: "talk", phase, heard, said, gesture }).
 -->
 <html>
 <head>
@@ -107,6 +115,7 @@
 <script src="capsule.js"></script>
 <script src="bots.js"></script>
 <script src="pointer.js"></script>
+<script src="voice.js"></script>
 <script src="start.js"></script>
 <script src="demo.js"></script>
 </body>

@@ -44,6 +44,28 @@ const MARKS = new Set(["box", "circle", "underline", "highlight", "arrow", "numb
 // The ones drawn round (or under, or over) a frame.
 const FRAMED = new Set(["box", "circle", "underline", "highlight"]);
 
+/** A sentence out loud, as a message for the guide (or the pill, talk.js). The
+ *  built-in voice with a real locale, by default: the server's voice
+ *  (/v1/speak, the read-aloud voice chosen in Settings) counts its words
+ *  against the month's, and Ask must never use up what dictation needs.
+ *  Where the server turns it on, and it fails, the built-in voice still
+ *  speaks. `c`: { authorizedFetch, num, bool }. */
+async function voiceOf(c, text, opts) {
+  const rate = c.num("desktop.agent.voiceRate", 1.04);
+  if (c.bool("desktop.agent.serverVoice", false)) {
+    try {
+      const res = await c.authorizedFetch("/v1/speak", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, format: "mp3" }),
+        signal: AbortSignal.timeout(Math.max(1000, c.num("desktop.agent.voiceFetchMs", 8000))),
+      });
+      if (res.ok) return { type: "voice", audio: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
+    } catch { /* the built-in voice */ }
+  }
+  return { type: "voice", text, speak: true, locale: (opts && opts.locale) || "", rate };
+}
+
 function createAsk(ctx) {
   const { BrowserWindow, screen, ipcMain, knobs: K } = ctx;
   const num = K.num, bool = K.bool, str = K.str, txt = K.txt;
@@ -662,26 +684,7 @@ function createAsk(ctx) {
     const s = speech;
     return s.then(() => (speech === s ? undefined : allSaid()));
   }
-  /** The sentence out loud, as a message for the guide. The built-in voice
-   *  with a real locale, by default: the server's voice (/v1/speak, the
-   *  read-aloud voice chosen in Settings) counts its words against the
-   *  month's, and Ask must never use up what dictation needs. Where the
-   *  server turns it on, and it fails, the built-in voice still speaks. */
-  async function voice(text, opts) {
-    const rate = num("desktop.agent.voiceRate", 1.04);
-    if (bool("desktop.agent.serverVoice", false)) {
-      try {
-        const res = await ctx.authorizedFetch("/v1/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, format: "mp3" }),
-          signal: AbortSignal.timeout(Math.max(1000, num("desktop.agent.voiceFetchMs", 8000))),
-        });
-        if (res.ok) return { type: "voice", audio: new Uint8Array(await res.arrayBuffer()), mime: "audio/mpeg" };
-      } catch { /* the built-in voice */ }
-    }
-    return { type: "voice", text, speak: true, locale: opts.locale || "", rate };
-  }
+  function voice(text, opts) { return voiceOf({ authorizedFetch: ctx.authorizedFetch, num, bool }, text, opts); }
 
   // ---- the picture ---------------------------------------------------------------
   // A question about something drawn (an equation, a chart, a photo) is
@@ -1334,6 +1337,8 @@ function createAsk(ctx) {
     /** The last look was refused for want of Screen Recording (and none
      *  since has been let through). */
     screenDenied: () => screenDenied,
+    /** An Esc now is the agent's own (talk mode leaves it be). */
+    ownEsc: () => Date.now() < selfEscUntil,
     escape() {
       // The agent's own Escape, heard by the same hook: for a moment after
       // it sends one, an Esc is its, not theirs.
@@ -1346,4 +1351,4 @@ function createAsk(ctx) {
   };
 }
 
-module.exports = { createAsk };
+module.exports = { createAsk, voiceOf };

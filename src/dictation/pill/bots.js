@@ -36,9 +36,18 @@ function blipFor(st, data, from) {
   else if (st === "error") p.play("oops", { now, then: "rest" });
   else if (st === "routed") { const g = ROUTED_GESTURE[data.kind] || "done"; p.play(g, { now, then: g === "send" || g === "celebrate" ? "done" : null, again: true }); }
   else if (st === "ask") p.play("look", { now });
+  else if (st === "talk") talkGesture(p, data, from, now);
   else if (from === "writing" || from === "listening") p.play("done", { now, then: "rest" });
   else p.play("rest", { now });
   blipQuirkAt = now + 30000 + Math.random() * 20000;
+}
+
+/** Talk mode's gesture (talk.js sends it with each change): from rest he wakes into listening; one that ends (done,
+ *  laugh, nope) goes back to talking while the answer is said, to listening while they speak. */
+function talkGesture(p, data, from, now) {
+  const g = data.gesture || "listen";
+  if (g === "listen" && (!from || from === "rest" || from === "hidden")) { p.play("wake", { speed: K.num("desktop.pill.blipWakeSpeed", 2.3), then: "listen", now }); return; }
+  p.play(g, { now, then: data.phase === "answer" ? "talk" : data.phase === "listen" ? "listen" : null });
 }
 
 // The app's white and ink, with Keylessbord's clay for what is live. Knobs like every other colour here.
@@ -60,15 +69,20 @@ const bLabel = () => (S.name === "done" ? doneLabel() : S.name === "routed" ? ro
 const bWriting = () => K.txt("desktop.pill.botsWriting", "Writing");
 /** How long it has been listening, as a clock reads: "0:07". */
 function bTimer() { const s = Math.max(0, Math.floor((clock() - S.at) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
-/** The words so far, their tail when they are longer than the pill has room for. */
-function bCaption() {
-  if (!caption) return "";
+/** Words, their tail when they are longer than the pill has room for. */
+function bTail(text) {
+  if (!text) return "";
   const maxW = K.num("desktop.pill.botsTextWidth", 280);
-  let s = caption;
+  let s = text;
   if (bTextW(s, 15) <= maxW) return s;
   while (s.length > 1 && bTextW("…" + s, 15) > maxW) s = s.slice(1);
   return "…" + s.trimStart();
 }
+/** The words so far, while it listens. */
+function bCaption() { return bTail(caption); }
+/** Talk mode's words: theirs while they speak and he thinks (grey), his as he answers (ink). */
+const talkAnswering = () => S.data.phase === "answer" || S.data.phase === "act";
+function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : S.data.heard || ""); }
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
 function botsTargets(st) {
   const g = { buttons: 0, show: 1, solid: 1, text: 0 };
@@ -76,6 +90,10 @@ function botsTargets(st) {
     // Blip is the whole signal: no bars, no time, no ✕. The white comes only with the words (paperK).
     const cap = bCaption();
     g.h = 44; g.w = cap ? 8 + 28 + 14 + bTextW(cap, 15) + 18 : 44;
+  } else if (st === "talk") {
+    // Blip, and the words when there are some: the white only with them.
+    const words = bTalkWords();
+    g.h = 44; g.w = words ? 8 + 28 + 14 + bTextW(words, 15) + 18 : 44;
   } else if (st === "listening") {
     const cap = bCaption();
     g.h = bDisc() + 16;
@@ -106,6 +124,17 @@ function bMic(x, y, d) {
   ctx.stroke(new Path2D("M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"));
   ctx.restore();
 }
+/** Talk mode is on: a faint clay ring behind Blip (desktop.talk.sign), breathing slowly unless motion is reduced. */
+function talkSign(x, feet, h, now) {
+  if (!K.bool("desktop.talk.sign", true)) return;
+  const breath = REDUCED() ? 1 : 0.75 + 0.25 * Math.sin(now / 1000 * 2 * Math.PI / Math.max(0.5, K.num("desktop.talk.signBreathS", 2.4)));
+  ctx.save();
+  ctx.globalAlpha = P.show * clamp(K.num("desktop.talk.signAlpha", 0.22)) * breath;
+  ctx.strokeStyle = B.clay(); ctx.lineWidth = K.num("desktop.talk.signWidth", 1.5);
+  ctx.beginPath(); ctx.arc(x, feet - h * 0.5, h * K.num("desktop.talk.signSize", 0.55), 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
 /** One frame of the Bots look. Returns true while something still moves. */
 function drawBots(t, now, dt, x0, y0, cy) {
   let moving = false;
@@ -113,8 +142,8 @@ function drawBots(t, now, dt, x0, y0, cy) {
   ctx.save();
   if (st === "error" && t < 0.42) ctx.translate(Math.sin(t * 60) * 3 * (1 - t / 0.42), 0);
   // The pill: white with a line, a soft shadow that firms up once it is in use.
-  bCapK = ease(bCapK, st === "listening" && bCaption() ? 1 : 0, 9, dt);
-  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" ? outCubic(bCapK) : st === "writing" ? 0 : 1;
+  bCapK = ease(bCapK, (st === "listening" && bCaption()) || (st === "talk" && bTalkWords()) ? 1 : 0, 9, dt);
+  const paperK = !BLIP() ? 1 : st === "rest" ? outCubic(P.text) : st === "listening" || st === "talk" ? outCubic(bCapK) : st === "writing" ? 0 : 1;
   ctx.globalAlpha = P.show * (0.86 + 0.14 * P.solid) * paperK;
   ctx.shadowColor = `rgba(0,0,0,${0.08 + 0.06 * P.solid})`; ctx.shadowBlur = 10 + 10 * P.solid; ctx.shadowOffsetY = 2 + 4 * P.solid;
   ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.roundRect(x0, y0, P.w, P.h, r); ctx.fill();
@@ -159,6 +188,10 @@ function drawBots(t, now, dt, x0, y0, cy) {
     ctx.strokeStyle = overCancel ? B.ink() : B.meta(); ctx.lineWidth = 1.6; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(c.x - s, c.y - s); ctx.lineTo(c.x + s, c.y + s); ctx.moveTo(c.x + s, c.y - s); ctx.lineTo(c.x - s, c.y + s); ctx.stroke();
     }
+  } else if (st === "talk") {
+    // Talk mode: their words grey, his in ink.
+    const words = bTalkWords();
+    if (words) { ctx.globalAlpha = P.show * clamp((bCapK - .4) / .6); ctx.font = bFont(15); ctx.fillStyle = talkAnswering() ? B.ink() : B.meta(); ctx.fillText(words, x0 + 8 + 28 + 14, cy + .5); ctx.globalAlpha = P.show; }
   } else if (st === "writing") {
     // The disc's three dots light in turn while the words are written.
     const dx = x0 + 6 + 14;
@@ -210,11 +243,13 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const pf = blipper();
     if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
     let bx, bh;
-    if (st === "listening") { bx = x0 + 8 + 14; bh = 52; }
+    if (st === "listening" || st === "talk") { bx = x0 + 8 + 14; bh = 52; }
     else if (st === "rest") { bx = lerpN(W / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
     else if (st === "ask") { bx = W / 2; bh = 40; }
     else { bx = x0 + 6 + 16; bh = 50; }
-    const level = st === "listening" && now - bandsAt < 250 ? Math.min(1, Math.max(...bands) * 1.3) : 0;
+    const hearing = st === "listening" || (st === "talk" && S.data.phase === "listen");
+    const level = hearing && now - bandsAt < 250 ? Math.min(1, Math.max(...bands) * 1.3) : 0;
+    if (st === "talk") talkSign(bx, y0 + P.h - 2, bh, now);
     ctx.globalAlpha = P.show;
     pf.draw(ctx, bx, y0 + P.h - 2, bh, now, level);
     moving = true;

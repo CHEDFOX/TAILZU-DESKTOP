@@ -42,6 +42,8 @@ window.addEventListener("mousedown", (e) => {
     // already going.
     : S.name === "ask" ? (S.data.phase === "closing" ? null : "askCancel")
     // A route's label: its alternative, when it has one.
-    : S.name === "routed" ? (S.data.alt ? "alt" : null) : null;
+    : S.name === "routed" ? (S.data.alt ? "alt" : null)
+    // Talk mode: a press ends it.
+    : S.name === "talk" ? "talkEnd" : null;
   if (act && bridge && bridge.pillAction) bridge.pillAction(act);
 });
