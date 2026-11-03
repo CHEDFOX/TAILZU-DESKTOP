@@ -1086,16 +1086,21 @@ function guardPill(on) {
 
 /** Where the pill's Blip stands on the screen (his feet): the middle of the pill's window, just above its foot.
  *  Null while the pill is hidden, and then Blip comes up at the text box without the hop from it. */
+// Where Blip stands along the pill's window, from its middle (pill:spot): he walks the bottom of the screen.
+let pillSpotX = 0;
 function pillBlipAt() {
   if (!pillWin || pillWin.isDestroyed() || !pillWin.isVisible()) return null;
   const b = pillWin.getBounds();
-  return { x: b.x + b.width / 2, y: b.y + b.height - num("desktop.pill.bottomPad", 14) - 2 };
+  return { x: b.x + b.width / 2 + pillSpotX, y: b.y + b.height - num("desktop.pill.bottomPad", 14) - 2 };
 }
 
 // ---- Blip at rest (dictation/restSpot.js, dictation/rest/) ------------------------------------------------
 // Between dictations Blip rests against the right edge of the screen in a window of his own, and the pill leaves him
 // out (restAway). Only in the Bots look with Blip in the pill; desktop.rest.edge turns it off.
 let restWin = null, restWatch = null, restShown = false, restDuck = false;
+// Not at once: he goes to the edge only after desktop.rest.afterMs with no command (the pill at rest all that time),
+// walking off the bottom of the screen first (desktop.rest.walkMs). Until then he strolls the bottom (pill/roam.js).
+let restSince = Date.now(), restLater = null, restWalk = null;
 const restOn = () => bool("bots.app", false) && bool("desktop.pill.blip", true) && bool("desktop.rest.edge", true);
 function restSend(m) {
   if (restWin && !restWin.isDestroyed() && !restWin.webContents.isLoading()) restWin.webContents.send("rest", m);
@@ -1122,15 +1127,27 @@ function createRestWindow(bounds) {
 }
 /** Shown while he rests, hidden otherwise; the pill told whether he is with it. */
 function updateRest() {
-  const rests = restOn() && restSpot.restsNow({ on: true, pillOn: pillOn(), pillState });
+  clearTimeout(restLater); restLater = null;
+  const afterMs = Math.max(0, num("desktop.rest.afterMs", 45000));
+  const s = { on: restOn(), pillOn: pillOn(), pillState, idleMs: Date.now() - restSince, afterMs };
+  const rests = restSpot.restsNow(s);
+  // At rest, not idle long enough yet: looked at again when it will be.
+  if (!rests && restSpot.restsNow(Object.assign({}, s, { idleMs: Infinity }))) restLater = setTimeout(updateRest, afterMs - s.idleMs + 50);
   if (rests === restShown) return;
   restShown = rests;
-  pillSend({ restAway: rests });
+  clearTimeout(restWalk); restWalk = null;
+  const walkMs = rests ? Math.max(0, num("desktop.rest.walkMs", 2400)) : 0;
+  pillSend({ restAway: rests, walkMs });
   if (!rests) {
     clearInterval(restWatch); restWatch = null;
     if (restWin && !restWin.isDestroyed() && restWin.isVisible()) restWin.hide();
     return;
   }
+  // He walks off the strip first; the edge has him once he is gone from it.
+  if (walkMs) restWalk = setTimeout(() => { restWalk = null; if (restShown) showRest(); }, walkMs);
+  else showRest();
+}
+function showRest() {
   const display = pillWin && !pillWin.isDestroyed() ? screen.getDisplayMatching(pillWin.getBounds()) : screen.getPrimaryDisplay();
   const bounds = restSpot.restBounds(display.workArea, { h: num("desktop.rest.windowHeight", restSpot.REST_H) });
   const w = createRestWindow(bounds);
@@ -1170,6 +1187,8 @@ function pill(state, data) {
   const moment = state === "caption" || state === "flash";
   const was = pillState;
   if (!moment) {
+    // Any state but rest is a command (or its answer): the clock to the edge starts again from its end.
+    if (state !== "rest" || was !== "rest") restSince = Date.now();
     pillState = state; pillData = data || {};
     // Held on top for as long as it is listening or writing, and never
     // past it: every other state ends the guard, a switched-off pill too
@@ -1215,7 +1234,7 @@ function pillAsk(phase, first) {
   const w = createPillWindow();
   if (move === "take") setBoundsExactly(w, pillBounds());
   pill("ask", { phase });
-  try { return capsuleRect(w.getBounds(), { num, bool }); } catch { return null; }
+  try { return capsuleRect(w.getBounds(), { num, bool }, pillSpotX); } catch { return null; }
 }
 
 /**
@@ -1305,6 +1324,13 @@ function cancelDictation() {
 // may touch the session, the settings, the browser or the updater.
 const isFrom = (e, w) => !!w && !w.isDestroyed() && e.sender === w.webContents;
 const fromPill = (e) => isFrom(e, pillWin);
+ipcMain.on("pill:spot", (e, m) => {
+  if (!fromPill(e) || !m || !Number.isFinite(m.blip)) return;
+  const b = pillWin && !pillWin.isDestroyed() ? pillWin.getBounds() : null;
+  const half = b ? b.width / 2 : 4000;
+  pillSpotX = Math.max(-half, Math.min(half, m.blip));
+});
+
 ipcMain.on("pill:hover", (e, on) => {
   if (!fromPill(e)) return;
   // Over the pill: it takes the click. Anywhere else: the click goes through

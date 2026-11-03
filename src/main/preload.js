@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld("tailzu", {
   pillAction: (a) => ipcRenderer.send("pill:action", String(a || "")),
   // pill → main: talk mode's sentence `id` has been said (pill/voice.js).
   pillSpoken: (id) => ipcRenderer.send("pill:spoken", Number(id) || 0),
+  // pill → main: where Blip stands along the pill's window (px from its middle), as he walks it (pill/bots.js).
+  pillSpot: (s) => ipcRenderer.send("pill:spot", { blip: Number(s && s.blip) || 0 }),
   // main → overlay
   onOverlayText: (cb) => ipcRenderer.on("overlay-text", (_e, t) => cb(t)),
   // The server's knobs ({ labels, flags } of the last bootstrap), for a page

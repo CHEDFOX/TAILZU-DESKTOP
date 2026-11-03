@@ -2,7 +2,7 @@
 "use strict";
 
 // Parted for a question, the pill is the gap wider (askGapPx; 0 otherwise).
-function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: W / 2 - P.w / 2 - askGapPx / 2, y: bottom - P.h, w: P.w + askGapPx, h: P.h }; }
+function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); return { x: (BOTS() ? pillCX : W / 2) - P.w / 2 - askGapPx / 2, y: bottom - P.h, w: P.w + askGapPx, h: P.h }; }
 function podsNow() { return SP.pods(podSeed(), W, clamp(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {

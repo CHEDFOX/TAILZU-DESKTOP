@@ -49,16 +49,21 @@
   //   lid    0 open … 1 shut (the heavy lid's resting droop is .18)
   //   hands  0 both on the edge … 1 the near hand up and pointing
   //   hop    a little jump (done)
+  //   neck   0 his neck as it is … 1 stretched as far as it goes (NECK of his height): the head far out over the edge
   const POSES = {
-    hidden:    { rise: 0,    tilt: 0,    brows: 0,    lid: .18, hands: 0, hop: 0 },
-    peek:      { rise: 1,    tilt: .04,  brows: .1,   lid: .18, hands: 0, hop: 0 },
-    listening: { rise: 1.06, tilt: -.1,  brows: .55,  lid: .02, hands: 0, hop: 0 },
-    thinking:  { rise: 1,    tilt: .16,  brows: .85,  lid: .3,  hands: 0, hop: 0 },
-    point:     { rise: 1.04, tilt: 0,    brows: .4,   lid: .08, hands: 1, hop: 0 },
-    confirm:   { rise: 1.02, tilt: -.06, brows: .7,   lid: .1,  hands: 1, hop: 0 },
-    done:      { rise: 1.1,  tilt: .08,  brows: .5,   lid: .3,  hands: 0, hop: 1 },
-    oops:      { rise: .9,   tilt: -.14, brows: -.8,  lid: .34, hands: 0, hop: 0 },
+    hidden:    { rise: 0,    tilt: 0,    brows: 0,    lid: .18, hands: 0, hop: 0, neck: 0 },
+    peek:      { rise: 1,    tilt: .04,  brows: .1,   lid: .18, hands: 0, hop: 0, neck: 0 },
+    listening: { rise: 1.06, tilt: -.1,  brows: .55,  lid: .02, hands: 0, hop: 0, neck: 0 },
+    thinking:  { rise: 1,    tilt: .16,  brows: .85,  lid: .3,  hands: 0, hop: 0, neck: 0 },
+    point:     { rise: 1.04, tilt: 0,    brows: .4,   lid: .08, hands: 1, hop: 0, neck: 0 },
+    confirm:   { rise: 1.02, tilt: -.06, brows: .7,   lid: .1,  hands: 1, hop: 0, neck: 0 },
+    done:      { rise: 1.1,  tilt: .08,  brows: .5,   lid: .3,  hands: 0, hop: 1, neck: 0 },
+    // crane: the long neck, his head stretched far out over the edge to see more.
+    crane:     { rise: 1,    tilt: -.12, brows: .9,   lid: 0,   hands: 0, hop: 0, neck: 1 },
+    oops:      { rise: .9,   tilt: -.14, brows: -.8,  lid: .34, hands: 0, hop: 0, neck: 0 },
   };
+
+  const NECK = .42;
 
   function createBlip(opts) {
     const o = Object.assign({ height: 96, pale: [243, 226, 198], ink: "rgba(15,13,11,.94)", live: "#E8A23C" }, opts || {});
@@ -94,7 +99,8 @@
       const dy = lift + bob + nod * .07 * H;
       const sway = still ? 0 : Math.sin(t * TAU * .45) * .02;
       // Where things are aimed from: the eye, and the near shoulder.
-      const hx = cx, hy = .3 * H + dy, R = .16 * H;
+      const neckLen = clamp(p.neck || 0) * NECK * H;
+      const hx = cx, hy = .3 * H + dy - neckLen, R = .16 * H;
       const side = target && target[0] < anchor[0] ? -1 : 1;
 
       // NOODLE ARMS. Each is one curve from a shoulder hidden behind the card
@@ -142,7 +148,7 @@
 
       // The neck, a little curved, too long.
       g.strokeStyle = grey(.72); g.lineWidth = .028 * H; g.lineCap = "round";
-      g.beginPath(); g.moveTo(cx, .53 * H + dy); g.quadraticCurveTo(cx + .035 * H, .49 * H + dy, cx, .44 * H + dy); g.stroke();
+      g.beginPath(); g.moveTo(cx, .53 * H + dy); g.quadraticCurveTo(cx + .035 * H + neckLen * .3, .49 * H + dy - neckLen * .5, cx, .44 * H + dy - neckLen); g.stroke();
 
       // THE HEAD, tilted from the base of the neck.
       g.save(); g.translate(hx, hy + R); g.rotate(p.tilt + sway + nod * .08); g.translate(-hx, -(hy + R));
@@ -262,18 +268,21 @@
       // A dot is about 1.6 CSS px: a whole number of device pixels, never under two.
       const cell = Math.max(2, Math.round(1.6 * r)) / r;
       const W = H * 1.3, EDGE = .5;
-      const bw = Math.ceil(W / cell), bh = Math.ceil(EDGE * H / cell) + 1;
+      // Room above the head for the neck, only while it is stretched.
+      const UP = Math.ceil(clamp(cur.neck || 0) * NECK * H / cell) * cell;
+      const bw = Math.ceil(W / cell), bh = Math.ceil((EDGE * H + UP) / cell) + 1;
       if (!buf || cellPx !== cell || buf.width !== bw || buf.height !== bh) {
         buf = (typeof OffscreenCanvas !== "undefined") ? new OffscreenCanvas(bw, bh) : Object.assign(document.createElement("canvas"), { width: bw, height: bh });
         cellPx = cell;
       }
       const g = buf.getContext("2d", { willReadFrequently: true });
       g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, bw, bh);
-      g.setTransform(1 / cell, 0, 0, 1 / cell, 0, 0);
+      g.setTransform(1 / cell, 0, 0, 1 / cell, 0, UP / cell);
       const f = figure(g, W, cur, t);
       const src = g.getImageData(0, 0, bw, bh).data;
 
-      const ox = ax - W / 2, oy = ay - EDGE * H;
+      // The figure's box (oy) and the dots' (dy0), which starts UP higher.
+      const ox = ax - W / 2, oy = ay - EDGE * H, dy0 = oy - UP;
       // The sticker: every cell the figure touches, grown by one, in ink.
       if (!on || on.length !== bw * bh) on = new Uint8Array(bw * bh);
       for (let i = 0; i < bw * bh; i++) on[i] = src[i * 4 + 3] > 60 ? 1 : 0;
@@ -282,7 +291,7 @@
       // of its box cut the antenna's ball off at the top of a hop, and its
       // glow off while it listened.
       const over = cell * 2 + .14 * H;
-      ctx.beginPath(); ctx.rect(ox - cell * 2, oy - over, W + cell * 4, EDGE * H + over); ctx.clip();
+      ctx.beginPath(); ctx.rect(ox - cell * 2, dy0 - over, W + cell * 4, EDGE * H + UP + over); ctx.clip();
       ctx.fillStyle = o.ink;
       ctx.beginPath();
       for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
@@ -293,7 +302,7 @@
             if (xx >= 0 && yy >= 0 && xx < bw && yy < bh && on[yy * bw + xx]) hit = 1;
           }
         }
-        if (hit) { const px = ox + x * cell, py = oy + y * cell; ctx.moveTo(px + cell, py + cell / 2); ctx.arc(px + cell / 2, py + cell / 2, cell * .62, 0, TAU); }
+        if (hit) { const px = ox + x * cell, py = dy0 + y * cell; ctx.moveTo(px + cell, py + cell / 2); ctx.arc(px + cell / 2, py + cell / 2, cell * .62, 0, TAU); }
       }
       ctx.fill();
       // The dots: lit where the grey beats the dither's threshold.
@@ -305,7 +314,7 @@
         if (a < 90) continue;
         const lum = (src[i] * .3 + src[i + 1] * .59 + src[i + 2] * .11) / 255 * (a / 255);
         if (lum > (BAYER[(y & 7) * 8 + (x & 7)] + .5) / 64) {
-          const px = ox + x * cell + cell / 2, py = oy + y * cell + cell / 2;
+          const px = ox + x * cell + cell / 2, py = dy0 + y * cell + cell / 2;
           ctx.moveTo(px + cell * .47, py); ctx.arc(px, py, cell * .47, 0, TAU);
         }
       }
@@ -1021,6 +1030,9 @@
     float: (t) => { const k = io(clamp(t / .7)); return { headLift: .42 * k + .03 * Math.sin(t * 3), tilt: .15 * Math.sin(t * 2), ra: [2.2, .3], la: [2.2, .3], eye: "wide", lid: 0, brows: 1, look: [0, 1], antSpin: .3 * Math.sin(t * 2.5), mouth: "o", mouthOpen: .4 }; },
     jelly: (t) => { const w = Math.sin(t * 22) * Math.exp(-t * 1.5); return { sqx: 1 + .14 * w, sqy: 1 - .14 * w, tilt: .1 * w, antSpin: .8 * w, ra: [.5 + .5 * w, .2], la: [.5 - .5 * w, .2], mouth: "grin", lid: .2 }; },
     dizzy: (t) => ({ antSpin: t * 10, antLen: 1.3, tilt: .14 * Math.sin(t * 4), spin: .05 * Math.sin(t * 3), ra: [.6, .4], la: [.6, .4], eye: t > .8 ? "spiral" : "wide", lid: 0, mouth: "o", mouthOpen: .5, look: [Math.sin(t * 10), -1] }),
+
+    // stroll: walking along the bottom of the screen, arms swinging, looking where he goes (the pill mirrors him to go left).
+    stroll: (t) => { const r = run(t, 9); return { legs: r.legs, ra: [.45 - .35 * r.a, .25], la: [.45 + .35 * r.a, .25], bob: .012 * Math.abs(r.a), tilt: -.04, look: [1, .1], lid: .12, brows: .45 }; },
 
     // ---- In a conversation, and at random: odder moves, still nothing but his body.
     // talk: answering out loud; his mouth and the antenna's ball keep time with the words.

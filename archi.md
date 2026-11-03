@@ -64,12 +64,13 @@ src/
       live.js           WebAudio, 16 kHz PCM, WS /v1/transcribe-stream (captions)
       heldStop.js       a full stop held at a pause until the next stretch decides
       testkit.js        for tests: recorder.html's scripts in order (not shipped)
-    restSpot.js         where Blip rests between dictations (the screen's right edge) and when
-    rest/               the rest window: Blip behind the edge, his antennae out, peeking now and then, ducking from the pointer
+    restSpot.js         where Blip rests (the screen's right edge) and when: after a while with no command
+    rest/               the rest window: Blip behind the edge, his antennae out, peeking now and then (some on his long neck), ducking from the pointer
     pill/               the dictation pill at the foot of the screen
       pill.html         the page; shared/blip.js, then core, frame, capsule, bots (with Blip), pointer,
                         voice (talk mode's voice), start, demo in order
       pillSplit.js      the split pill's geometry and spring (no drawing)
+      roam.js           Blip strolling the bottom of the screen: idle, while a task runs, off to the edge (no drawing)
     overlay/            the live-caption strip (when the pill is off)
 
   context/              what the person is looking at
@@ -225,7 +226,7 @@ helpers and the runner. Every window is a sandboxed renderer with context
 isolation and no Node; each page loads only its own files (CSP `script-src
 'self'`), as classic scripts in a fixed order. Code shared between the main
 process, pages and tests is written as small UMD modules (`knobs.js`,
-`botTiles.js`, `botLooks.js`, `shared/*.js`, `notesCore.js`, `pillSplit.js`,
+`botTiles.js`, `botLooks.js`, `shared/*.js`, `notesCore.js`, `pillSplit.js`, `roam.js`,
 `heldStop.js`): `require()`d in Node, `window.Tailzu*` in a page.
 
 **Windows.** Hidden recorder (`dictation/recorder`), pill (`dictation/pill`),

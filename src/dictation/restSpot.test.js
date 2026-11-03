@@ -36,3 +36,11 @@ test("he rests only while the pill is on and at rest", () => {
   assert.strictEqual(restsNow({ on: false, pillOn: true, pillState: "rest" }), false);
   assert.strictEqual(restsNow({ on: true, pillOn: false, pillState: "rest" }), false);
 });
+
+test("he goes to the edge only after a while at rest with no command", () => {
+  const s = { on: true, pillOn: true, pillState: "rest", afterMs: 45000 };
+  assert.strictEqual(restsNow(Object.assign({}, s, { idleMs: 10000 })), false, "ten seconds in: still at the bottom");
+  assert.strictEqual(restsNow(Object.assign({}, s, { idleMs: 45000 })), true, "45 s with nothing asked: the edge");
+  assert.strictEqual(restsNow(Object.assign({}, s, { idleMs: 90000, pillState: "routed" })), false, "never while something is on the pill");
+  assert.strictEqual(restsNow(Object.assign({}, s, { idleMs: 0, afterMs: 0 })), true, "afterMs 0: at once");
+});

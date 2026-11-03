@@ -1,6 +1,6 @@
 // Where Blip rests between dictations, and when (main process). The rest window (rest/) draws him.
 //
-// He rests against the right edge of the screen, a little below the middle: clear of the menu bar, the Dock and
+// After a while with no command (desktop.rest.afterMs) he rests against the right edge of the screen, a little below the middle: clear of the menu bar, the Dock and
 // the taskbar, the screen's corners, and where notifications come up (top right on a Mac, bottom right on Windows,
 // top middle on Ubuntu). Over an app only his antenna shows, and every few seconds his head peeks out. He ducks out
 // of sight when the pointer comes near, and he is in no screen share or recording (the window's content protection).
@@ -29,9 +29,10 @@ function pointerNear(p, b, px = NEAR_PX) {
   return Math.hypot(dx, dy) < px;
 }
 
-/** He rests at the edge now: switched on, the pill shown and at rest. A dictation or a question takes the pill out of rest. */
+/** He rests at the edge now: switched on, the pill shown and at rest, and at rest for afterMs (idleMs, no command
+ *  since). A dictation or a question takes the pill out of rest, and the wait starts again after it. */
 function restsNow(s) {
-  return !!(s && s.on && s.pillOn && s.pillState === "rest");
+  return !!(s && s.on && s.pillOn && s.pillState === "rest" && (s.idleMs == null || s.idleMs >= (s.afterMs || 0)));
 }
 
 module.exports = { restBounds, pointerNear, restsNow, REST_W, REST_H, REST_AT, NEAR_PX };

@@ -40,13 +40,14 @@ function pillAskMove(phase, now) {
  * exactly where pill/ draws it, from the same knobs pill/ reads. The
  * small pill's size when the capsule look is off, or the Bots look is on.
  */
-function capsuleRect(b, K) {
+function capsuleRect(b, K, dx = 0) {
   if (!b || ![b.x, b.y, b.width, b.height].every((v) => typeof v === "number" && Number.isFinite(v))) return null;
   // The Bots look (bots.app) has no capsule: the small white pill (pill/bots.js botsTargets).
   const capsule = !K.bool("bots.app", false) && K.bool("desktop.pill.split", true) && K.bool("desktop.pill.capsule", true);
   const w = capsule ? K.num("desktop.pill.capsuleWidth", 40) : K.num("desktop.pill.restWidth", 46);
   const h = capsule ? K.num("desktop.pill.capsuleHeight", 16) : K.num("desktop.pill.restHeight", 14);
-  return { x: b.x + b.width / 2 - w / 2, y: b.y + b.height - K.num("desktop.pill.bottomPad", 14) - h, w, h };
+  // dx: where the pill is along its window, from the middle (the Bots look's pill is wherever Blip stands).
+  return { x: b.x + b.width / 2 + (Number.isFinite(dx) ? dx : 0) - w / 2, y: b.y + b.height - K.num("desktop.pill.bottomPad", 14) - h, w, h };
 }
 
 module.exports = { pillAskMove, capsuleRect };

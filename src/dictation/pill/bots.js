@@ -84,6 +84,72 @@ function bCaption() { return bTail(caption); }
 const talkAnswering = () => S.data.phase === "answer" || S.data.phase === "act";
 function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : S.data.heard || ""); }
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
+// ---- Strolling (roam.js) ------------------------------------------------------------------------------------
+// While nothing is asked of him (at rest, no hint open) he walks the bottom of the screen and now and then does
+// something odd where he stops; while a task runs he walks about too, and the pill with its label stays put. A
+// command stops him where he is and the pill opens there: he answers from that spot, not from the middle. Going to
+// rest at the screen's edge (restAway with walkMs), he walks off its right end first. desktop.pill.roam turns it off.
+const roam = window.TailzuRoam ? window.TailzuRoam.createRoam() : null;
+let roamNow = { x: 0, dir: 1, walking: false, arrived: false };
+let pillAnchor = 0;               // the pill's place: Blip's offset from the window's middle, eased, so it follows him
+let workAnchor = null;            // where the pill stays while a task runs
+let leaveUntil = 0, leaveMs = 0;  // walking off to the screen's edge, until then
+let pillCX = 0;                   // the pill's middle this frame (pointer.js hit-tests it)
+let spotSent = null, spotAt = 0;  // what main was last told of where he is (the hop to a text box starts there)
+const ROAM_ON = () => !!roam && BLIP() && !REDUCED() && K.bool("desktop.pill.roam", true);
+const WORKING = () => S.name === "routed" && (S.data.kind === "work" || S.data.kind === "look");
+function roamMode() {
+  if (!ROAM_ON()) return "stay";
+  if (leaveUntil) return "leave";
+  if (WORKING()) return "work";
+  if (S.name === "rest" && !blipResting && !hovered && P.text < 0.01) return "wander";
+  return "stay";
+}
+/** Main says he goes to (or comes back from) the screen's edge. With walkMs he walks off the strip's right end first. */
+function blipRestAway(on, walkMs) {
+  if (on && walkMs > 0 && ROAM_ON() && !blipResting) { leaveUntil = clock() + walkMs; leaveMs = walkMs; return; }
+  leaveUntil = 0;
+  // Back from the edge he is in the middle again; called back on his way there, he answers from where he is.
+  if (!on && blipResting && roam) { roam.place(0); pillAnchor = 0; }
+  blipResting = on;
+}
+/** The pill's middle this frame (frame.js): Blip's walk stepped once, and the pill placed where he is. */
+function botsCenter(now, dt) {
+  if (!BLIP() || !roam) { pillCX = W / 2; return pillCX; }
+  const pf = blipper(), mode = roamMode();
+  const span = Math.max(0, Math.min(K.num("desktop.pill.roamSpan", 360), W / 2 - 70));
+  const free = pf.name === "rest" || pf.name === "work" || pf.name === "stroll";
+  // While a task runs, the pill with its label (from the last frame) is what he walks round, not over.
+  const avoid = mode === "work" ? [pillCX - P.w / 2 - 26 - W / 2, pillCX + P.w / 2 + 26 - W / 2] : null;
+  roamNow = roam.step({ mode, now, span, speed: K.num("desktop.pill.roamSpeed", 60), free, avoid,
+    pauseMs: mode === "work" ? [2000, 5000] : [5000, 11000], leaveTo: W / 2 + 60, leaveMs }, dt);
+  if (mode === "leave" && (roamNow.arrived || now >= leaveUntil)) {
+    leaveUntil = 0; blipResting = true; roam.place(0); pillAnchor = 0; roamNow = { x: 0, dir: 1, walking: false, arrived: false };
+  }
+  // Strolling while he walks; where he stops, back to work, or (idle) now and then something odd.
+  if (roamNow.walking && pf.name !== "stroll" && (free || mode === "leave")) pf.play("stroll", { now });
+  else if (!roamNow.walking && pf.name === "stroll") {
+    if (mode === "work") pf.play("work", { now });
+    else if (mode === "wander" && Math.random() < K.num("desktop.pill.roamQuirk", 0.4)) pf.play(pf.quirk(), { now, then: "rest" });
+    else pf.play("rest", { now });
+  }
+  if (mode === "work") { if (workAnchor === null) workAnchor = pillAnchor; } else workAnchor = null;
+  const want = blipResting ? 0 : workAnchor !== null ? workAnchor : roamNow.x;
+  pillAnchor += (want - pillAnchor) * (1 - Math.exp(-dt * 12));
+  // Blip's place in the pill, from its middle: its left end, or the middle while it is small.
+  const st = S.name, slot = st === "ask" ? 0 : st === "rest" ? (7 + 14 - P.w / 2) * outCubic(P.text) : 22 - P.w / 2;
+  const half = P.w / 2 + 8;
+  pillCX = W / 2 + pillAnchor - slot;
+  pillCX = W < 2 * half ? W / 2 : Math.max(half, Math.min(W - half, pillCX));
+  // Main is told where he stands (a hop to a text box starts there) and where the pill is (Ask's thread docks to it).
+  const spot = { blip: Math.round(mode === "work" || mode === "leave" ? roamNow.x : pillCX + slot - W / 2), pill: Math.round(pillCX - W / 2) };
+  if ((!spotSent || Math.abs(spot.blip - spotSent.blip) > 2 || Math.abs(spot.pill - spotSent.pill) > 2) && now - spotAt > 150) {
+    spotSent = spot; spotAt = now;
+    if (bridge && bridge.pillSpot) bridge.pillSpot(spot);
+  }
+  return pillCX;
+}
+
 function botsTargets(st) {
   const g = { buttons: 0, show: 1, solid: 1, text: 0 };
   if (st === "listening" && BLIP()) {
@@ -217,7 +283,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
       // At rest: three small grey dots, the pill's way of saying it is there.
       ctx.globalAlpha = P.show * (1 - P.text) * .8;
       ctx.fillStyle = B.meta();
-      for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(W / 2 + i * 6, cy, 1.5, 0, Math.PI * 2); ctx.fill(); }
+      for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(x0 + P.w / 2 + i * 6, cy, 1.5, 0, Math.PI * 2); ctx.fill(); }
     }
   } else {
     // Done: an ink tick that draws itself. An error: a small ink ✕ (never red). Then the words.
@@ -246,14 +312,21 @@ function drawBots(t, now, dt, x0, y0, cy) {
     if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
     let bx, bh;
     if (st === "listening" || st === "talk") { bx = x0 + 8 + 14; bh = 52; }
-    else if (st === "rest") { bx = lerpN(W / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
-    else if (st === "ask") { bx = W / 2; bh = 40; }
+    else if (st === "rest") { bx = lerpN(x0 + P.w / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
+    else if (st === "ask") { bx = x0 + P.w / 2; bh = 40; }
     else { bx = x0 + 6 + 16; bh = 50; }
+    // A task running, the pill stays put and he walks about the strip; going to the edge, he walks off it.
+    const rm = roamMode();
+    if (rm === "work" || rm === "leave") bx = W / 2 + roamNow.x;
     const hearing = st === "listening" || (st === "talk" && S.data.phase === "listen");
     const level = hearing && now - bandsAt < 250 ? Math.min(1, Math.max(...bands) * 1.3) : 0;
     if (st === "talk") talkSign(bx, y0 + P.h - 2, bh, now);
     ctx.globalAlpha = P.show;
+    // Walking left, he is drawn the other way round: he faces where he goes.
+    const back = roamNow.walking && roamNow.dir < 0;
+    if (back) { ctx.save(); ctx.translate(bx, 0); ctx.scale(-1, 1); ctx.translate(-bx, 0); }
     pf.draw(ctx, bx, y0 + P.h - 2, bh, now, level);
+    if (back) ctx.restore();
     moving = true;
   }
   // Ask: the bead on the small pill's top edge, where the guide's thread leaves it. Clay while it listens.
@@ -262,8 +335,8 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const breath = still ? 1 : 0.5 + 0.5 * Math.sin(now / 1000 * 2 * Math.PI / Math.max(0.2, K.num("desktop.pill.askBreathS", 1.25)));
     const rr = R * (1 - 0.2 * beadHot * (1 - breath));
     ctx.globalAlpha = P.show * clamp(bead * 1.6);
-    ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.arc(W / 2, y0, rr + 1, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = mixHex(B.ink(), B.clay(), beadHot); ctx.beginPath(); ctx.arc(W / 2, y0, rr, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = B.paper(); ctx.beginPath(); ctx.arc(x0 + P.w / 2, y0, rr + 1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = mixHex(B.ink(), B.clay(), beadHot); ctx.beginPath(); ctx.arc(x0 + P.w / 2, y0, rr, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
   return moving;

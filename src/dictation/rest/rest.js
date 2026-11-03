@@ -1,5 +1,5 @@
 // The rest window's page: Blip behind the screen's right edge, his antenna out, his head peeking out now and
-// then, and gone while the pointer is near (main.js sends `duck`). Under Reduce Motion only the antenna shows, still.
+// then (every third time on his long neck, stretched far out), and gone while the pointer is near (main.js sends `duck`). Under Reduce Motion only the antenna shows, still.
 (function () {
 "use strict";
 const K = window.TailzuKnobs;
@@ -12,7 +12,7 @@ const blip = window.TailzuBlip.createBlip({ height: h });
 
 // How far below the edge he is, as a share of his height: the antenna alone, his head out, or out of sight.
 const ANTENNA = () => K.num("desktop.rest.antenna", 0.35), OUT = 0, GONE = 1.2;
-const S = { duck: false, sink: GONE, peekUntil: 0, nextPeek: 0, last: 0, raf: 0 };
+const S = { duck: false, sink: GONE, peekUntil: 0, nextPeek: 0, last: 0, raf: 0, crane: false, peeks: 0 };
 let W = 0, H = 0, dpr = 1;
 
 function fit() {
@@ -31,6 +31,10 @@ function frame(ms) {
   if (!reduced && !S.duck && ms > S.nextPeek) {
     S.peekUntil = ms + K.num("desktop.rest.peekMs", 2300);
     S.nextPeek = ms + 7000 + Math.random() * 4000;
+    // Every third peek (desktop.rest.craneEvery) is the long neck: his head stretched far out, to see more.
+    S.peeks++;
+    const every = Math.round(K.num("desktop.rest.craneEvery", 3));
+    S.crane = every > 0 && S.peeks % every === 0;
   }
   const out = !reduced && !S.duck && ms < S.peekUntil;
   const target = S.duck ? GONE : out ? OUT : ANTENNA();
@@ -42,7 +46,7 @@ function frame(ms) {
   g.translate(W, H / 2);
   g.rotate(-Math.PI / 2);
   g.beginPath(); g.rect(-2 * h, -2 * h, 4 * h, 2 * h); g.clip();
-  blip.pose("peek");
+  blip.pose(out && S.crane ? "crane" : "peek");
   blip.still(reduced);
   blip.live(false);
   // Out, he looks across the screen and back; in, at nothing in particular.
