@@ -75,6 +75,8 @@ src/
   context/              what the person is looking at
     frontApp.js         the app in front, the focused field, the text around it (AppleScript / PowerShell)
     screenRead.js       the screen's text: accessibility first, on-device OCR to fill the gaps
+    pageRead.js         the whole page, off-screen parts included, for understanding (never acted on):
+                        the helper's page read, a screen at a time when that is thin; cut for the server
 
   agent/                Ask
     ask.js              createAsk: the guide's window, the question's microphone, the agent's hands
@@ -101,6 +103,7 @@ src/
       driver.js         picks the driver for this platform
       axDriver.js       macOS: talks to native/tzax.swift (accessibility, look, caret)
       uiaDriver.js      Windows: talks to native/uia-agent.ps1 (UI Automation, OCR, caret)
+      page.js           a "page" answer (the window's whole text) as callers see it, from either helper
       fixtures/         fake helpers the driver tests run against
     guide/              the guide window: card, ring, thread, Blip, marks
       guide.html        the page; core, placement, card, ring, tether, peek, pen, frame, speech,
@@ -202,6 +205,7 @@ holds checks of the repository as a whole.
 | App and field in front | `src/context/frontApp.js`, `screenRead.js` |
 | Ask (agent) | `src/agent/ask.js`, `src/agent/run/agent.js`, `src/agent/guide/` |
 | Reading and acting on the screen | `src/agent/driver/`, `native/tzax.swift`, `native/uia-agent.ps1` |
+| The whole page (understanding, not acting) | `src/context/pageRead.js`; the helpers' "page" command and `src/agent/driver/page.js`; step 0's `page` in `src/agent/run/agent.js` |
 | Ask's file operations | `src/agent/localfiles.js`, `folderSettings.js` |
 | Notes | `src/notes/`; `main.js` "Notes"; `native/audiotap.swift` |
 | Server-drawn app window | `src/app/app.html`, `src/app/sdui/` (node kinds: `sdui/core.js` COMPONENTS) |
@@ -265,7 +269,7 @@ caches it; dictation uses `/v1/transcribe-clean`, `/v1/transcribe-stream` and
 `/v1/refine`; routing `/v1/shell/route`, `/v1/shell/ask`, `/v1/ask/decide` (the
 brain) and `/v1/routines/draft` then `/v1/routines`; talk mode `/v1/talk`
 (NDJSON) and `/v1/talk/stop`, its voice `/v1/speak` when the server's voice is on; Ask `/v1/agent`
-(NDJSON) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
+(NDJSON; step 0 may carry the whole page as `page`) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
 `/v1/app/screen`, `/v1/live`, `/v1/files`, `/v1/connectors/:id/connect`,
 `/v1/auth/link`; the runner `/v1/code/runner/*` and a WebSocket to the jobs
 Worker (protocol: `TAILZU-BACKEND/docs/desktop-runner-session.md`). Accounts
