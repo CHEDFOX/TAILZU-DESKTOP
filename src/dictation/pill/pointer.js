@@ -6,6 +6,8 @@ function pillRect() { const bottom = H - K.num("desktop.pill.bottomPad", 14); re
 function podsNow() { return SP.pods(podSeed(), W, clamp(splitT), INSET()); }
 const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
+  // Hidden (Blip over a text box, or no rest pill), it takes nothing: the app under it keeps its clicks.
+  if (P.show < 0.5) return false;
   // Apart, only the two halves take the pointer: the thread and the screen
   // between them stay the app's, clicks and all.
   if (apart()) return !!SP.podAt(podsNow(), x, y, pad);

@@ -83,6 +83,8 @@ function runDemo(scene) {
     pg.setTransform(dpr, 0, 0, dpr, 0, 0);
     pg.clearRect(0, 0, W, H);
     if (pillMode) return false;
+    // The Bots look hides the pill while Blip is over the text box (pill/bots.js botsTargets): no pill, no thread.
+    if (BOTS() && DICT.state !== "idle") return false;
     if (DICT.on) { dictationPill(t); return true; }
     const P = pillAt(), L = S.life, e = now() - L.at;
     // Open while a question is up; closing, held open while the thread

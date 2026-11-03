@@ -112,6 +112,8 @@ function botsTargets(st) {
   } else {
     g.h = BLIP() ? 36 : 32; g.w = 12 + 12 + 8 + bTextW(bLabel(), 13) + 14 + (BLIP() ? 10 : 0); g.text = 1;
   }
+  // Blip is over the text box and the words go into it as they are said: no pill and nothing in it, until he is home.
+  if (BLIP() && blipAway(clock()) && (st === "listening" || st === "writing" || st === "done") && K.bool("desktop.pill.awayHides", true)) g.show = 0;
   return g;
 }
 /** The ✕ at the listening pill's end, where onCancel looks for it. */
