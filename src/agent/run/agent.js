@@ -85,8 +85,6 @@ const { actionLine, fingerprint, confirmText, acting } = require("./actions.js")
 const { makePost } = require("./stream.js");
 const { needsWhole } = require("../../context/pageRead.js");
 
-/** History the server takes, oldest first. Older turns fall off the front. */
-const MAX_HISTORY = 16;
 /** What a device result may carry back, as the server reads it. */
 const DEVICE_DATA_MAX = 5000;
 /** A long job's plan, and the facts it keeps (the server takes the same: AgentJob). */
@@ -99,10 +97,6 @@ const DEVICE_BIG = 100;
 /** The driver resolves within the timeout it is given, so a little more than
  *  that here only ever catches a driver that broke its promise. */
 const SNAPSHOT_GRACE_MS = 250;
-/** A finished answer's card waits for its voice to finish before its doneMs
- *  starts, but never longer than this: a voice that never says it has
- *  finished does not hold the card up for good. */
-const SPEECH_MAX_MS = 180000;
 /** The server takes a picture up to this size (AGENT_IMAGE_MAX_BYTES) and
  *  answers 413 above it; a crop that big is not sent at all. */
 const MAX_PICTURE_BYTES = 2000000;
@@ -225,6 +219,14 @@ function createAgent(deps) {
     try { v = knob(name, fallback); } catch { v = fallback; }
     return typeof v === "boolean" ? v : fallback;
   }
+  /** History the server takes, oldest first. Older turns fall off the front. */
+  const historyMax = () => Math.max(1, Math.round(num("desktop.agent.historyMax", 16)));
+  /** Words the person reads (desktop.*, through `d.txt`, the knobs' reader); the English here without it. */
+  function txt(key, fallback, vars) {
+    let v;
+    try { v = typeof d.txt === "function" ? d.txt(key, fallback, vars) : undefined; } catch { v = undefined; }
+    return typeof v === "string" && v.trim() ? v : localFiles.fill(fallback, vars);
+  }
 
   function language() {
     try { return str(typeof d.language === "function" ? d.language() : d.language); } catch { return ""; }
@@ -300,7 +302,9 @@ function createAgent(deps) {
     try { said = d.afterSpeech(); } catch (e) { log(`agent: afterSpeech threw: ${errText(e)}`); }
     let cap = null;
     new Promise((resolve) => {
-      cap = setTimeout(resolve, SPEECH_MAX_MS);
+      // A finished answer's card waits for its voice to finish before its doneMs starts, but never longer than
+      // desktop.agent.speechMaxMs: a voice that never says it has finished does not hold the card up for good.
+      cap = setTimeout(resolve, Math.max(0, num("desktop.agent.speechMaxMs", 180000)));
       if (typeof cap.unref === "function") cap.unref();
       Promise.resolve(said).then(resolve, resolve);
     }).then(() => { clearTimeout(cap); arm(); });
@@ -559,7 +563,7 @@ function createAgent(deps) {
     if (lang) req.language = lang;
     // "This computer": the person's own files, offered to the planner only when this copy can do them.
     if (canDevice()) req.capabilities = ["DeviceFiles"];
-    if (run.history.length) req.history = run.history.slice(-MAX_HISTORY).map((h) => Object.assign({}, h));
+    if (run.history.length) req.history = run.history.slice(-historyMax()).map((h) => Object.assign({}, h));
     if (run.job) req.job = { goal: run.job.goal, plan: run.job.plan.slice(), done: run.job.done.slice(), notes: run.job.notes.slice() };
     // The whole page, on step 0 only, and never from a screen that must not be read.
     if (run.step === 0 && input.page && !refusal(snap)) {
@@ -588,7 +592,7 @@ function createAgent(deps) {
       for (let i = run.history.length - 1; i >= 0; i--) if (run.history[i].data && ++kept >= 2) delete run.history[i].data;
     }
     run.history.push(t);
-    while (run.history.length > MAX_HISTORY) run.history.shift();
+    while (run.history.length > historyMax()) run.history.shift();
   }
 
   function showPlan(run) {
@@ -1093,7 +1097,7 @@ function createAgent(deps) {
     const trash = p.risk === "destructive";
     return {
       title: trash ? w.titleTrash : w.title,
-      app: "This computer", label: w.label, preview,
+      app: txt("desktop.files.thisComputer", "This computer"), label: w.label, preview,
       note: trash ? w.noteTrash : w.note,
       buttons: [{ id: "approve", label: w.ok }, { id: "deny", label: w.later }],
     };

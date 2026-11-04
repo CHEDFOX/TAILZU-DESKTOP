@@ -258,9 +258,12 @@ function broadcastKnobs() {
   const k = knobsPayload();
   // The pill too: it was left out, so its sizes and colours from the server
   // held only from the next launch.
-  for (const w of [appWin, recorderWin, overlayWin, pillWin, notesWin]) {
+  // And the runner's window, whose words are labels too.
+  for (const w of [appWin, recorderWin, overlayWin, pillWin, notesWin, runnerWin]) {
     if (w && !w.isDestroyed() && !w.webContents.isLoading()) w.webContents.send("knobs", k);
   }
+  // And Ask's card (its window is ask.js's own).
+  try { if (ask) ask.knobs(k); } catch { /* no card window yet */ }
 }
 
 /** POST /v1/app/bootstrap as this desktop, with the account's token when
@@ -1984,6 +1987,8 @@ function setupRunner() {
     api: { fetch: authorizedFetch, signedIn },
     secrets: () => [authSession && authSession.access_token, authSession && authSession.refresh_token].filter(Boolean),
     notify: (body) => notify(body),
+    // The words it says to the person (desktop.runner.*): the knobs' reader.
+    txt,
     // config.json: "runnerImage" (the Docker image) and "runnerName" (the name this computer is listed under); read when used.
     config: { get image() { return cfg.runnerImage; }, get name() { return cfg.runnerName; } },
     powerMonitor,
@@ -2032,6 +2037,7 @@ function pushRunnerWindow() {
 // and the audit folder. Nothing here asks first: on, and every project allowed, are the defaults.
 const fromRunnerWin = (e) => isFrom(e, runnerWin);
 ipcMain.handle("runner:state", async (e) => (fromRunnerWin(e) && runner ? runner.snapshot() : null));
+ipcMain.handle("runner:knobs", (e) => (fromRunnerWin(e) ? knobsPayload() : null));
 ipcMain.handle("runner:set", async (e, key, value) => {
   if (!fromRunnerWin(e) || !runner || typeof value !== "boolean") return null;
   if (key === "enabled") runner.setEnabled(value);

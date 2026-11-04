@@ -18,17 +18,28 @@ class El {
   walk(f) { f(this); for (const c of this.children) c.walk(f); }
 }
 
-function page(snapshot) {
+/** A fresh knobs.js of its own, as the window loads it (a <script>), so no test's knobs leak into another's. */
+function freshKnobs() {
+  const box = { module: { exports: {} } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "..", "knobs.js"), "utf8"), box);
+  return box.module.exports;
+}
+
+function page(snapshot, knobs) {
   const ids = {};
-  const document = { getElementById: (id) => (ids["#" + id] = ids["#" + id] || new El("#" + id)), createElement: (t) => new El(t) };
+  const document = {
+    title: "", getElementById: (id) => (ids["#" + id] = ids["#" + id] || new El("#" + id)), createElement: (t) => new El(t),
+    createTextNode: (t) => { const e = new El("#text"); e.textContent = t; return e; },
+  };
   const sent = [];
   const api = {
     state: async () => snapshot, set: async (k, v) => { sent.push(["set", k, v]); return snapshot; }, project: async (id, name, action) => { sent.push(["project", id, name, action]); return snapshot; },
     checkDocker: async () => { sent.push(["checkDocker"]); return snapshot; }, stop: () => sent.push(["stop"]), openAudit: () => sent.push(["openAudit"]), onUpdate: (f) => { api.update = f; },
+    knobs: async () => knobs || null, onKnobs: (f) => { api.pushKnobs = f; },
   };
-  const ctx = { window: { tailzuRunner: api }, document, Date, String, Array, Object, Number };
+  const ctx = { window: { tailzuRunner: api, TailzuKnobs: freshKnobs() }, document, Date, String, Array, Object, Number };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "ui.js"), "utf8"), ctx);
-  return { ids, sent, api, ctx };
+  return { ids, sent, api, ctx, document };
 }
 
 const snap = (over = {}) => ({
@@ -64,7 +75,7 @@ test("working shows what it works on, with Stop; paused says why; the container'
   p.ids["#stop"].listeners.click();
   assert.deepStrictEqual(p.sent, [["stop"]]);
   p.api.update(snap({ status: { enabled: true, state: "paused", pausedReason: "battery_low", working: false }, container: { on: true, image: "node:22-bookworm", docker: { installed: false, running: false, version: "", reason: "Docker is not installed on this computer.", checked: true } } }));
-  assert.strictEqual(p.ids["#state"].textContent, "Paused: the battery is under 20%");
+  assert.strictEqual(p.ids["#state"].textContent, "Paused: battery is under 20%", "the tray's words: the window and the tray agree");
   assert.match(p.ids["#dockerNote"].textContent, /Docker is not installed on this computer\. Nothing will run until/);
   assert.strictEqual(p.ids["#recheck"].hidden, false);
 });
@@ -78,4 +89,20 @@ test("what the person clicks goes back as a request: the switch, the container, 
   p.ids["#projects"].children[1].children.find((b) => b.textContent === "Don't allow").listeners.click();
   p.ids["#projects"].children[2].children.find((b) => b.textContent === "Allow").listeners.click();
   assert.deepStrictEqual(p.sent, [["set", "enabled", false], ["set", "container", true], ["openAudit"], ["project", "p2", "<img src=x onerror=alert(1)>", "deny"], ["project", "p3", "acme/no", "allow"]]);
+});
+
+test("every word is the server's when it sends one, the English otherwise, and a change lands without a reload", async () => {
+  const p = page(snap({ activity: [] }), { labels: { "desktop.runner.title": "Xode auf diesem Computer", "desktop.tray.runnerOnline": "Online für Xode", "desktop.runner.nothingYet": "Noch nichts." }, flags: {} });
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(p.document.title, "Xode auf diesem Computer");
+  assert.strictEqual(p.ids["#heading"].textContent, "Xode auf diesem Computer");
+  assert.strictEqual(p.ids["#state"].textContent, "Online für Xode");
+  assert.strictEqual(p.ids["#activity"].textContent, "Noch nichts.");
+  assert.strictEqual(p.ids["#audit"].textContent, "Open the audit log folder", "a word the server did not send stays English");
+  assert.match(p.ids["#explain"].textContent, /^On unless you turn it off\. While it is on/);
+  p.api.pushKnobs({ labels: { "desktop.runner.allow": "Erlauben", "desktop.runner.deny": "Nicht erlauben", "desktop.runner.workspaces": "Arbeitsordner: {dir}" }, flags: {} });
+  const buttons = []; p.ids["#projects"].walk((e) => { if (e.tag === "button") buttons.push(e.textContent); });
+  assert.deepStrictEqual(buttons, ["Nicht erlauben", "Nicht erlauben", "Erlauben"]);
+  assert.strictEqual(p.ids["#where"].textContent, "Arbeitsordner: /x/workspaces");
+  assert.strictEqual(p.ids["#heading"].textContent, "Xode on this computer", "the newer knobs replace the older ones");
 });

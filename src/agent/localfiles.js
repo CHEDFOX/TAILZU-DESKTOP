@@ -117,20 +117,7 @@ const tidy = (s) => str(s).replace(NAME_G, " ");
 const tidyText = (s) => str(s).split("\n").map(tidy).join("\n");
 const fill = (s, vars) => str(s).replace(/\{(\w+)\}/g, (m, k) => (vars && k in vars ? String(vars[k]) : m));
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
-const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
-/** A failure in plain words; never the path the system put in its message. */
-function whyFailed(e) {
-  const code = e && e.code;
-  if (code === "EACCES" || code === "EPERM") return "no permission";
-  if (code === "EBUSY" || code === "ETXTBSY") return "in use";
-  if (code === "ENOENT") return "not found";
-  if (code === "ENOSPC") return "disk full";
-  if (code === "EEXIST") return "name taken";
-  if (code === "EXDEV") return "another disk";
-  if (e && e.refused) return str(e.message);
-  return "failed";
-}
 const refuse = (message) => Object.assign(new Error(message), { refused: true });
 
 function sizeText(n) {
@@ -170,6 +157,24 @@ function createLocalFiles(opts) {
     let v;
     try { v = say ? say(key, fallback, vars) : undefined; } catch { v = undefined; }
     return typeof v === "string" && v.trim() ? v : fill(fallback, vars);
+  }
+
+  /** "1 file", "3 files": the counts the person reads, worded by the server too. */
+  const nFiles = (n) => (n === 1 ? txt("desktop.files.countFile", "{n} file", { n }) : txt("desktop.files.countFiles", "{n} files", { n }));
+  const nFolders = (n) => (n === 1 ? txt("desktop.files.countFolder", "{n} folder", { n }) : txt("desktop.files.countFolders", "{n} folders", { n }));
+  const nItems = (n) => (n === 1 ? txt("desktop.files.countItem", "{n} item", { n }) : txt("desktop.files.countItems", "{n} items", { n }));
+
+  /** A failure in plain words; never the path the system put in its message. */
+  function whyFailed(e) {
+    const code = e && e.code;
+    if (code === "EACCES" || code === "EPERM") return txt("desktop.files.whyPermission", "no permission");
+    if (code === "EBUSY" || code === "ETXTBSY") return txt("desktop.files.whyInUse", "in use");
+    if (code === "ENOENT") return txt("desktop.files.whyNotFound", "not found");
+    if (code === "ENOSPC") return txt("desktop.files.whyDiskFull", "disk full");
+    if (code === "EEXIST") return txt("desktop.files.whyNameTaken", "name taken");
+    if (code === "EXDEV") return txt("desktop.files.whyOtherDisk", "another disk");
+    if (e && e.refused) return str(e.message);
+    return txt("desktop.files.whyFailed", "failed");
   }
 
   const fold = (p) => (insensitive ? p.toLowerCase() : p);
@@ -504,7 +509,7 @@ function createLocalFiles(opts) {
           if (!src.ok) throw refuse(src.why);
           const st = lstat(src.real);
           if (!st) throw Object.assign(new Error("gone"), { code: "ENOENT" });
-          if (st.isSymbolicLink()) throw refuse("a link");
+          if (st.isSymbolicLink()) throw refuse(txt("desktop.files.whyLink", "a link"));
           if (s.op === "trash") {
             await shell.trashItem(src.real);
             batch.ops.push({ op: "trash", from: src.real });
@@ -515,17 +520,17 @@ function createLocalFiles(opts) {
           if (!dst.ok) throw refuse(dst.why);
           if (!lstat(path.dirname(dst.real))) throw Object.assign(new Error("gone"), { code: "ENOENT" });
           if (s.op === "copy") {
-            if (!st.isFile()) throw refuse("only files are copied");
+            if (!st.isFile()) throw refuse(txt("desktop.files.whyOnlyFiles", "only files are copied"));
             fs.copyFileSync(src.real, dst.real, nodeFs.constants.COPYFILE_EXCL);
             batch.ops.push({ op: "copy", from: src.real, to: dst.real });
           } else {
-            if (st.isDirectory() && isInside(dst.real, src.real)) throw refuse("a folder can't go inside itself");
+            if (st.isDirectory() && isInside(dst.real, src.real)) throw refuse(txt("desktop.files.whyIntoItself", "a folder can't go inside itself"));
             relocate(src.real, dst.real);
             batch.ops.push({ op: s.op, from: src.real, to: dst.real });
           }
           moved++;
         } catch (e) {
-          failed.push(`${clip(tidy(s.label || "a file"), 50)} (${whyFailed(e)})`);
+          failed.push(`${clip(tidy(s.label || txt("desktop.files.aFile", "a file")), 50)} (${whyFailed(e)})`);
         }
         // On disk after every step, not in batches: if the app is closed halfway, what got done can still be undone.
         if (batch.ops.length !== logged) { logged = batch.ops.length; saveLog(log); }
@@ -534,8 +539,9 @@ function createLocalFiles(opts) {
       if (!batch.ops.length) log.batches = log.batches.filter((b) => b !== batch);
       saveLog(log);
     }
-    const note = `${verb(moved)}${failed.length ? `; ${failed.length} didn’t go through` : ""}`;
-    const text = [note + ".", ...(failed.length ? ["Could not: " + failed.slice(0, 8).join(", ") + (failed.length > 8 ? `, and ${failed.length - 8} more` : "")] : [])]
+    const note = verb(moved) + (failed.length ? txt("desktop.files.someFailed", "; {n} didn’t go through", { n: failed.length }) : "");
+    const couldNot = failed.slice(0, 8).join(", ") + (failed.length > 8 ? txt("desktop.files.andMore", ", and {n} more", { n: failed.length - 8 }) : "");
+    const text = [note + ".", ...(failed.length ? [txt("desktop.files.couldNot", "Could not: {list}", { list: couldNot })] : [])]
       .join(" ");
     return { ok: moved > 0 || (!steps.length && !failed.length), text: clip(text, RESULT_CHARS), note: clip(note, 200), done: moved, failed: failed.length };
   }
@@ -546,7 +552,7 @@ function createLocalFiles(opts) {
 
   function planFind(args) {
     const rs = roots();
-    if (!rs.length) return bad("No folder is allowed for Ask. Add one in Settings.");
+    if (!rs.length) return bad(txt("desktop.files.noFolders", "No folder is allowed for Ask. Add one in Settings."));
     const sc = scope(args, rs);
     if (sc.why) return bad(sc.why);
     const limit = Math.min(FIND_MAX, Math.max(1, Math.round(Number(args.limit)) || FIND_DEFAULT));
@@ -556,32 +562,34 @@ function createLocalFiles(opts) {
         const found = files(sc.from, rs, filterOf(args), limit + 1);
         const more = found.hits.length > limit || found.truncated;
         const hits = found.hits.slice(0, limit);
-        const head = hits.length ? `${plural(hits.length, "file", "files")} found${more ? " (more match; narrow it down)" : ""}:` : "No files found.";
+        const found2 = txt("desktop.files.found", "{files} found", { files: nFiles(hits.length) });
+        const head = !hits.length ? txt("desktop.files.noneFound", "No files found.")
+          : more ? txt("desktop.files.foundMore", "{files} found (more match; narrow it down):", { files: nFiles(hits.length) }) : found2 + ":";
         const text = clip([head, ...hits.map(line)].join("\n"), RESULT_CHARS);
-        return { ok: true, text, note: hits.length ? plural(hits.length, "file", "files") + " found" : "no files found", done: hits.length, failed: 0 };
+        return { ok: true, text, note: hits.length ? found2 : txt("desktop.files.noneFoundNote", "no files found"), done: hits.length, failed: 0 };
       },
     };
   }
 
   function planList(args) {
     const rs = roots();
-    if (!rs.length) return bad("No folder is allowed for Ask. Add one in Settings.");
+    if (!rs.length) return bad(txt("desktop.files.noFolders", "No folder is allowed for Ask. Add one in Settings."));
     if (!args.folder) {
       return {
         ok: true, risk: "read", count: 0, lines: [],
-        run: async () => ({ ok: true, text: "Folders Ask may use:\n" + rs.map((r) => r.label).join("\n"), note: plural(rs.length, "folder", "folders"), done: rs.length, failed: 0 }),
+        run: async () => ({ ok: true, text: txt("desktop.files.foldersHead", "Folders Ask may use:") + "\n" + rs.map((r) => r.label).join("\n"), note: nFolders(rs.length), done: rs.length, failed: 0 }),
       };
     }
     const g = guard(args.folder, rs);
     if (!g.ok) return bad(g.why);
     const st = g.exists ? lstat(g.real) : null;
-    if (!st || !st.isDirectory()) return bad(`${clip(str(args.folder), 40)} isn't a folder I can see.`);
+    if (!st || !st.isDirectory()) return bad(txt("desktop.files.cantSeeFolder", "{name} isn't a folder I can see.", { name: clip(str(args.folder), 40) }));
     const limit = Math.min(FIND_MAX, Math.max(1, Math.round(Number(args.limit)) || FIND_DEFAULT));
     return {
       ok: true, risk: "read", count: 0, lines: [],
       run: async () => {
         let names = [];
-        try { names = fs.readdirSync(g.real, { withFileTypes: true }); } catch (e) { return { ok: false, text: `I couldn't read it (${whyFailed(e)}).`, note: "couldn’t read the folder", done: 0, failed: 1 }; }
+        try { names = fs.readdirSync(g.real, { withFileTypes: true }); } catch (e) { return { ok: false, text: txt("desktop.files.cantRead", "I couldn't read it ({why}).", { why: whyFailed(e) }), note: txt("desktop.files.cantReadNote", "couldn’t read the folder"), done: 0, failed: 1 }; }
         const items = [];
         for (const d of names) {
           if (badName(d.name) || (d.isSymbolicLink && d.isSymbolicLink())) continue;
@@ -590,8 +598,11 @@ function createLocalFiles(opts) {
         }
         items.sort((a, b) => Number(b.dir) - Number(a.dir) || b.mtime - a.mtime);
         const shownItems = items.slice(0, limit);
-        const text = clip([`${shown(g)}: ${plural(items.length, "item", "items")}${items.length > limit ? `, newest ${limit}` : ""}`, ...shownItems.map(line)].join("\n"), RESULT_CHARS);
-        return { ok: true, text, note: plural(items.length, "item", "items"), done: items.length, failed: 0 };
+        const head = items.length > limit
+          ? txt("desktop.files.listHeadNewest", "{folder}: {items}, newest {n}", { folder: shown(g), items: nItems(items.length), n: limit })
+          : txt("desktop.files.listHead", "{folder}: {items}", { folder: shown(g), items: nItems(items.length) });
+        const text = clip([head, ...shownItems.map(line)].join("\n"), RESULT_CHARS);
+        return { ok: true, text, note: nItems(items.length), done: items.length, failed: 0 };
       },
     };
   }
@@ -600,20 +611,21 @@ function createLocalFiles(opts) {
     const g = guard(args.path);
     if (!g.ok) return bad(g.why);
     const st = g.exists ? lstat(g.real) : null;
-    if (!st) return bad(`${clip(str(args.path), 60)} isn't there.`);
-    if (st.isSymbolicLink()) return bad("That's a link, so I leave it.");
+    if (!st) return bad(txt("desktop.files.notThere", "{name} isn't there.", { name: clip(str(args.path), 60) }));
+    if (st.isSymbolicLink()) return bad(txt("desktop.files.thatsLink", "That's a link, so I leave it."));
     // Programs and scripts are never opened from here: by name, by bundle, or, off Windows, a file with the execute bit and no type we know.
     const program = RUNS_CODE.has(extOf(g.real)) || bundleName(g.real) || (platform !== "win32" && st.isFile() && (st.mode & 0o111) !== 0 && kindOf(path.basename(g.real)) === "other");
-    if (!reveal && program) return bad("I don't open programs or scripts. Open it yourself if you meant to.");
+    if (!reveal && program) return bad(txt("desktop.files.noPrograms", "I don't open programs or scripts. Open it yourself if you meant to."));
     return {
       ok: true, risk: "read", count: 0, lines: [],
       run: async () => {
         // Looked at again at the moment it is opened.
         const again = guard(args.path);
-        if (!again.ok || again.real !== g.real) return { ok: false, text: "It moved, so I didn’t open it.", note: "it moved", done: 0, failed: 1 };
-        if (reveal) { shell.showItemInFolder(g.real); return { ok: true, text: `Showing ${shown(g)}.`, note: "shown", done: 1, failed: 0 }; }
+        if (!again.ok || again.real !== g.real) return { ok: false, text: txt("desktop.files.moved", "It moved, so I didn’t open it."), note: txt("desktop.files.movedNote", "it moved"), done: 0, failed: 1 };
+        if (reveal) { shell.showItemInFolder(g.real); return { ok: true, text: txt("desktop.files.showing", "Showing {name}.", { name: shown(g) }), note: txt("desktop.files.shownNote", "shown"), done: 1, failed: 0 }; }
         const err = await shell.openPath(g.real);
-        return err ? { ok: false, text: "It wouldn’t open.", note: "wouldn’t open", done: 0, failed: 1 } : { ok: true, text: `Opened ${shown(g)}.`, note: "opened", done: 1, failed: 0 };
+        return err ? { ok: false, text: txt("desktop.files.wontOpen", "It wouldn’t open."), note: txt("desktop.files.wontOpenNote", "wouldn’t open"), done: 0, failed: 1 }
+          : { ok: true, text: txt("desktop.files.opened", "Opened {name}.", { name: shown(g) }), note: txt("desktop.files.openedNote", "opened"), done: 1, failed: 0 };
       },
     };
   }
@@ -628,18 +640,18 @@ function createLocalFiles(opts) {
     const g = guard(args.folder, rs);
     if (!g.ok) return bad(g.why);
     const st = g.exists ? lstat(g.real) : null;
-    if (!st || !st.isDirectory()) return bad(`${clip(str(args.folder), 40)} isn't a folder I can see.`);
+    if (!st || !st.isDirectory()) return bad(txt("desktop.files.cantSeeFolder", "{name} isn't a folder I can see.", { name: clip(str(args.folder), 40) }));
     const by = args.by === "month" ? "month" : args.by === "type" ? "type" : "";
-    if (!by) return bad("Sort by type or by month.");
+    if (!by) return bad(txt("desktop.files.sortBy", "Sort by type or by month."));
     let entries = [];
-    try { entries = fs.readdirSync(g.real, { withFileTypes: true }); } catch { return bad("I can't read that folder."); }
+    try { entries = fs.readdirSync(g.real, { withFileTypes: true }); } catch { return bad(txt("desktop.files.cantReadFolder", "I can't read that folder.")); }
     const loose = [];
     for (const d of entries) {
       if (badName(d.name) || !d.isFile() || (d.isSymbolicLink && d.isSymbolicLink())) continue;
       const st2 = lstat(path.join(g.real, d.name));
       if (st2 && st2.isFile()) loose.push(describe(path.join(g.real, d.name), st2, rs));
     }
-    if (!loose.length) return bad("There are no loose files to sort in there.");
+    if (!loose.length) return bad(txt("desktop.files.noLoose", "There are no loose files to sort in there."));
     loose.sort((a, b) => a.name.localeCompare(b.name));
     const take = loose.slice(0, MAX_FILES);
     const taken = new Set();
@@ -652,7 +664,7 @@ function createLocalFiles(opts) {
       if (!made.has(folder)) {
         made.set(folder, true);
         const at = lstat(destDir);
-        if (at && !at.isDirectory()) return bad(`There's a file called ${folder} in the way.`);
+        if (at && !at.isDirectory()) return bad(txt("desktop.files.inTheWay", "There's a file called {name} in the way.", { name: folder }));
         if (!at) steps.push({ op: "mkdir", to: destDir, label: folder });
       }
       const name = freeName(destDir, f.name, taken);
@@ -662,37 +674,39 @@ function createLocalFiles(opts) {
     const { lines, more } = cardLines(rows);
     return {
       ok: true, risk: "write", count: take.length, say: { key: "organise", vars: { n: take.length, m: made.size, to: shown(g) } },
-      lines, more, extra: loose.length > take.length ? `${loose.length - take.length} more files are left for next time.` : "",
-      run: () => perform("organise_folder", steps, (n) => `Moved ${plural(n, "file", "files")} into ${plural(made.size, "folder", "folders")} in ${shown(g)}`),
+      lines, more, extra: loose.length > take.length ? txt("desktop.files.leftForLater", "{n} more files are left for next time.", { n: loose.length - take.length }) : "",
+      run: () => perform("organise_folder", steps, (n) => txt("desktop.files.movedInto", "Moved {files} into {folders} in {to}", { files: nFiles(n), folders: nFolders(made.size), to: shown(g) })),
     };
   }
 
   function planTransfer(args, copy) {
     const rs = roots();
-    if (!args.to) return bad("Which folder should they go to?");
+    if (!args.to) return bad(txt("desktop.files.whichFolder", "Which folder should they go to?"));
     const sel = selection(args, rs, { dirs: !copy });
     if (sel.why) return bad(sel.why);
-    if (!sel.items.length) return bad("I didn't find any files like that.");
+    if (!sel.items.length) return bad(txt("desktop.files.noneLikeThat", "I didn't find any files like that."));
     const to = guard(args.to, rs);
     if (!to.ok) return bad(to.why);
-    if (to.exists) { const t = lstat(to.real); if (!t || !t.isDirectory()) return bad(`${clip(str(args.to), 40)} is a file, not a folder.`); }
+    if (to.exists) { const t = lstat(to.real); if (!t || !t.isDirectory()) return bad(txt("desktop.files.isFile", "{name} is a file, not a folder.", { name: clip(str(args.to), 40) })); }
     const taken = new Set();
     const steps = [];
     const rows = [];
     if (!to.exists) steps.push(...newFolders(to));
     for (const f of sel.items) {
       if (fold(path.dirname(f.real)) === fold(to.real)) continue;
-      if (f.dir && isInside(to.real, f.real)) return bad("A folder can't go inside itself.");
+      if (f.dir && isInside(to.real, f.real)) return bad(txt("desktop.files.intoItself", "A folder can't go inside itself."));
       const name = freeName(to.real, f.name, taken);
       steps.push({ op: copy ? "copy" : "move", from: f.real, to: path.join(to.real, name), label: f.name });
       rows.push(`${f.show} → ${shown(to)}/${name === f.name ? "" : name}`);
     }
-    if (!rows.length) return bad("They're already there.");
+    if (!rows.length) return bad(txt("desktop.files.alreadyThere", "They're already there."));
     const { lines, more } = cardLines(rows);
     return {
       ok: true, risk: "write", count: rows.length, say: { key: copy ? "copy" : "move", vars: { n: rows.length, to: shown(to) } }, lines, more,
-      extra: sel.more ? "More files match than one change takes; the rest are left for next time." : "",
-      run: () => perform(copy ? "copy_files" : "move_files", steps, (n) => `${copy ? "Copied" : "Moved"} ${plural(n, "file", "files")} to ${shown(to)}`),
+      extra: sel.more ? txt("desktop.files.moreMatch", "More files match than one change takes; the rest are left for next time.") : "",
+      run: () => perform(copy ? "copy_files" : "move_files", steps, (n) => (copy
+        ? txt("desktop.files.copiedTo", "Copied {files} to {to}", { files: nFiles(n), to: shown(to) })
+        : txt("desktop.files.movedTo", "Moved {files} to {to}", { files: nFiles(n), to: shown(to) }))),
     };
   }
 
@@ -709,14 +723,14 @@ function createLocalFiles(opts) {
     const g = guard(args.path, rs);
     if (!g.ok) return bad(g.why);
     const st = g.exists ? lstat(g.real) : null;
-    if (!st) return bad(`${clip(str(args.path), 60)} isn't there.`);
-    if (st.isSymbolicLink()) return bad("That's a link, so I leave it.");
-    if (!g.rel) return bad("Ask doesn't rename a whole allowed folder.");
+    if (!st) return bad(txt("desktop.files.notThere", "{name} isn't there.", { name: clip(str(args.path), 60) }));
+    if (st.isSymbolicLink()) return bad(txt("desktop.files.thatsLink", "That's a link, so I leave it."));
+    if (!g.rel) return bad(txt("desktop.files.renameWhole", "Ask doesn't rename a whole allowed folder."));
     const name = str(args.new_name).trim();
-    if (!name || name.length > 200 || CONTROL.test(name) || /[\\/:*?"<>|]/.test(name) || name === "." || name === "..") return bad("That isn't a usable name.");
-    if (badName(name)) return bad("Ask doesn't make hidden or app names.");
+    if (!name || name.length > 200 || CONTROL.test(name) || /[\\/:*?"<>|]/.test(name) || name === "." || name === "..") return bad(txt("desktop.files.badName", "That isn't a usable name."));
+    if (badName(name)) return bad(txt("desktop.files.hiddenName", "Ask doesn't make hidden or app names."));
     const dir = path.dirname(g.real);
-    if (name === path.basename(g.real)) return bad("It's already called that.");
+    if (name === path.basename(g.real)) return bad(txt("desktop.files.sameName", "It's already called that."));
     let final = name;
     const there = lstat(path.join(dir, name));
     // On a disk that ignores case, "a.pdf" to "A.pdf" is the same file, not a clash.
@@ -724,20 +738,20 @@ function createLocalFiles(opts) {
     if (there && !same) final = freeName(dir, name);
     return {
       ok: true, risk: "write", count: 1, say: { key: "rename", vars: { from: path.basename(g.real), to: final } }, lines: [], more: 0,
-      run: () => perform("rename_file", [{ op: "rename", from: g.real, to: path.join(dir, final), label: path.basename(g.real) }], () => `Renamed ${path.basename(g.real)} to ${final}`),
+      run: () => perform("rename_file", [{ op: "rename", from: g.real, to: path.join(dir, final), label: path.basename(g.real) }], () => txt("desktop.files.renamed", "Renamed {from} to {to}", { from: path.basename(g.real), to: final })),
     };
   }
 
   function planMakeFolder(args) {
     const g = guard(args.path);
     if (!g.ok) return bad(g.why);
-    if (!g.rel) return bad("That folder is already one of Ask's.");
-    if (g.exists) return bad("There's already something called that.");
+    if (!g.rel) return bad(txt("desktop.files.alreadyAllowed", "That folder is already one of Ask's."));
+    if (g.exists) return bad(txt("desktop.files.nameExists", "There's already something called that."));
     const steps = newFolders(g);
-    if (!steps.length) return bad("I can't make that folder.");
+    if (!steps.length) return bad(txt("desktop.files.cantMake", "I can't make that folder."));
     return {
       ok: true, risk: "write", count: steps.length, say: { key: "makeFolder", vars: { to: shown(g) } }, lines: [], more: 0,
-      run: () => perform("make_folder", steps, () => `Made the folder ${shown(g)}`),
+      run: () => perform("make_folder", steps, () => txt("desktop.files.made", "Made the folder {name}", { name: shown(g) })),
     };
   }
 
@@ -745,31 +759,31 @@ function createLocalFiles(opts) {
     const rs = roots();
     const sel = selection(args, rs, { dirs: true });
     if (sel.why) return bad(sel.why);
-    if (!sel.items.length) return bad("I didn't find any files like that.");
-    const rows = sel.items.map((f) => `${f.show}${f.dir ? "/" : ""} (${f.dir ? "folder" : sizeText(f.size)})`);
+    if (!sel.items.length) return bad(txt("desktop.files.noneLikeThat", "I didn't find any files like that."));
+    const rows = sel.items.map((f) => `${f.show}${f.dir ? "/" : ""} (${f.dir ? txt("desktop.files.folderWord", "folder") : sizeText(f.size)})`);
     const { lines, more } = cardLines(rows);
     return {
       ok: true, risk: "destructive", count: sel.items.length, say: { key: "trash", vars: { n: sel.items.length } }, lines, more,
-      extra: sel.more ? "More files match than one change takes; the rest are left for next time." : "",
-      run: () => perform("trash_files", sel.items.map((f) => ({ op: "trash", from: f.real, label: f.name })), (n) => `Moved ${plural(n, "item", "items")} to the Trash`),
+      extra: sel.more ? txt("desktop.files.moreMatch", "More files match than one change takes; the rest are left for next time.") : "",
+      run: () => perform("trash_files", sel.items.map((f) => ({ op: "trash", from: f.real, label: f.name })), (n) => txt("desktop.files.trashed", "Moved {items} to the Trash", { items: nItems(n) })),
     };
   }
 
   function planUndo() {
     const log = loadLog();
     const batch = log.batches[log.batches.length - 1];
-    if (!batch) return bad("There's nothing to undo.");
+    if (!batch) return bad(txt("desktop.files.nothingToUndo", "There's nothing to undo."));
     const doable = batch.ops.filter((op) => op.op !== "trash");
     if (!doable.length) {
       // Said once, then the batch is let go, or "undo" would only ever say this.
       log.batches.pop();
       saveLog(log);
-      return bad("Those went to the Trash, so I can't put them back myself. Open the Trash and drag them out.");
+      return bad(txt("desktop.files.inTrash", "Those went to the Trash, so I can't put them back myself. Open the Trash and drag them out."));
     }
     const rs = roots();
     const rows = [...doable].reverse().filter((op) => op.op !== "mkdir").map((op) => {
       const from = shownReal(op.to, rs), back = op.from ? shownReal(path.dirname(op.from), rs) : "";
-      return op.op === "copy" ? `${from} → Trash` : `${from} → ${back}/`;
+      return op.op === "copy" ? `${from} → ${txt("desktop.files.trashWord", "Trash")}` : `${from} → ${back}/`;
     });
     const count = doable.filter((op) => op.op !== "mkdir").length;
     const { lines, more } = cardLines(rows);
@@ -784,7 +798,7 @@ function createLocalFiles(opts) {
   async function undoBatch() {
     const log = loadLog();
     const batch = log.batches[log.batches.length - 1];
-    if (!batch) return { ok: false, text: "There's nothing to undo.", note: "nothing to undo", done: 0, failed: 0 };
+    if (!batch) return { ok: false, text: txt("desktop.files.nothingToUndo", "There's nothing to undo."), note: txt("desktop.files.nothingToUndoNote", "nothing to undo"), done: 0, failed: 0 };
     const left = [];
     const problems = [];
     let back = 0;
@@ -795,14 +809,14 @@ function createLocalFiles(opts) {
         if (op.op === "mkdir") {
           const g = guard(op.to, rs, true);
           if (g.ok && g.exists && !fs.readdirSync(g.real).length) fs.rmdirSync(g.real);
-          else if (g.ok && g.exists) { problems.push(`${clip(tidy(path.basename(op.to)), 40)} (not empty)`); }
+          else if (g.ok && g.exists) { problems.push(`${clip(tidy(path.basename(op.to)), 40)} (${txt("desktop.files.whyNotEmpty", "not empty")})`); }
           continue;
         }
         const here = guard(op.to, rs, true);
         if (!here.ok) throw refuse(here.why);
         const st = lstat(here.real);
         if (!st) throw Object.assign(new Error("gone"), { code: "ENOENT" });
-        if (st.isSymbolicLink()) throw refuse("a link");
+        if (st.isSymbolicLink()) throw refuse(txt("desktop.files.whyLink", "a link"));
         if (op.op === "copy") {
           await shell.trashItem(here.real);
           back++;
@@ -817,13 +831,14 @@ function createLocalFiles(opts) {
         back++;
       } catch (e) {
         left.unshift(op);
-        problems.push(`${clip(tidy(path.basename(op.to || op.from || "a file")), 40)} (${whyFailed(e)})`);
+        problems.push(`${clip(tidy(path.basename(op.to || op.from || txt("desktop.files.aFile", "a file"))), 40)} (${whyFailed(e)})`);
       }
     }
     if (left.length) batch.ops = left; else log.batches.pop();
     saveLog(log);
-    const note = `Put back ${plural(back, "file", "files")}${problems.length ? `; ${problems.length} couldn’t be` : ""}`;
-    return { ok: back > 0 || !problems.length, text: clip(`${note}.${problems.length ? " Could not: " + problems.slice(0, 8).join(", ") : ""}`, RESULT_CHARS), note: clip(note, 200), done: back, failed: problems.length };
+    const note = txt("desktop.files.putBack", "Put back {files}", { files: nFiles(back) }) + (problems.length ? txt("desktop.files.someNotBack", "; {n} couldn’t be", { n: problems.length }) : "");
+    const text = note + "." + (problems.length ? " " + txt("desktop.files.couldNot", "Could not: {list}", { list: problems.slice(0, 8).join(", ") }) : "");
+    return { ok: back > 0 || !problems.length, text: clip(text, RESULT_CHARS), note: clip(note, 200), done: back, failed: problems.length };
   }
 
   const TOOLS = {
@@ -853,12 +868,12 @@ function createLocalFiles(opts) {
   /** What a tool would do, without doing it: see the top of this file. Never throws. */
   async function plan(tool, args) {
     const name = str(tool);
-    if (!Object.hasOwn(TOOLS, name)) return { ok: false, error: "I can't do that on this computer." };
+    if (!Object.hasOwn(TOOLS, name)) return { ok: false, error: txt("desktop.files.cantDoThat", "I can't do that on this computer.") };
     try {
       const p = TOOLS[name](args && typeof args === "object" && !Array.isArray(args) ? args : {});
       return p.ok ? tidied(Object.assign({ tool: name, more: 0, extra: "" }, p)) : p;
     } catch (e) {
-      return { ok: false, error: e && e.refused ? e.message : "That didn’t work." };
+      return { ok: false, error: e && e.refused ? e.message : txt("desktop.files.didntWork", "That didn’t work.") };
     }
   }
 

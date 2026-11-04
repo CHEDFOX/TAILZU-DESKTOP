@@ -9,7 +9,8 @@
 
 const WO_STARTED = new Map();
 const LM_LIVES = new Map();
-const WO_CARET_MS = 2600;
+// How long the caret stays after the last word, before it fades.
+const woCaretMs = () => K.num("desktop.writeOn.caretMs", 2600);
 const seedOfText = (str) => { let h = 7; for (const ch of String(str)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h; };
 
 function writeOnNode(p) {
@@ -65,12 +66,13 @@ function mountHomeHead(root, reduced) {
       setTimeout(() => { if (!el.isConnected) return; w.style.opacity = "1"; w.style.transform = "none"; at(i); }, times[i] - el0);
     });
     if (last >= 0) at(last);
-    if (el0 >= end + WO_CARET_MS) return;
+    const caretMs = woCaretMs();
+    if (el0 >= end + caretMs) return;
     // Keylessbord's caret: blinking while he writes and a moment after, then it fades.
     let on = true;
     caret.style.opacity = "1";
     const blink = setInterval(() => { if (!el.isConnected) { clearInterval(blink); return; } on = !on; caret.style.opacity = on ? "1" : "0"; }, 520);
-    setTimeout(() => { clearInterval(blink); caret.style.transition = "opacity .42s"; caret.style.opacity = "0"; }, end + WO_CARET_MS - el0);
+    setTimeout(() => { clearInterval(blink); caret.style.transition = "opacity .42s"; caret.style.opacity = "0"; }, end + caretMs - el0);
   });
   root.querySelectorAll("[data-lm]").forEach((host) => {
     const cfg = BT_PENDING[Number(host.getAttribute("data-lm"))];

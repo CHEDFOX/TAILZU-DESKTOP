@@ -1031,6 +1031,8 @@ function createAsk(ctx) {
         : txt("desktop.agent.replyHint", "Tap {key} twice to answer", { key: str("desktop.agent.tapKey", "Alt") }) });
       replyTimer = soft(setTimeout(() => { if (replyWait === resolve) { replyWait = null; resolve(null); } }, Math.max(5000, num("desktop.agent.replyWaitMs", 90000))));
     }),
+    // The words it shows the person that are its own (the plan card's "This computer").
+    txt: (key, fallback, vars) => txt(key, fallback, vars),
     knob: (name, fallback) => {
       if (typeof fallback === "boolean") return bool(name, fallback);
       if (typeof fallback === "number") return num(name, fallback);
@@ -1303,6 +1305,8 @@ function createAsk(ctx) {
     tap,
     askHeard,
     cancel,
+    /** The server's knobs changed: the guide's card takes them at once (its words are labels), not from the next launch. */
+    knobs(k) { if (win && !win.isDestroyed() && ready) win.webContents.send("knobs", k); },
     audioIn,
     textIn,
     partial,

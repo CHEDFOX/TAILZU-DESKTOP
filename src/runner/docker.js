@@ -13,17 +13,21 @@ const childProcess = require("child_process");
 
 const DEFAULT_IMAGE = "node:22-bookworm";
 
-/** Is there a Docker that answers? { installed, running, version, reason }. */
-function dockerStatus({ execFile = childProcess.execFile, env = process.env, timeoutMs = 7000 } = {}) {
+/** Is there a Docker that answers? { installed, running, version, reason }. The reason is said to the person (the window, a
+ *  notification), so its words are labels through `txt`, the knobs' reader; English without it. */
+function dockerStatus({ execFile = childProcess.execFile, env = process.env, timeoutMs = 7000, txt = (_key, fallback) => fallback } = {}) {
+  const missing = () => txt("desktop.runner.dockerMissing", "Docker is not installed on this computer.");
   return new Promise((resolve) => {
     try {
       execFile("docker", ["version", "--format", "{{.Server.Version}}"], { timeout: timeoutMs, windowsHide: true, env }, (err, stdout, stderr) => {
         if (!err) { resolve({ installed: true, running: true, version: String(stdout || "").trim().slice(0, 40), reason: "" }); return; }
-        if (err.code === "ENOENT") { resolve({ installed: false, running: false, version: "", reason: "Docker is not installed on this computer." }); return; }
-        resolve({ installed: true, running: false, version: "", reason: /permission denied/i.test(String(stderr)) ? "This account is not allowed to use Docker." : "Docker is installed but not running. Start it, then try again." });
+        if (err.code === "ENOENT") { resolve({ installed: false, running: false, version: "", reason: missing() }); return; }
+        resolve({ installed: true, running: false, version: "", reason: /permission denied/i.test(String(stderr))
+          ? txt("desktop.runner.dockerDenied", "This account is not allowed to use Docker.")
+          : txt("desktop.runner.dockerStopped", "Docker is installed but not running. Start it, then try again.") });
       });
     } catch {
-      resolve({ installed: false, running: false, version: "", reason: "Docker is not installed on this computer." });
+      resolve({ installed: false, running: false, version: "", reason: missing() });
     }
   });
 }

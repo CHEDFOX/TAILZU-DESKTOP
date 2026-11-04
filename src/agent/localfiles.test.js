@@ -687,3 +687,16 @@ test("nothing here reads a file's contents: the only read is the undo log", () =
   assert.deepStrictEqual(reads, ["readFile"], "only fs.readFileSync(logPath)");
   assert.match(src, /readFileSync\(logPath/);
 });
+
+test("what the person reads is the server's words when it sends them, with the numbers filled in", async () => {
+  const words = { "desktop.files.noneFound": "Keine Dateien gefunden.", "desktop.files.countFiles": "{n} Dateien", "desktop.files.movedTo": "{files} nach {to} verschoben", "desktop.files.nothingToUndo": "Nichts rückgängig zu machen." };
+  const txt = (key, fallback, vars) => (words[key] || fallback).replace(/\{(\w+)\}/g, (m, k) => (vars && k in vars ? String(vars[k]) : m));
+  const r = rig({ opts: { txt } });
+  r.w("Downloads/a.txt"); r.w("Downloads/b.txt");
+  assert.strictEqual((await (await plan(r, "find_files", { name: "nothing-like-this" })).run()).text, "Keine Dateien gefunden.");
+  const res = await (await plan(r, "move_files", { paths: ["Downloads/a.txt", "Downloads/b.txt"], to: "Documents" })).run();
+  assert.strictEqual(res.note, "2 Dateien nach Documents verschoben");
+  const undone = await (await plan(r, "undo_last", {})).run();
+  assert.match(undone.note, /^Put back 2 Dateien$/, "a word it did not send stays English, around one it did");
+  assert.strictEqual((await r.lf.plan("undo_last", {})).error, "Nichts rückgängig zu machen.");
+});

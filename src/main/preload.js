@@ -171,4 +171,7 @@ contextBridge.exposeInMainWorld("tailzuRunner", {
   stop: () => ipcRenderer.send("runner:stop"),
   openAudit: () => ipcRenderer.send("runner:openAudit"),
   onUpdate: (cb) => ipcRenderer.on("runner:update", (_e, s) => cb(s)),
+  // The server's knobs, for the window's words (knobs.js): pulled once on load, then pushed on every change.
+  knobs: () => ipcRenderer.invoke("runner:knobs"),
+  onKnobs: (cb) => ipcRenderer.on("knobs", (_e, k) => cb(k)),
 });

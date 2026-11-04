@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <!-- This app's own files only: the script is ui.js, and nothing is fetched. -->
+    <!-- This app's own files only: the scripts are knobs.js and ui.js, and nothing is fetched. -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Xode on this computer</title>
@@ -42,16 +42,16 @@
     </style>
   </head>
   <body>
-    <h1>Xode on this computer</h1>
-    <p>Let Xode do its work here first: free, and fast, because nothing has to wait for a cloud computer to start.</p>
+    <h1 id="heading">Xode on this computer</h1>
+    <p id="intro">Let Xode do its work here first: free, and fast, because nothing has to wait for a cloud computer to start.</p>
 
     <div class="card">
       <div class="row">
         <input type="checkbox" id="enabled" />
-        <label for="enabled">Use this computer for Xode</label>
+        <label for="enabled" id="enabledLabel">Use this computer for Xode</label>
         <span class="status"><span class="dot" id="dot"></span><span id="state"></span></span>
       </div>
-      <p class="small" style="margin-top:10px">
+      <p class="small" style="margin-top:10px" id="explain">
         <b>On unless you turn it off.</b> While it is on, and only while X0 Bot is open, Xode can run its commands (tests, builds,
         installs) on this computer, for every project of yours but the ones you say "Don't allow" to below. It works in a folder of
         its own, from a read-only copy of your code, and cannot see your passwords, keys or other files: commands get a clean
@@ -69,23 +69,24 @@
     <div class="card">
       <div class="row">
         <input type="checkbox" id="container" />
-        <label for="container">Run in a container (Docker)</label>
+        <label for="container" id="containerLabel">Run in a container (Docker)</label>
         <button id="recheck" hidden>Check Docker</button>
       </div>
       <p class="small" style="margin-top:10px" id="dockerNote"></p>
     </div>
 
-    <h2>Projects</h2>
+    <h2 id="projectsHead">Projects</h2>
     <div class="card" id="projects"></div>
 
-    <h2>What it ran</h2>
+    <h2 id="ranHead">What it ran</h2>
     <div class="card" style="padding:4px 8px">
       <table>
-        <thead><tr><th style="width:84px">Time</th><th style="width:120px">Project</th><th>Command</th><th style="width:70px">Exit</th><th style="width:70px">Took</th></tr></thead>
+        <thead><tr><th style="width:84px" id="colTime">Time</th><th style="width:120px" id="colProject">Project</th><th id="colCommand">Command</th><th style="width:70px" id="colExit">Exit</th><th style="width:70px" id="colTook">Took</th></tr></thead>
         <tbody id="activity"></tbody>
       </table>
     </div>
     <p class="small"><button id="audit">Open the audit log folder</button>&nbsp; <span id="where"></span></p>
+    <script src="../../knobs.js"></script>
     <script src="ui.js"></script>
   </body>
 </html>

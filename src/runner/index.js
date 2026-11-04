@@ -65,6 +65,7 @@ function repoName(cloneUrl) {
  *   api              { fetch(path, init) -> Response (as the signed-in person), signedIn() -> boolean }
  *   secrets()        the app's own tokens, so no output can carry them
  *   notify(text)     a native notification
+ *   txt(key, fallback, vars)  the knobs' reader for words (desktop.runner.*), so the server words what the person is told; English without it
  *   config           { image, name } from config.json
  *   powerMonitor     Electron's, for the battery
  *   -- for the tests: real (the environment), fs, child { execFile, spawn }, connect, power { read }, urlPolicy, dockerStatus, sleep,
@@ -82,6 +83,15 @@ function createRunner(o) {
   const log = o.log || (() => {});
   const config = o.config || {};
   const settings = o.state;
+  // THE WORDS the person is told (a notification, Docker's state, this computer's name when it has none) are labels, through
+  // `o.txt`; the English here is today's, and the fallback.
+  const say = typeof o.txt === "function" ? o.txt : null;
+  function txt(key, fallback, vars) {
+    let v;
+    try { v = say ? say(key, fallback, vars) : undefined; } catch { v = undefined; }
+    const s = typeof v === "string" && v.trim() ? v : fallback;
+    return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
+  }
   const paths = runnerPaths(o.userData);
   ensurePaths(paths, fs);
 
@@ -121,7 +131,8 @@ function createRunner(o) {
   let projectsAsking = null;
   let stopped = false;
 
-  const computerName = () => String(config.name || o.hostname || nodeOs.hostname() || "This computer").replace(/\.local$/i, "").trim().slice(0, 80) || "This computer";
+  const unnamed = () => txt("desktop.runner.thisComputer", "This computer");
+  const computerName = () => String(config.name || o.hostname || nodeOs.hostname() || unnamed()).replace(/\.local$/i, "").trim().slice(0, 80) || unnamed();
   function changed() {
     try { if (o.onChange) o.onChange(); } catch { /* the tray's own */ }
   }
@@ -284,7 +295,7 @@ function createRunner(o) {
     if (!force && docker.at && now() - docker.at < DOCKER_TTL_MS) return docker;
     if (dockerAsking) return dockerAsking;
     dockerAsking = (async () => {
-      const probe = o.dockerStatus || ((env) => dockerStatus({ execFile: child.execFile, env }));
+      const probe = o.dockerStatus || ((env) => dockerStatus({ execFile: child.execFile, env, txt }));
       const st = await probe(dockerClientEnv(real, await loginPath.get()));
       docker = Object.assign({}, st, { at: now() });
       dockerAsking = null;
@@ -368,7 +379,7 @@ function createRunner(o) {
       const d = await dockerNow(true);
       if (!d.running) {
         decline(j, "docker_unavailable");
-        if (o.notify) o.notify(d.reason || "Docker is not available, so Xode did not run. Turn off \"Run in a container\" or start Docker.");
+        if (o.notify) o.notify(d.reason || txt("desktop.runner.dockerUnavailable", "Docker is not available, so Xode did not run. Turn off \"Run in a container\" or start Docker."));
         return;
       }
     }
@@ -487,7 +498,7 @@ function createRunner(o) {
       settings.enabled = false;
       o.saveState();
       sync();
-      if (o.notify) o.notify("Xode stopped. This computer is off for Xode until you turn it on again.");
+      if (o.notify) o.notify(txt("desktop.runner.stopped", "Xode stopped. This computer is off for Xode until you turn it on again."));
     },
     /** A project's setting, from the window: "allow", "deny" or "ask" (forget what was said: back to the default, allowed). */
     async setProject(id, name, action) {

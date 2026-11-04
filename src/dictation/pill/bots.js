@@ -10,6 +10,12 @@
 // there are words, and goes back into him when they are gone.
 const BLIP = () => BOTS() && K.bool("desktop.pill.blip", true) && !!(window.TailzuBlip && window.TailzuBlip.createPerformer);
 let blipP = null, blipQuirkAt = 0;
+/** When he does his next odd thing at rest: between desktop.pill.blipQuirkMinMs and desktop.pill.blipQuirkMaxMs from now. */
+function nextQuirk(now) {
+  const lo = Math.max(1000, K.num("desktop.pill.blipQuirkMinMs", 30000));
+  const hi = Math.max(lo, K.num("desktop.pill.blipQuirkMaxMs", 50000));
+  return now + lo + Math.random() * (hi - lo);
+}
 function blipper() {
   if (!blipP) blipP = window.TailzuBlip.createPerformer({ dpr: window.devicePixelRatio || 1, reduced: REDUCED() });
   return blipP;
@@ -39,7 +45,7 @@ function blipFor(st, data, from) {
   else if (st === "talk") talkGesture(p, data, from, now);
   else if (from === "writing" || from === "listening") p.play("done", { now, then: "rest" });
   else p.play("rest", { now });
-  blipQuirkAt = now + 30000 + Math.random() * 20000;
+  blipQuirkAt = nextQuirk(now);
 }
 
 /** Talk mode's gesture (talk.js sends it with each change): from rest he wakes into listening; one that ends (done,
@@ -87,14 +93,23 @@ function bCaption() { return HEARD() ? bTail(caption) : ""; }
 const talkAnswering = () => S.data.phase === "answer" || S.data.phase === "act";
 function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : HEARD() ? S.data.heard || "" : ""); }
 // Hovered at rest, he does something (one that ends) instead of opening a hint: once a hover, never more than every 1.2 s.
+// Which ones is desktop.pill.hoverGestures; a name Blip does not know (shared/blip.js BLIP_GESTURES) is left out, and none
+// he knows is the list below.
 const HOVER_GESTURES = ["jelly", "peekaboo", "laugh", "sneeze", "propeller", "dizzy", "headbang", "celebrate"];
+function hoverGestures() {
+  const known = (window.TailzuBlip && window.TailzuBlip.BLIP_GESTURES) || {};
+  const sent = K.list("desktop.pill.hoverGestures", ["jelly", "peekaboo", "laugh", "sneeze", "propeller", "dizzy", "headbang", "celebrate"]);
+  const ok = sent.filter((g) => typeof g === "string" && g !== "rest" && Object.prototype.hasOwnProperty.call(known, g));
+  return ok.length ? ok : HOVER_GESTURES;
+}
 let hoverGestureAt = 0;
 function blipHover() {
   if (!BLIP() || S.name !== "rest" || blipResting || REDUCED()) return;
   const now = clock();
   if (now - hoverGestureAt < 1200) return;
   hoverGestureAt = now;
-  blipper().play(HOVER_GESTURES[Math.floor(Math.random() * HOVER_GESTURES.length)], { now, then: "rest", again: true });
+  const gestures = hoverGestures();
+  blipper().play(gestures[Math.floor(Math.random() * gestures.length)], { now, then: "rest", again: true });
   wake();
 }
 /** The size for a state: the listening pill around its disc, bars, words, time and ✕; small at rest. */
@@ -323,7 +338,7 @@ function drawBots(t, now, dt, x0, y0, cy) {
   // Blip, over the pill's edge: feet in its left end, his head out over the top. Not clipped by it.
   if (blip && P.show > 0.01 && !blipAway(now) && !(st === "rest" && blipResting)) {
     const pf = blipper();
-    if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = now + 30000 + Math.random() * 20000; }
+    if (st === "rest" && !REDUCED() && pf.name === "rest" && now > blipQuirkAt && P.text < 0.01) { pf.play(pf.quirk(), { now, then: "rest" }); blipQuirkAt = nextQuirk(now); }
     let bx, bh;
     if (st === "listening" || st === "talk") { bx = x0 + 8 + 14; bh = 52; }
     else if (st === "rest") { bx = lerpN(x0 + P.w / 2, x0 + 7 + 14, outCubic(P.text)); bh = 46; }
