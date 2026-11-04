@@ -710,10 +710,12 @@ function createAsk(ctx) {
    *  ever from this computer's own say-so: the server may turn pictures off
    *  everywhere, but a server value that skipped the card would send a
    *  picture of whatever is in front with nobody asked. That say-so is
-   *  "Always for <app>" on the card, or the setup card's "Look at the screen
-   *  when it's needed" in the app window, which is yes once for every app:
-   *  browser pages and unnamed Store apps too, which have no Always of their
-   *  own, since that is what they said yes to. */
+   *  "Always for <app>" on the card, or "Look at the screen when it's
+   *  needed", which is for every app and ON by default on this computer
+   *  (main.js picturesForAll: said in the privacy policy, x0bot.com/privacy
+   *  section 10, not asked) until it is turned off from the tray or the setup
+   *  card: browser pages and unnamed Store apps too, which have no Always of
+   *  their own. */
   function pictures(app) {
     if (str("desktop.agent.pictures", "ask") === "never") return "never";
     if (typeof ctx.picturesAlwaysAll === "function" && ctx.picturesAlwaysAll() === true) return "always";
@@ -981,7 +983,7 @@ function createAsk(ctx) {
     post: agentCore.makePost({ baseUrl: ctx.baseUrl, token: ctx.token, fetch: ctx.fetch || ((...a) => fetch(...a)) }),
     approveElsewhere: () => txt("desktop.agent.approveElsewhere", "I need your OK in X0 Bot first."),
     // "This computer": the person's own files, done here by localfiles.js and
-    // only inside the folders they allowed (main.js hands it in).
+    // only inside the usual folders, Downloads, Desktop and Documents (main.js hands it in).
     device: ctx.device,
     // The whole page in front for step 0 (src/context/pageRead.js, handed in by main.js).
     ...(typeof ctx.page === "function" ? { page: ctx.page } : {}),

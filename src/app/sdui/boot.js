@@ -104,7 +104,6 @@ async function render() {
   // Ask's permission states, asked now so the first page that carries the
   // setup card has them rather than drawing it twice.
   askSetupWatch();
-  foldersWatch();
 
   $("dictate").addEventListener("click", () => {
     window.tailzuApp.dictate();

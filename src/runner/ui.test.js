@@ -33,7 +33,7 @@ function page(snapshot) {
 
 const snap = (over = {}) => ({
   status: { enabled: true, container: false, state: "online", pausedReason: "", project: "", working: false },
-  projects: [{ id: "p1", name: "acme/app", state: "allowed" }, { id: "p2", name: "<img src=x onerror=alert(1)>", state: "ask" }, { id: "p3", name: "acme/no", state: "denied" }],
+  projects: [{ id: "p1", name: "acme/app", state: "allowed" }, { id: "p2", name: "<img src=x onerror=alert(1)>", state: "allowed" }, { id: "p3", name: "acme/no", state: "denied" }],
   activity: [{ id: 2, at: Date.now(), project: "acme/app", command: "npm test", state: "done", exitCode: 1, ms: 2500, refused: "" }, { id: 1, at: Date.now(), project: "acme/app", command: "sudo ls", state: "refused", exitCode: 126, ms: 0, refused: "sudo", message: "no sudo" }],
   power: { paused: false }, container: { on: false, image: "node:22-bookworm", docker: { installed: true, running: true, version: "27", reason: "", checked: true } },
   auditDir: "/x/audit", workspacesDir: "/x/workspaces", ...over,
@@ -48,7 +48,9 @@ test("it draws the switch, the state, the projects with what to do about each, a
   const names = []; p.ids["#projects"].walk((e) => { if (e.className === "name") names.push(e.textContent); });
   assert.deepStrictEqual(names, ["acme/app", "<img src=x onerror=alert(1)>", "acme/no"], "a server's text is text");
   const buttons = []; p.ids["#projects"].walk((e) => { if (e.tag === "button") buttons.push(e.textContent); });
-  assert.deepStrictEqual(buttons, ["Don't allow", "Ask me again", "Allow", "Don't allow", "Allow", "Ask me again"]);
+  assert.deepStrictEqual(buttons, ["Don't allow", "Don't allow", "Allow"], "allowed (the default) offers Don't allow; refused offers Allow");
+  const badges = []; p.ids["#projects"].walk((e) => { if (/^badge/.test(e.className)) badges.push(e.textContent); });
+  assert.deepStrictEqual(badges, ["allowed", "allowed", "denied"]);
   const rows = p.ids["#activity"].children.map((tr) => tr.children.map((td) => td.textContent));
   assert.deepStrictEqual(rows.map((r) => [r[2], r[3], r[4]]), [["npm test", "1", "2.5 s"], ["sudo ls  - not run: no sudo", "refused", "0 ms"]]);
   assert.match(p.ids["#where"].textContent, /\/x\/workspaces/);
@@ -73,6 +75,7 @@ test("what the person clicks goes back as a request: the switch, the container, 
   p.ids["#enabled"].listeners.change({ target: { checked: false } });
   p.ids["#container"].listeners.change({ target: { checked: true } });
   p.ids["#audit"].listeners.click();
-  p.ids["#projects"].children[1].children.find((b) => b.textContent === "Allow").listeners.click();
-  assert.deepStrictEqual(p.sent, [["set", "enabled", false], ["set", "container", true], ["openAudit"], ["project", "p2", "<img src=x onerror=alert(1)>", "allow"]]);
+  p.ids["#projects"].children[1].children.find((b) => b.textContent === "Don't allow").listeners.click();
+  p.ids["#projects"].children[2].children.find((b) => b.textContent === "Allow").listeners.click();
+  assert.deepStrictEqual(p.sent, [["set", "enabled", false], ["set", "container", true], ["openAudit"], ["project", "p2", "<img src=x onerror=alert(1)>", "deny"], ["project", "p3", "acme/no", "allow"]]);
 });

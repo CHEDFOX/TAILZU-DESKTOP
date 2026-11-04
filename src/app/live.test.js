@@ -279,7 +279,7 @@ test("in the window: wired to sdui.js's own session, stack, state and painting",
       addEventListener: (k) => { listeners[k] = (listeners[k] || 0) + 1; }, getElementById: () => null, querySelector: () => null,
       querySelectorAll: () => [], activeElement: null, visibilityState: "hidden",
     },
-    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, onAskSetup: noop, onFolders: noop },
+    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, onAskSetup: noop },
   };
   g.window = g;
   const ctx = vm.createContext(g);

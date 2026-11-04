@@ -15,8 +15,10 @@ const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "pictur
  *             granted but the helper's last look was still refused, which
  *             takes a restart of Tailzu
  *   pictures  look without asking each time, for every app (local state
- *             askPicturesAlwaysAll); "never" when the server has turned
- *             pictures off, which wins over everything
+ *             askPicturesAlwaysAll): ON by default, so "on" unless it was
+ *             turned off (an explicit false, from this card or the tray's
+ *             "Ask again for all of them"); "never" when the server has
+ *             turned pictures off, which wins over everything
  *
  * The states are read here, on this computer, and nothing of them leaves it.
  * The window asks for them (app:askSetup) and is told again whenever they
@@ -53,7 +55,7 @@ function createAskSetup(o) {
     return {
       platform: mac ? "mac" : o.platform === "win32" ? "windows" : "linux",
       read, see,
-      pictures: never ? "never" : o.localState.askPicturesAlwaysAll === true ? "on" : "off",
+      pictures: never ? "never" : o.localState.askPicturesAlwaysAll === false ? "off" : "on",
     };
   }
   /** The state, to the app window. */

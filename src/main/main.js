@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer, systemPreferences, dialog,
+  desktopCapturer, systemPreferences,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -42,7 +42,6 @@ const { pillAskMove, capsuleRect } = require("../agent/pillAsk.js");
 const { createPeekWatch } = require("../agent/peek.js");
 const { createAskSetup } = require("../agent/askSetup.js");
 const { createLocalFiles } = require("../agent/localfiles.js");
-const { createFolderSettings } = require("../agent/folderSettings.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
 // Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
@@ -154,6 +153,15 @@ let BOOT = readJson(bootPath);
 setKnobs(BOOT);
 const localState = readJson(localStatePath) || {};
 function saveLocalState() { writeJson(localStatePath, localState); }
+// What older copies kept and nothing reads any more, dropped on the first launch so nothing stale stays on disk: the folders Ask
+// could use, picked in a Settings row that is gone (Ask works in the usual folders: Downloads, Desktop and Documents), and whether
+// Xode's explanation had been shown before turning it on (there is no such dialog now).
+{
+  let stale = false;
+  if ("askFolders" in localState) { delete localState.askFolders; stale = true; }
+  if (localState.runner && typeof localState.runner === "object" && "explained" in localState.runner) { delete localState.runner.explained; stale = true; }
+  if (stale) saveLocalState();
+}
 
 /** The knobs as the windows need them: the last bootstrap's labels and flags. */
 function knobsPayload() {
@@ -561,7 +569,8 @@ function adoptSession(raw) {
       }
     : null;
   saveSession(authSession);
-  // Signed in, or out: the runner goes online for Xode, or stands down and forgets which projects the last person allowed.
+  // Signed in, or out: the runner goes online for Xode, or stands down, forgets which projects the last person refused, and is back
+  // to its default (on) for whoever signs in next.
   if (runner) { try { runner.sessionChanged(); } catch { /* the runner's own */ } }
 }
 
@@ -649,15 +658,22 @@ async function refreshAccountTone() {
   } catch { /* leave the last known value */ }
 }
 
-/** What this process knew of the account that has gone. Ask's "Always for
- *  <app>" goes with it: the next person to sign in on this computer is
- *  asked for themselves before a picture of their screen is sent. So does
- *  the setup card's yes for every app, for the same reason: it was theirs. */
+/** What this process knew of the account that has gone. Ask's pictures go
+ *  back to the default for whoever signs in next: "look at the screen when
+ *  it's needed, for every app" on (the key is deleted, and absent is on), and
+ *  the per-app "Always for <app>" list emptied. A person who turned pictures
+ *  off had turned them off for themselves. */
 function signedOut() {
   accountTone = null;
   accountPreset = null;
   accountNickname = "";
-  if (picturesAllowed().length || localState.askPicturesAlwaysAll === true) forgetPictures();
+  if (picturesAllowed().length || "askPicturesAlwaysAll" in localState) {
+    localState.askPicturesAlways = [];
+    delete localState.askPicturesAlwaysAll;
+    saveLocalState();
+    refreshTray();
+    askSetup.push();
+  }
   // The kinds of change to their files they said yes to were theirs too.
   if (deviceKinds().length) { localState.askDeviceOk = []; saveLocalState(); }
 }
@@ -1696,10 +1712,12 @@ function buildMenu() {
     // "Always for <app>" on the picture card, taken back: one click on it
     // sent pictures of that app for good, with nowhere to undo it. Listed
     // while there is one, each to be asked about again, or all of them. And
-    // while the setup card's yes for every app is on: "Ask again for all of
-    // them" takes that back too (forgetPictures), or it promised the card
-    // again and every app still went without one.
-    ...(picturesAllowed().length || localState.askPicturesAlwaysAll === true ? [{
+    // while pictures go for every app, which is the default (on unless it was
+    // turned off: askPicturesAlwaysAll is anything but false): "Ask again for
+    // all of them" turns that off too (forgetPictures), or it promised the
+    // card again and every app still went without one. This is the one way to
+    // turn pictures off; nothing asks before they are on.
+    ...(picturesAllowed().length || picturesForAll() ? [{
       label: txt("desktop.tray.picturesAllowed", "Pictures sent without asking"),
       submenu: picturesAllowed().map((a) => ({
         label: txt("desktop.tray.picturesForget", "Ask again for {app}", { app: a }),
@@ -1863,7 +1881,8 @@ function setLocal(key, value) {
 
 // ---- Tailzu Code on this computer ---------------------------------------------
 // The person's own computer as a runner for Xode (runner/index.js; the protocol is the backend's
-// docs/desktop-runner-session.md). OFF until they turn it on, here or in its window. When it is on, the tray says what it is doing
+// docs/desktop-runner-session.md). ON by default, with nothing asked first (it is said in the privacy policy, x0bot.com/privacy
+// section 10); the person can turn it off here or in its window, and that sticks. When it is on, the tray says what it is doing
 // ("Tailzu is working on <project>", with a Stop), its window lists the commands it ran, and every command goes into an audit log.
 let runnerWin = null;
 
@@ -1894,58 +1913,18 @@ function runnerMenuItems() {
   }
   items.push({
     label: txt("desktop.tray.runnerUse", "Use this computer for Xode"),
-    type: "checkbox", checked: st.enabled, click: (item) => { void runnerSwitch(item.checked); },
+    type: "checkbox", checked: st.enabled, click: (item) => runnerSwitch(item.checked),
   });
   const line = runnerStateLine(st);
   if (st.enabled && line && !st.working) items.push({ label: "    " + line, enabled: false });
-  items.push({ label: txt("desktop.tray.runnerActivity", "Xode activity…"), click: openRunnerPage });
+  items.push({ label: txt("desktop.tray.runnerActivity", "Xode activity…"), click: openRunnerWindow });
   return items;
 }
 
-/** What turning it on means, in plain words: said the first time it is turned on from the tray, and written under the switch in its window. */
-const RUNNER_EXPLAIN = () => txt("desktop.runner.explain",
-  "When this is on, and only while X0 Bot is open, Xode can run its commands (tests, builds, installs) on this computer instead of on a cloud computer: free, and fast. It only works on projects you allow here, asking the first time. It works in a folder of its own, from a read-only copy of your code, with a clean environment and a private home folder, so it cannot see your passwords, keys or other files, and it refuses things like sudo, git push, publishing, or deleting your home folder. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed in Xode on this computer, and kept in a log here for 7 days. Turn it off any time.");
-
-/** The switch. Turned on from the tray for the first time, it says what it does first; from its window the words are already on the page. */
-async function runnerSwitch(on) {
+/** The switch, from the tray: on or off at once. Nothing is asked first; the runner's window says what it does. */
+function runnerSwitch(on) {
   if (!runner) return;
-  if (on && !(localState.runner && localState.runner.explained)) {
-    let yes = false;
-    try {
-      try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
-      const r = await dialog.showMessageBox({
-        type: "question", noLink: true, defaultId: 1, cancelId: 1,
-        title: txt("desktop.runner.askTitle", "Xode"),
-        message: txt("desktop.runner.onMessage", "Use this computer for Xode?"),
-        detail: RUNNER_EXPLAIN(),
-        buttons: [txt("desktop.runner.onYes", "Turn on"), txt("desktop.runner.onNo", "Not now")],
-      });
-      yes = r.response === 0;
-    } catch { yes = false; }
-    if (!yes) { refreshTray(); return; }
-    if (localState.runner) { localState.runner.explained = true; saveLocalState(); }
-  }
   runner.setEnabled(on);
-}
-
-/** The first time a project's work is offered to this computer: ask. Resolves true (allow), false (not here) or null (closed, no answer). */
-async function askRunnerProject({ name }) {
-  try { app.focus({ steal: true }); } catch { /* the dialog still shows */ }
-  try {
-    const r = await dialog.showMessageBox({
-      type: "question", noLink: true, defaultId: 1, cancelId: 2,
-      title: txt("desktop.runner.askTitle", "Xode"),
-      message: txt("desktop.runner.askMessage", "Let Xode run {project} on this computer?", { project: name }),
-      detail: txt("desktop.runner.askDetail",
-        "Xode wants to run this project's commands (tests, builds, installs) here instead of on a cloud computer. It works in a folder of its own, from a read-only copy of the code, with a clean environment: it cannot see your passwords, keys or other files. You can change this any time in Xode on this computer."),
-      buttons: [
-        txt("desktop.runner.askAllow", "Allow for this project"),
-        txt("desktop.runner.askDeny", "Not on this computer"),
-        txt("desktop.runner.askLater", "Ask me later"),
-      ],
-    });
-    return r.response === 0 ? true : r.response === 1 ? false : null;
-  } catch { return null; }
 }
 
 function setupRunner() {
@@ -1957,7 +1936,6 @@ function setupRunner() {
     // Everything the runner asks of the server is as the signed-in person, renewed once on a 401 (authorizedFetch).
     api: { fetch: authorizedFetch, signedIn },
     secrets: () => [authSession && authSession.access_token, authSession && authSession.refresh_token].filter(Boolean),
-    ask: askRunnerProject,
     notify: (body) => notify(body),
     // config.json: "runnerImage" (the Docker image) and "runnerName" (the name this computer is listed under); read when used.
     config: { get image() { return cfg.runnerImage; }, get name() { return cfg.runnerName; } },
@@ -1987,76 +1965,45 @@ function openRunnerWindow() {
   runnerWin.loadFile("src/runner/runner.html");
 }
 
-/**
- * Where "Tailzu Code activity…" goes: the server's page for it (desktop.runner.screenId, bots.computer, whose
- * DeskRunner card runnerCard.js draws) for someone in the Bots app, where the server names one; else this
- * window, as it always was.
- */
-function openRunnerPage() {
-  const id = bool("bots.app", false) ? str("desktop.runner.screenId", "") : "";
-  if (id && /^[a-z][a-z0-9._-]{0,80}$/.test(id)) openAppWindow(id);
-  else openRunnerWindow();
-}
-
-// Told on every change, at most four times a second: the runner's window, and the app window's card.
+// Told on every change, at most four times a second: the runner's window.
 let runnerPushTimer = null;
 function pushRunnerWindow() {
-  const wins = [runnerWin, appWin].filter((w) => w && !w.isDestroyed());
-  if (!wins.length || runnerPushTimer) return;
+  if (!runnerWin || runnerWin.isDestroyed() || runnerPushTimer) return;
   runnerPushTimer = setTimeout(async () => {
     runnerPushTimer = null;
     if (!runner) return;
     let snap;
     try { snap = await runner.snapshot({ fetchProjects: false }); } catch { return; }
-    for (const w of [runnerWin, appWin]) {
-      if (!w || w.isDestroyed() || w.webContents.isLoading()) continue;
-      try { w.webContents.send("runner:update", snap); } catch { /* the window went */ }
-    }
+    const w = runnerWin;
+    if (!w || w.isDestroyed() || w.webContents.isLoading()) return;
+    try { w.webContents.send("runner:update", snap); } catch { /* the window went */ }
   }, 250);
 }
 
-// What the runner's window, and the app window's card on the server's page (runnerCard.js), may ask for:
-// narrow, checked here, and only from those two windows. The card's words are the server's, so they are not
-// the consent: from the app window, turning it on asks here first (runnerSwitch, with this file's own words,
-// the first time) and allowing a project asks as a project's first run does (askRunnerProject). Taking
-// anything back (off, don't allow, ask again, Stop) needs no asking.
+// What the runner's window may ask for: narrow, checked here, and only from that window (no other window has these
+// calls). Its switch, the container setting, a project's "Don't allow" (or Allow again, or back to the default), Stop,
+// and the audit folder. Nothing here asks first: on, and every project allowed, are the defaults.
 const fromRunnerWin = (e) => isFrom(e, runnerWin);
-const fromRunnerCard = (e) => fromRunnerWin(e) || fromApp(e);
-ipcMain.handle("runner:state", async (e) => (fromRunnerCard(e) && runner ? runner.snapshot() : null));
+ipcMain.handle("runner:state", async (e) => (fromRunnerWin(e) && runner ? runner.snapshot() : null));
 ipcMain.handle("runner:set", async (e, key, value) => {
-  if (!fromRunnerCard(e) || !runner || typeof value !== "boolean") return null;
-  if (key === "enabled") {
-    if (fromRunnerWin(e)) {
-      // Its words are on the page the switch is on.
-      if (value && localState.runner && !localState.runner.explained) { localState.runner.explained = true; saveLocalState(); }
-      runner.setEnabled(value);
-    } else if (value) {
-      await runnerSwitch(true);
-    } else {
-      runner.setEnabled(false);
-    }
-  } else if (key === "container") runner.setContainer(value);
+  if (!fromRunnerWin(e) || !runner || typeof value !== "boolean") return null;
+  if (key === "enabled") runner.setEnabled(value);
+  else if (key === "container") runner.setContainer(value);
   return runner.snapshot({ fetchProjects: false });
 });
 ipcMain.handle("runner:project", async (e, id, name, action) => {
-  if (!fromRunnerCard(e) || !runner) return null;
+  if (!fromRunnerWin(e) || !runner) return null;
   if (!["allow", "deny", "ask"].includes(action)) return null;
-  const pid = String(id || ""), pname = String(name || "").slice(0, 120);
-  if (action === "allow" && !fromRunnerWin(e)) {
-    // Asked here, with its own words, before a project the page names may run on this computer.
-    const yes = await askRunnerProject({ name: pname });
-    if (yes !== true) return runner.snapshot({ fetchProjects: false });
-  }
-  await runner.setProject(pid, pname, action);
+  await runner.setProject(String(id || ""), String(name || "").slice(0, 120), action);
   return runner.snapshot({ fetchProjects: false });
 });
 ipcMain.handle("runner:checkDocker", async (e) => {
-  if (!fromRunnerCard(e) || !runner) return null;
+  if (!fromRunnerWin(e) || !runner) return null;
   await runner.checkDocker();
   return runner.snapshot({ fetchProjects: false });
 });
-ipcMain.on("runner:stop", (e) => { if (fromRunnerCard(e) && runner) runner.stopWork(); });
-ipcMain.on("runner:openAudit", (e) => { if (fromRunnerCard(e) && runner) shell.openPath(runner.auditDir).catch(() => {}); });
+ipcMain.on("runner:stop", (e) => { if (fromRunnerWin(e) && runner) runner.stopWork(); });
+ipcMain.on("runner:openAudit", (e) => { if (fromRunnerWin(e) && runner) shell.openPath(runner.auditDir).catch(() => {}); });
 
 // ---- What the app window is allowed to ask for -------------------------------
 // Narrow on purpose: the renderer gets the backend URL, the session, and the
@@ -2099,8 +2046,6 @@ ipcMain.handle("app:env", (e) => {
     // Ask is here, so the window declares its one-time setup card
     // (DeskAskSetup) and reads its states with askSetup().
     askSetup: askOn(),
-    // Tailzu Code on this computer is here: the window declares its card (DeskRunner) on bots.computer.
-    runner: !!runner,
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
@@ -2892,15 +2837,20 @@ async function authorizedFetch(p, init) {
   return res;
 }
 
+/** "Look at the screen when it's needed", for every app: ON by default. Only
+ *  an explicit false (the tray's "Ask again for all of them", or the setup
+ *  card's Turn off) is off; absent, or anything else kept, is on. */
+function picturesForAll() { return localState.askPicturesAlwaysAll !== false; }
 /** The apps said "Always" to on the picture card (ask.js permit). */
 function picturesAllowed() {
   return Array.isArray(localState.askPicturesAlways) ? localState.askPicturesAlways.filter((a) => typeof a === "string") : [];
 }
 /** Asked again before a picture of `app` is sent, or of any app: of any
- *  app, the setup card's yes for every app goes too, and the card is told. */
+ *  app, pictures for every app are turned off too (false, kept: the default
+ *  is on), and the setup card is told. */
 function forgetPictures(app) {
   localState.askPicturesAlways = app == null ? [] : picturesAllowed().filter((a) => a.toLowerCase() !== String(app).toLowerCase());
-  const every = app == null && localState.askPicturesAlwaysAll === true;
+  const every = app == null && picturesForAll();
   if (every) localState.askPicturesAlwaysAll = false;
   saveLocalState();
   refreshTray();
@@ -2908,26 +2858,22 @@ function forgetPictures(app) {
 }
 
 // ASK'S "THIS COMPUTER" (localfiles.js): the person's own files, found, sorted,
-// moved and so on here, only inside the folders they allowed (Settings > Ask).
+// moved and so on here, only inside the usual folders (Downloads, Desktop and
+// Documents). There is no setting for them: nothing is asked before Ask may
+// work there, it is said in the privacy policy (x0bot.com/privacy section 10).
 // The kinds of change they said yes to once are kept here, on this computer.
 const localFiles = createLocalFiles({
   shell, userData: app.getPath("userData"), home: app.getPath("home"),
   // This program and where it lives are never touched, wherever it was put (a Downloads folder, say).
   protect: [process.execPath, path.dirname(process.execPath), typeof app.getAppPath === "function" ? app.getAppPath() : ""],
-  roots: () => (Array.isArray(localState.askFolders) ? localState.askFolders : null),
+  // The usual three, always (null): no list of the person's own is kept any more.
+  roots: () => null,
   // Its refusals' words: the server's labels (desktop.files.*), today's as the fallback.
   txt,
 });
 function deviceKinds() {
   return Array.isArray(localState.askDeviceOk) ? localState.askDeviceOk.filter((k) => typeof k === "string") : [];
 }
-createFolderSettings({
-  ipcMain, fromApp, dialog, window: () => (appWin && !appWin.isDestroyed() ? appWin : undefined),
-  files: localFiles, localState, saveLocalState, home: app.getPath("home"),
-  send: (state) => {
-    if (appWin && !appWin.isDestroyed() && !appWin.webContents.isLoading()) appWin.webContents.send("ask-folders", state);
-  },
-});
 
 // The Mac's Screen Recording page in System Settings, for Ask's card when a
 // look was refused for want of it (run/text.js TEXT.needScreen). A fixed
@@ -3028,10 +2974,11 @@ function setupAsk() {
     // rest of what it remembers about itself, never sent anywhere, and taken
     // back from the tray (forgetPictures).
     picturesAlways: picturesAllowed,
-    // "Look at the screen when it's needed" on the setup card: yes once, for
-    // every app, kept beside that list (askPicturesAlwaysAll). Turned off
-    // there, or forgotten at sign-out, like the list.
-    picturesAlwaysAll: () => localState.askPicturesAlwaysAll === true,
+    // "Look at the screen when it's needed", for every app: ON by default,
+    // kept beside that list (askPicturesAlwaysAll; absent is on, only false is
+    // off). Turned off from the tray ("Ask again for all of them") or the
+    // setup card; back to the default at sign-out, like the list.
+    picturesAlwaysAll: picturesForAll,
     // A look's word on Screen Recording changed: the setup card is told, so
     // it can offer the restart a granted permission still needs.
     lookPermission: () => askSetup.push(),
@@ -3607,7 +3554,7 @@ app.whenReady().then(() => {
 
   tray = new Tray(trayIcon());
   refreshTray();
-  // Tailzu Code on this computer: off until the person turns it on (the tray, or its window), online for Xode when they have.
+  // Tailzu Code on this computer: on by default, online for Xode while signed in, unless the person turned it off (the tray, or its window).
   setupRunner();
 
   // ASK THE SERVER NOW, window or no window. A login-item start never opens

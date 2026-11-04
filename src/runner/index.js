@@ -3,20 +3,21 @@
 // docs/desktop-runner-session.md (in the backend repository) is the protocol; this is the app's side of it, from the switch in
 // the tray to the last process killed. In the order things happen:
 //
-//   the switch     "Use this computer for Tailzu Code", OFF until the person turns it on (state.enabled)
+//   the switch     "Use this computer for Tailzu Code", ON by default (state.enabled): nothing is asked first, it is said in the privacy
+//                  policy (x0bot.com/privacy section 10). The person can turn it off from the tray or its window, and that sticks
 //   presence       presence.js keeps one WebSocket open to the jobs Worker, so the router knows this computer is here. Paused (the
 //                  socket closed, nothing polled) while the battery is under 20% or a low-power mode is on (power.js)
-//   an offer       the router chose this computer for a step. Which project is it? (the server's job record). Has the person allowed
-//                  it here? (allow.js; asked the first time.) Then the code: a workspace under <userData>/workspaces, fetched with the
-//                  read-only token the offer carries (workspace.js)
+//   an offer       the router chose this computer for a step. Which project is it? (the server's job record). Has the person said
+//                  "Don't allow" to it here? (allow.js; every project is allowed until they do.) Then the code: a workspace under
+//                  <userData>/workspaces, fetched with the read-only token the offer carries (workspace.js)
 //   a session      the step is a live session: connect to the job's room and do what it sends, one thing at a time (session.js)
 //   a plain step   no session: run its commands, hand back what they changed (changes.js) and report
 //   the report     POST /v1/code/runner/result, with the real minutes; progress every 30 s until then, to keep the lease
 //   Stop / quit    every process Tailzu Code started is killed (procs.js), on Stop, on a closed session, on quit, on a crash (and, with
 //                  the watchdog, when the app is killed outright)
 //
-// Every command goes into the audit log (audit.js) and the activity list (activity.js). Nothing here touches Electron: the tray, the
-// window and the dialog are handed in, so the tests run all of it with a fake Worker.
+// Every command goes into the audit log (audit.js) and the activity list (activity.js). Nothing here touches Electron: the tray and the
+// window are handed in, so the tests run all of it with a fake Worker.
 
 "use strict";
 
@@ -59,16 +60,15 @@ function repoName(cloneUrl) {
 /**
  * o: {
  *   userData, version, platform, hostname,
- *   state            the runner's saved settings: { enabled, container, deviceId, projects } - mutated in place, then saveState()
+ *   state            the runner's saved settings: { enabled, container, deviceId, projects, defaultOnV1 } - mutated in place, then saveState()
  *   saveState()
  *   api              { fetch(path, init) -> Response (as the signed-in person), signedIn() -> boolean }
  *   secrets()        the app's own tokens, so no output can carry them
- *   ask({ projectId, name }) -> Promise<true | false | null>    the question to the person
  *   notify(text)     a native notification
  *   config           { image, name } from config.json
  *   powerMonitor     Electron's, for the battery
  *   -- for the tests: real (the environment), fs, child { execFile, spawn }, connect, power { read }, urlPolicy, dockerStatus, sleep,
- *      timers, askWaitMs, previewLimits, caps, graceMs, noWatchdog, leaseEveryMs
+ *      timers, previewLimits, caps, graceMs, noWatchdog, leaseEveryMs
  * }
  */
 function createRunner(o) {
@@ -85,7 +85,12 @@ function createRunner(o) {
   const paths = runnerPaths(o.userData);
   ensurePaths(paths, fs);
 
-  if (typeof settings.enabled !== "boolean") settings.enabled = false;
+  // ON BY DEFAULT. Before, it was off until the person turned it on, and every install that never touched the switch kept that old
+  // default on disk as `enabled: false`, which reads the same as someone who turned it off. So once, on the first launch of this
+  // version (defaultOnV1 not yet set), the switch is turned on whatever is kept; after that what the person chooses (the tray's
+  // "Use this computer for Xode", the window's switch, Stop) is what stands.
+  if (settings.defaultOnV1 !== true) { settings.enabled = true; settings.defaultOnV1 = true; o.saveState(); }
+  if (typeof settings.enabled !== "boolean") settings.enabled = true;
   if (typeof settings.container !== "boolean") settings.container = false;
   if (!settings.projects || typeof settings.projects !== "object") settings.projects = {};
   if (!isDeviceId(settings.deviceId)) { settings.deviceId = "desk-" + crypto.randomBytes(8).toString("hex"); o.saveState(); }
@@ -101,7 +106,7 @@ function createRunner(o) {
   const allow = createAllowList({
     read: () => settings.projects,
     write: (map) => { settings.projects = map; o.saveState(); },
-    ask: (p) => o.ask(p), waitMs: o.askWaitMs, now, timers,
+    now,
   });
   const readPower = (o.power && o.power.read) || createSystemSource({ platform, execFile: child.execFile, fs, powerMonitor: o.powerMonitor });
   const power = createPowerGate({
@@ -346,12 +351,13 @@ function createRunner(o) {
     j.projectId = await projectIdOf(j.id);
     if (j.aborted) return;
     if (!j.projectId) { decline(j, "unknown_project"); return; }
+    // Allowed unless the person said "Don't allow" to it in the window: nothing is asked.
     const verdict = await allow.check({ projectId: j.projectId, name: j.project });
     if (j.aborted) return;
     if (verdict !== "allowed") {
-      decline(j, verdict === "denied" ? "project_not_allowed" : "not_asked_in_time");
+      decline(j, "project_not_allowed");
       // The server stops offering a refused project once it is told which projects are left.
-      if (verdict === "denied") void pushProjects();
+      void pushProjects();
       return;
     }
     if (power.paused) { decline(j, "paused"); return; }
@@ -483,7 +489,7 @@ function createRunner(o) {
       sync();
       if (o.notify) o.notify("Xode stopped. This computer is off for Xode until you turn it on again.");
     },
-    /** A project's answer, from the window: "allow", "deny" or "ask" (forget). */
+    /** A project's setting, from the window: "allow", "deny" or "ask" (forget what was said: back to the default, allowed). */
     async setProject(id, name, action) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(String(id))) return;
       if (action === "allow") allow.decide(id, name, true);
@@ -497,7 +503,8 @@ function createRunner(o) {
       const known = fetchProjects ? await refreshProjects() : projects;
       const answered = new Map(allow.list().map((p) => [p.id, p]));
       const rows = [];
-      for (const id of known.ids) rows.push({ id, name: known.names[id] || (answered.get(id) && answered.get(id).name) || id, state: answered.has(id) ? answered.get(id).state : "ask" });
+      // A project nobody said anything about is allowed (the default).
+      for (const id of known.ids) rows.push({ id, name: known.names[id] || (answered.get(id) && answered.get(id).name) || id, state: answered.has(id) ? answered.get(id).state : "allowed" });
       for (const [id, p] of answered) if (!known.ids.includes(id)) rows.push({ id, name: p.name, state: p.state });
       rows.sort((a, b) => a.name.localeCompare(b.name));
       if (settings.container && (!docker.at || now() - docker.at > DOCKER_TTL_MS)) dockerNow().catch(() => {});
@@ -516,10 +523,11 @@ function createRunner(o) {
     /** The sign-in changed (a person signed in, or the session ended). */
     sessionChanged() {
       if (!o.api.signedIn()) {
-        // Their answers were theirs: whoever signs in next is asked for themselves.
+        // The projects they kept off this computer were theirs and go; the switch is this computer's and stays as it was, so a
+        // sign-out (even one forced by an expired session) never turns back on what the person turned off. Nothing goes online
+        // while signed out, whatever the switch says.
         if (job) abortJob(job, "signed out on this computer", false);
         allow.clear();
-        settings.enabled = false;
         o.saveState();
       }
       sync();

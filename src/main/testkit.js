@@ -28,6 +28,8 @@ function mainProcess(o = {}) {
   fs.writeFileSync(path.join(dir, "session.json"), JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_at: 4102444800 }));
   // Always a bootstrap of its own: knobs.js keeps the last one it was given.
   fs.writeFileSync(path.join(dir, "bootstrap.json"), JSON.stringify({ labels: {}, flags: Object.assign({ "desktop.paste.delayMs": 1 }, o.flags) }));
+  // What an earlier launch kept on this computer, when a test starts from it.
+  if (o.state) fs.writeFileSync(path.join(dir, "desktop-state.json"), JSON.stringify(o.state));
   const dictation = [];   // what plain dictation records, sends and pastes
   const guide = [];       // what the guide's window was sent
   const carets = [];      // what the helper was asked

@@ -115,7 +115,7 @@ test("main: plain dictation records, sends and pastes byte-for-byte the same wit
   }
 });
 
-test("main: the setup card's wiring: the env says so, only the app window asks or acts, and it is told on focus, after each action and at sign-out", async () => {
+test("main: the setup card's wiring: the env says so, pictures are on by default, only the app window asks or acts, and it is told on focus, after each action and at sign-out", async () => {
   const m = mainProcess();
   try {
     await m.ready();
@@ -126,23 +126,26 @@ test("main: the setup card's wiring: the env says so, only the app window asks o
     const want = (pictures) => (platform === "mac"
       ? { platform, read: "on", see: "on", pictures }
       : { platform, read: "na", see: "na", pictures });
-    assert.deepStrictEqual(m.invoke("app:askSetup", appWc), want("off"));
+    // Nothing kept yet: pictures for every app are on (the default).
+    assert.deepStrictEqual(m.invoke("app:askSetup", appWc), want("on"));
     assert.strictEqual(m.invoke("app:askSetup", other), null);
     const told = () => (appWin.appSent || []).filter(([ch]) => ch === "ask-setup").map(([, s]) => s);
+    const saved = () => JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8"));
     // Another window's action: nothing.
-    m.ipc.emit("app:askSetupAction", { sender: other }, { kind: "picturesAll", on: true });
+    m.ipc.emit("app:askSetupAction", { sender: other }, { kind: "picturesAll", on: false });
     assert.deepStrictEqual(told(), []);
     // The app window's: saved on this computer, and the window told.
-    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: true });
-    assert.deepStrictEqual(told(), [want("on")]);
-    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll, true);
+    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: false });
+    assert.deepStrictEqual(told(), [want("off")]);
+    assert.strictEqual(saved().askPicturesAlwaysAll, false);
     // Back from System Settings: the window is told again.
     appWin.emit("focus");
-    assert.deepStrictEqual(told(), [want("on"), want("on")]);
-    // Signed out: the yes was theirs, and goes with them.
+    assert.deepStrictEqual(told(), [want("off"), want("off")]);
+    // Signed out: the off was theirs. The next person gets the default (on): the key is gone, not kept false.
     await m.invoke("app:setSession", appWc, null);
-    assert.deepStrictEqual(told().pop(), want("off"));
-    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll, false);
+    assert.deepStrictEqual(told().pop(), want("on"));
+    assert.ok(!("askPicturesAlwaysAll" in saved()), "back to the default");
+    assert.deepStrictEqual(saved().askPicturesAlways, [], "and the per-app list is emptied");
   } finally { m.close(); }
   const off = mainProcess({ flags: { "desktop.agent.enabled": false } });
   try {
@@ -151,7 +154,7 @@ test("main: the setup card's wiring: the env says so, only the app window asks o
   } finally { off.close(); }
 });
 
-test("main: the tray's \"Ask again for all of them\" takes back the setup card's yes for every app too, and the card is told", async () => {
+test("main: pictures for every app are on by default, and the tray's \"Ask again for all of them\" turns them off, and the card is told", async () => {
   const m = mainProcess();
   try {
     await m.ready();
@@ -160,20 +163,23 @@ test("main: the tray's \"Ask again for all of them\" takes back the setup card's
     const told = () => (appWin.appSent || []).filter(([ch]) => ch === "ask-setup").map(([, s]) => s.pictures);
     const pictures = () => m.tray().find((i) => i && i.label === "Pictures sent without asking");
     const saved = () => JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).askPicturesAlwaysAll;
-    assert.strictEqual(pictures(), undefined, "nothing goes without asking: no list");
-    // Yes for every app, from the setup card: the tray lists it at once.
-    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: true });
+    // Nothing kept (absent is on): the tray says pictures go without asking, with the way to turn that off.
+    assert.strictEqual(saved(), undefined);
     const menu = pictures();
     assert.ok(menu, "the tray says something goes without asking");
     const all = menu.submenu.find((i) => i.label === "Ask again for all of them");
     assert.ok(all);
-    // Taken back from the tray: the card asks again everywhere, and the
-    // setup card turns to off.
+    // Turned off from the tray: the card asks again everywhere, false is
+    // kept, and the setup card turns to off.
     all.click();
     assert.strictEqual(saved(), false);
-    assert.deepStrictEqual(told(), ["on", "off"]);
+    assert.deepStrictEqual(told(), ["off"]);
     assert.strictEqual(pictures(), undefined);
     assert.strictEqual(m.invoke("app:askSetup", appWc).pictures, "off");
+    // On again from the setup card: the tray lists it again.
+    m.ipc.emit("app:askSetupAction", { sender: appWc }, { kind: "picturesAll", on: true });
+    assert.deepStrictEqual(told(), ["off", "on"]);
+    assert.ok(pictures());
   } finally { m.close(); }
 });
 
@@ -210,4 +216,50 @@ test("preload: the app window's bridge carries the setup card's three calls, by 
   ]);
   // The other windows' bridges have none of it.
   for (const k of ["tailzu", "tailzuGuide", "tailzuNotes"]) assert.ok(!("askSetup" in exposed[k]) && !("askSetupAction" in exposed[k]), k);
+  // The folders row and the runner's card are gone from the app window: no calls for them. The runner's own window keeps its own.
+  for (const k of ["folders", "onFolders", "foldersAction", "runner", "onRunner", "runnerSet", "runnerProject", "runnerCheckDocker", "runnerStop", "runnerOpenAudit"]) {
+    assert.ok(!(k in t), k);
+  }
+  for (const k of ["state", "set", "project", "checkDocker", "stop", "openAudit", "onUpdate"]) assert.strictEqual(typeof exposed.tailzuRunner[k], "function", k);
+});
+
+test("main: what older copies kept and nothing reads is dropped at launch: the folders Ask could use, and the runner's explained mark", async () => {
+  const m = mainProcess({ state: { askFolders: ["/somewhere/Photos"], runner: { enabled: false, explained: true }, launchCount: 3 } });
+  try {
+    await m.ready();
+    const saved = JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8"));
+    assert.ok(!("askFolders" in saved), "no folder list stays on disk");
+    assert.ok(!("explained" in saved.runner));
+    assert.strictEqual(saved.launchCount, 4, "the rest is kept");
+  } finally { m.close(); }
+});
+
+test("main: Xode on this computer is on by default, its tray item opens its own window, and only that window may ask anything of it", async () => {
+  // An install that kept the old default (off) and never chose: turned on, once.
+  const m = mainProcess({ state: { runner: { enabled: false } } });
+  try {
+    await m.ready();
+    const use = m.tray().find((i) => i && i.label === "Use this computer for Xode");
+    assert.ok(use && use.checked === true, "on by default");
+    const saved = JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8"));
+    assert.strictEqual(saved.runner.enabled, true);
+    assert.strictEqual(saved.runner.defaultOnV1, true);
+    // Turned off from the tray: at once, nothing asked, and kept.
+    use.click({ checked: false });
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).runner.enabled, false);
+    assert.strictEqual(m.tray().find((i) => i && i.label === "Use this computer for Xode").checked, false);
+    // "Xode activity…" opens the runner's own window, whatever the server sends.
+    m.tray().find((i) => i && i.label === "Xode activity…").click();
+    const runnerWin = m.win("src/runner/runner.html");
+    assert.ok(runnerWin, "the runner's window");
+    // The app window may not ask anything of the runner; its own window may.
+    const appWc = m.win("src/app/app.html").webContents;
+    assert.strictEqual(await m.invoke("runner:state", appWc), null);
+    assert.strictEqual(await m.invoke("runner:set", appWc, "enabled", true), null);
+    assert.strictEqual(await m.invoke("runner:project", appWc, "proj-1", "acme/app", "deny"), null);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(m.dir, "desktop-state.json"), "utf8")).runner.enabled, false, "the app window turned nothing on");
+    const snap = await m.invoke("runner:set", runnerWin.webContents, "enabled", true);
+    assert.strictEqual(snap.status.enabled, true);
+    await m.invoke("runner:set", runnerWin.webContents, "enabled", false);
+  } finally { m.close(); }
 });

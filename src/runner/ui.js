@@ -38,15 +38,15 @@
 
     const box = $("projects");
     box.textContent = "";
-    if (!s.projects.length) box.appendChild(el("div", "empty", "No projects yet. Xode asks the first time it wants to run one here."));
+    if (!s.projects.length) box.appendChild(el("div", "empty", "No projects yet. Every project of yours may run here unless you say otherwise."));
+    // Every project is allowed until the person says "Don't allow"; Allow puts a refused one back.
     for (const p of s.projects) {
+      const denied = p.state === "denied";
       const row = el("div", "proj");
       row.appendChild(el("span", "name", p.name));
-      row.appendChild(el("span", "badge " + p.state, p.state === "ask" ? "will ask" : p.state));
+      row.appendChild(el("span", "badge " + (denied ? "denied" : "allowed"), denied ? "denied" : "allowed"));
       const act = (label, action, primary) => { const b = el("button", primary ? "primary" : "", label); b.addEventListener("click", () => api.project(p.id, p.name, action).then(refresh)); return b; };
-      if (p.state !== "allowed") row.appendChild(act("Allow", "allow", true));
-      if (p.state !== "denied") row.appendChild(act("Don't allow", "deny"));
-      if (p.state !== "ask") row.appendChild(act("Ask me again", "ask"));
+      row.appendChild(denied ? act("Allow", "allow", true) : act("Don't allow", "deny"));
       box.appendChild(row);
     }
 

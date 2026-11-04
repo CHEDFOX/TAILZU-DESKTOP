@@ -152,7 +152,7 @@ function page(o = {}) {
       createElement: (tag) => (tag === "webview" && o.webview ? { loadURL() {} } : { setAttribute: noop, style: {} }),
     },
     fetch: o.fetch,
-    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, askSetup: async () => null, onAskSetup: noop, folders: async () => ({}), onFolders: noop, openExternal: noop },
+    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, askSetup: async () => null, onAskSetup: noop, openExternal: noop },
   };
   g.window = g;
   const ctx = vm.createContext(g);

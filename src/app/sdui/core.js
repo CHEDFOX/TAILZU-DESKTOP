@@ -54,6 +54,8 @@ const COMPONENTS = [
   // and its one button missing.
   "SVG", "Gradient", "BlurBackground", "FlipText", "Modal", "ProgressBar",
   "SwipeAction", "NeuralField",
+  // A stack's `hint`: a small card shown while the pointer is on it, or it has the focus (nodes.js hintOf). Settings' app icons.
+  "HoverHint",
   // The Train tab, in full. The conversation is a real repeater here now, and
   // the mic records in the page rather than through the tray's global hotkey —
   // so the refine screen is the same screen it is on a phone, not a notice
@@ -121,10 +123,6 @@ const SYSTEM_AUDIO = "DeskSystemAudio";
  *  server may send its one-time setup card, which this window draws with the
  *  permission states only the main process can read. */
 const ASK_SETUP_CARD = "DeskAskSetup";
-/** The allowed-folders row under Ask (Settings): which folders Ask may work in,
- *  kept by the main process (folderSettings.js). Declared with
- *  the setup card, in the same copies that have Ask. */
-const FOLDERS_CARD = "DeskFolders";
 /** This window shows the assistant's side: Connected apps in Settings, the
  *  Tasks page, and the connector.connect action that signs an app in. The
  *  server sends them only while connected apps are switched on there. */
@@ -176,9 +174,6 @@ const ACTIONS = [
   // where. picturesAll takes `on` (true or false); relaunch restarts Tailzu,
   // which macOS can need before a new Screen Recording grant takes.
   "ask.openAccessibility", "ask.openScreenRecording", "ask.picturesAll", "ask.relaunch",
-  // The folders row: add one (the system's chooser), take one out (`i`, its
-  // place in the list), or go back to the usual three.
-  "ask.folderAdd", "ask.folderRemove", "ask.folderReset",
   // Connect an app from Settings: POST /v1/connectors/:id/connect, then the
   // sign-in page it answers with opens in the browser (connectApp).
   "connector.connect",

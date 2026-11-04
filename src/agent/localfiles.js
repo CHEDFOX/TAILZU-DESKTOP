@@ -9,8 +9,9 @@
  * never read: there is no tool that opens one for its contents.
  *
  * THE RULES, all of them enforced here and not left to the planner:
- *   - only inside the allowed folders: Downloads, Desktop and Documents until
- *     the person changes them in Settings (roots());
+ *   - only inside the allowed folders: the usual three, Downloads, Desktop and
+ *     Documents (roots()). There is no setting for them in the app: main.js
+ *     hands in no list of its own, so these are the folders, always;
  *   - never a system, app or hidden folder, whatever was allowed: no dot
  *     folders or files, no .app bundles, nothing under Windows, Program Files,
  *     /System, /usr and the like, this app's own data, the home folder itself;
@@ -30,7 +31,7 @@
  * and its run() is the whole of it.
  *
  *   createLocalFiles({ fs, path, os, shell, platform, home, userData, roots, protect, now, caseInsensitive })
- *     roots()   the folders the person chose (absolute paths; an empty list is "none"), or null for the usual three
+ *     roots()   other folders to use instead (absolute paths; an empty list is "none"), or null for the usual three (what main.js hands in)
  *     protect   paths of the app itself (its program, its folder): never touched even when they sit inside an allowed folder
  */
 "use strict";

@@ -54,9 +54,6 @@ function page(env = { askSetup: true }, extra = {}) {
       askSetup: async () => MAC,
       onAskSetup: (cb) => { g.__push = cb; },
       askSetupAction: (kind, on) => calls.push({ kind, on }),
-      folders: async () => ({ custom: false, folders: [], error: "" }),
-      onFolders: (cb) => { g.__pushFolders = cb; },
-      foldersAction: (kind, i) => calls.push({ folders: kind, i }),
     },
   };
   // Whatever else a test needs the page to have (a microphone, a recorder, listeners to fire).
@@ -511,6 +508,17 @@ test("a line drawn from state is drawn from state in the onboarding, and a Grid 
   assert.match(p.run("node(__n)"), /flex:1;min-height:12px/);
 });
 
+test("a stack's hint is drawn hidden inside it, shown by the stylesheet on hover or focus; it says it can (HoverHint)", () => {
+  const p = page();
+  assert.ok(p.run("capabilities().components").includes("HoverHint"));
+  p.ctx.__n = { type: "Stack", props: { hint: { type: "Text", props: { content: "Search and write pages." } }, hintLabel: "Pages <b>" }, children: [{ type: "Text", props: { content: "N" } }] };
+  const html = p.run("node(__n)");
+  assert.match(html, /^<div[^>]* data-hint tabindex="0" aria-description="Pages &lt;b&gt;"/);
+  assert.match(html, /<div class="tz-hint" role="tooltip">.*Search and write pages\..*<\/div><\/div>$/);
+  p.ctx.__n = { type: "Stack", children: [] };
+  assert.doesNotMatch(p.run("node(__n)"), /data-hint|tz-hint/, "no hint, nothing added");
+});
+
 test("every step of the server's own screen draws, with nothing left unresolved", () => {
   const p = screenPage();
   const steps = ONBOARD.root.children.length;
@@ -827,62 +835,21 @@ test("the held mic is a disc of the node's size with its own glyph, and says whe
   assert.doesNotMatch(p.run("node(__n)"), /data-hold/);
 });
 
-// ---- the folders row under Ask (sdui/ DeskFolders) --------------------------------
+// ---- what the window no longer declares ---------------------------------------------
+// The allowed-folders row (DeskFolders) and the runner's card (DeskRunner) are gone: Ask works in the usual folders and Xode on this
+// computer is on by default, with nothing to set in the app window. The setup card (DeskAskSetup) stays: the server still sends it.
 
-const FOLDER_PROPS = {
-  title: "Folders Ask can use", lede: "Only inside these.", usual: "The usual three", add: "Add a folder", remove: "Remove",
-  reset: "Back to the usual three", none: "No folders yet.", refused: "Ask can't use that folder.", foot: "How Ask uses your files:",
-  policyLabel: "Privacy policy", policyUrl: "https://x0bot.com/privacy",
-};
-const USUAL = { custom: false, error: "", folders: [{ label: "Downloads", path: "~/Downloads" }, { label: "Desktop", path: "~/Desktop" }, { label: "Documents", path: "~/Documents" }] };
-const folderRow = (p) => { p.ctx.__n = { type: "DeskFolders", props: FOLDER_PROPS }; return p.run("node(__n)"); };
-
-test("the window declares DeskFolders with the setup card, and its three actions", () => {
-  const on = page({ askSetup: true });
-  assert.ok(on.run("capabilities().components").includes("DeskFolders"));
-  for (const a of ["ask.folderAdd", "ask.folderRemove", "ask.folderReset"]) assert.ok(on.run("capabilities().actions").includes(a), a);
-  assert.ok(!page({ askSetup: false }).run("capabilities().components").includes("DeskFolders"));
-});
-
-test("the folders row draws nothing until the main process answers, then each folder with its remove button", () => {
-  const p = page();
-  assert.strictEqual(folderRow(p), "");
-  p.ctx.__st = USUAL;
-  p.run("foldersTook(__st)");
-  const html = folderRow(p);
-  assert.match(html, /Folders Ask can use/);
-  for (const f of ["Downloads", "Desktop", "Documents", "~/Downloads"]) assert.ok(html.includes(f), f);
-  assert.strictEqual((html.match(/Remove/g) || []).length, 3 * 2 /* the label and the aria-label */);
-  assert.match(html, /Add a folder/);
-  assert.doesNotMatch(html, /Back to the usual three<\/button>/, "nothing to go back to while it is the usual three");
-  assert.match(html, /href|d-ask-link/);
-});
-
-test("once the list is the person's own it can go back, an unsafe add says why, and the names are escaped", () => {
-  const p = page();
-  p.ctx.__st = { custom: true, error: "That's a system folder.", folders: [{ label: "<img src=x onerror=1>", path: "~/x" }] };
-  p.run("foldersTook(__st)");
-  const html = folderRow(p);
-  assert.match(html, /Back to the usual three<\/button>/);
-  assert.match(html, /Ask can.{1,6}t use that folder\. That.{1,6}s a system folder\./);
-  assert.ok(!html.includes("<img src=x"), "a folder's name is text");
-  p.ctx.__st = { custom: true, error: "", folders: [] };
-  p.run("foldersTook(__st)");
-  assert.match(folderRow(p), /No folders yet\./);
-});
-
-test("the buttons reach foldersAction with the fixed kinds and the row's place", async () => {
-  const p = page();
-  for (const a of [{ kind: "ask.folderAdd" }, { kind: "ask.folderRemove", i: 2 }, { kind: "ask.folderReset" }, { kind: "ask.folderRemove", i: "x" }]) {
-    p.ctx.__a = a; await p.run("run(__a)");
+test("the window declares the setup card but no folders row, no runner card and none of their actions", () => {
+  const on = page({ askSetup: true, runner: true });
+  const components = on.run("capabilities().components"), actions = on.run("capabilities().actions");
+  assert.ok(components.includes("DeskAskSetup"));
+  for (const c of ["DeskFolders", "DeskRunner"]) assert.ok(!components.includes(c), c);
+  for (const a of ["ask.folderAdd", "ask.folderRemove", "ask.folderReset", "runner.set", "runner.project", "runner.checkDocker", "runner.stop", "runner.openAudit"]) {
+    assert.ok(!actions.includes(a), a);
   }
-  assert.deepStrictEqual(p.calls, [{ folders: "add", i: -1 }, { folders: "remove", i: 2 }, { folders: "reset", i: -1 }, { folders: "remove", i: -1 }]);
-});
-
-test("a window with an older main process, with no folders bridge, does not break", () => {
-  const p = page({ askSetup: true });
-  p.run("delete window.tailzuApp.folders; delete window.tailzuApp.onFolders");
-  assert.doesNotThrow(() => p.run("foldersWatch()"));
+  // A page that still sends one draws nothing for it.
+  on.ctx.__n = { type: "DeskFolders", props: { title: "Folders" } };
+  assert.doesNotMatch(on.run("node(__n)"), /Folders/);
 });
 
 // ---- the Bots app's microphone card: the system's answer, and its prompt --------------------

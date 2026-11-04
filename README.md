@@ -169,21 +169,28 @@ window rather than recording into a history no account owns.
   - **Pictures**: "what's this graph saying?", "solve this". The window is
     also read from its pixels on the device (the system's own OCR), and a
     question about something drawn sends one cropped picture, to Tailzu and
-    the AI providers it answers with, after a card asks **Allow once /
-    Always for this app / Not now**. Always is offered for an app, never for
-    a browser tab, whose name is the page's own title; the tray lists the
-    apps said Always to and asks again for any of them, and signing out
-    forgets them. `desktop.agent.pictures: never` turns pictures off; no
-    server value skips the card.
+    the AI providers it answers with. **On by default, for every app**
+    ("look at the screen when it's needed", `askPicturesAlwaysAll` in the
+    local state: absent is on, only `false` is off); it is said in the
+    privacy policy (x0bot.com/privacy section 10), not asked. The tray's
+    *Pictures sent without asking › Ask again for all of them* turns it off,
+    and then a card asks **Allow once / Always for this app / Not now**
+    before each picture. Always is offered for an app, never for a browser
+    tab, whose name is the page's own title; the tray lists the apps said
+    Always to and asks again for any of them. Signing out puts pictures back
+    to the default (on) for whoever signs in next. `desktop.agent.pictures:
+    never` turns pictures off, whatever is kept here.
   - **Out of the pill**: the card grows out of the pill on a thread, stays
     tied to it while it is up, and folds back into it at the end.
   - **Drawing**: while it explains, it circles, underlines, numbers and
     draws arrows on the screen or on the picture, labelled in handwriting.
   - **Peek**: while you dictate, a small Blip peeks over the text box at the
     cursor (`desktop.dictation.peek`).
-  - **One-time setup**: a card in the app ("Let Ask see what you see.")
-    allows reading the screen, seeing it and looking when needed, so the
-    working screens never stop to ask.
+  - **One-time setup**: the setup card (`DeskAskSetup`) is drawn where the
+    server sends it, today only Keylessbord's first-run steps (the Mac's
+    Accessibility row). There is no Ask setup card or folders row in
+    Settings any more: Ask's file operations work in Downloads, Desktop and
+    Documents.
   - **Connected apps** (when the server has them on): Settings lists the
     apps (state, Connect, how far it may go: Can look / Can draft / Can send,
     Disconnect) and a Tasks tab lists what was done (Waiting for you /
@@ -210,23 +217,26 @@ window rather than recording into a history no account owns.
 ## Tailzu Code on this computer
 
 Xode works on a project's code and needs somewhere to run commands (tests,
-builds, installs). Its first choice is the person's own computer, if they have said
-it may: free, and fast, because nothing waits for a cloud computer to start. This
+builds, installs). Its first choice is the person's own computer: free, and fast,
+because nothing waits for a cloud computer to start. This
 app speaks the backend's runner protocol for that
 (`TAILZU-BACKEND/docs/desktop-runner-session.md`; the code is `src/runner/`).
 
-**It is off until the person turns it on** (tray: *Use this computer for Tailzu Code*,
-which says what it means the first time; or *Tailzu Code activity…*, the window).
+**It is on by default**, with nothing asked first: it is said in the privacy policy
+(x0bot.com/privacy section 10). An install that kept the old default (off) is turned on
+once (the runner's state gets `defaultOnV1`); after that the person's choice stands
+(tray: *Use this computer for Xode*, on or off at once; *Xode activity…* opens the
+runner's own window, which has the same switch). Signing out puts it back to the
+default for whoever signs in next. Nothing goes online while signed out.
 While it is on and the app is running, one WebSocket stays open to the jobs Worker, so
 the router knows this computer is here. That costs one small text frame every 30
 seconds and nothing else; reconnects wait 1, 2, 4 … 60 seconds with a little jitter,
 each with a new one-use ticket (`POST /v1/code/runner/ticket`).
 
-**Which projects.** Per project, on this computer. The first time the bot offers a
-project's work here, a dialog asks (*Allow for this project / Not on this computer /
-Ask me later*). The answer is kept; a project never answered is not run, a refused one
-is left out of the list the server is told. The window lists them and changes them.
-Signing out forgets the answers.
+**Which projects.** All of the person's projects, with nothing asked. The runner's
+window lists them, each with *Don't allow* (or *Allow* again for one refused): a
+refused project is never run here and is left out of the list the server is told.
+Signing out forgets the refusals.
 
 **The code.** `<userData>/workspaces/<projectId>`, a git repository kept from job to
 job: the first job fetches the commit (shallow), later ones only what changed (nothing

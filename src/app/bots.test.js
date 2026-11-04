@@ -15,7 +15,7 @@ function page() {
     navigator: { language: "en-IN" }, innerWidth: 1280, innerHeight: 800, devicePixelRatio: 2, addEventListener: noop,
     matchMedia: () => ({ matches: false, addEventListener: noop }),
     document: { addEventListener: noop, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], activeElement: null },
-    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, askSetup: async () => null, onAskSetup: noop, folders: async () => ({}), onFolders: noop },
+    tailzuApp: { env: () => new Promise(() => {}), onKnobs: noop, onNavigate: noop, onDictated: noop, onNotes: noop, askSetup: async () => null, onAskSetup: noop },
   };
   g.window = g;
   const ctx = vm.createContext(g);

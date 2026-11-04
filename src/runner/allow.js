@@ -1,30 +1,24 @@
 // THE ALLOW LIST: which of the person's projects may run on this computer.
 //
-// Per project, and decided by the person here, on this computer. The first time Xode offers a project's work to this
-// computer, a question is put to them ("Let Tailzu Code run this project's commands on this computer?") and the answer is
-// remembered: allowed, or not. A project that was never answered is not run. A project that was refused is never offered again
-// (it is left out of the list `hello` sends, so the server does not even try).
+// Every project may, by default: nothing is asked before Xode runs a project's work here (it is said in the privacy policy, x0bot.com/privacy
+// section 10, not in a dialog). What is kept here is what the person changed in the runner's window: a project they said "Don't allow" to is
+// never run and never offered again (it is left out of the list `hello` sends, so the server does not even try), and one they allowed again
+// is allowed. A project with no entry is allowed.
 //
-// Nothing here knows how the question is asked (a native dialog, in main.js) or where the answers are kept (the app's own
-// state file): both are handed in. It is also the only thing that decides: a server that offers a project this list does not
-// allow gets a `decline`, however it asks.
+// Nothing here knows where the answers are kept (the app's own state file): that is handed in. It is also the only thing that decides: a
+// server that offers a project this list refuses gets a `decline`, however it asks.
 
 "use strict";
 
 /**
  * o: {
- *   read()        -> { [projectId]: { name, allowed: boolean, at } }   the answers so far
+ *   read()        -> { [projectId]: { name, allowed: boolean, at } }   what the person changed so far
  *   write(map)    keeps them
- *   ask({ projectId, name }) -> Promise<true | false | null>   null: the question was closed without an answer
- *   waitMs        how long a job's offer waits for the answer before it is declined (the lease is 90 s)
- *   now, timers
+ *   now
  * }
  */
 function createAllowList(o) {
   const now = o.now || Date.now;
-  const timers = o.timers || { setTimeout, clearTimeout };
-  const waitMs = o.waitMs === undefined ? 45000 : o.waitMs;
-  const asking = new Map();   // projectId -> Promise<boolean | null>
 
   // What is kept on disk can be edited by hand: an entry that is not an object is no answer.
   const map = () => {
@@ -40,13 +34,13 @@ function createAllowList(o) {
   }
 
   return {
-    /** "allowed", "denied" or "ask" (never answered). */
+    /** "allowed" (the default, and a project allowed again) or "denied" (the person said "Don't allow"). */
     state(projectId) {
       const e = map()[projectId];
-      return !e ? "ask" : e.allowed ? "allowed" : "denied";
+      return e && e.allowed === false ? "denied" : "allowed";
     },
     decide,
-    /** Back to "ask": the next offer is asked about again. */
+    /** Back to the default (allowed): whatever the person said about it is forgotten. */
     forget(projectId) {
       const m = Object.assign({}, map());
       delete m[projectId];
@@ -54,34 +48,13 @@ function createAllowList(o) {
     },
     /** Forget everything (a different person signed in). */
     clear() { o.write({}); },
-    /** The answers as the window lists them, newest first. */
+    /** What the person changed, as the window lists it, newest first. */
     list() {
-      return Object.entries(map()).map(([id, e]) => ({ id, name: e.name || id, state: e.allowed ? "allowed" : "denied", at: e.at || 0 })).sort((a, b) => b.at - a.at);
+      return Object.entries(map()).map(([id, e]) => ({ id, name: e.name || id, state: e.allowed === false ? "denied" : "allowed", at: e.at || 0 })).sort((a, b) => b.at - a.at);
     },
-    /**
-     * Can this project's job run here? Resolves "allowed", "denied", or "waiting" (it was asked about, the person has not
-     * answered in time: the job is declined now, and the answer, when it comes, is kept for the next one).
-     */
-    async check({ projectId, name }) {
-      const s = this.state(projectId);
-      if (s === "allowed") return "allowed";
-      if (s === "denied") return "denied";
-      let pending = asking.get(projectId);
-      if (!pending) {
-        pending = (async () => {
-          let answer = null;
-          try { answer = await o.ask({ projectId, name }); } catch { answer = null; }
-          if (answer === true || answer === false) decide(projectId, name, answer);
-          return answer;
-        })().finally(() => { asking.delete(projectId); });
-        asking.set(projectId, pending);
-      }
-      let timer;
-      const timeout = new Promise((resolve) => { timer = timers.setTimeout(() => resolve("waiting"), waitMs); });
-      const answer = await Promise.race([pending, timeout]);
-      timers.clearTimeout(timer);
-      if (answer === "waiting" || answer === null) return "waiting";
-      return answer ? "allowed" : "denied";
+    /** Can this project's job run here? "allowed", unless the person said "Don't allow" to it here ("denied"). Nothing is asked. */
+    async check({ projectId }) {
+      return this.state(projectId);
     },
     /**
      * The `projects` of the hello: "all" while nothing is refused, else the person's projects but the refused ones. `known` is every
@@ -89,13 +62,12 @@ function createAllowList(o) {
      * offer is declined here instead.
      */
     helloProjects(known) {
-      const denied = new Set(Object.entries(map()).filter(([, e]) => !e.allowed).map(([id]) => id));
+      const denied = new Set(Object.entries(map()).filter(([, e]) => e.allowed === false).map(([id]) => id));
       if (!denied.size) return "all";
       if (!Array.isArray(known) || !known.length) return "all";
       const ids = known.filter((id) => !denied.has(id));
       return ids.slice(0, 200);
     },
-    get asking() { return asking.size; },
   };
 }
 

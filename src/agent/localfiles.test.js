@@ -13,7 +13,6 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createLocalFiles, higher, RISK, MAX_FILES, fill, EN_WORDS } = require("./localfiles.js");
-const { createFolderSettings } = require("./folderSettings.js");
 
 // ---- fixtures ---------------------------------------------------------------
 
@@ -514,51 +513,6 @@ test("with no folder allowed there is nothing to work on, and it says where to c
 test("the plan card's words fill their slots", () => {
   assert.strictEqual(fill(EN_WORDS.organise, { n: 34, m: 5, to: "Downloads" }), "I’ll move 34 files into 5 folders inside Downloads.");
   assert.strictEqual(fill(EN_WORDS.more, { n: 7 }), "…and 7 more");
-});
-
-// ---- the Settings row --------------------------------------------------------------------
-
-test("the folders row: add through the chooser (refused if unsafe), remove, and back to the usual three", async () => {
-  const r = rig();
-  const state = { askFolders: undefined };
-  const handlers = {};
-  const ipcMain = { handle: (c, f) => { handlers[c] = f; }, on: (c, f) => { handlers[c] = f; } };
-  const photos = path.join(r.base, "Photos");
-  fs.mkdirSync(photos);
-  let pick = [photos];
-  const sent = [];
-  const settings = createFolderSettings({
-    ipcMain, fromApp: () => true, dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: pick }) }, window: () => undefined,
-    files: createLocalFiles({ shell: r.shell, home: r.home, userData: r.userData, roots: () => state.askFolders || null }),
-    localState: state, saveLocalState: () => {}, home: r.home, send: (s) => sent.push(s),
-  });
-  assert.deepStrictEqual(settings.state().folders.map((f) => f.label), ["Downloads", "Desktop", "Documents"]);
-  assert.strictEqual(settings.state().custom, false);
-  assert.strictEqual(settings.state().folders[0].path, "~" + path.sep + "Downloads");
-
-  assert.strictEqual(await settings.act({ kind: "add" }), true);
-  assert.deepStrictEqual(settings.state().folders.map((f) => f.label), ["Downloads", "Desktop", "Documents", "Photos"]);
-  assert.strictEqual(settings.state().custom, true);
-
-  pick = [r.home];
-  await settings.act({ kind: "add" });
-  assert.match(settings.state().error, /home folder/);
-  assert.strictEqual(settings.state().folders.length, 4, "an unsafe folder is not added");
-  pick = ["/etc"];
-  await settings.act({ kind: "add" });
-  assert.match(settings.state().error, /system/);
-
-  await settings.act({ kind: "remove", i: 0 });
-  assert.deepStrictEqual(settings.state().folders.map((f) => f.label), ["Desktop", "Documents", "Photos"]);
-  assert.strictEqual(settings.state().error, "");
-  assert.strictEqual(await settings.act({ kind: "remove", i: 99 }), false);
-  assert.strictEqual(await settings.act({ kind: "nonsense" }), false);
-
-  await settings.act({ kind: "reset" });
-  assert.strictEqual(settings.state().custom, false);
-  assert.strictEqual(settings.state().folders.length, 3);
-  // Only the app window may ask.
-  assert.deepStrictEqual(await handlers["app:folders"]({}), settings.state());
 });
 
 // ---- the review: what the planner, a name, a crash or a different computer could still do ---------

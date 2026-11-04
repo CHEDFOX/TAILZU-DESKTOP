@@ -116,12 +116,6 @@ async function run(action, eventValue) {
     case "ask.openScreenRecording": askAction("openScreenRecording"); return;
     case "ask.picturesAll": askAction("picturesAll", action.on === true || action.on === "true"); return;
     case "ask.relaunch": askAction("relaunch"); return;
-    case "ask.folderAdd": foldersAction("add"); return;
-    case "ask.folderRemove": foldersAction("remove", Number(action.i)); return;
-    case "ask.folderReset": foldersAction("reset"); return;
-    // Tailzu Code on this computer's card (runnerCard.js): the main process checks each, and asks itself before turning it on or allowing a project.
-    case "runner.set": case "runner.project": case "runner.checkDocker": case "runner.stop": case "runner.openAudit":
-      return typeof runnerRun === "function" ? runnerRun(action) : undefined;
     case "connector.connect": return connectApp(action);
     case "requestPermission":
       if (action.permission === "microphone") return askMic(action);

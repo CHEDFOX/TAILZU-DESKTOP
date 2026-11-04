@@ -2656,8 +2656,8 @@ test("setup: the window's names, as fixed between the builders", () => {
 });
 
 test("setup: a Mac's three rows from the system's own answers; Windows and Linux have nothing to allow but pictures", () => {
-  assert.deepStrictEqual(setupCard().ask(), { platform: "mac", read: "on", see: "on", pictures: "off" });
-  assert.deepStrictEqual(setupCard({ trusted: false, screen: "denied" }).ask(), { platform: "mac", read: "off", see: "off", pictures: "off" });
+  assert.deepStrictEqual(setupCard().ask(), { platform: "mac", read: "on", see: "on", pictures: "on" });
+  assert.deepStrictEqual(setupCard({ trusted: false, screen: "denied" }).ask(), { platform: "mac", read: "off", see: "off", pictures: "on" });
   assert.deepStrictEqual(setupCard({ screen: "not-determined" }).ask().see, "off");
   // Asked without a prompt: reading the state never puts up the system's dialog.
   const c = setupCard();
@@ -2666,19 +2666,24 @@ test("setup: a Mac's three rows from the system's own answers; Windows and Linux
   // Granted, but the helper's last look was still refused: a restart finishes it.
   assert.deepStrictEqual(setupCard({ denied: true }).ask().see, "restart");
   assert.deepStrictEqual(setupCard({ denied: true, screen: "denied" }).ask().see, "off", "not granted is off, whatever the look said");
-  // The setup card's yes for every app, and the server's never, which wins.
+  // Pictures for every app are ON by default: absent is on, and only an
+  // explicit false (turned off from the card or the tray) is off. The
+  // server's never wins over both.
+  assert.deepStrictEqual(setupCard({ localState: {} }).ask().pictures, "on", "absent is on");
   assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: true } }).ask().pictures, "on");
+  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: false } }).ask().pictures, "off");
+  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: "yes" } }).ask().pictures, "on", "only an explicit false is off");
   assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: true }, flags: { "desktop.agent.pictures": "never" } }).ask().pictures, "never");
-  assert.deepStrictEqual(setupCard({ localState: { askPicturesAlwaysAll: "yes" } }).ask().pictures, "off", "only a real true");
+  assert.deepStrictEqual(setupCard({ flags: { "desktop.agent.pictures": "never" } }).ask().pictures, "never", "the server's never wins over the default");
   // No system permission to read or see on Windows and Linux.
-  assert.deepStrictEqual(setupCard({ platform: "win32" }).ask(), { platform: "windows", read: "na", see: "na", pictures: "off" });
-  assert.deepStrictEqual(setupCard({ platform: "linux", denied: true }).ask(), { platform: "linux", read: "na", see: "na", pictures: "off" });
+  assert.deepStrictEqual(setupCard({ platform: "win32" }).ask(), { platform: "windows", read: "na", see: "na", pictures: "on" });
+  assert.deepStrictEqual(setupCard({ platform: "linux", denied: true }).ask(), { platform: "linux", read: "na", see: "na", pictures: "on" });
   const w = setupCard({ platform: "win32" });
   w.ask();
   assert.deepStrictEqual(w.did, [], "the Mac's checks are not asked elsewhere");
   // A system call that throws is off, never a crash.
   const boom = () => { throw new Error("no"); };
-  assert.deepStrictEqual(setupCard({ systemPreferences: { isTrustedAccessibilityClient: boom, getMediaAccessStatus: boom } }).ask(), { platform: "mac", read: "off", see: "off", pictures: "off" });
+  assert.deepStrictEqual(setupCard({ systemPreferences: { isTrustedAccessibilityClient: boom, getMediaAccessStatus: boom } }).ask(), { platform: "mac", read: "off", see: "off", pictures: "on" });
 });
 
 test("setup: only the app window may ask or act", () => {

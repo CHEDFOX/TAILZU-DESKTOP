@@ -24,13 +24,10 @@ function capabilities() {
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD, FOLDERS_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
       // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.
-      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : [],
-      // Tailzu Code on this computer as a card on bots.computer (runnerCard.js, loaded after this file; main.js answers it).
-      typeof runnerOn === "function" && runnerOn() && ENV && ENV.runner ? ["DeskRunner"] : []),
-    actions: ACTIONS.concat(typeof outboxRun === "function" ? ["outbox"] : [],
-      typeof runnerOn === "function" && runnerOn() && ENV && ENV.runner ? ["runner.set", "runner.project", "runner.checkDocker", "runner.stop", "runner.openAudit"] : []),
+      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : []),
+    actions: ACTIONS.concat(typeof outboxRun === "function" ? ["outbox"] : []),
     templates: [],
     device: {
       // WHAT THIS IS, as opposed to what it can draw.

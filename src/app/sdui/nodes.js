@@ -94,6 +94,20 @@ function cls(p) {
   return list.length ? ' class="' + list.join(" ") + '"' : "";
 }
 
+/**
+ * A STACK'S HINT (HoverHint): `props.hint` is a node drawn as a small card under the stack while the pointer is on it or it has
+ * the focus, and `props.hintLabel` is what a screen reader hears for it. Only the CSS in app.html (.tz-hint) shows and hides it:
+ * nothing here listens for the pointer. The host takes the focus so a keyboard reaches it too.
+ */
+function hintHost(p) {
+  if (!p.hint || typeof p.hint !== "object") return "";
+  return ' data-hint tabindex="0"' + (p.hintLabel ? ' aria-description="' + esc(label(p.hintLabel)) + '"' : "");
+}
+function hintOf(p) {
+  if (!p.hint || typeof p.hint !== "object") return "";
+  return '<div class="tz-hint" role="tooltip">' + node(p.hint) + "</div>";
+}
+
 function node(n) {
   if (!n) return "";
   if (!visible(n.visibleIf)) return n.fallback ? node(n.fallback) : "";
@@ -153,11 +167,11 @@ function node(n) {
       // means. It also fixes the containing block: an absolutely-positioned
       // child now measures against its own parent, which is what it does on
       // the phones and not what it was doing here.
-      return '<div' + bind(press) + rolePress(press) + cls(p) +
+      return '<div' + bind(press) + rolePress(press) + cls(p) + hintHost(p) +
         (p.accessibilityLabel ? ' aria-label="' + esc(label(p.accessibilityLabel)) + '"' : "") + ' style="' +
         (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
-        (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + "</div>";
+        (press ? ";cursor:pointer" : "") + ";" + s + '">' + kids + hintOf(p) + "</div>";
 
     case "Card":
       return '<div' + bind(press) + ' style="background:var(--card);border:1px solid var(--border);' +
@@ -343,8 +357,6 @@ function node(n) {
     case "WriteOn": return writeOnNode(p);
     case "LiveMark": return liveMarkNode(n, p);
     case "HeadBar": return headBarNode(p, kids);
-    case "DeskFolders": return foldersNode(p, s);
-    case "DeskRunner": return typeof runnerNode === "function" ? runnerNode(p, s) : "";
 
     case "WordMeter": return wordMeter(p);
     case "PieChart": case "DonutChart": return pie(p);
