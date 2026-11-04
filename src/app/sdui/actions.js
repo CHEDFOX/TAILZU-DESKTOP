@@ -108,6 +108,7 @@ async function run(action, eventValue) {
     case "delay": await new Promise((r) => setTimeout(r, action.ms || 0)); return;
     case "openUrl": window.tailzuApp.openExternal(String(resolveValue(action.url) ?? "")); return;
     case "notes.toggle": try { window.tailzuApp.toggleNotes(); } catch { /* an older main process */ } return;
+    case "notes.stop": try { window.tailzuApp.stopNotes(String(action.id || "")); } catch { /* an older main process */ } return;
     case "notes.allowSystemAudio": try { window.tailzuApp.allowSystemAudio(); } catch { /* an older main process */ } return;
     case "installUpdate": return installUpdate(action);
     // The Ask setup card. The window names which setting, never an address;

@@ -1561,6 +1561,13 @@ async function startNotes() {
     : fmt("notify.notesStarted", { key: prettyKey(cfg.notesHotkey) }));
 }
 
+// Saving a note after Stop: said if it takes a while, and given up on (the window closed, what was sent kept) if it never ends.
+let notesSlowTimer = null, notesSaveTimer = null;
+function clearNotesTimers() {
+  clearTimeout(notesSlowTimer); clearTimeout(notesSaveTimer);
+  notesSlowTimer = null; notesSaveTimer = null;
+}
+
 function stopNotes() {
   if (!notes || notes.state !== "recording") return;
   notes.state = "saving";
@@ -1569,11 +1576,25 @@ function stopNotes() {
   setTimeout(stopAudiotap, 600);
   stopNotesClock();
   refreshTray();
+  const id = notes.id;
+  clearNotesTimers();
+  notesSaveTimer = setTimeout(() => notesGaveUp(id), Math.max(60000, num("desktop.notes.saveMaxMs", 900000)));
+}
+
+/**
+ * The window never said it finished: it is closed, which ends anything it still held, and the server is told to organise
+ * what reached it. Nothing is left recording or "saving" for good.
+ */
+function notesGaveUp(id) {
+  if (!notes || notes.id !== id || notes.state !== "saving") return;
+  notesEnded({ crashed: true });
+  if (notesWin && !notesWin.isDestroyed()) { try { notesWin.destroy(); } catch { /* already gone */ } }
 }
 
 /** The window has finished with a note (or died with one). */
 function notesEnded(p) {
   const id = notes && notes.id;
+  clearNotesTimers();
   stopAudiotap();
   stopNotesClock();
   notes = null;
@@ -1623,6 +1644,13 @@ ipcMain.on("notes:status", (e, p) => {
     notify(txt("desktop.notes.noMic", "Couldn't open the microphone, so notes did not start."));
   } else if (p.state === "recording" && p.system === false && notes && notes.system !== "none" && process.platform !== "darwin") {
     notify(txt("desktop.notes.micOnly", "Noting your microphone only: the computer's sound isn't available here."));
+  } else if (p.state === "stopped" && notes && notes.state === "saving") {
+    // The microphone and the computer's sound are closed; what was said is still being sent. Said only if that takes a while.
+    const id = notes.id;
+    clearTimeout(notesSlowTimer);
+    notesSlowTimer = setTimeout(() => {
+      if (notes && notes.id === id && notes.state === "saving") notify(txt("desktop.notes.stoppedSaving", "Notes stopped. Still saving what was said; this can take a minute on a slow connection."));
+    }, Math.max(1000, num("desktop.notes.slowSaveMs", 6000)));
   } else if (p.state === "fatal" && p.reason === "quota") {
     notify(txt("desktop.notify.wordsOut", "You're out of words this month."));
   } else if (p.state === "fatal" && p.reason === "auth") {
@@ -1631,6 +1659,25 @@ ipcMain.on("notes:status", (e, p) => {
 });
 ipcMain.on("notes:done", (e, p) => { if (fromNotes(e)) notesEnded(p); });
 ipcMain.on("app:notes", (e) => { if (fromApp(e)) toggleNotes(); });
+ipcMain.on("app:notesStop", (e, id) => { if (fromApp(e)) void stopNoteById(id); });
+
+/**
+ * Stop, for a named note. The one recording here stops as always. Any other (left "recording" on the server when the app quit,
+ * crashed or lost the connection, so nothing here holds it) is finished on the server, which writes it up; the page then reloads.
+ * Never starts a note: that was what the old toggle did with a note it did not hold.
+ */
+async function stopNoteById(id) {
+  if (!/^[0-9a-f-]{8,64}$/i.test(String(id || ""))) return;
+  if (notes && notes.id === id) { if (notes.state === "recording") stopNotes(); return; }
+  try {
+    await apiJson("/v1/notes/" + id + "/finish", { method: "POST", body: "{}" });
+    notify(txt("desktop.notes.stoppedLeft", "Stopped. Writing up what was heard."));
+  } catch (e) {
+    // 404: it had already stopped (another computer, or the server finished it); the reload shows it as it is.
+    if (!String(e && e.message).endsWith("404")) notify(txt("desktop.notes.cantStop", "Couldn't stop those notes. Check the connection and try again."));
+  }
+  if (appWin && !appWin.isDestroyed()) appWin.webContents.send("app:notes", id);
+}
 // The note's Allow button: the Mac's own page for the permission, and nothing
 // else. A fixed address, so the window cannot open anything with it.
 const SYSTEM_AUDIO_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";

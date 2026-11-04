@@ -508,6 +508,18 @@ test("a line drawn from state is drawn from state in the onboarding, and a Grid 
   assert.match(p.run("node(__n)"), /flex:1;min-height:12px/);
 });
 
+test("Stop on the Notes page names the note, and the window says it can (NotesStop)", async () => {
+  const p = page();
+  const caps = p.run("capabilities()");
+  assert.ok(caps.components.includes("NotesStop"));
+  assert.ok(caps.actions.includes("notes.stop"));
+  const stopped = [];
+  p.ctx.tailzuApp.stopNotes = (id) => stopped.push(id);
+  p.ctx.__a = { kind: "notes.stop", id: "11111111-1111-4111-8111-111111111111" };
+  await p.run("run(__a)");
+  assert.deepStrictEqual(stopped, ["11111111-1111-4111-8111-111111111111"]);
+});
+
 test("a stack's hint is drawn hidden inside it, shown by the stylesheet on hover or focus; it says it can (HoverHint)", () => {
   const p = page();
   assert.ok(p.run("capabilities().components").includes("HoverHint"));

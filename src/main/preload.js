@@ -87,6 +87,8 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   dictate: () => ipcRenderer.send("app:dictate"),
   // Start or stop taking notes, as the notes hotkey does.
   toggleNotes: () => ipcRenderer.send("app:notes"),
+  // Stop this note: the one running here, or one the server still has as recording that nothing here holds.
+  stopNotes: (id) => ipcRenderer.send("app:notesStop", String(id || "").slice(0, 64)),
   // macOS: open the permission that lets notes hear the computer's sound.
   allowSystemAudio: () => ipcRenderer.send("app:allowSystemAudio"),
   // Ask's one-time setup card: what is allowed on this computer, read by the

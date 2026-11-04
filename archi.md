@@ -13,6 +13,11 @@ JavaScript, with no bundler. It does five things:
   anything that sends, deletes or pays.
 - **Meeting notes.** A hidden recorder hears the microphone and, on a Mac, the
   computer's sound, and uploads it in stretches for the server to organise.
+  Stop closes the microphone at once and sends what is left after; a save that
+  never ends is given up after `desktop.notes.saveMaxMs` (15 min). The Notes
+  page's Stop names its note (`notes.stop`, NotesStop): one this computer is not
+  recording (left behind by a quit or a crash) is finished on the server, never
+  started again.
 - **The app window.** Every screen is JSON from the server, drawn by a renderer
   of the server's node kinds (the same catalog the phone apps draw).
 - **The runner.** On by default (said in the privacy policy, x0bot.com/privacy

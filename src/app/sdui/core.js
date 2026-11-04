@@ -54,6 +54,8 @@ const COMPONENTS = [
   // and its one button missing.
   "SVG", "Gradient", "BlurBackground", "FlipText", "Modal", "ProgressBar",
   "SwipeAction", "NeuralField",
+  // The Notes page's Stop sends "notes.stop" with the note's id (the server checks for this before it does).
+  "NotesStop",
   // A stack's `hint`: a small card shown while the pointer is on it, or it has the focus (nodes.js hintOf). Settings' app icons.
   "HoverHint",
   // The Train tab, in full. The conversation is a real repeater here now, and
@@ -163,8 +165,9 @@ const ACTIONS = [
   // live on this computer (the pill, the shortcut), a microphone started from
   // a page, and a way out of the account from the settings page itself.
   "copyText", "desktop.config", "dictate", "signOut",
-  // Start or stop the note-taker from the Notes page.
-  "notes.toggle",
+  // Start or stop the note-taker from the Notes page; Stop names the note (main.js stopNoteById), so it stops even one left
+  // recording on the server after the app quit, instead of starting another.
+  "notes.toggle", "notes.stop",
   // A note's Allow button (macOS): the computer's-sound permission.
   "notes.allowSystemAudio",
   // The update card's button: download, check and install the new build here.

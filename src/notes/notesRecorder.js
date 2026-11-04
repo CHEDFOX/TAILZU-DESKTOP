@@ -156,6 +156,10 @@
   }
 
   /** End the current stretch of a track; upload it if anyone spoke in it. */
+  /**
+   * Ends a stretch: `ended` once its recorder has given up its last data (at once), `sent` once its upload has gone (or given
+   * up). Stopping waits only for `ended`: an upload on a slow connection must never keep the microphone open.
+   */
   function endChunk(t, restart) {
     const rec = t.chunk, parts = t.chunkParts, at = t.chunkAt, voiced = t.voicedMs, metered = !!t.meter;
     const ended = new Promise((resolve) => {
@@ -164,13 +168,15 @@
       try { rec.stop(); } catch { resolve(); }
     });
     if (restart) newChunk(t);
-    return ended.then(() => {
-      if (!parts.length) return;
+    const q = queue;
+    const sent = ended.then(() => {
+      if (!parts.length || !q) return;
       if (metered && !N.worthSending(voiced, K.num("desktop.notes.minVoicedMs", 400))) return;
       t.heardAnything = true;
       const blob = new Blob(parts, { type: t.type });
-      return queue.push({ kind: "audio", track: t.name, at, blob });
+      return q.push({ kind: "audio", track: t.name, at, blob });
     });
+    return { ended, sent };
   }
 
   function readMeters() {
@@ -245,7 +251,7 @@
     poll = setInterval(readMeters, K.num("desktop.notes.meterPollMs", 150));
     tick = setInterval(() => {
       if (stopping) return;
-      for (const t of Object.values(tracks)) void endChunk(t, true);
+      for (const t of Object.values(tracks)) void endChunk(t, true).sent;
     }, chunkMs);
   }
 
@@ -258,14 +264,18 @@
     const id = note.id;
     const duration = (performance.now() - note.t0) / 1000;
     bridge.status({ state: "saving" });
-    // The last stretches, then the whole tracks.
-    await Promise.all(Object.values(tracks).map((t) => endChunk(t, false)));
+    // Stop listening first: the last stretches and the whole tracks give up their data, and the microphone and the computer's
+    // sound are closed, before anything waits on the network. Only then are they sent.
+    const last = Object.values(tracks).map((t) => endChunk(t, false));
+    await Promise.all(last.map((c) => c.ended));
     const wholes = await Promise.all(Object.values(tracks).map((t) => new Promise((resolve) => {
       if (!t.whole || t.whole.state === "inactive") { resolve(null); return; }
       t.whole.onstop = () => resolve(t);
       try { t.whole.stop(); } catch { resolve(null); }
     })));
     for (const t of Object.values(tracks)) t.stream.getTracks().forEach((x) => x.stop());
+    bridge.status({ state: "stopped" });
+    await Promise.all(last.map((c) => c.sent));
     await queue.drain();
     if (!queue.dead) {
       for (const t of wholes) {
