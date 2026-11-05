@@ -1,0 +1,23 @@
+{
+  "name": "xode",
+  "version": "0.1.0",
+  "description": "Xode in your terminal: talk a change over, approve its plan, and watch the work.",
+  "author": "X0 Bot <hello@x0bot.com>",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "xode": "bin/xode.js"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "demo": "node dev/demo-server.js 4545"
+  }
+}

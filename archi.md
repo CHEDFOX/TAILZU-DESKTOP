@@ -198,6 +198,24 @@ assets/                 fonts (OFL), tray and app icons
 build/                  electron-builder resources: icon.ico, entitlements, NSIS include, Store tiles
 docs/microsoft-store.md the Store listing
 .github/workflows/build.yml   installers for macOS, Windows and Linux; publishing on a manual run
+
+cli/                    xode: Xode in the terminal, its own npm package (no runtime dependencies; the backend repo's xode-cli doc)
+cli/package.json        name xode, bin xode, Node 20+
+cli/bin/xode.js         the arguments, to a command
+cli/src/args.js         reading the arguments; cli/src/config.js: the server (XODE_SERVER) and its host
+cli/src/api/            client.js: the server, as the terminal's sign-in; redact.js: no secret is ever printed
+cli/src/auth/           link.js: the code sign-in; store.js picks keychain.js (macOS), secretTool.js (Linux) or fileStore.js (600)
+cli/src/commands/       login, logout, status, stop, chat (xode and xode "words"), help
+cli/src/chat/           session.js: one chat (plan, approve, follow); flowApi.js, jobsApi.js: the routes; gate.js: the project's
+                        first read; follow.js: a job to its end; live.js: the job's room, else polling; needs.js: questions
+                        and yeses; stages.js, activity.js: progress words; thread.js: the app's own chat
+cli/src/net/ws.js       a copy of src/runner/ws.js (a test keeps the two the same), so the package stands alone
+cli/src/project/        resolve.js: which project (a flag, XODE_PROJECT, or picker.js)
+cli/src/state/folders.js  per server and folder: the project, the chat, the last job (~/.config/xode/state.json)
+cli/src/ui/             term, paint, wrap, markdown, refs (file:line), box, plan, progress, prompt, out
+cli/src/util/           atomicWrite, sleep, which
+cli/test/               node --test against fakeServer.js (runCli.js runs the real binary)
+cli/dev/demo-server.js  the fake server with a slow, realistic script, to watch a session
 ```
 
 Unit tests sit beside the code they test (`x.test.js` next to `x.js`); `test/`
