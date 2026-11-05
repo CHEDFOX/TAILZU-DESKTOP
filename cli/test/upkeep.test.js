@@ -158,7 +158,7 @@ test("xode update: the command to run, and the version here", async () => {
   try {
     const r = await runCli(["update"], { server, home }).done;
     assert.strictEqual(r.code, 0, r.all);
-    assert.match(r.stdout, /^This xode: \d+\.\d+\.\d+\nNewest: .+\nTo update:\n {2}npm i -g @x0bot\/xode@latest\n$/);
+    assert.match(r.stdout, /^This xode: \d+\.\d+\.\d+\nNewest: .+\nTo update:\n {2}npm i -g @xooteqlab\/xode@latest\n$/);
   } finally {
     await server.close();
     home.cleanup();

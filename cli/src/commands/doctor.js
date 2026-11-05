@@ -89,7 +89,7 @@ async function doctor({ server, store, out, cwd, env, deps = {} }) {
     let make = null;
     try { make = (deps.loadCreateRunner || loadCreateRunner)(); } catch { make = null; }
     if (typeof make === "function") ok("This computer can do the work (its runner is here)");
-    else problem("This copy of xode has no runner: reinstall it (npm i -g @x0bot/xode@latest).");
+    else problem("This copy of xode has no runner: reinstall it (npm i -g @xooteqlab/xode@latest).");
   }
 
   const W = out.term.tty ? out.term.width() : 60;

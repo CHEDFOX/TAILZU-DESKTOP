@@ -285,12 +285,12 @@ test("update check: once a day, cached, said once a day, and off by XODE_NO_UPDA
   try {
     let asked = 0;
     let t = Date.UTC(2026, 10, 5);
-    const fetchImpl = async (url) => { asked += 1; assert.strictEqual(url, "https://registry.npmjs.org/@x0bot/xode/latest"); return { ok: true, json: async () => ({ version: "0.2.0" }) }; };
+    const fetchImpl = async (url) => { asked += 1; assert.strictEqual(url, "https://registry.npmjs.org/@xooteqlab/xode/latest"); return { ok: true, json: async () => ({ version: "0.2.0" }) }; };
     const env = { XDG_CONFIG_HOME: dir };
     const a = startUpdateCheck({ env, version: "0.1.0", fetchImpl, now: () => t });
     await a.done;
     assert.strictEqual(asked, 1);
-    assert.strictEqual(a.notice(), "xode 0.2.0 is out (you have 0.1.0): npm i -g @x0bot/xode@latest");
+    assert.strictEqual(a.notice(), "xode 0.2.0 is out (you have 0.1.0): npm i -g @xooteqlab/xode@latest");
     const kept = JSON.parse(fs.readFileSync(path.join(dir, "xode", "update.json"), "utf8"));
     assert.strictEqual(kept.latest, "0.2.0");
     t += 60_000;

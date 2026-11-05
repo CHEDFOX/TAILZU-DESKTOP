@@ -1,4 +1,4 @@
-// Is there a newer xode? The npm registry is asked at most once a day (GET .../@x0bot/xode/latest, given 1.5 s), in the
+// Is there a newer xode? The npm registry is asked at most once a day (GET .../@xooteqlab/xode/latest, given 1.5 s), in the
 // background so it never holds up the start; the answer is kept in ~/.config/xode/update.json. A newer version is said in
 // one dim line, at most once a day. XODE_NO_UPDATE_CHECK=1 turns it off (the tests do).
 
@@ -8,10 +8,10 @@ const path = require("path");
 const { configDir } = require("../config");
 const { writeFileAtomic, readJson } = require("../util/atomicWrite");
 
-const LATEST_URL = "https://registry.npmjs.org/@x0bot/xode/latest";
+const LATEST_URL = "https://registry.npmjs.org/@xooteqlab/xode/latest";
 const DAY = 24 * 60 * 60_000;
 const WAIT_MS = 1500;
-const UPDATE_COMMAND = "npm i -g @x0bot/xode@latest";
+const UPDATE_COMMAND = "npm i -g @xooteqlab/xode@latest";
 
 const fileOf = (env) => path.join(configDir(env), "update.json");
 
