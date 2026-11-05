@@ -85,7 +85,12 @@ const KIND_EXT = {
 const EXT_KIND = new Map();
 for (const [kind, list] of Object.entries(KIND_EXT)) for (const e of list.split(" ")) EXT_KIND.set(e, kind);
 const KINDS = new Set([...Object.keys(KIND_EXT), "other"]);
-/** The subfolder each kind is sorted into. */
+/**
+ * The subfolder each kind is sorted into, in English. The name used is a label, desktop.files.kind.<kind> (kindFolder()), so the
+ * server names these folders, in the person's language; these are its fallback. They also always count as a kind's earlier names:
+ * sorting puts files into a folder that already has the kind's name today OR any earlier one, and only makes today's when there is
+ * none, so a renamed label never starts a second folder beside the old one (the names this computer has sorted into are kept too).
+ */
 const KIND_FOLDER = {
   image: "Images", video: "Videos", audio: "Audio", pdf: "PDFs", document: "Documents", spreadsheet: "Spreadsheets",
   presentation: "Presentations", archive: "Archives", installer: "Installers", code: "Code", other: "Other",
@@ -163,6 +168,28 @@ function createLocalFiles(opts) {
   const nFiles = (n) => (n === 1 ? txt("desktop.files.countFile", "{n} file", { n }) : txt("desktop.files.countFiles", "{n} files", { n }));
   const nFolders = (n) => (n === 1 ? txt("desktop.files.countFolder", "{n} folder", { n }) : txt("desktop.files.countFolders", "{n} folders", { n }));
   const nItems = (n) => (n === 1 ? txt("desktop.files.countItem", "{n} item", { n }) : txt("desktop.files.countItems", "{n} items", { n }));
+
+  /** The folder a kind is sorted into today: the server's label (one literal key per kind, for the knob extractor), the English when it is no usable name. */
+  function kindFolder(kind) {
+    let name;
+    switch (kind) {
+      case "image": name = txt("desktop.files.kind.image", "Images"); break;
+      case "video": name = txt("desktop.files.kind.video", "Videos"); break;
+      case "audio": name = txt("desktop.files.kind.audio", "Audio"); break;
+      case "pdf": name = txt("desktop.files.kind.pdf", "PDFs"); break;
+      case "document": name = txt("desktop.files.kind.document", "Documents"); break;
+      case "spreadsheet": name = txt("desktop.files.kind.spreadsheet", "Spreadsheets"); break;
+      case "presentation": name = txt("desktop.files.kind.presentation", "Presentations"); break;
+      case "archive": name = txt("desktop.files.kind.archive", "Archives"); break;
+      case "installer": name = txt("desktop.files.kind.installer", "Installers"); break;
+      case "code": name = txt("desktop.files.kind.code", "Code"); break;
+      default: name = txt("desktop.files.kind.other", "Other"); kind = "other";
+    }
+    const n = str(name).trim();
+    return folderNameOk(n) ? n : KIND_FOLDER[kind];
+  }
+  /** A name a folder can have here: one plain part of a path, not hidden, nothing that reorders text, nothing Windows refuses. */
+  const folderNameOk = (n) => !!n && n.length <= 80 && tidy(n) === n && !/[\\/:*?"<>|]/.test(n) && !/^\./.test(n) && !/[. ]$/.test(n) && !badName(n);
 
   /** A failure in plain words; never the path the system put in its message. */
   function whyFailed(e) {
@@ -465,6 +492,46 @@ function createLocalFiles(opts) {
     } catch { /* an undo log that cannot be kept must not stop the change that is already done */ }
   }
 
+  // ---- the names a kind's folder has had ----
+
+  // Besides the English, the names this computer has sorted a kind into (another language, a label the server since changed),
+  // so the next sort finds that folder again. Kept in userData beside the undo log; a few per kind.
+  const namesPath = userData ? path.join(userData, "local-files-folders.json") : "";
+  let namesMemory = {};
+  function loadNames() {
+    if (!namesPath) return namesMemory;
+    try {
+      const j = JSON.parse(fs.readFileSync(namesPath, "utf8"));
+      return j && typeof j === "object" && !Array.isArray(j) ? j : {};
+    } catch { return {}; }
+  }
+  /** A kind's earlier folder names: the English, then the ones used here, newest first. */
+  function earlierNames(kind) {
+    const kept = loadNames()[kind];
+    const used = Array.isArray(kept) ? kept.filter((n) => typeof n === "string" && folderNameOk(n)) : [];
+    return [KIND_FOLDER[kind] || KIND_FOLDER.other, ...used];
+  }
+  function rememberNames(kindDirs) {
+    const all = loadNames();
+    let changed = false;
+    for (const [kind, name] of kindDirs) {
+      if (!Object.hasOwn(KIND_FOLDER, kind) || name === KIND_FOLDER[kind]) continue;
+      const before = Array.isArray(all[kind]) ? all[kind].filter((n) => typeof n === "string") : [];
+      if (before[0] === name) continue;
+      all[kind] = [name, ...before.filter((n) => n !== name)].slice(0, 8);
+      changed = true;
+    }
+    if (!changed) return;
+    namesMemory = all;
+    if (!namesPath) return;
+    try {
+      fs.mkdirSync(path.dirname(namesPath), { recursive: true });
+      const tmp = `${namesPath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(all));
+      fs.renameSync(tmp, namesPath);
+    } catch { /* only a help for the next sort */ }
+  }
+
   // ---- doing: the one place a file changes ----
 
   /** Move one thing without overwriting. A rename; across disks, a copy and then the removal. */
@@ -656,10 +723,26 @@ function createLocalFiles(opts) {
     const take = loose.slice(0, MAX_FILES);
     const taken = new Set();
     const made = new Map();
+    // A kind's folder: one already here under today's name or an earlier one (any case), else today's name, made.
+    const kindDirs = new Map();
+    const same = (a, b) => a.normalize("NFC").toLowerCase() === b.normalize("NFC").toLowerCase();
+    const kindFolderIn = (kind) => {
+      if (!kindDirs.has(kind)) {
+        const today = kindFolder(kind);
+        const names = [today, ...earlierNames(kind)];
+        let found = "";
+        for (const n of names) {
+          const d = entries.find((e) => same(e.name, n) && !badName(e.name) && e.isDirectory() && !(e.isSymbolicLink && e.isSymbolicLink()));
+          if (d) { found = d.name; break; }
+        }
+        kindDirs.set(kind, found || today);
+      }
+      return kindDirs.get(kind);
+    };
     const steps = [];
     const rows = [];
     for (const f of take) {
-      const folder = by === "type" ? KIND_FOLDER[f.kind] || "Other" : monthText(f.mtime);
+      const folder = by === "type" ? kindFolderIn(f.kind) : monthText(f.mtime);
       const destDir = path.join(g.real, folder);
       if (!made.has(folder)) {
         made.set(folder, true);
@@ -675,7 +758,11 @@ function createLocalFiles(opts) {
     return {
       ok: true, risk: "write", count: take.length, say: { key: "organise", vars: { n: take.length, m: made.size, to: shown(g) } },
       lines, more, extra: loose.length > take.length ? txt("desktop.files.leftForLater", "{n} more files are left for next time.", { n: loose.length - take.length }) : "",
-      run: () => perform("organise_folder", steps, (n) => txt("desktop.files.movedInto", "Moved {files} into {folders} in {to}", { files: nFiles(n), folders: nFolders(made.size), to: shown(g) })),
+      run: async () => {
+        const r = await perform("organise_folder", steps, (n) => txt("desktop.files.movedInto", "Moved {files} into {folders} in {to}", { files: nFiles(n), folders: nFolders(made.size), to: shown(g) }));
+        if (r && r.done) rememberNames(kindDirs);
+        return r;
+      },
     };
   }
 
@@ -884,4 +971,4 @@ function createLocalFiles(opts) {
 const RANK = { "": 0, read: 1, write: 2, destructive: 3 };
 const higher = (a, b) => ((RANK[a] || 0) >= (RANK[b] || 0) ? a : b);
 
-module.exports = { createLocalFiles, higher, fill, EN_WORDS, RISK, MAX_FILES };
+module.exports = { createLocalFiles, higher, fill, EN_WORDS, RISK, MAX_FILES, KIND_FOLDER };

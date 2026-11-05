@@ -40,6 +40,7 @@ async function rig(o = {}) {
     api: { fetch: (p, init) => fetch(cloud.url + p, init), signedIn: () => sig.in },
     secrets: () => ["the-apps-own-access-token-123"],
     notify: (m) => notes.push(m),
+    txt: o.txt,
     config: o.config || {},
     urlPolicy: () => true, power: { read: async () => power.reading }, dockerStatus: async () => dockerState.value,
     noWatchdog: true, sleep: async () => {}, leaseEveryMs: o.leaseEveryMs || 30000, graceMs: o.graceMs === undefined ? 100 : o.graceMs,
@@ -375,7 +376,7 @@ withTimeout("an ordinary step (no session) runs its commands and hands back what
 });
 
 withTimeout("an ordinary step is guarded like a session: a refused command is 126 and nothing ran", async () => {
-  const r = await rig();
+  const r = await rig({ txt: (key, fallback) => (key === "desktop.runner.refuse.push" ? "git push ist hier nicht erlaubt." : fallback) });
   const dev = await r.online();
   dev.send({ t: "offer", offer: { ...r.offer("job-1"), commands: ["touch ran.txt", "git push origin main"], timeoutSec: 30, session: undefined } });
   await until(() => r.cloud.api.results.length === 1, 15000);
@@ -383,6 +384,10 @@ withTimeout("an ordinary step is guarded like a session: a refused command is 12
   assert.match(r.cloud.api.results[0].outputTail, /git push isn't allowed/);
   assert.ok(!fs.existsSync(path.join(r.workspace(), "ran.txt")));
   assert.ok(r.auditLines().some((l) => l.event === "refused" && l.rule === "push"));
+  // The window says why in the person's words; the job got the English above, the same sentence whatever the language.
+  const row = r.runner._internals.activity.list().find((a) => a.state === "refused");
+  assert.strictEqual(row.message, "git push ist hier nicht erlaubt.");
+  assert.ok(!/ist hier/.test(r.cloud.api.results[0].outputTail));
 });
 
 withTimeout("the live-session mark is never run as a command", async () => {

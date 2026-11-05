@@ -37,7 +37,7 @@ const { createWorkspaces, tarExtract } = require("./workspace.js");
 const { createGit } = require("./gitrun.js");
 const { commandEnv, createLoginPath, runnerPaths, ensurePaths, ensureContainerCache } = require("./env.js");
 const { createSpawner, runCommands, firstRefusal } = require("./exec.js");
-const { makeContext } = require("./guard.js");
+const { makeContext, refusalText } = require("./guard.js");
 const { createSession } = require("./session.js");
 const { createProcs } = require("./procs.js");
 const { createWatchdog } = require("./watchdog.js");
@@ -349,8 +349,10 @@ function createRunner(o) {
         if (at >= 0) activity.end(j.current.splice(at, 1)[0].id, { exitCode, ms, timedOut, cancelled });
         audit.log({ event: "end", jobId: j.id, project: j.project, projectId: j.projectId, command, exitCode, ms, timedOut: !!timedOut, cancelled: !!cancelled, preview: !!preview });
       },
-      onRefused: ({ command, rule, message }) => {
-        activity.refused({ project: j.project, command, jobId: j.id, rule, message });
+      onRefused: ({ command, rule, code, vars, message }) => {
+        // The window shows why in the person's words (desktop.runner.refuse.*); the job and the audit log keep the English.
+        const shown = (code && refusalText(code, vars, txt)) || message;
+        activity.refused({ project: j.project, command, jobId: j.id, rule, message: shown });
         audit.log({ event: "refused", jobId: j.id, project: j.project, projectId: j.projectId, command, rule, message });
       },
     };

@@ -120,7 +120,7 @@ function createSession(o) {
       if (refused) {
         const text = "[X0 Bot: not run on this computer: " + refused.message + "]\n";
         send({ t: "out", id: m.id, data: "$ " + refused.command + "\n" + text });
-        if (hooks.onRefused) hooks.onRefused({ command: refused.command, rule: refused.rule, message: refused.message, index: refused.index });
+        if (hooks.onRefused) hooks.onRefused(refused);
         commands += 1;
         send({ t: "done", id: m.id, exitCode: 126, ms: now() - t0, note: ("refused (" + refused.rule + "): " + refused.message).slice(0, 500) });
         return;
@@ -154,7 +154,7 @@ function createSession(o) {
     try {
       const refused = firstRefusal([m.cmd].concat(m.prepare ? [m.prepare] : []), o.guard);
       if (refused) {
-        if (hooks.onRefused) hooks.onRefused({ command: refused.command, rule: refused.rule, message: refused.message, index: refused.index });
+        if (hooks.onRefused) hooks.onRefused(refused);
         send({ t: "preview", id: m.id, ok: false, error: ("Not started on this computer: " + refused.message).slice(0, 1900) });
         return;
       }

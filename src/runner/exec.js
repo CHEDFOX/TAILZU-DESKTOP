@@ -155,11 +155,11 @@ async function runCommands(commands, timeoutSec, o) {
   return { exitCode: 0, output: held, ran, timedOut: false, cancelled: false };
 }
 
-/** The first command the guard rails refuse, or null: { index, command, rule, message }. All are read before any is run. */
+/** The first command the guard rails refuse, or null: { index, command, rule, code, vars, message } (message in English). All are read before any is run. */
 function firstRefusal(commands, guardOpts, check = checkCommand) {
   for (let index = 0; index < commands.length; index += 1) {
     const r = check(commands[index], guardOpts);
-    if (!r.ok) return { index, command: commands[index], rule: r.rule, message: r.message };
+    if (!r.ok) return { index, command: commands[index], rule: r.rule, code: r.code || "", vars: r.vars || {}, message: r.message };
   }
   return null;
 }

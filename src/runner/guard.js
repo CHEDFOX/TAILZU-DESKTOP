@@ -339,7 +339,7 @@ function homeOf(p, ctx) {
   return best;
 }
 
-/** What is wrong with writing to this absolute path, if anything: { rule, message } or null. */
+/** What is wrong with writing to this absolute path, if anything: a refusal, or null. */
 function writeProblem(abs, ctx) {
   const plain = canon(abs);
   const real = canon(realish(abs, ctx.realpath));
@@ -350,16 +350,16 @@ function writeProblem(abs, ctx) {
     // The runner's private folders (its home, its temp, its caches) are the commands' own, dotfiles of that home excepted.
     if (underDir(p, ctx.runnerDirCanon) && !ctx.runnerHomeDotfile(p)) continue;
     if (SYSTEM_DIRS.some((d) => underDir(p, d)) || WIN_SYSTEM.some((d) => underDir(p, d)) || /^[a-z]:\/(windows|program files)/.test(p)) {
-      return { rule: "system_write", message: "That writes to a system folder (" + abs + "). Xode only writes inside the project's workspace." };
+      return refuse("system_write", "system_write", { path: abs });
     }
     const h = homeOf(p, ctx);
     if (h) {
       const first = p.slice(h.dir.length).replace(/^\//, "").split("/")[0];
-      if (!first) return { rule: "home_write", message: "That writes to a home folder itself (" + abs + "). Xode only writes inside the project's workspace." };
+      if (!first) return refuse("home_write", "home_root", { path: abs });
       if (first.startsWith(".") || first === "library" || first === "appdata") {
-        return { rule: "home_write", message: "That writes to a dotfile or settings folder in a home directory (" + abs + "). Xode never changes those." };
+        return refuse("home_write", "home_dotfile", { path: abs });
       }
-      if (h.person) return { rule: "outside_write", message: "That writes outside the project's workspace, into the person's own folders (" + abs + "). Xode only writes inside the workspace." };
+      if (h.person) return refuse("outside_write", "outside_write", { path: abs });
     }
   }
   return null;
@@ -381,7 +381,53 @@ function secretProblem(abs, ctx) {
   return false;
 }
 
-const refuse = (rule, message) => ({ ok: false, rule, message });
+// ---------------------------------------------------------------------------------------------- the words of a refusal
+
+/** `{name}` placeholders filled from `vars`, once (a path that holds braces is not read again). */
+const fill = (s, vars) => String(s).replace(/\{(\w+)\}/g, (m, k) => (vars && Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m));
+const english = (_key, fallback, vars) => fill(fallback, vars);
+
+/**
+ * Why a command was not run, in words: each refusal's `code` is a label, desktop.runner.refuse.<code>, its paths and command
+ * names its `vars`. `say` is the knobs' reader (the runner window shows these words, so the server words and translates them);
+ * left out, it is today's English, which is also what goes back to the job, so the planner always reads the same sentence.
+ * The keys and their English stay literals, one per line: the knob extractor reads them from here.
+ */
+function refusalText(code, vars, say) {
+  const txt = typeof say === "function" ? say : english;
+  const v = vars || {};
+  switch (code) {
+    case "sudo": return txt("desktop.runner.refuse.sudo", "{cmd} isn't allowed: it would run with more power than Xode has on this computer. Run the command without it.", v);
+    case "system": return txt("desktop.runner.refuse.system", "{cmd} changes the whole computer, which isn't allowed here.", v);
+    case "system_write": return txt("desktop.runner.refuse.system_write", "That writes to a system folder ({path}). Xode only writes inside the project's workspace.", v);
+    case "home_root": return txt("desktop.runner.refuse.home_root", "That writes to a home folder itself ({path}). Xode only writes inside the project's workspace.", v);
+    case "home_dotfile": return txt("desktop.runner.refuse.home_dotfile", "That writes to a dotfile or settings folder in a home directory ({path}). Xode never changes those.", v);
+    case "outside_write": return txt("desktop.runner.refuse.outside_write", "That writes outside the project's workspace, into the person's own folders ({path}). Xode only writes inside the workspace.", v);
+    case "secret_read": return txt("desktop.runner.refuse.secret_read", "That names a place where keys and tokens are kept ({path}). Xode doesn't look there.", v);
+    case "pipe_to_shell": return txt("desktop.runner.refuse.pipe_to_shell", "Downloading a script and running it straight away isn't allowed. Download it, read it, then run it as a separate step.", v);
+    case "rm_root": return txt("desktop.runner.refuse.rm_root", "That would delete a whole folder tree ({path}): the root of the disk, a home folder or a parent of the workspace. Xode only deletes inside the workspace.", v);
+    case "chmod_root": return txt("desktop.runner.refuse.chmod_root", "{cmd} -R on {path} would change a whole folder tree outside the workspace. It isn't allowed here.", v);
+    case "find_delete": return txt("desktop.runner.refuse.find_delete", "find ... -delete on {path} would delete a whole folder tree outside the workspace. It isn't allowed here.", v);
+    case "push": return txt("desktop.runner.refuse.push", "git push isn't allowed here: Xode has read-only access to the code, and it never pushes. Its changes come back through X0 Bot.", v);
+    case "git_config_global": return txt("desktop.runner.refuse.git_config_global", "git config --global or --system would change settings outside the workspace. Use --local, or leave it.", v);
+    case "git_credential": return txt("desktop.runner.refuse.git_credential", "git credential would touch stored passwords. It isn't allowed here.", v);
+    case "gh": return txt("desktop.runner.refuse.gh", "gh {sub} acts on GitHub as the person, which Xode doesn't do from this computer.", v);
+    case "publish_tool": return txt("desktop.runner.refuse.publish_tool", "{cmd} publishes or deploys, which isn't allowed here.", v);
+    case "registry": return txt("desktop.runner.refuse.registry", "{cmd} {verb} isn't allowed here: Xode doesn't publish packages or log in to registries.", v);
+    case "publish_script": return txt("desktop.runner.refuse.publish_script", "{cmd} run {script} looks like a publish or deploy script, which isn't allowed here.", v);
+    case "nuget": return txt("desktop.runner.refuse.nuget", "dotnet nuget {verb} isn't allowed here: Xode doesn't publish packages.", v);
+    case "deploy": return txt("desktop.runner.refuse.deploy", "{cmd} {verb} isn't allowed here: Xode doesn't publish or deploy from this computer.", v);
+    case "image_push": return txt("desktop.runner.refuse.image_push", "{cmd} build --push isn't allowed here: Xode doesn't push images.", v);
+    case "system_packager": return txt("desktop.runner.refuse.system_packager", "{cmd} installs or removes software for the whole computer, which isn't allowed here. Install it inside the project, or turn on \"Run in a container\".", v);
+    case "yarn_global": return txt("desktop.runner.refuse.yarn_global", "yarn global installs software for the whole computer, which isn't allowed here.", v);
+    case "npm_global": return txt("desktop.runner.refuse.npm_global", "{cmd} -g installs software for the whole computer, which isn't allowed here. Install it inside the project.", v);
+    case "pip_user": return txt("desktop.runner.refuse.pip_user", "pip install --user or --break-system-packages installs software for the whole computer. Use a virtual environment inside the project.", v);
+    default: return "";
+  }
+}
+
+/** A refusal: the rule it falls under, the code that words it (refusalText), what goes into the words, and the words in English. */
+const refuse = (rule, code, vars) => ({ ok: false, rule, code, vars: vars || {}, message: refusalText(code, vars) });
 
 /** A folder whose recursive deletion (or owner change) would be a disaster: `/`, a home, a drive root, a parent of the workspace. */
 function catastrophic(abs, ctx) {
@@ -467,20 +513,20 @@ function publishProblem(cmd) {
     // git [global options] <subcommand>: -C <dir> and -c <k=v> take a value.
     const sub = positionals(args, 1, new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--super-prefix"]))[0] || "";
     if (sub === "push" || sub === "send-pack" || sub === "receive-pack") {
-      return refuse("push", "git push isn't allowed here: Xode has read-only access to the code, and it never pushes. Its changes come back through X0 Bot.");
+      return refuse("push", "push");
     }
-    if (sub === "config" && args.some((a) => /^--(global|system)$/.test(a.text))) return refuse("home_write", "git config --global or --system would change settings outside the workspace. Use --local, or leave it.");
-    if (sub === "credential" || sub === "credential-store" || sub === "credential-cache") return refuse("secret_read", "git credential would touch stored passwords. It isn't allowed here.");
+    if (sub === "config" && args.some((a) => /^--(global|system)$/.test(a.text))) return refuse("home_write", "git_config_global");
+    if (sub === "credential" || sub === "credential-store" || sub === "credential-cache") return refuse("secret_read", "git_credential");
     return null;
   }
   if (name === "gh") {
     const sub = positionals(args, 1)[0] || "";
     if (["release", "repo", "workflow", "secret", "variable", "auth", "gist", "ruleset", "label", "pr", "issue", "api"].includes(sub) && sub !== "") {
-      return refuse("publish", "gh " + sub + " acts on GitHub as the person, which Xode doesn't do from this computer.");
+      return refuse("publish", "gh", { sub });
     }
     return null;
   }
-  if (ONLY_PUBLISH.has(name) && !args.some((a) => /^(--version|-v|--help|-h)$/.test(a.text))) return refuse("publish", name + " publishes or deploys, which isn't allowed here.");
+  if (ONLY_PUBLISH.has(name) && !args.some((a) => /^(--version|-v|--help|-h)$/.test(a.text))) return refuse("publish", "publish_tool", { cmd: name });
   // Package runners: look at the tool they run.
   const viaRunner = name === "npx" || name === "pnpx" || name === "bunx" || ((name === "pnpm" || name === "yarn") && positionals(args, 1)[0] === "dlx");
   if (viaRunner) {
@@ -502,15 +548,15 @@ function publishProblem(cmd) {
     const words = positionals(args, 4, new Set(NPM_VALUES)).map((w) => w.toLowerCase());
     const t = PUBLISH[name];
     const hit = t ? words.slice(0, t.depth).find((w) => t.verbs.has(w)) : "";
-    if (hit) return refuse("publish", name + " " + hit + " isn't allowed here: Xode doesn't publish packages or log in to registries.");
+    if (hit) return refuse("publish", "registry", { cmd: name, verb: hit });
     const runAt = words.findIndex((w) => w === "run" || w === "run-script");
     const script = runAt >= 0 ? words[runAt + 1] : name === "npm" ? "" : words[0];
-    if (script && PUBLISH_SCRIPTS.has(script)) return refuse("publish", name + " run " + script + " looks like a publish or deploy script, which isn't allowed here.");
+    if (script && PUBLISH_SCRIPTS.has(script)) return refuse("publish", "publish_script", { cmd: name, script });
     return globalProblem(cmd);
   }
   if (name === "dotnet") {
     const words = positionals(args, 3).map((w) => w.toLowerCase());
-    if (words[0] === "nuget" && (words[1] === "push" || words[1] === "delete")) return refuse("publish", "dotnet nuget " + words[1] + " isn't allowed here: Xode doesn't publish packages.");
+    if (words[0] === "nuget" && (words[1] === "push" || words[1] === "delete")) return refuse("publish", "nuget", { verb: words[1] });
     return null;
   }
   const t = Object.prototype.hasOwnProperty.call(PUBLISH, name) ? PUBLISH[name] : null;
@@ -518,8 +564,8 @@ function publishProblem(cmd) {
     const words = positionals(name === "cargo" ? args.filter((a) => !a.text.startsWith("+")) : args, t.depth, t.values).map((w) => w.toLowerCase());
     const hit = words.find((w) => t.verbs.has(w) || ((name === "gradle" || name === "gradlew") && /^publish(?!tomavenlocal$)/.test(w)));
     const flag = args.find((a) => t.verbs.has(a.text.toLowerCase()) && isOption(a.text));
-    if (hit || flag) return refuse("publish", name + " " + (hit || flag.text) + " isn't allowed here: Xode doesn't publish or deploy from this computer.");
-    if ((name === "docker" || name === "podman") && args.some((a) => a.text === "--push" || /^--output=.*push=true/.test(a.text))) return refuse("publish", name + " build --push isn't allowed here: Xode doesn't push images.");
+    if (hit || flag) return refuse("publish", "deploy", { cmd: name, verb: hit || flag.text });
+    if ((name === "docker" || name === "podman") && args.some((a) => a.text === "--push" || /^--output=.*push=true/.test(a.text))) return refuse("publish", "image_push", { cmd: name });
   }
   return globalProblem(cmd);
 }
@@ -531,19 +577,19 @@ function globalProblem(cmd) {
   if (SYSTEM_PACKAGERS.has(name)) {
     const first = positionals(cmd.args, 1)[0] || "";
     const flagged = a.some((x) => PACKAGER_VERBS.has(x) || /^-[SRU][a-zA-Z]*$/.test(x));
-    if (PACKAGER_VERBS.has(first) || flagged) return refuse("global_install", name + " installs or removes software for the whole computer, which isn't allowed here. Install it inside the project, or turn on \"Run in a container\".");
+    if (PACKAGER_VERBS.has(first) || flagged) return refuse("global_install", "system_packager", { cmd: name });
   }
   if (SCRIPT_RUNNERS.has(name)) {
     const words = positionals(cmd.args, 2, new Set(NPM_VALUES)).map((w) => w.toLowerCase());
     const mutates = new Set(["install", "i", "add", "link", "ln", "uninstall", "remove", "rm", "update", "upgrade", "up", "unlink", "global"]);
-    if (name === "yarn" && words[0] === "global") return refuse("global_install", "yarn global installs software for the whole computer, which isn't allowed here.");
+    if (name === "yarn" && words[0] === "global") return refuse("global_install", "yarn_global");
     if (words.some((w) => mutates.has(w)) && a.some((x) => x === "--global" || x === "--location=global" || /^-[a-zA-Z]*g[a-zA-Z]*$/.test(x))) {
-      return refuse("global_install", name + " -g installs software for the whole computer, which isn't allowed here. Install it inside the project.");
+      return refuse("global_install", "npm_global", { cmd: name });
     }
   }
   if (name === "pip" || name === "pip3") {
     if (positionals(cmd.args, 1)[0] === "install" && a.some((x) => x === "--user" || x === "--break-system-packages" || x === "--prefix=/usr" || x === "--target=/")) {
-      return refuse("global_install", "pip install --user or --break-system-packages installs software for the whole computer. Use a virtual environment inside the project.");
+      return refuse("global_install", "pip_user");
     }
   }
   return null;
@@ -681,7 +727,7 @@ const NULLS = /^(\/dev\/null|\/dev\/std(out|err|in)|\/dev\/tty|nul|\$null)$/i;
  *   command    the text a shell would be given
  *   o          { cwd (the workspace), home (the person's), runnerHome (the private $HOME the command gets), runnerDir,
  *                realpath (a function, or null to read paths as written), protectedDirs, protectedOk }
- * Returns { ok: true } or { ok: false, rule, message }.
+ * Returns { ok: true } or { ok: false, rule, code, vars, message } (message: the English words; refusalText(code, vars, txt) words it for the person).
  */
 function checkCommand(command, o) {
   const ctx = o && o.homesCanon ? o : makeContext(o || {});
@@ -694,21 +740,21 @@ function checkCommand(command, o) {
     here.cwd = depth === 0 ? cwd : null;
     for (const w of stage.words.concat(stage.redirs.map((r) => r.target))) {
       const abs = pathOf(w, here);
-      if (abs && secretProblem(abs, here)) return refuse("secret_read", "That names a place where keys and tokens are kept (" + w.text + "). Xode doesn't look there.");
+      if (abs && secretProblem(abs, here)) return refuse("secret_read", "secret_read", { path: w.text });
     }
     if (!cmd.name) continue;
     const { name } = cmd;
 
-    if (SUDO.has(name)) return refuse("sudo", name + " isn't allowed: it would run with more power than Xode has on this computer. Run the command without it.");
+    if (SUDO.has(name)) return refuse("sudo", "sudo", { cmd: name });
     if (POWER.has(name) || /^mkfs\./.test(name) || (name === "diskutil" && cmd.args.some((a) => /^(erase|partition|reformat|zero|secure)/i.test(a.text)))) {
-      return refuse("system", name + " changes the whole computer, which isn't allowed here.");
+      return refuse("system", "system", { cmd: name });
     }
 
     // A download that is run: `curl ... | sh`, `wget -qO- ... | bash`, `bash <(curl ...)`, `sh -c "$(curl ...)"`, `eval "$(curl ...)"`.
     const downloadFirst = idx > 0 && pipeline.slice(0, idx).some((st) => DOWNLOADERS.has(commandOf(st.words).name) || st.subs.some(downloads));
     if (((SHELLS.has(name) || INTERPRETERS.has(name)) && downloadFirst && readsProgramFromStdin(cmd)) || runsDownloadedText(cmd, stage)
       || ((name === "iex" || name === "invoke-expression") && (downloadFirst || stage.subs.some(downloads) || cmd.args.some((a) => DOWNLOADERS.has(baseName(a.text)))))) {
-      return refuse("pipe_to_shell", "Downloading a script and running it straight away isn't allowed. Download it, read it, then run it as a separate step.");
+      return refuse("pipe_to_shell", "pipe_to_shell");
     }
 
     const pub = publishProblem(cmd);
@@ -722,14 +768,14 @@ function checkCommand(command, o) {
       for (const w of cmd.args.filter((a) => !isOption(a.text) && !/^\/[a-z]$/i.test(a.text))) {
         const abs = pathOf(w, here);
         if (abs ? catastrophic(abs, here) : /^(\/|~|\$HOME|\$\{HOME\}|\.\.)(\/\*|\/)?$/.test(w.text)) {
-          return refuse("rm_root", "That would delete a whole folder tree (" + w.text + "): the root of the disk, a home folder or a parent of the workspace. Xode only deletes inside the workspace.");
+          return refuse("rm_root", "rm_root", { path: w.text });
         }
       }
     }
     if ((name === "chmod" || name === "chown" || name === "chgrp") && recursive) {
       for (const w of cmd.args.filter((a) => !isOption(a.text)).slice(1)) {
         const abs = pathOf(w, here);
-        if (abs && catastrophic(abs, here)) return refuse("rm_root", name + " -R on " + w.text + " would change a whole folder tree outside the workspace. It isn't allowed here.");
+        if (abs && catastrophic(abs, here)) return refuse("rm_root", "chmod_root", { cmd: name, path: w.text });
       }
     }
     if (name === "find") {
@@ -739,7 +785,7 @@ function checkCommand(command, o) {
         const stop = a.findIndex((x) => isOption(x.text) || x.text === "(" || x.text === "!");
         for (const w of a.slice(0, stop < 0 ? a.length : stop)) {
           const abs = pathOf(w, here);
-          if (abs && catastrophic(abs, here)) return refuse("rm_root", "find ... -delete on " + w.text + " would delete a whole folder tree outside the workspace. It isn't allowed here.");
+          if (abs && catastrophic(abs, here)) return refuse("rm_root", "find_delete", { path: w.text });
         }
       }
     }
@@ -750,7 +796,7 @@ function checkCommand(command, o) {
       const abs = pathOf(w, here);
       if (!abs) continue;
       const bad = writeProblem(abs, here);
-      if (bad) return refuse(bad.rule, bad.message);
+      if (bad) return bad;
     }
 
     // Follow a `cd` so that later relative paths in the same line are read where they point.
@@ -787,4 +833,4 @@ function checkPathInside(root, rel, o) {
   return { ok: true, abs };
 }
 
-module.exports = { checkCommand, checkPathInside, makeContext, parseCommand };
+module.exports = { checkCommand, checkPathInside, makeContext, parseCommand, refusalText };

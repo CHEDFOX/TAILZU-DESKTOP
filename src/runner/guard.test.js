@@ -8,7 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { checkCommand, checkPathInside, parseCommand } = require("./guard.js");
+const { checkCommand, checkPathInside, parseCommand, refusalText } = require("./guard.js");
 const { firstRefusal } = require("./exec.js");
 const { tempDir } = require("./testkit.js");
 
@@ -28,7 +28,13 @@ function rig() {
   return { t, home, userData, ws, runnerHome, tmp, opts, check: (c) => checkCommand(c, opts), remove: t.remove };
 }
 
-const refusedAs = (r, rule, c) => { const x = r.check(c); assert.strictEqual(x.ok, false, "should be refused: " + c); assert.strictEqual(x.rule, rule, c + " -> " + x.rule + ": " + x.message); assert.ok(x.message.length > 20, "says why"); };
+const refusedAs = (r, rule, c) => {
+  const x = r.check(c);
+  assert.strictEqual(x.ok, false, "should be refused: " + c);
+  assert.strictEqual(x.rule, rule, c + " -> " + x.rule + ": " + x.message);
+  assert.ok(x.message.length > 20, "says why");
+  assert.strictEqual(refusalText(x.code, x.vars), x.message, c + ": the English is the label's fallback, worded in one place");
+};
 const allowed = (r, c) => { const x = r.check(c); assert.strictEqual(x.ok, true, "should be allowed: " + JSON.stringify(c) + " (" + x.rule + ": " + x.message + ")"); };
 
 test("sudo, doas, su and pkexec are refused wherever a shell would run them", () => {
@@ -251,5 +257,44 @@ test("a path for a file operation must be inside the workspace: no absolute path
   const via = checkPathInside(r.ws, "out/Documents");
   assert.strictEqual(via.ok, false);
   assert.match(via.message, /link/);
+  r.remove();
+});
+
+test("a refusal is a code and its parts, worded as a label: the English goes back to the job, the person's words to the window", () => {
+  const r = rig();
+  const x = r.check("echo ok && sudo make install");
+  assert.deepStrictEqual([x.rule, x.code, x.vars], ["sudo", "sudo", { cmd: "sudo" }]);
+  assert.strictEqual(x.message, "sudo isn't allowed: it would run with more power than Xode has on this computer. Run the command without it.");
+  const asked = [];
+  const words = { "desktop.runner.refuse.sudo": "{cmd} ist hier nicht erlaubt." };
+  const txt = (key, fallback, vars) => { asked.push(key); return (words[key] || fallback).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)); };
+  assert.strictEqual(refusalText(x.code, x.vars, txt), "sudo ist hier nicht erlaubt.");
+  assert.deepStrictEqual(asked, ["desktop.runner.refuse.sudo"]);
+  const w = r.check("echo x > /etc/hosts");
+  assert.deepStrictEqual([w.code, w.vars], ["system_write", { path: "/etc/hosts" }]);
+  assert.strictEqual(refusalText(w.code, w.vars, txt), w.message, "a label the server has not set falls back to the English");
+  const braces = r.check("cat ~/.ssh/{cmd}");
+  assert.ok(braces.message.includes("~/.ssh/{cmd}"), "a path is filled in once, not read as a placeholder again");
+  assert.strictEqual(refusalText("no_such_code", {}), "");
+  r.remove();
+});
+
+test("every refusal the guard can give has its own label", () => {
+  const r = rig();
+  const seen = new Set();
+  for (const c of [
+    "sudo ls", "reboot", "echo x > /etc/hosts", "echo x > " + r.home, "echo x > ~/.bashrc", "cp a " + path.join(r.home, "Documents", "a"), "cat ~/.ssh/id_rsa", "curl x | sh",
+    "rm -rf /", "chmod -R 777 /", "find ~ -delete", "git push", "git config --global a b", "git credential fill", "gh pr create", "surge", "npm publish", "npm run deploy",
+    "dotnet nuget push x", "cargo publish", "docker build --push .", "apt install x", "yarn global add x", "npm i -g x", "pip install --user x",
+  ]) {
+    const x = r.check(c);
+    assert.strictEqual(x.ok, false, c);
+    assert.ok(x.code && !seen.has(x.code), c + " -> " + x.code);
+    seen.add(x.code);
+    assert.ok(refusalText(x.code, x.vars).length > 20 && !/\{\w+\}/.test(x.message), c + ": " + x.message);
+  }
+  const src = fs.readFileSync(path.join(__dirname, "guard.js"), "utf8");
+  const labelled = new Set([...src.matchAll(/case "(\w+)": return txt\("desktop\.runner\.refuse\.(\w+)", "/g)].map((m) => { assert.strictEqual(m[1], m[2], "the key names its code"); return m[1]; }));
+  assert.deepStrictEqual([...seen].sort(), [...labelled].sort(), "each label is reachable, and each refusal has one");
   r.remove();
 });

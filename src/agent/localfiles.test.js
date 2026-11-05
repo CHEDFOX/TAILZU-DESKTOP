@@ -12,7 +12,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createLocalFiles, higher, RISK, MAX_FILES, fill, EN_WORDS } = require("./localfiles.js");
+const { createLocalFiles, higher, RISK, MAX_FILES, fill, EN_WORDS, KIND_FOLDER } = require("./localfiles.js");
 
 // ---- fixtures ---------------------------------------------------------------
 
@@ -249,6 +249,60 @@ test("a name already taken in the target becomes (2); nothing is overwritten, pl
   assert.strictEqual(fs.readFileSync(path.join(r.home, "Downloads/PDFs/a.pdf"), "utf8"), "old");
   assert.strictEqual(fs.readFileSync(path.join(r.home, "Downloads/PDFs/a (3).pdf"), "utf8"), "new");
   assert.strictEqual(fs.readFileSync(path.join(r.home, "Downloads/PDFs/a (2).pdf"), "utf8"), "older");
+});
+
+test("a kind's folder is named by the server, and a fresh folder gets today's name", async () => {
+  const asked = [];
+  const words = { "desktop.files.kind.pdf": "PDF-Dateien", "desktop.files.kind.image": "Bilder" };
+  const txt = (key, fallback, vars) => { asked.push([key, fallback]); return (words[key] || fallback).replace(/\{(\w+)\}/g, (m, k) => (vars && k in vars ? String(vars[k]) : m)); };
+  const r = rig({ opts: { txt } });
+  r.w("Downloads/a.pdf"); r.w("Downloads/b.png"); r.w("Downloads/c.zip");
+  const p = await plan(r, "organise_folder", { folder: "Downloads", by: "type" });
+  assert.ok(p.lines.includes("a.pdf → PDF-Dateien/"));
+  await p.run();
+  assert.deepStrictEqual(r.ls("Downloads"), ["Archives", "Bilder", "PDF-Dateien"]);
+  for (const [key, fallback] of asked.filter(([k]) => k.startsWith("desktop.files.kind."))) assert.strictEqual(fallback, KIND_FOLDER[key.slice(19)], key);
+});
+
+test("a kind the server renamed goes into the folder it already has under an earlier name, in any case", async () => {
+  const words = {};
+  const txt = (key, fallback) => words[key] || fallback;
+  const r = rig({ opts: { txt } });
+  // Sorted before, in English: the old names are always earlier names.
+  r.w("Downloads/old.pdf", "old"); r.w("Downloads/images/old.png", "old");
+  await (await plan(r, "organise_folder", { folder: "Downloads", by: "type" })).run();
+  assert.deepStrictEqual(r.ls("Downloads"), ["PDFs", "images"]);
+  words["desktop.files.kind.pdf"] = "PDF files";
+  words["desktop.files.kind.image"] = "Pictures";
+  r.w("Downloads/new.pdf", "new"); r.w("Downloads/new.png", "new");
+  const p = await plan(r, "organise_folder", { folder: "Downloads", by: "type" });
+  assert.strictEqual(p.say.vars.m, 2);
+  assert.ok(p.lines.includes("new.pdf → PDFs/") && p.lines.includes("new.png → images/"), p.lines.join(" | "));
+  await p.run();
+  assert.deepStrictEqual(r.ls("Downloads"), ["PDFs", "images"], "no second folder beside the old one");
+  assert.deepStrictEqual(r.ls("Downloads/PDFs"), ["new.pdf", "old.pdf"]);
+  // A name the server gave before (another language, a label changed since) is remembered here, and found again.
+  words["desktop.files.kind.pdf"] = "Dokumente (PDF)";
+  r.w("Desktop/x.pdf");
+  await (await plan(r, "organise_folder", { folder: "Desktop", by: "type" })).run();
+  assert.deepStrictEqual(r.ls("Desktop"), ["Dokumente (PDF)"]);
+  words["desktop.files.kind.pdf"] = "PDF-Dateien";
+  r.w("Desktop/y.pdf");
+  await (await plan(r, "organise_folder", { folder: "Desktop", by: "type" })).run();
+  assert.deepStrictEqual(r.ls("Desktop"), ["Dokumente (PDF)"]);
+  assert.deepStrictEqual(r.ls("Desktop/Dokumente (PDF)"), ["x.pdf", "y.pdf"]);
+  // Where nothing like it is there yet, today's name is made.
+  r.w("Documents/z.pdf");
+  await (await plan(r, "organise_folder", { folder: "Documents", by: "type" })).run();
+  assert.deepStrictEqual(r.ls("Documents"), ["PDF-Dateien"]);
+});
+
+test("a folder name from the server that is no usable name falls back to the English", async () => {
+  const words = { "desktop.files.kind.pdf": "../escape", "desktop.files.kind.image": ".hidden", "desktop.files.kind.archive": "  " };
+  const r = rig({ opts: { txt: (key, fallback) => words[key] || fallback } });
+  r.w("Downloads/a.pdf"); r.w("Downloads/b.png"); r.w("Downloads/c.zip");
+  await (await plan(r, "organise_folder", { folder: "Downloads", by: "type" })).run();
+  assert.deepStrictEqual(r.ls("Downloads"), ["Archives", "Images", "PDFs"]);
 });
 
 test("one change takes at most 500 files, and says the rest are left", async () => {
@@ -681,11 +735,13 @@ test("open: no more programs by another name — trailing dots or spaces, script
   assert.strictEqual((await r.lf.plan("reveal_file", { path: "Downloads/run.py" })).ok, true, "showing where a program is, is only showing");
 });
 
-test("nothing here reads a file's contents: the only read is the undo log", () => {
+test("nothing here reads a file's contents: the only reads are its own undo log and folder names", () => {
   const src = fs.readFileSync(path.join(__dirname, "localfiles.js"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const reads = src.match(/readFile|createReadStream|readSync|openSync|\.open\(|readlinkSync/g) || [];
-  assert.deepStrictEqual(reads, ["readFile"], "only fs.readFileSync(logPath)");
+  assert.deepStrictEqual(reads, ["readFile", "readFile"], "only fs.readFileSync(logPath) and fs.readFileSync(namesPath)");
   assert.match(src, /readFileSync\(logPath/);
+  assert.match(src, /readFileSync\(namesPath/);
+  assert.match(src, /namesPath = userData \? path\.join\(userData, "local-files-folders\.json"\)/, "both in the app's own folder");
 });
 
 test("what the person reads is the server's words when it sends them, with the numbers filled in", async () => {
