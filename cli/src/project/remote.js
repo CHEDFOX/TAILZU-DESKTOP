@@ -23,17 +23,10 @@ async function chooseRemote(top, { input, out }) {
 }
 
 async function ask(names, { input, out }) {
-  out.line("This repository has several remotes and none is called origin. Which one is the project's?");
-  names.forEach((n, i) => out.line(`  ${out.paint.cyan(String(i + 1).padStart(String(names.length).length))}. ${n}`));
-  for (;;) {
-    const a = await input.ask(`Remote (1-${names.length}): `);
-    if (a === null) throw Object.assign(new Error("No remote was chosen."), { code: "cancelled" });
-    const t = a.trim();
-    const n = Number(t);
-    if (Number.isInteger(n) && n >= 1 && n <= names.length) return names[n - 1];
-    if (names.includes(t)) return t;
-    out.note(`Type a number from 1 to ${names.length}.`);
-  }
+  out.line("This repository has several remotes and none is called origin.");
+  const i = await input.pick({ title: "Which one is the project's?", options: names });
+  if (i === null || typeof i !== "number") throw Object.assign(new Error("No remote was chosen."), { code: "cancelled" });
+  return names[i];
 }
 
 module.exports = { chooseRemote };

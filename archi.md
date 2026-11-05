@@ -200,23 +200,40 @@ docs/microsoft-store.md the Store listing
 .github/workflows/build.yml   installers for macOS, Windows and Linux; publishing on a manual run
 
 cli/                    xode: Xode in the terminal, its own npm package (no runtime dependencies; the backend repo's xode-cli doc)
+                        `xode` in a project folder is the whole of it: sign-in inline, the folder's project, a welcome box,
+                        the prompt; Ctrl+C twice (or /exit) leaves, and leaving never stops a job
 cli/package.json        name xode, bin xode, Node 20+; prepack copies the runner in (cli/scripts/bundle-runner.js)
 cli/.gitignore          cli/runner/, the packed copy of src/runner (made by npm pack, never committed)
-cli/bin/xode.js         the arguments, to a command
-cli/src/args.js         reading the arguments; cli/src/config.js: the server (XODE_SERVER), its host, the config and cache folders
+cli/bin/xode.js         the arguments, to a command; only the session and the sign-in read the keyboard; exit 0, 1 or 2
+cli/src/args.js         reading the arguments (words, -p, doctor, update, the older login/logout/status/stop, the flags)
+cli/src/config.js       the server (XODE_SERVER), its host, the config and cache folders
 cli/src/api/            client.js: the server, as the terminal's sign-in; redact.js: no secret is ever printed
-cli/src/auth/           link.js: the code sign-in; store.js picks keychain.js (macOS), secretTool.js (Linux) or fileStore.js (600)
-cli/src/commands/       login, logout, status, stop, chat (xode and xode "words"), help
-cli/src/chat/           session.js: one chat (plan, approve, follow); flowApi.js, jobsApi.js: the routes; gate.js: the project's
-                        first read; follow.js: a job to its end; live.js: the job's room, else polling; needs.js: questions
-                        and yeses; stages.js, activity.js: progress words; thread.js: the app's own chat
+cli/src/auth/           link.js: the code sign-in; store.js picks keychain.js (macOS), secretTool.js (Linux) or fileStore.js (600),
+                        and says where the sign-in is kept (for doctor)
+cli/src/commands/chat.js       xode and xode "words": sign-in when needed, the project, the runner, the welcome, the session
+cli/src/commands/login.js      the code sign-in (signIn: inline at the start, /login, and the unadvertised xode login)
+cli/src/commands/print.js      xode -p: one answer from the folder's chat (POST /say), piped text after the question (20 KB);
+                               never a plan approved, a job, or the runner
+cli/src/commands/doctor.js     xode doctor: Node, the sign-in, the server, git, the folder's project, the runner; one line each
+cli/src/commands/update.js     xode update: the command that updates, this version and the newest
+cli/src/commands/       logout, status (also /status), stop (also /stop), help
+cli/src/chat/session.js one session: talk (/say), the plan's picker (/approve), the job followed while the prompt stays open
+                        (/work for what is typed meanwhile), "/" and "!" commands, and leaving with the job left running
+cli/src/chat/controls.js       what Ctrl+C, Ctrl+D and Esc mean: cancel what is in flight, Esc twice stops a job, Ctrl+C
+                               twice leaves
+cli/src/chat/slash.js   the "/" commands and their list; cli/src/chat/shell.js: "!" commands, their output kept for the next
+                        message; cli/src/chat/diff.js: /diff, the last work branch against the default branch
+cli/src/chat/follow.js  a job to its end, quietly: "● Build" per stage, dim activity lines, the status line; live.js: the job's
+                        room, else polling; needs.js: its questions and yeses as pickers
+cli/src/chat/           flowApi.js, jobsApi.js: the routes; gate.js: the project's first read; stages.js, activity.js: progress
+                        words; thread.js: the app's own chat (or a fresh one: --new, /clear)
 cli/src/net/ws.js       a copy of src/runner/ws.js (a test keeps the two the same), so the package stands alone
 cli/src/git/run.js      git through execFile (no shell), with a time limit and errors in one sentence; the repository's top
 cli/src/project/resolve.js     which project: a flag, XODE_PROJECT, or the folder's own (its remote against the projects)
-cli/src/project/remote.js      which remote: origin, the only one, or the person says
+cli/src/project/remote.js      which remote: origin, the only one, or the person picks
 cli/src/project/remoteUrl.js   a remote's address read: which GitHub repository, if any
 cli/src/project/connect.js     a repository not connected yet: the app's connect link, then a wait until it is a project
-cli/src/work/afterJob.js       after a job: its branch into the folder, its pull request, both kept for xode status
+cli/src/work/afterJob.js       after a job: its branch into the folder, its pull request, both kept for /status and /diff
 cli/src/work/bringBack.js      the work branch into the folder: left alone with uncommitted changes, a fast-forward on the
                                branch, else the branch made and switched to; then git's diff --stat
 cli/src/computer/host.js       this computer for Xode while xode is open: src/runner run headless, the folder's project only,
@@ -224,16 +241,30 @@ cli/src/computer/host.js       this computer for Xode while xode is open: src/ru
 cli/src/computer/load.js       finds the runner: cli/runner/ when packed, else ../src/runner
 cli/src/computer/state.js      the runner's state per server and project (~/.config/xode/runner/state.json, 600)
 cli/src/computer/power.js      the stand-in for the battery monitor (unknown reads as mains power)
-cli/src/computer/statusLine.js "This computer: online…", once and on a change
+cli/src/computer/statusLine.js "Working on this computer." when a job starts here, or a problem; nothing otherwise
 cli/src/state/          folders.js: per server and folder, the project, the chat, the last job and its branch
                         (~/.config/xode/state.json)
 cli/src/state/folderOf.js      the folder state is kept under: the repository's top
-cli/src/ui/             term, paint, wrap, markdown, refs (file:line), box, plan, progress, prompt, out
-cli/src/util/           atomicWrite, sleep, which
+cli/src/ui/input.js     the keyboard and the bottom of the screen: keys one by one on a terminal (lines from a pipe), the
+                        prompt, pickers and questions over it, the status line above it, a hint under it
+cli/src/ui/keys.js      key presses in raw mode (Esc at once, pastes marked); cli/src/ui/screen.js: the redrawn region
+cli/src/ui/editor.js    the line being typed; cli/src/ui/history.js: Up and Down, per folder (~/.config/xode/history.json,
+                        never a line that looks like a secret); cli/src/ui/complete.js: Tab for "/" and "@" (git ls-files)
+cli/src/ui/picker.js    a choice like a permission prompt; cli/src/ui/twoPress.js: "press again"
+cli/src/ui/statusBar.js the spinner, the stage, the time and "esc to stop"; cli/src/ui/welcome.js: the welcome box
+cli/src/ui/             term, paint, wrap, markdown, refs (file:line), box, plan, progress, out
+cli/src/upkeep/updateCheck.js  a newer xode on npm: asked at most once a day in the background (~/.config/xode/update.json)
+cli/src/util/           atomicWrite, sleep, which, shortPath (~ for home)
 cli/src/util/open.js    a link in the browser, with the platform's opener and no shell
 cli/scripts/bundle-runner.js  npm prepack: src/runner's runtime files (followed from index.js) into cli/runner/
-cli/test/               node --test against fakeServer.js (runCli.js runs the real binary in a real clone)
+cli/test/               node --test against fakeServer.js (runCli.js runs the real binary in a real clone; keys through a pipe
+                        with XODE_KEYS=1)
+cli/test/screen.js      a small terminal: what xode drew, as a person would see it, at a width
 cli/test/gitFixture.js  a bare "GitHub" repository and a clone of it, in a temporary folder
+cli/test/chat.test.js   the session: pickers, the job, Esc twice, Ctrl+C twice, "/", "!", history, pastes
+cli/test/look.test.js   60 and 76 columns: boxes, the welcome, the status line redrawn in place, NO_COLOR, plain pipes
+cli/test/prompt.test.js the prompt's parts on their own, and the update check
+cli/test/upkeep.test.js xode -p, doctor and update
 cli/test/folder.test.js the folder's project, a repository not connected yet, and the branch coming back
 cli/test/computer.test.js  the runner headless, for one project, shut down at the end; the packed copy
 cli/dev/demo-server.js  the fake server with a slow, realistic script, and a project folder whose work branch comes back

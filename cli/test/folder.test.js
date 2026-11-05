@@ -80,8 +80,9 @@ test("the folder's project is found from its remote (case aside), from a subfold
   try {
     const sub = path.join(t.home.work, "src", "cart");
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, cwd: sub, env: { XODE_RUNNER: "0" } });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.ok(t.server.calls.some((c) => c.path === `/v1/bots/code/flow/${PROJECT_ID}/say`));
@@ -101,8 +102,9 @@ test("--project still wins over the folder's remote", async () => {
   const t = await setup({ projects });
   try {
     const run = runCli(["--project", other, "--no-runner", "fix it"], { server: t.server, home: t.home });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.ok(t.server.calls.some((c) => c.path === `/v1/bots/code/flow/${other}/say`));
@@ -126,8 +128,9 @@ test("not connected yet: the connect link, a wait, and once the project appears 
     // Connected in X0 Bot meanwhile.
     t.server.options.projects.push({ id: PROJECT_ID, fullName: "ana/storefront", defaultBranch: "main" });
     await run.waitFor("ana/storefront is connected.");
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.ok(t.server.calls.some((c) => c.path === `/v1/bots/code/flow/${PROJECT_ID}/say`));
@@ -140,9 +143,9 @@ test("a repository GitHub already lets Xode see is added on a yes", async () => 
   const t = await setup({ projects: [], repos: [{ id: 77, fullName: "ana/storefront", defaultBranch: "main", private: true }] });
   try {
     const run = runCli(["--no-runner"], { server: t.server, home: t.home });
-    await run.waitFor("Add it to your Xode projects? (y/n)");
+    await run.waitFor("Add it to your Xode projects?");
     run.type("y");
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Xode · ana/storefront");
     run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
@@ -158,8 +161,9 @@ test("a clean folder: switched to the work branch, git's diff --stat, and the pu
   const t = await setup();
   try {
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.match(r.stdout, new RegExp(`Switched to ${BRANCH}, with Xode's changes\\.`));
@@ -188,8 +192,9 @@ test("uncommitted changes: nothing fetched, nothing touched, and the two command
     const before = sha(t.home.work, `refs/remotes/origin/${BRANCH}`);
     fs.writeFileSync(path.join(t.home.work, "scratch.txt"), "mine\n");
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, env: { XODE_RUNNER: "0" } });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.ok(r.stdout.includes("You have uncommitted changes, so I left your folder as it is."), r.stdout);
@@ -211,8 +216,9 @@ test("already on the work branch: a fast-forward", async () => {
     git(t.home.work, "switch", "-q", BRANCH);
     const mine = sha(t.home.work, "HEAD");
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, env: { XODE_RUNNER: "0" } });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.match(r.stdout, new RegExp(`Updated ${BRANCH} with Xode's changes\\.`));
@@ -236,8 +242,9 @@ test("a local branch of the same name with commits of the person's own is left a
     const mine = sha(t.home.work, "HEAD");
     git(t.home.work, "switch", "-q", "main");
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, env: { XODE_RUNNER: "0" } });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
     assert.strictEqual(r.code, 0, r.all);
     assert.match(r.stdout, new RegExp(`Your own ${BRANCH} has commits Xode's doesn't, so I left it as it is\\. Xode's work is at origin/${BRANCH}\\.`));
@@ -253,10 +260,11 @@ test("a failed job that pushed its branch brings it back too, with its draft pul
   const t = await setup({ script });
   try {
     const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, env: { XODE_RUNNER: "0" } });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Start this plan?");
     run.type("y");
+    run.end();
     const r = await run.done;
-    assert.strictEqual(r.code, 1, r.all);
+    assert.strictEqual(r.code, 0, r.all);
     assert.match(r.stdout, /The job failed: The tests would not pass\./);
     assert.match(r.stdout, new RegExp(`Switched to ${BRANCH}, with Xode's changes\\.`));
     assert.match(r.stdout, /Pull request \(draft\): https:\/\/github\.com\/ana\/storefront\/pull\/42/);

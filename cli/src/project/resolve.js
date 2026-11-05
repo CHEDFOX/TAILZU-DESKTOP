@@ -26,8 +26,9 @@ async function repoTop(cwd) {
 /**
  * Resolves { id, name, defaultBranch, top, remote: { name, url } | null, repo: { owner, repo, fullName } | null }.
  * `repo` is the folder's GitHub repository when it is this project's, so its work can be brought back (null otherwise).
+ * connect: false refuses a repository that isn't connected yet, instead of offering to connect it (xode -p).
  */
-async function resolveProject(cwd, { flag, env = process.env, client, input, out, server, pollMs, platform }) {
+async function resolveProject(cwd, { flag, env = process.env, client, input, out, server, pollMs, platform, connect = true }) {
   const top = await topOf(cwd);
   if (!top) throw refuse(NOT_A_REPO);
   const given = (flag || env.XODE_PROJECT || "").trim();
@@ -45,7 +46,9 @@ async function resolveProject(cwd, { flag, env = process.env, client, input, out
   } else {
     if (!remote) throw refuse(NO_REMOTE);
     if (!github) throw refuse(found && found.notGithub ? NOT_GITHUB : `xode can't read this repository's remote (${remote.name}): Xode works with GitHub repositories.`);
-    project = matchProject(projects, github.fullName) || (await connectRepo({ client, found: github, input, out, pollMs, platform }));
+    project = matchProject(projects, github.fullName);
+    if (!project && !connect) throw refuse(`${github.owner}/${github.repo} isn't connected to Xode yet: run xode here to connect it.`, 1);
+    if (!project) project = await connectRepo({ client, found: github, input, out, pollMs, platform });
   }
 
   const same = !!github && String(project.fullName || "").toLowerCase() === github.fullName;

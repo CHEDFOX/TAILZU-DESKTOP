@@ -1,5 +1,6 @@
-// xode status: who is signed in, on which device and server, and the job of this folder (the repository's top folder, as xode
-// keeps it): where it is, or how it ended, with its work branch and pull request.
+// xode status, and /status: who is signed in, on which device and server, and the job of this folder (the repository's top
+// folder, as xode keeps it): where it is, or how it ended, with its work branch and pull request. /status also says the
+// project and what this computer is doing.
 
 "use strict";
 
@@ -15,18 +16,18 @@ const STATE_WORDS = {
   paused: "paused", done: "done", failed: "failed", cancelled: "stopped",
 };
 
-async function status({ server, store, out, cwd: here, env }) {
-  const token = await store.get(hostOf(server));
-  if (!token) { out.line("Not signed in. Run xode login."); out.line(`Server: ${server}`); return 1; }
-  const client = createClient({ server, token });
+/**
+ * Prints the report. Resolves the exit code. extra: lines to put after the server's (the project, this computer).
+ */
+async function report({ client, server, cwd, env, out, extra = [] }) {
   let d;
   try { d = await client.get("/v1/auth/device"); } catch (err) { out.error(err.message); return 1; }
   const u = d.user || {};
-  out.line(u.email || u.name ? `Signed in as ${u.email || u.name}` : "Signed in")
+  out.line(u.email || u.name ? `Signed in as ${u.email || u.name}` : "Signed in");
   out.line(`Device: ${d.name || "this computer"}`);
   out.line(`Server: ${server}`);
+  for (const l of extra) out.line(l);
 
-  const cwd = await folderOf(here);
   const st = folderState(server, cwd, env);
   if (!st.jobId) return 0;
   try {
@@ -53,4 +54,10 @@ async function status({ server, store, out, cwd: here, env }) {
   return 0;
 }
 
-module.exports = { status };
+async function status({ server, store, out, cwd: here, env }) {
+  const token = await store.get(hostOf(server));
+  if (!token) { out.line("Not signed in. Run xode."); out.line(`Server: ${server}`); return 1; }
+  return report({ client: createClient({ server, token }), server, cwd: await folderOf(here), env, out });
+}
+
+module.exports = { status, report };

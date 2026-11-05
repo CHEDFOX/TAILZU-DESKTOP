@@ -8,15 +8,16 @@ const assert = require("node:assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { Writable } = require("stream");
+const { Writable, PassThrough } = require("stream");
 const { createFakeServer, defaultScript, PROJECT_ID } = require("./fakeServer");
 const { runCli, tempHome } = require("./runCli");
 const { createFileStore } = require("../src/auth/fileStore");
 const { createOut } = require("../src/ui/out");
+const { createInput } = require("../src/ui/input");
 const { chat } = require("../src/commands/chat");
 const { startComputer, terminalName } = require("../src/computer/host");
 const { runnerDir, loadCreateRunner } = require("../src/computer/load");
-const { wordsOf } = require("../src/computer/statusLine");
+const { wordsOf, stateWords } = require("../src/computer/statusLine");
 const { bundle } = require("../scripts/bundle-runner");
 
 const FAKE = "xdt_fake_computer_test_token_abcdefg";
@@ -44,18 +45,17 @@ function captureOut() {
   return { out, get text() { return text; } };
 }
 
-/** Typed answers, one per question; null once they run out. */
-function fakeInput(answers) {
-  let interrupt = null;
-  return {
-    interactive: false,
-    closed: false,
-    ask() { const p = Promise.resolve(answers.length ? answers.shift() : null); p.cancel = () => {}; return p; },
-    onInterrupt(fn) { const was = interrupt; interrupt = fn; return was; },
-    setIdle() {},
-    asking: () => false,
-    close() { this.closed = true; },
-  };
+/** A session's input and output in a string: `lines` typed through a pipe, then the end of it. */
+function sessionIO(lines) {
+  let text = "";
+  const sink = new Writable({ write(chunk, enc, cb) { text += chunk; cb(); } });
+  const env = { XODE_TTY: "0" };
+  const out = createOut({ stdout: sink, stderr: sink, env });
+  const stdin = new PassThrough();
+  const input = createInput({ stdin, stdout: sink, stderr: sink, env, term: out.term, paint: out.paint });
+  out.attach(input);
+  stdin.end(lines.map((l) => l + "\n").join(""));
+  return { out, input, get text() { return text; } };
 }
 
 /** A createRunner that only notes what it is asked. */
@@ -80,10 +80,10 @@ test("xode offers this computer for this folder's project only, named for the te
   const sigterm = process.listenerCount("SIGTERM");
   try {
     const fake = fakeRunnerMaker();
-    const cap = captureOut();
+    const cap = sessionIO(["1"]);
     const store = { get: async () => FAKE };
     const code = await chat({
-      server: t.server.url, store, out: cap.out, input: fakeInput(["y"]), cwd: t.home.work, env: t.env, pollMs: 30,
+      server: t.server.url, store, out: cap.out, input: cap.input, cwd: t.home.work, env: t.env, pollMs: 30,
       args: { message: "fix the cart rounding", project: "", fresh: false, noRunner: false },
       deps: { createRunner: fake.make, hostname: "studio.local", holdMs: 10 },
     });
@@ -106,8 +106,11 @@ test("xode offers this computer for this folder's project only, named for the te
     const file = path.join(t.home.config, "xode", "runner", "state.json");
     assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
     assert.ok(JSON.parse(fs.readFileSync(file, "utf8")).runners[`${t.server.url} ${PROJECT_ID}`]);
-    assert.match(cap.text, /This computer: online for Xode, for ana\/storefront only\./);
+    // Online is nothing worth saying; the job ran to its end with the session.
+    assert.ok(!/This computer/.test(cap.text), cap.text);
+    assert.match(cap.text, /Pull request: https:/);
     assert.ok(!cap.text.includes(FAKE));
+    cap.input.close();
     assert.strictEqual(process.listenerCount("SIGTERM"), sigterm, "its SIGTERM handler is gone");
   } finally {
     await t.close();
@@ -119,14 +122,15 @@ test("--no-runner and XODE_RUNNER=0: this computer isn't offered", async () => {
   try {
     for (const [args, env] of [[{ noRunner: true }, {}], [{}, { XODE_RUNNER: "0" }]]) {
       const fake = fakeRunnerMaker();
-      const cap = captureOut();
+      const cap = sessionIO(["1"]);
       const code = await chat({
-        server: t.server.url, store: { get: async () => FAKE }, out: cap.out, input: fakeInput(["y"]), cwd: t.home.work, env: { ...t.env, ...env }, pollMs: 30,
+        server: t.server.url, store: { get: async () => FAKE }, out: cap.out, input: cap.input, cwd: t.home.work, env: { ...t.env, ...env }, pollMs: 30,
         args: { message: "fix the cart rounding", project: "", fresh: false, ...args }, deps: { createRunner: fake.make },
       });
       assert.strictEqual(code, 0, cap.text);
       assert.deepStrictEqual(fake.calls, []);
       assert.ok(!/This computer/.test(cap.text));
+      cap.input.close();
     }
   } finally {
     await t.close();
@@ -153,7 +157,8 @@ test("the desktop's own runner, headless: online for one project, then a clean g
     // The older heartbeat route answers the runner's api.fetch too (the same sign-in).
     const api = require("../src/computer/host").authorizedFetch(t.server.url, FAKE);
     assert.strictEqual((await api("/v1/code/runner/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, 200);
-    await until(() => /This computer: online/.test(cap.text), 3000, "the status line");
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(!/This computer/.test(cap.text), "online: nothing said");
     c.stop();
     c.stop();
     await until(() => dev.closed, 3000, "the socket closed");
@@ -169,7 +174,7 @@ test("SIGTERM: xode shuts this computer down and leaves", async () => {
   const t = await setup();
   try {
     const run = runCli([], { server: t.server, home: t.home });
-    await run.waitFor("Approve? (y/n)");
+    await run.waitFor("Xode · ana/storefront");
     await until(() => t.server.devices.length && t.server.devices[0].hello, 8000, "the hello");
     run.child.kill("SIGTERM");
     const r = await run.done;
@@ -181,10 +186,11 @@ test("SIGTERM: xode shuts this computer down and leaves", async () => {
   }
 });
 
-test("the status line's words", () => {
-  assert.strictEqual(wordsOf({ state: "working", project: "ana/storefront" }, "x"), "This computer: working on ana/storefront.");
-  assert.strictEqual(wordsOf({ state: "paused", pausedReason: "battery_low" }, "x"), "This computer: paused (the battery is low).");
-  assert.strictEqual(wordsOf({ state: "backoff" }, "x"), "This computer: connecting…");
+test("this computer is spoken of only when it matters", () => {
+  assert.strictEqual(wordsOf({ state: "working", project: "ana/storefront" }), "Working on this computer.");
+  assert.strictEqual(wordsOf({ state: "paused", pausedReason: "battery_low" }), "This computer paused its work: the battery is low.");
+  for (const quiet of ["online", "backoff", "connecting", "off", "live_off"]) assert.strictEqual(wordsOf({ state: quiet }), null, quiet);
+  assert.strictEqual(stateWords({ state: "online" }, "ana/storefront"), "online, for ana/storefront only");
   assert.strictEqual(terminalName("mac.local"), "mac (terminal)");
 });
 

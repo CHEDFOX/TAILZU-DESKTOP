@@ -71,9 +71,70 @@ test("Ctrl+C while waiting cancels the sign-in cleanly", async () => {
     await run.waitFor("Waiting for you to approve it");
     run.child.kill("SIGINT");
     const r = await run.done;
-    assert.strictEqual(r.code, 130);
+    assert.strictEqual(r.code, 0);
     assert.match(r.stdout, /Sign-in cancelled\./);
     assert.ok(!fs.existsSync(credFile(home)));
+  } finally {
+    await server.close();
+    home.cleanup();
+  }
+});
+
+test("xode with nobody signed in: the code inline, then straight into the session", async () => {
+  const server = await createFakeServer({ approveAfterPolls: 2 });
+  const home = tempHome();
+  try {
+    const run = runCli([], { server, home });
+    await run.waitFor("Xode · ana/storefront");
+    run.type("/exit");
+    const r = await run.done;
+    assert.strictEqual(r.code, 0, r.all);
+    assert.ok(r.stdout.startsWith("To sign in, open x0bot.com/device and enter the code\n  ABCD-EFGH\n"), r.stdout);
+    const at = (s) => r.stdout.indexOf(s);
+    assert.ok(at("Waiting for you to approve it") < at("Signed in as ana@example.com") && at("Signed in as") < at("Xode · ana/storefront"), r.stdout);
+    assert.ok(!/xode login/.test(r.stdout), "no separate step to run");
+    const token = JSON.parse(fs.readFileSync(credFile(home), "utf8")).servers[new URL(server.url).host].token;
+    assert.ok(server.tokens.has(token));
+    assert.ok(!r.all.includes(token));
+    // The session used the new sign-in.
+    assert.ok(server.calls.some((c) => c.path === "/v1/code/projects" && c.auth));
+  } finally {
+    await server.close();
+    home.cleanup();
+  }
+});
+
+test("xode with nobody signed in: Ctrl+C while waiting cancels, nothing kept", async () => {
+  const server = await createFakeServer({ approveAfterPolls: 1000, pollHoldMs: 100 });
+  const home = tempHome();
+  try {
+    const run = runCli(["fix the cart"], { server, home });
+    await run.waitFor("Waiting for you to approve it");
+    run.child.kill("SIGINT");
+    const r = await run.done;
+    assert.strictEqual(r.code, 0, r.all);
+    assert.match(r.stdout, /Sign-in cancelled\./);
+    assert.ok(!fs.existsSync(credFile(home)));
+    assert.ok(!server.calls.some((c) => c.path.startsWith("/v1/bots/")));
+  } finally {
+    await server.close();
+    home.cleanup();
+  }
+});
+
+test("a sign-in the server no longer takes is made again inline", async () => {
+  const server = await createFakeServer({ approveAfterPolls: 1 });
+  const home = tempHome();
+  try {
+    const { createFileStore } = require("../src/auth/fileStore");
+    await createFileStore({ XDG_CONFIG_HOME: home.config }).set(new URL(server.url).host, "xdt_fake_revoked_token_0000000000");
+    const run = runCli([], { server, home });
+    await run.waitFor("Xode · ana/storefront");
+    run.end();
+    const r = await run.done;
+    assert.strictEqual(r.code, 0, r.all);
+    assert.match(r.stdout, /sign-in was switched off\. Sign in again:\nTo sign in, open/);
+    assert.ok(!r.all.includes("xdt_fake_revoked_token_0000000000"));
   } finally {
     await server.close();
     home.cleanup();

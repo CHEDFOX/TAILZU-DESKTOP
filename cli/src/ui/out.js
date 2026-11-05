@@ -1,4 +1,5 @@
-// Printing: lines, Xode's boxes, plans, progress, and errors (always with secrets taken out).
+// Printing: lines, Xode's boxes, plans, progress, and errors (always with secrets taken out). Once the input layer is attached,
+// everything goes above the prompt and the status line (input.js), so what is being typed is never broken.
 
 "use strict";
 
@@ -19,7 +20,7 @@ function createOut({ stdout = process.stdout, stderr = process.stderr, env = pro
   return {
     term,
     paint,
-    /** Prints through the prompt from now on, so typing isn't broken by output. */
+    /** Prints through the input layer from now on. */
     attach(i) { input = i; },
     line(text = "") { write(text); },
     lines(list) { for (const l of list) write(l); },

@@ -21,7 +21,7 @@ async function openGate({ flow, thread, input, out, pollMs = 1500, signal }) {
     } else if (g.reading && g.reading.status === "failed") {
       throw new Error("Xode couldn't read this project. Open X0 Bot to try again.");
     } else {
-      const words = `Xode is reading the project (${(g.reading && g.reading.pct) || 0}%${g.reading && g.reading.phase ? `, ${g.reading.phase}` : ""}). Ctrl+C to leave.`;
+      const words = `Xode is reading the project (${(g.reading && g.reading.pct) || 0}%${g.reading && g.reading.phase ? `, ${g.reading.phase}` : ""}).`;
       if (words !== said) { out.note(words); said = words; }
       await sleep(Math.max(pollMs * 3, 50), signal);
       if (signal && signal.aborted) throw Object.assign(new Error("Cancelled."), { code: "cancelled" });

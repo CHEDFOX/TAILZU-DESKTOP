@@ -6,6 +6,9 @@
 const { createFileStore } = require("./fileStore");
 const { createKeychainStore } = require("./keychain");
 const { createSecretToolStore } = require("./secretTool");
+const { shortPath } = require("../util/shortPath");
+
+const WORDS = { keychain: "the keychain", "secret-tool": "the secret service" };
 
 function createStore(env = process.env) {
   const file = createFileStore(env);
@@ -41,6 +44,12 @@ function createStore(env = process.env) {
       }
       await file.set(host, token);
       return file.name;
+    },
+    /** Where this host's sign-in is kept, in words (the keychain, the secret service, or the file's path), or "". */
+    async where(host) {
+      const main = preferred();
+      if (main !== file && (await main.get(host).catch(() => null))) return WORDS[main.name] || main.name;
+      return (await file.get(host)) ? shortPath(file.file) : "";
     },
     /** Forgets the token everywhere it might be. */
     async remove(host) {

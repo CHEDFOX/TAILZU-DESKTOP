@@ -12,6 +12,7 @@ const { highlightRefs } = require("../src/ui/refs");
 const { createFakeServer } = require("./fakeServer");
 const { runCli, tempHome } = require("./runCli");
 const { createFileStore } = require("../src/auth/fileStore");
+const { screenRows } = require("./screen");
 
 const ESC = /\x1b\[/;
 const ANSWER = "The total is rounded per item in `src/cart/total.ts:42`, so a long cart drifts. Rounding **once** at the end, see https://github.com/ana/storefront/blob/main/src/cart/total.ts#L42 fixes it.\n\n- keep each line unrounded until the very end of the sum, whatever the cart holds\n- round half up";
@@ -66,10 +67,10 @@ test("plan steps wrap under their words at 60 columns", () => {
   assert.ok(lines.every((l) => l.length <= 60));
 });
 
-test("the stage line fits 60 columns", () => {
+test("a stage is one short line", () => {
   const term = termOf({ isTTY: true }, { COLUMNS: "60" });
-  for (let i = 0; i < 5; i += 1) assert.ok(visible(stageLine(i, { term, paint: painter(true) })) <= 60);
-  assert.strictEqual(stageLine(1, { term: termOf({ isTTY: false }, {}), paint: painter(false) }), "Stage 2 of 5: Plan");
+  assert.strictEqual(strip(stageLine(2, { term, paint: painter(true) })), "● Build");
+  assert.strictEqual(stageLine(1, { term: termOf({ isTTY: false }, {}), paint: painter(false) }), "● Plan");
 });
 
 test("wrapping cuts a word longer than the line", () => {
@@ -77,29 +78,128 @@ test("wrapping cuts a word longer than the line", () => {
   assert.deepStrictEqual(lines, ["xxxxxxxxxx", "xxxxxxxxxx", "xxxxx"]);
 });
 
-test("a whole session at 60 columns: boxes in width, and NO_COLOR has no escape codes", async () => {
-  const server = await createFakeServer({ live: true });
+const SIGNED = "xdt_fake_look_test_token_000000000000";
+
+async function lookSetup(opts = {}) {
+  const server = await createFakeServer({ live: true, ...opts });
   const home = tempHome();
-  server.addToken("xdt_fake_look_test_token_000000000000");
-  await createFileStore({ XDG_CONFIG_HOME: home.config }).set(new URL(server.url).host, "xdt_fake_look_test_token_000000000000");
+  server.addToken(SIGNED);
+  await createFileStore({ XDG_CONFIG_HOME: home.config }).set(new URL(server.url).host, SIGNED);
+  return { server, home, close: async () => { await server.close(); home.cleanup(); } };
+}
+
+test("a whole session through a pipe, drawn for 60 columns: boxes in width, and NO_COLOR has no escape codes", async () => {
+  const t = await lookSetup();
   try {
     for (const env of [{ XODE_TTY: "1", COLUMNS: "60" }, { XODE_TTY: "1", COLUMNS: "60", NO_COLOR: "1" }]) {
-      const run = runCli(["--new", "fix the cart rounding"], { server, home, env });
-      await run.waitFor("Approve? (y/n)");
-      run.type("y");
-      await run.waitFor("Your answer");
+      const run = runCli(["--new", "fix the cart rounding"], { server: t.server, home: t.home, env });
+      await run.waitFor("Start this plan?");
       run.type("1");
+      await run.waitFor("Xode asks");
+      run.type("1");
+      await run.waitFor("Pull request:");
+      run.end();
       const r = await run.done;
       assert.strictEqual(r.code, 0, r.all);
-      const boxed = r.stdout.split("\n").filter((l) => /[┌│└]/.test(strip(l)));
+      // Xode's boxes, after the small welcome box (its first four lines).
+      const boxed = r.stdout.split("\n").slice(4).filter((l) => /[┌│└]/.test(strip(l)));
+      assert.match(strip(r.stdout.split("\n")[1]), /^│ Xode · ana\/storefront +│$/);
       assert.ok(boxed.length > 6);
       for (const l of boxed) assert.strictEqual(visible(l), 60, JSON.stringify(strip(l)));
       for (const l of r.stdout.split("\n")) assert.ok(visible(l) <= 60, JSON.stringify(strip(l)));
+      // A pipe for input: nothing is redrawn, so nothing but colour is ever sent.
+      assert.ok(!/\x1b\[[0-9;?]*[A-HJKhl]/.test(r.all), "no cursor moves without a keyboard");
       if (env.NO_COLOR) assert.ok(!ESC.test(r.all), "escape codes with NO_COLOR");
       else assert.ok(ESC.test(r.stdout));
     }
   } finally {
-    await server.close();
-    home.cleanup();
+    await t.close();
   }
 });
+
+/** The rows a person sees once `run` has written `what`. */
+const rowsOf = (run, cols) => screenRows(run.output, cols);
+
+for (const cols of [76, 60]) {
+  test(`on a terminal ${cols} columns wide: the welcome box, the status line redrawn in place, the pickers, the two-press exit`, async () => {
+    const t = await lookSetup({ stepMs: 120 });
+    try {
+      const env = { XODE_TTY: "1", XODE_KEYS: "1", COLUMNS: String(cols) };
+      const run = runCli([], { server: t.server, home: t.home, env });
+      await run.waitFor("Ctrl+C twice to exit");
+      await pause(100);
+      let rows = rowsOf(run, cols);
+      assert.match(rows[0], /^╭─+╮$/);
+      assert.match(rows[1], /^│ Xode · ana\/storefront +│$/);
+      assert.match(rows[2], /^│ .*work +│$/);
+      assert.strictEqual(rows[4], "Type what you want · / for commands · Ctrl+C twice to exit");
+      assert.strictEqual(rows[5], ">");
+      assert.strictEqual(rows.length, 6, "nothing else at the start");
+
+      run.keys("fix the cart rounding");
+      await pause(60);
+      run.keys("\r");
+      await run.waitFor("Start this plan?");
+      await pause(60);
+      rows = rowsOf(run, cols);
+      assert.deepStrictEqual(rows.slice(-3), ["Start this plan?", "❯ 1. Yes", "  2. No, tell Xode what to change"]);
+      run.keys("\x1b[B");
+      await pause(60);
+      assert.deepStrictEqual(rowsOf(run, cols).slice(-2), ["  1. Yes", "❯ 2. No, tell Xode what to change"]);
+      run.keys("\x1b[A\r");
+      await run.waitFor(/●.*Understand/);
+      await pause(250);
+      rows = rowsOf(run, cols);
+      // One status line, redrawn, the prompt under it; what was done above.
+      assert.match(rows[rows.length - 2], /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] (Understand|Plan|Build|Check) · \d+s · esc to stop$/);
+      assert.strictEqual(rows[rows.length - 1], ">");
+      assert.strictEqual(rows.filter((l) => /esc to stop/.test(l)).length, 1, "drawn once, not stacked");
+      assert.ok(rows.includes("● Understand"));
+      assert.ok(rows.some((l) => l.startsWith("  · ")));
+
+      await run.waitFor("Type your own answer");
+      await pause(60);
+      rows = rowsOf(run, cols);
+      assert.deepStrictEqual(rows.slice(-4), ["Xode asks: Should prices round half up, or half to even?", "❯ 1. Half up", "  2. Half to even", "  3. Type your own answer"]);
+      assert.ok(!rows.some((l) => /esc to stop$/.test(l)), "no status line frozen above the question while it is asked");
+      run.keys("1");
+      await run.waitFor("Pull request:");
+      await pause(150);
+      rows = rowsOf(run, cols);
+      assert.strictEqual(rows[rows.length - 1], ">");
+      assert.ok(!rows.some((l) => /esc to stop/.test(l)), "the status line goes with the job");
+
+      run.keys("\x03");
+      await pause(80);
+      assert.deepStrictEqual(rowsOf(run, cols).slice(-2), [">", "Press Ctrl+C again to exit"]);
+      run.keys("\x03");
+      const r = await run.done;
+      assert.strictEqual(r.code, 0, r.all);
+      rows = screenRows(r.all, cols);
+      for (const l of rows) assert.ok(l.length <= cols, JSON.stringify(l));
+      assert.ok(!rows.some((l) => /Press Ctrl\+C again/.test(l)), "the hint is gone once out");
+    } finally {
+      await t.close();
+    }
+  });
+}
+
+test("NO_COLOR on a terminal: redrawn in place, but no colour codes", async () => {
+  const t = await lookSetup({ stepMs: 60 });
+  try {
+    const run = runCli(["fix the cart rounding"], { server: t.server, home: t.home, env: { XODE_TTY: "1", XODE_KEYS: "1", COLUMNS: "60", NO_COLOR: "1" } });
+    await run.waitFor("Start this plan?");
+    run.keys("\r");
+    await run.waitFor("● Understand");
+    await pause(200);
+    run.keys("\x03\x03");
+    const r = await run.done;
+    assert.strictEqual(r.code, 0, r.all);
+    assert.ok(!/\x1b\[[0-9;]*m/.test(r.all), "a colour code with NO_COLOR");
+    assert.match(screenRows(r.all, 60).join("\n"), /Xode keeps working\. Run xode here to follow it\./);
+  } finally {
+    await t.close();
+  }
+});
+
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));

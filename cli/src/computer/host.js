@@ -4,10 +4,11 @@
 //
 //   api        the server, as this terminal's sign-in (the device token reaches /v1/code/runner/*, /v1/code/projects, /v1/code/jobs)
 //   state      ~/.config/xode/runner/state.json (state.js), per server and project; userData under the cache folder
-//   power      a stand-in for Electron's powerMonitor (power.js); notify and onChange: dim lines in the chat (statusLine.js)
+//   power      a stand-in for Electron's powerMonitor (power.js); notify and onChange: a dim line in the chat when it matters
+//              (statusLine.js: a job working here, or a problem)
 //   the name   "<hostname> (terminal)", and this folder's project only (onlyProject)
 //
-// stop() shuts it down: at the end of the chat or the one-shot, on an error, and on SIGTERM / SIGHUP.
+// stop() shuts it down: at the end of the session, on an error, and on SIGTERM / SIGHUP.
 
 "use strict";
 
@@ -55,7 +56,7 @@ function startComputer(o) {
   kept.state.enabled = true;
   kept.state.defaultOnV1 = true;
   let runner = null;
-  const line = createStatusLine({ out: o.out, status: () => runner.status(), projectName: o.project.name, holdMs: o.holdMs });
+  const line = createStatusLine({ out: o.out, status: () => runner.status(), holdMs: o.holdMs });
   runner = createRunner({
     userData: path.join(cacheDir(env, o.platform), "runner"),
     version: `xode/${o.version || ""}`,

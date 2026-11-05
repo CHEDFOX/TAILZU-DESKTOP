@@ -1,24 +1,30 @@
-// xode login: a code to type in X0 Bot (x0bot.com/device), then the device token kept in the keychain (or the 600 file).
+// Signing in: a code to type in X0 Bot (x0bot.com/device), then the device token kept in the keychain (or the 600 file).
+// `xode` does it by itself when nobody is signed in (signIn); `xode login` and /login do it on request.
 
 "use strict";
 
 const { createClient } = require("../api/client");
 const { startLink, waitForApproval } = require("../auth/link");
 const { hostOf } = require("../config");
+const { shortPath } = require("../util/shortPath");
 
 const WHY = {
   denied: "The sign-in was turned down in X0 Bot.",
-  expired: "The code ran out before it was approved: run xode login for a new one.",
-  used: "That code was already used: run xode login for a new one.",
-  failed: "The sign-in didn't go through: run xode login to try again.",
+  expired: "The code ran out before it was approved: run xode for a new one.",
+  used: "That code was already used: run xode for a new one.",
+  failed: "The sign-in didn't go through: run xode to try again.",
 };
 
-async function login({ server, store, out, input }) {
+/**
+ * Shows the code, waits for its approval, keeps the token. Ctrl+C cancels. Resolves { token } once signed in, or
+ * { code, cancelled? } when not (said already).
+ */
+async function signIn({ server, store, out, input }) {
   const host = hostOf(server);
   const client = createClient({ server });
   const ctl = new AbortController();
   let cancelled = false;
-  input.onInterrupt(() => { cancelled = true; ctl.abort(); });
+  const prev = input.onInterrupt((kind) => { if (kind === "ctrl-c") { cancelled = true; ctl.abort(); } });
   try {
     const link = await startLink(client, { signal: ctl.signal });
     const where = String(link.deviceUrl || "https://x0bot.com/device").replace(/^https?:\/\//, "").replace(/\/+$/, "");
@@ -27,7 +33,7 @@ async function login({ server, store, out, input }) {
     if (link.deviceUrlWithCode) out.line(`(or open ${link.deviceUrlWithCode})`);
     out.line("Waiting for you to approve it in X0 Bot…");
     const r = await waitForApproval(client, link, { signal: ctl.signal });
-    if (r.status !== "approved") { out.error(WHY[r.status] || WHY.failed); return 1; }
+    if (r.status !== "approved") { out.error(WHY[r.status] || WHY.failed); return { code: 1 }; }
 
     const old = await store.get(host).catch(() => null);
     const kept = await store.set(host, r.deviceToken);
@@ -42,18 +48,20 @@ async function login({ server, store, out, input }) {
     } catch { /* signed in all the same */ }
     out.good(["Signed in", account ? `as ${account}` : "", device ? `on ${device}` : ""].filter(Boolean).join(" ") + ".");
     if (kept === "file") out.note(`Kept in ${shortPath(store.file.file)}, which only you can read.`);
-    return 0;
+    return { token: r.deviceToken };
   } catch (err) {
-    if (cancelled || err.code === "cancelled") { out.line(""); out.line("Sign-in cancelled."); return 130; }
+    if (cancelled || err.code === "cancelled") { out.line(""); out.line("Sign-in cancelled."); return { code: 0, cancelled: true }; }
     out.error(err.message);
-    return 1;
+    return { code: 1 };
+  } finally {
+    input.onInterrupt(prev);
   }
 }
 
-/** A path with the home folder as ~, so it fits a narrow terminal. */
-function shortPath(p) {
-  const home = require("os").homedir();
-  return home && p.startsWith(home + require("path").sep) ? "~" + p.slice(home.length) : p;
+/** xode login */
+async function login(o) {
+  const r = await signIn(o);
+  return r.token ? 0 : r.code;
 }
 
-module.exports = { login };
+module.exports = { login, signIn };

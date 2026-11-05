@@ -69,7 +69,7 @@ function errorOf(status, body, { host, signedIn }) {
   const code = typeof body.code === "string" ? body.code : "";
   const said = typeof body.message === "string" ? body.message : "";
   if (status === 401) {
-    return new ApiError(signedIn ? "Signed out: run xode login" : "Not signed in: run xode login", { status, code: "signed_out", body });
+    return new ApiError(signedIn ? "Signed out: run xode to sign in again." : "Not signed in: run xode", { status, code: "signed_out", body });
   }
   if (status === 403 && code === "device_scope") {
     return new ApiError("This sign-in only works for Xode, and that request was for something else.", { status, code, body });

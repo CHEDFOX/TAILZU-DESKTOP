@@ -1,4 +1,4 @@
-// When the job needs the person (state "waiting_for_you"): its question, answered inline, or the yes it waits for.
+// When the job needs the person (state "waiting_for_you"): its question, or the yes it waits for, answered with a picker.
 // The same choices as the app's job screen (tulmi/src/experience/bots/screens/codeWork/job.ts quickQuestion).
 
 "use strict";
@@ -35,26 +35,19 @@ function approvalLine(action, summary) {
   return `Okay to ${action.replace(/^[a-z]+\./, "").replace(/[._-]+/g, " ")}?`;
 }
 
-const yes = (a) => /^\s*y(es)?\s*$/i.test(a || "");
+const OWN = "Type your own answer";
 
 /**
- * Asks the person and sends what they said. Returns { done: Promise, cancel() }: cancel when the job stops waiting by itself
- * (answered in the app, say).
+ * Asks the person, with a picker (picker.js), and sends what they said. A question's own options come with a last one to
+ * type an answer instead. Returns { done: Promise, cancel() }: cancel when the job stops waiting by itself (answered in the
+ * app, say).
  */
 function settleNeed(need, { jobId, jobs, input, out }) {
   let current = null;
   let cancelled = false;
-  const ask = (q) => { current = input.ask(q); return current; };
-
-  async function yesNo(q) {
-    for (;;) {
-      const a = await ask(`${q} (y/n) `);
-      if (a === null || cancelled) return null;
-      if (yes(a)) return true;
-      if (/^\s*no?\s*$/i.test(a)) return false;
-      out.note("Type y or n.");
-    }
-  }
+  const pick = (title, options, o = {}) => { current = input.pick({ title, options, ...o }); return current; };
+  const ask = (q, o) => { current = input.ask(q, o); return current; };
+  const yesNo = async (q) => { const r = await pick(q, ["Yes", "No"]); return r === null || cancelled ? null : r === 0; };
 
   /** A two-step yes: the first call may come back as a question with an approvalId, to be sent again. */
   async function twoStep(call) {
@@ -65,27 +58,40 @@ function settleNeed(need, { jobId, jobs, input, out }) {
     }
   }
 
+  async function answer() {
+    const options = need.options.length ? [...need.options, OWN] : [];
+    for (;;) {
+      let a = "";
+      if (options.length) {
+        const r = await pick(`Xode asks: ${need.question}`, options, { freeText: true });
+        if (r === null || cancelled) return;
+        if (typeof r === "string") a = r;
+        else if (r < need.options.length) a = need.options[r];
+        else {
+          const t = await ask("Your answer: ", { escCancels: true });
+          if (cancelled) return;
+          if (t === null) { if (input.ended || input.closed) return; continue; }
+          a = t.trim();
+        }
+      } else {
+        out.warn(out.paint.bold("Xode asks: ") + need.question);
+        const t = await ask("Your answer: ");
+        if (t === null || cancelled) return;
+        a = t.trim();
+      }
+      if (!a) continue;
+      await jobs.answer(jobId, a);
+      out.note(`Sent: ${a}`);
+      return;
+    }
+  }
+
   const done = (async () => {
     try {
-      if (need.kind === "answer") {
-        out.line("");
-        out.warn(out.paint.bold("Xode asks: ") + need.question);
-        need.options.forEach((o, i) => out.line(`  ${out.paint.cyan(String(i + 1))}. ${o}`));
-        for (;;) {
-          const a = await ask(need.options.length ? "Your answer (a number, or your own words): " : "Your answer: ");
-          if (a === null || cancelled) return;
-          const n = Number(a.trim());
-          const answer = need.options.length && Number.isInteger(n) && n >= 1 && n <= need.options.length ? need.options[n - 1] : a.trim();
-          if (!answer) continue;
-          await jobs.answer(jobId, answer);
-          out.note(`Sent: ${answer}`);
-          return;
-        }
-      }
+      if (need.kind === "answer") { await answer(); return; }
       if (need.kind === "other") { out.warn(need.question); return; }
       if (need.kind === "approval" && need.faceId) { out.warn(`${need.question} This one needs Face ID: say yes in X0 Bot on your phone.`); return; }
-      out.line("");
-      const ok = await yesNo(out.paint.yellow(need.question));
+      const ok = await yesNo(need.question);
       if (ok === null) return;
       if (need.kind === "approval") {
         if (ok) { await twoStep((id) => jobs.approve(jobId, id)); out.note("Going ahead."); } else { await jobs.deny(jobId); out.note("Told Xode no."); }
@@ -108,4 +114,4 @@ function settleNeed(need, { jobId, jobs, input, out }) {
   };
 }
 
-module.exports = { needOf, settleNeed, approvalLine };
+module.exports = { needOf, settleNeed, approvalLine, OWN };

@@ -1,30 +1,22 @@
-// xode --help
+// xode --help: the few ways in, and the keys inside. Fits 60 columns.
 
 "use strict";
 
-const TEXT = `xode: Xode, X0 Bot's coding bot, in your terminal.
+const TEXT = `xode: Xode in your terminal.
 
-  xode login               sign in: approve a code in the X0 Bot app
-  xode                     chat with Xode about this folder's project (its GitHub repository)
-  xode "fix the rounding"  send that, approve the plan, follow the job to its end
-  xode status              who is signed in, and the job of this folder
-  xode stop                stop the job running in this folder
-  xode logout              sign out and forget the sign-in
+  xode                start in this project's folder
+  xode "fix the cart" start with that message
+  xode -p "question"  answer once and exit (pipe text in)
+  xode doctor         check your setup
 
-Options
-  --project <id>           the project (or XODE_PROJECT); without it, the folder's own
-  --new                    start a new chat instead of carrying on the last one
-  --no-runner              don't offer this computer to do the work (or XODE_RUNNER=0)
-  --version                print the version
+Inside: / for commands, ! to run a shell command,
+@ to name a file, Esc to stop, Ctrl+C twice to exit.
 
-Run it inside your project's folder. While xode is open, this computer can do that project's
-work (and only that project's); when a job ends, its branch comes into the folder.
-
-XODE_SERVER sets the server (default https://api.x0bot.com).`;
+Also: xode update, --new (a fresh chat), --no-runner.`;
 
 async function help({ out }) {
   out.line(TEXT);
   return 0;
 }
 
-module.exports = { help };
+module.exports = { help, TEXT };

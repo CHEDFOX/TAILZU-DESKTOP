@@ -14,7 +14,6 @@ const { openUrl } = require("../util/open");
 const { sleep } = require("../util/sleep");
 
 const WAIT_MS = 5 * 60_000;
-const yes = (a) => /^\s*y(es)?\s*$/i.test(a || "");
 
 /** The project in `projects` for the repository `fullName` (lower case), if there is one. */
 function matchProject(projects, fullName) {
@@ -62,8 +61,8 @@ async function connectRepo({ client, found, input, out, pollMs = 1500, platform 
   // GitHub lets Xode see it already: it only needs adding.
   const seen = await visibleRepo(client, found.fullName);
   if (seen) {
-    const a = await input.ask("Add it to your Xode projects? (y/n) ");
-    if (!yes(a)) throw Object.assign(new Error("Nothing was added. Run xode again when you want to."), { code: "cancelled" });
+    const a = await input.pick({ title: "Add it to your Xode projects?", options: ["Yes", "No"] });
+    if (a !== 0) throw Object.assign(new Error("Nothing was added. Run xode again when you want to."), { code: "cancelled" });
     const p = await addProject(client, seen);
     out.good(`Added ${p.fullName || shown} to Xode.`);
     return p;
@@ -74,14 +73,14 @@ async function connectRepo({ client, found, input, out, pollMs = 1500, platform 
   out.line("Give Xode access to it on GitHub:");
   out.line(`  ${out.paint.bold(link)}`);
   if (input.interactive) {
-    const a = await input.ask("Open it in your browser? (y/n) ");
+    const a = await input.pick({ title: "Open it in your browser?", options: ["Yes", "No"] });
     if (a === null) throw Object.assign(new Error("Cancelled."), { code: "cancelled" });
-    if (yes(a)) openUrl(link, { platform }).then((ok) => { if (!ok) out.note("Couldn't open a browser: open the link above."); });
+    if (a === 0) openUrl(link, { platform }).then((ok) => { if (!ok) out.note("Couldn't open a browser: open the link above."); });
   }
 
   out.note(`Waiting for ${shown} to show up in Xode… (Ctrl+C to stop)`);
   const ctl = new AbortController();
-  const prev = input.onInterrupt(() => ctl.abort());
+  const prev = input.onInterrupt((kind) => { if (kind === "ctrl-c") ctl.abort(); });
   const every = Math.max(pollMs * 2, 50);
   const until = Date.now() + waitMs;
   let round = 0;

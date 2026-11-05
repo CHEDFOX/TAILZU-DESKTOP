@@ -38,7 +38,7 @@ test("status when signed out", async () => {
   try {
     const r = await runCli(["status"], { server, home }).done;
     assert.strictEqual(r.code, 1);
-    assert.match(r.stdout, /Not signed in\. Run xode login\./);
+    assert.match(r.stdout, /Not signed in\. Run xode\./);
   } finally {
     await server.close();
     home.cleanup();
@@ -52,7 +52,7 @@ test("a token the server no longer takes reads as signed out", async () => {
     await createFileStore({ XDG_CONFIG_HOME: home.config }).set(new URL(server.url).host, FAKE);
     const r = await runCli(["status"], { server, home }).done;
     assert.strictEqual(r.code, 1);
-    assert.match(r.stderr, /Signed out: run xode login/);
+    assert.match(r.stderr, /Signed out: run xode to sign in again\./);
     assert.ok(!r.all.includes(FAKE));
   } finally {
     await server.close();

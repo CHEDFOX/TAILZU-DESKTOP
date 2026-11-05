@@ -17,10 +17,11 @@ const { stageOf } = require("../src/chat/stages");
 const { needOf } = require("../src/chat/needs");
 const { logLine, toolLine } = require("../src/chat/activity");
 
-test("arguments: commands, a message, flags", () => {
+test("arguments: a message, -p, commands, flags", () => {
   assert.strictEqual(parseArgs(["login"]).command, "login");
   assert.deepStrictEqual(parseArgs(["fix", "the", "cart"]).message, "fix the cart");
   assert.strictEqual(parseArgs(["fix the cart rounding"]).command, "chat");
+  assert.strictEqual(parseArgs([]).command, "chat");
   assert.strictEqual(parseArgs(["--project", "abc", "hi"]).project, "abc");
   assert.strictEqual(parseArgs(["--project=abc"]).project, "abc");
   assert.strictEqual(parseArgs(["--", "login"]).message, "login");
@@ -28,6 +29,12 @@ test("arguments: commands, a message, flags", () => {
   assert.ok(parseArgs(["status", "extra"]).error);
   assert.strictEqual(parseArgs(["--no-runner", "hi"]).noRunner, true);
   assert.strictEqual(parseArgs(["hi"]).noRunner, false);
+  // -p is the one answer, not a project.
+  assert.deepStrictEqual([parseArgs(["-p", "why", "this"]).command, parseArgs(["-p", "why", "this"]).message], ["print", "why this"]);
+  assert.strictEqual(parseArgs(["--print", "doctor"]).message, "doctor");
+  assert.strictEqual(parseArgs(["doctor"]).command, "doctor");
+  assert.strictEqual(parseArgs(["update"]).command, "update");
+  assert.strictEqual(parseArgs(["--help", "x"]).command, "help");
 });
 
 test("server address: https, or http only to this computer", () => {
@@ -58,7 +65,7 @@ test("errors: 401 is signed out, 403 device_scope, a server's own words otherwis
   await new Promise((r) => srv.listen(0, "127.0.0.1", r));
   const c = createClient({ server: `http://127.0.0.1:${srv.address().port}`, token });
   try {
-    await assert.rejects(c.get("/a"), { code: "signed_out", message: "Signed out: run xode login" });
+    await assert.rejects(c.get("/a"), { code: "signed_out", message: "Signed out: run xode to sign in again." });
     await assert.rejects(c.get("/b"), (e) => e.code === "device_scope" && e.status === 403);
     await assert.rejects(c.get("/c"), (e) => e.code === "plan_changed" && e.message.startsWith("The plan changed.") && !e.message.includes(token));
     await assert.rejects(c.get("/d"), (e) => e.status === 502 && /had a problem/.test(e.message));

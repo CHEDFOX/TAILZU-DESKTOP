@@ -1,4 +1,5 @@
-// Runs bin/xode.js as a person would, against the fake server: its output is collected, and lines can be typed when it asks.
+// Runs bin/xode.js as a person would, against the fake server: its output is collected, and lines can be typed when it asks
+// (or, with XODE_KEYS=1, keys pressed one by one).
 
 "use strict";
 
@@ -29,7 +30,7 @@ function runCli(args, { server, home, env = {}, cwd } = {}) {
     cwd: cwd || home.work,
     env: {
       PATH: process.env.PATH, HOME: home.root, XDG_CONFIG_HOME: home.config, XODE_CRED_STORE: "file", XODE_SERVER: server.url,
-      XODE_POLL_MS: "30", XODE_TTY: "0", XDG_CACHE_HOME: path.join(home.root, "cache"), ...env,
+      XODE_POLL_MS: "30", XODE_TTY: "0", XDG_CACHE_HOME: path.join(home.root, "cache"), XODE_NO_UPDATE_CHECK: "1", ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -45,7 +46,10 @@ function runCli(args, { server, home, env = {}, cwd } = {}) {
   };
   child.stdout.on("data", (d) => { stdout += d; all += d; check(); });
   child.stderr.on("data", (d) => { stderr += d; all += d; check(); });
-  const done = new Promise((resolve) => child.on("close", (code) => resolve({ code, stdout, stderr, all })));
+  // A run that never ends (a test that failed half way) is stopped, so the test file can end.
+  const cap = setTimeout(() => child.kill("SIGKILL"), 60_000);
+  cap.unref();
+  const done = new Promise((resolve) => child.on("close", (code) => { clearTimeout(cap); resolve({ code, stdout, stderr, all }); }));
   return {
     child,
     done,
@@ -54,7 +58,11 @@ function runCli(args, { server, home, env = {}, cwd } = {}) {
     waitFor(what, ms = 8000, from = 0) {
       return new Promise((resolve, reject) => {
         const w = { what, from, resolve };
-        w.t = setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); reject(new Error(`Timed out waiting for ${what}\n--- output ---\n${all}`)); }, ms);
+        w.t = setTimeout(() => {
+          waiters.splice(waiters.indexOf(w), 1);
+          child.kill("SIGKILL");
+          reject(new Error(`Timed out waiting for ${what}\n--- output ---\n${all}`));
+        }, ms);
         waiters.push(w);
         check();
       });
@@ -62,6 +70,8 @@ function runCli(args, { server, home, env = {}, cwd } = {}) {
     /** Waits for `what` printed after everything so far. */
     waitForNext(what, ms) { return this.waitFor(what, ms, all.length); },
     type(line) { child.stdin.write(line + "\n"); },
+    /** Raw key presses (with XODE_KEYS=1): "\r" is Enter, "\x03" Ctrl+C, "\x04" Ctrl+D, "\x1b" Esc, "\x1b[A" Up. */
+    keys(seq) { child.stdin.write(seq); },
     end() { child.stdin.end(); },
   };
 }

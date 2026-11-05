@@ -6,9 +6,8 @@
 // folder (test/gitFixture.js). When the job ends, its work branch is pushed there, so the branch comes back into the folder.
 //
 //   node dev/demo-server.js 4545
-//   XODE_SERVER=http://127.0.0.1:4545 node bin/xode.js login
 //   cd <the folder it prints>
-//   XODE_SERVER=http://127.0.0.1:4545 node <this package>/bin/xode.js "fix the cart rounding"
+//   XODE_SERVER=http://127.0.0.1:4545 node <this package>/bin/xode.js        (signs in first: approved by itself)
 //
 // --no-live leaves the live room off, so the terminal polls instead.
 
@@ -54,9 +53,8 @@ createFakeServer({
 }).then((s) => {
   const bin = path.resolve(__dirname, "..", "bin", "xode.js");
   console.log(`Demo server on ${s.url}${live ? " (live room on)" : " (polling)"}`);
-  console.log(`  XODE_SERVER=${s.url} node ${bin} login`);
   console.log(`  cd ${repos.work}`);
-  console.log(`  XODE_SERVER=${s.url} node ${bin} "fix the cart rounding"`);
+  console.log(`  XODE_SERVER=${s.url} node ${bin}`);
   const bye = () => s.close().then(() => { fs.rmSync(root, { recursive: true, force: true }); process.exit(0); });
   process.on("SIGINT", bye);
   process.on("SIGTERM", bye);
