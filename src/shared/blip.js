@@ -30,10 +30,10 @@
  * where he should stand.
  */
 (function (root, factory) {
-  const api = factory();
+  const api = factory(root);
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.TailzuBlip = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (root) {
   "use strict";
 
   const TAU = Math.PI * 2;
@@ -50,18 +50,16 @@
   //   hands  0 both on the edge … 1 the near hand up and pointing
   //   hop    a little jump (done)
   //   neck   0 his neck as it is … 1 stretched as far as it goes (NECK of his height): the head far out over the edge
-  const POSES = {
-    hidden:    { rise: 0,    tilt: 0,    brows: 0,    lid: .18, hands: 0, hop: 0, neck: 0 },
-    peek:      { rise: 1,    tilt: .04,  brows: .1,   lid: .18, hands: 0, hop: 0, neck: 0 },
-    listening: { rise: 1.06, tilt: -.1,  brows: .55,  lid: .02, hands: 0, hop: 0, neck: 0 },
-    thinking:  { rise: 1,    tilt: .16,  brows: .85,  lid: .3,  hands: 0, hop: 0, neck: 0 },
-    point:     { rise: 1.04, tilt: 0,    brows: .4,   lid: .08, hands: 1, hop: 0, neck: 0 },
-    confirm:   { rise: 1.02, tilt: -.06, brows: .7,   lid: .1,  hands: 1, hop: 0, neck: 0 },
-    done:      { rise: 1.1,  tilt: .08,  brows: .5,   lid: .3,  hands: 0, hop: 1, neck: 0 },
-    // crane: the long neck, his head stretched far out over the edge to see more.
-    crane:     { rise: 1,    tilt: -.12, brows: .9,   lid: 0,   hands: 0, hop: 0, neck: 1 },
-    oops:      { rise: .9,   tilt: -.14, brows: -.8,  lid: .34, hands: 0, hop: 0, neck: 0 },
-  };
+  // The faces it can make: the catalog's "card" poses (shared/blipCatalog.js), filled by useCatalog below. Each value
+  // is eased toward, never jumped to.
+  //   rise   how far it has come up over the edge (0 hidden, 1 peeking)
+  //   tilt   head tilt, radians
+  //   brows  -1 frowning … 1 raised
+  //   lid    0 open … 1 shut (the heavy lid's resting droop is .18)
+  //   hands  0 both on the edge … 1 the near hand up and pointing
+  //   hop    a little jump (done)
+  //   neck   0 his neck as it is … 1 stretched as far as it goes (NECK of his height): the head far out over the edge
+  const POSES = {};
 
   const NECK = .42;
 
@@ -450,24 +448,10 @@
   // only where they live: one canvas the size of the window, feet at (x, y) in
   // CSS pixels, and a clock the caller can hold in its hand (tests, mostly).
   const lerp = (a, b, k) => a + (b - a) * k;
-  const WALKER_POSES = {
-    present: { ra0: 1.22, ra1: .4, la0: .2, la1: .16, tilt: -.03, brows: .45, lx: .9, ly: -.35, thumb: 0, point: 0, hop: 0, grin: 0 },
-    tap: { ra0: 1.8, ra1: .06, la0: .18, la1: .14, tilt: -.05, brows: .55, lx: 1, ly: -.45, thumb: 0, point: 1, hop: 0, grin: 0 },
-    pointd: { ra0: 1.0, ra1: .25, la0: .2, la1: .16, tilt: -.04, brows: .6, lx: .9, ly: .3, thumb: 0, point: 1, hop: 0, grin: 0 },
-    tada: { ra0: 2.62, ra1: .24, la0: 2.62, la1: .24, tilt: 0, brows: .9, lx: .3, ly: -.2, thumb: 0, point: 0, hop: 1, grin: 1 },
-    thumbs: { ra0: .62, ra1: 1.92, la0: .18, la1: .14, tilt: -.06, brows: .7, lx: .4, ly: -.1, thumb: 1, point: 0, hop: 0, grin: 1 },
-    wave: { ra0: 2.5, ra1: -.55, la0: .16, la1: .12, tilt: -.06, brows: .75, lx: .1, ly: 0, thumb: 0, point: 0, hop: 0, grin: 1 },
-    listen: { ra0: 2.5, ra1: 1.0, la0: .2, la1: .16, tilt: -.13, brows: .8, lx: .6, ly: -.2, thumb: 0, point: 0, hop: 0, grin: 0 },
-    carry: { ra0: 1.5, ra1: -.3, la0: .35, la1: .2, tilt: -.04, brows: .6, lx: .8, ly: .2, thumb: 0, point: 0, hop: 0, grin: 1 },
-  };
-  WALKER_POSES.wait = { ra0: .35, ra1: .2, la0: .2, la1: .16, tilt: -.06, brows: .5, lx: .9, ly: -.4, thumb: 0, point: 0, hop: 0, grin: 0 };
-  WALKER_POSES.key = WALKER_POSES.carry;
-  WALKER_POSES.nod = WALKER_POSES.thumbs;
-  // `walk` belongs to the walker: it is what he does between two places, never a spot's pose.
-  WALKER_POSES.walk = { ra0: .32, ra1: .22, la0: .32, la1: .2, tilt: -.03, brows: .5, lx: .9, ly: -.1, thumb: 0, point: 0, hop: 0, grin: 0 };
-  WALKER_POSES.think = { ra0: 1.9, ra1: 2.75, la0: .2, la1: .16, tilt: -.1, brows: .9, lx: .8, ly: -.7, thumb: 0, point: 0, hop: 0, grin: 0 };
-  /** How lit the antenna's ball is in each pose. */
-  const GLOW = { listen: 1, tada: .9, wait: 1 };
+  // The poses he stands in on the ground (the catalog's "ground"; `walk` belongs to the walker: what he does between two
+  // places, never a spot's pose), and how lit the antenna's ball is in each ("groundGlow"). Filled by useCatalog below.
+  const WALKER_POSES = {};
+  const GLOW = {};
   /** The poses whose hands are busy: he keeps them while he walks. */
   const KEEPS_POSE = { wave: 1, key: 1, carry: 1 };
   /** Poses in which his arms swing as he walks. */
@@ -991,83 +975,8 @@
   //   rest sleep wake listen think write send look point read work yourTurn done celebrate call plan routine travel
   //   code oops, and the quirks he does at random while he waits: melt float jelly dizzy
   const io2 = (k) => (k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2);
-  const io = io2;
-  const boing = (k) => Math.cos(k * 16) * Math.exp(-k * 4.5);
-  const run = (t, sp = 16) => { const a = Math.sin(t * sp); return { a, legs: [{ th: a * .5, lift: Math.max(0, Math.cos(t * sp)) * .05 }, { th: -a * .5, lift: Math.max(0, -Math.cos(t * sp)) * .05 }] }; };
-  const BLIP_GESTURES = {
-    rest: (t) => ({ ra: [.28, .2], la: [.22, .16], look: [.7 * Math.sin(t * .5), -.1], lid: .18, bob: .006 * Math.sin(t * 2), brows: .4 }),
-    sleep: (t) => ({ ra: [.1, .05], la: [.1, .05], tilt: .42, headLift: -.05, lid: 1, antSpin: 1.3, brows: .1, mouth: "flat", sqy: .96 + .015 * Math.sin(t * 1.6), sqx: 1.03, glow: 0, noBlink: true }),
-    wake: (t) => {
-      if (t < .35) return BLIP_GESTURES.sleep(t);
-      if (t < .85) { const k = (t - .35) / .5, b = boing(k); return { ra: [.5, .2], la: [.5, .2], tilt: lerp(.42, 0, io(clamp(k * 2.5))), headLift: .1 * clamp(k * 3) + .06 * b, eye: "tiny", lid: 0, brows: 1, antSpin: 1.1 * b, antLen: 1 + .25 * Math.abs(b), hop: .07 * Math.sin(Math.PI * k), mouth: "o", mouthOpen: .5, glow: clamp(k * 2) }; }
-      if (t < 1.35) { const k = io((t - .85) / .5), y = Math.sin(Math.PI * clamp((t - .85) / .5)); return { ra: [lerp(.5, 2.55, k), lerp(.2, -.25, k)], la: [lerp(.5, 2.55, k), lerp(.2, -.25, k)], sqy: 1 + .1 * y, sqx: 1 - .06 * y, mouth: "o", mouthOpen: y, lid: .55 * y, headLift: .06 * y, tilt: -.06 * y, glow: .6 }; }
-      if (t < 1.65) { const k = (t - 1.35) / .3, w = Math.sin(k * 30) * (1 - k); return { ra: [.6 + .4 * w, .1], la: [.6 - .4 * w, .1], tilt: .22 * w, antSpin: .8 * w, sqx: 1 + .07 * w, sqy: 1 - .07 * w, mouth: "grin", lid: .1, glow: .7 }; }
-      const k = clamp((t - 1.65) / .45);
-      if (k < .35) { const c = io(k / .35); return { ra: [lerp(.6, -.1, c), .2], la: [lerp(.6, -.1, c), .2], sqy: 1 - .16 * c, sqx: 1 + .1 * c, lid: .3, brows: .7, glow: .8 }; }
-      return { ra: [2.4, -.2], la: [2.4, -.2], hop: .3 * Math.sin(Math.PI * (k - .35) / .65), eye: "wide", lid: 0, brows: .9, mouth: "grin", glow: .9 };
-    },
-    listen: (t, v) => ({ headLift: .1 + .02 * v, tilt: -.18 + .05 * Math.sin(t * 3) - .04 * Math.max(0, v - .5), ra: [2.45, 1.15], la: [.25, .18], brows: .85, eye: "wide", lid: 0, look: [-.5, -.2], glow: .35 + .65 * v, antWob: .025 * v * Math.sin(t * 40), mouth: "o", mouthOpen: .2 + .3 * v }),
-    think: (t) => ({ tilt: .16 + .07 * Math.sin(t * 1.6), headLift: .03, ra: [1.9, 2.75], la: [.25, .18], brows: .9, lid: .3, look: [.6, -.8], antSpin: t * 2.4, antLen: 1.1, glow: .3 + .25 * Math.sin(t * 3) }),
-    write: (t) => { const a = Math.sin(t * 30), b = Math.sin(t * 30 + Math.PI), sc = ((t * .9) % 1) * 2 - 1; return { ra: [.75 + .1 * a, -1.25], la: [.75 + .1 * b, -1.25], tilt: .06, lid: .35, look: [sc, .7], mouth: "flat", headLift: -.02, bob: .004 * Math.abs(a) }; },
-    send: (t) => {
-      if (t < .35) { const c = io(t / .35); return { ra: [lerp(.3, -.1, c), .2], la: [lerp(.3, -.1, c), .2], sqy: 1 - .2 * c, sqx: 1 + .12 * c, lid: .4, brows: .6, antSpin: .6 * c }; }
-      const k = clamp((t - .35) / .75); return { ra: [2.9, 0], la: [2.9, 0], hop: .45 * Math.sin(Math.PI * k), spin: TAU * io(k), mouth: "grin", eye: "wide", lid: 0, antLen: 1.2 };
-    },
-    look: (t) => { const sw = Math.sin(t * 2.2); return { headLift: .2, tilt: .14 + .05 * sw, spin: .1, eye: "wide", lid: 0, brows: 1, look: [.3 + .6 * sw, .5], antLen: 1.3, antSpin: .5, ra: [.2, -.3], la: [.2, -.3], glow: .6 }; },
-    point: (t) => ({ spin: .32, ra: [1.62, 0], point: 1, la: [.3, .2], headLift: .08, tilt: -.25, look: [1, .1], brows: .6, eye: "wide", lid: .05, antSpin: .7, glow: .5 + .3 * Math.sin(t * 8) }),
-    read: (t) => { const p = (t * .7) % 1, x = p < .85 ? lerp(-1, 1, p / .85) : lerp(1, -1, (p - .85) / .15); return { look: [x, .6], tilt: .1 * x, headLift: .03, lid: .3, ra: [.2, -.4], la: [.2, -.4], brows: .55, antSpin: -.3 * x }; },
-    work: (t) => { const r = run(t); return { legs: r.legs, ra: [.9 + .6 * r.a, -1.4], la: [.9 - .6 * r.a, -1.4], hop: .03 * Math.abs(r.a), antSpin: t * 12, brows: -.4, lid: .25, mouth: "flat", glow: .7, look: [.6, 0], spin: .06 }; },
-    yourTurn: (t) => { const peek = (t % 3) > 1.7 && (t % 3) < 2.2; return { handsOver: true, ra: [2.9, 1.37], la: peek ? [2.0, .7] : [2.9, 1.37], tilt: .06 * Math.sin(t * 2), brows: .3, mouth: "flat", sqy: .98, look: [-.6, 0], antSpin: .4 * Math.sin(t * 1.5) }; },
-    done: (t) => { if (t < .45) { const k = Math.sin(Math.PI * clamp(t / .45)); return { ra: [2.2, -.3], la: [2.2, -.3], hop: .14 * k, mouth: "grin", eye: "wide", lid: 0 }; } return { ra: [.62, 1.92], thumb: 1, la: [.2, .16], mouth: "grin", lid: .3, brows: .7, tilt: -.06 }; },
-    celebrate: (t) => { const k = clamp(t / .95); return { ra: [2.7, .2], la: [2.7, .2], hop: .5 * Math.sin(Math.PI * k), spin: -TAU * io(k), mouth: "grin", eye: "wide", lid: 0, brows: 1, glow: .9, antSpin: .8 * Math.sin(t * 9) }; },
-    call: (t) => ({ antLen: 1.9, antWob: .02 * Math.sin(t * 7), antSpin: .25 * Math.sin(t * 4), ra: [2.6, 1.1], la: [.25, .18], mouth: "o", mouthOpen: Math.abs(Math.sin(t * 9)), headLift: .05, tilt: -.1 + .04 * Math.sin(t * 5), glow: .6 + .4 * Math.sin(t * 12), look: [-.3, -.1] }),
-    plan: (t) => { const tap = Math.max(0, Math.sin(t * 3 * TAU)); return { ra: [1.05 + .14 * tap, -1.3], la: [1.15, -1.2], bob: -.01 * tap, tilt: -.1 + .06 * (Math.floor(t * 3) % 2), look: [.5, -.9], brows: .75, lid: .1, glow: .4 + .5 * tap }; },
-    routine: (t) => { const p = (t * .8) % 1; if (p < .6) { const s = Math.sin(p / .6 * TAU); return { spin: .22 * s, ra: [1.5 + .8 * s, -.3], la: [1.5 - .8 * s, -.3], tilt: -.15 * s, mouth: "grin", antSpin: .6 * s, hop: .04 * Math.abs(s) }; } const k = (p - .6) / .4; return { spin: TAU * io(k), hop: .18 * Math.sin(Math.PI * k), ra: [2.6, 0], la: [2.6, 0], mouth: "grin" }; },
-    travel: (t) => { const r = run(t, 7); return { legs: r.legs, ra: [2.75, 1.3], la: [.8 + .4 * r.a, -.6], look: [1, -.4], lid: .35, tilt: -.06, brows: .7 }; },
-    code: (t) => { const a = Math.sin(t * 32), b = Math.sin(t * 32 + Math.PI); return { ra: [.75 + .1 * a, -1.25], la: [.75 + .1 * b, -1.25], lid: .45, mouth: "flat", brows: -.2, look: [((t * 1.2) % 1) * 2 - 1, .8], antSpin: .2 * a }; },
-    oops: (t) => { const k = io(clamp(t / .3)); return { ra: [lerp(.3, 1.6, k), lerp(.2, -1.3, k)], la: [lerp(.3, 1.6, k), lerp(.2, -1.3, k)], tilt: .2 * k + (t > .3 && t < 1 ? Math.sin(t * 22) * .07 : 0), brows: -.8, mouth: "flat", lid: .34 }; },
-    melt: (t) => { const k = Math.sin(Math.PI * clamp(t / 1.3)); return { sqy: 1 - .5 * k, sqx: 1 + .5 * k, ra: [.2 + 1.3 * k, .1], la: [.2 + 1.3 * k, .1], tilt: .1 * k, antSpin: 1.6 * k, eye: k > .5 ? "wide" : undefined, mouth: k > .5 ? "o" : "smile", look: [0, .8 * k] }; },
-    float: (t) => { const k = io(clamp(t / .7)); return { headLift: .42 * k + .03 * Math.sin(t * 3), tilt: .15 * Math.sin(t * 2), ra: [2.2, .3], la: [2.2, .3], eye: "wide", lid: 0, brows: 1, look: [0, 1], antSpin: .3 * Math.sin(t * 2.5), mouth: "o", mouthOpen: .4 }; },
-    jelly: (t) => { const w = Math.sin(t * 22) * Math.exp(-t * 1.5); return { sqx: 1 + .14 * w, sqy: 1 - .14 * w, tilt: .1 * w, antSpin: .8 * w, ra: [.5 + .5 * w, .2], la: [.5 - .5 * w, .2], mouth: "grin", lid: .2 }; },
-    dizzy: (t) => ({ antSpin: t * 10, antLen: 1.3, tilt: .14 * Math.sin(t * 4), spin: .05 * Math.sin(t * 3), ra: [.6, .4], la: [.6, .4], eye: t > .8 ? "spiral" : "wide", lid: 0, mouth: "o", mouthOpen: .5, look: [Math.sin(t * 10), -1] }),
-
-    // stroll: walking along the bottom of the screen, arms swinging, looking where he goes (the pill mirrors him to go left).
-    stroll: (t) => { const r = run(t, 9); return { legs: r.legs, ra: [.45 - .35 * r.a, .25], la: [.45 + .35 * r.a, .25], bob: .012 * Math.abs(r.a), tilt: -.04, look: [1, .1], lid: .12, brows: .45 }; },
-
-    // ---- In a conversation, and at random: odder moves, still nothing but his body.
-    // talk: answering out loud; his mouth and the antenna's ball keep time with the words.
-    talk: (t) => { const w = Math.abs(Math.sin(t * 11)) * (Math.sin(t * 2.7) > -.6 ? 1 : .2); return { mouth: "o", mouthOpen: .25 + .75 * w, ra: [.9 + .25 * Math.sin(t * 2.1), -.9], la: [.3, .2], tilt: -.05 + .05 * Math.sin(t * 1.7), brows: .55, lid: .12, glow: .3 + .4 * w, bob: .006 * w }; },
-    // laugh: doubled over, shaking, eye squeezed shut.
-    laugh: (t) => { const s = Math.sin(t * 34); return { spin: .3 + .03 * s, sqy: .94 + .02 * s, ra: [.6, -1.6], la: [.6, -1.6], lid: .85, mouth: "grin", tilt: .15 + .04 * s, bob: .01 * Math.abs(s), antSpin: .3 * s, brows: .9 }; },
-    // facepalm: one hand over his great eye, head down, a slow shake.
-    facepalm: (t) => ({ handsOver: true, ra: [2.95, 1.35], la: [.2, .15], tilt: .18 + .06 * Math.sin(t * 3), headLift: -.03, brows: -.5, mouth: "flat", antSpin: 1.1 }),
-    // sneeze: the build-up, then a jolt that throws his antennae and his head back.
-    sneeze: (t) => {
-      if (t < .7) { const k = t / .7; return { tilt: -.25 * k, headLift: .04 * k, lid: .5 * k, mouth: "o", mouthOpen: .3 + .4 * k, brows: .9, ra: [.4, .2], la: [.4, .2] }; }
-      const k = clamp((t - .7) / .5), j = Math.exp(-k * 5) * Math.cos(k * 18);
-      return { tilt: .35 * j, headLift: .08 * j, antSpin: 2.2 * j, antLen: 1 + .3 * Math.abs(j), lid: .9, mouth: "o", mouthOpen: 1, hop: .06 * Math.max(0, j), ra: [.9, .3], la: [.9, .3] };
-    },
-    // moonwalk: gliding backwards while his feet step forwards.
-    moonwalk: (t) => { const r = run(t, 7); return { legs: r.legs, spin: -.08, ra: [.3 + .2 * r.a, .2], la: [2.4, -.2], tilt: -.12, lid: .3, mouth: "grin", look: [-1, 0], bob: .01 * Math.abs(r.a) }; },
-    // headbang: fast nods, antennae whipping.
-    headbang: (t) => { const n = Math.sin(t * 22); return { tilt: .3 * n, headLift: -.02 + .03 * Math.abs(n), antSpin: -1.2 * n, ra: [2.7, -.2], la: [.3, .2], lid: .7, mouth: "o", mouthOpen: .6, bob: .015 * Math.abs(n) }; },
-    // shy: hands over his eye, twisting on the spot, one peek through his fingers.
-    shy: (t) => { const peek = (t % 2.4) > 1.6 && (t % 2.4) < 2.0; return { handsOver: true, ra: [2.95, 1.35], la: peek ? [1.9, .6] : [2.95, 1.35], spin: .06 * Math.sin(t * 2.5), tilt: -.12, sqy: .97, legs: [{ th: .15 * Math.sin(t * 2.5), lift: 0 }, { th: -.1, lift: 0 }], mouth: "flat" }; },
-    // nope: crossed arms, a fast shake of the head, eye shut.
-    nope: (t) => ({ ra: [1.35, -1.9], la: [1.35, -1.9], tilt: .22 * Math.sin(t * 18) * Math.exp(-(t % 1.2) * 2), lid: .9, mouth: "flat", brows: -.6 }),
-    // shiver: cold, every part of him trembling, arms wrapped round.
-    shiver: (t) => { const j = Math.sin(t * 60); return { ra: [1.3, -2.1], la: [1.3, -2.1], sqx: 1 + .015 * j, sqy: .97 - .01 * j, tilt: .03 * j, antSpin: .2 * j, lid: .4, mouth: "flat", headLift: -.03 }; },
-    // tiptoe: a big careful sneak, crouched, looking both ways.
-    tiptoe: (t) => { const r = run(t, 4); return { legs: r.legs.map((l) => ({ th: l.th * 1.4, lift: l.lift * 2.2 })), sqy: .9, ra: [1.6, -1.2], la: [1.6, -1.2], look: [Math.sin(t * 1.5), -.2], eye: "wide", lid: 0, mouth: "flat", bob: .02 * Math.abs(r.a) }; },
-    // balance: on one leg, arms out, wobbling, nearly over.
-    balance: (t) => { const w = Math.sin(t * 2.3) + .4 * Math.sin(t * 5.1); return { legs: [{ th: 0, lift: 0 }, { th: -.9, lift: .14 }], spin: .12 * w, ra: [1.62, .1 * w], la: [1.62, -.1 * w], tilt: -.1 * w, eye: "wide", lid: 0, mouth: "o", mouthOpen: .3 }; },
-    // peekaboo: hands over his eye, then thrown open, eye wide.
-    peekaboo: (t) => { const open = (t % 1.6) > 1.0; return open ? { ra: [2.5, -.2], la: [2.5, -.2], eye: "wide", lid: 0, mouth: "grin", hop: .05, brows: 1 } : { handsOver: true, ra: [2.95, 1.35], la: [2.95, 1.35], mouth: "flat", sqy: .97 }; },
-    // propeller: both antennae spun up, a little lift off the ground, legs dangling.
-    propeller: (t) => ({ antSpin: t * 18, antLen: 1.25, hop: .12 + .03 * Math.sin(t * 6), legs: [{ th: .2 * Math.sin(t * 5), lift: 0 }, { th: -.2 * Math.sin(t * 5), lift: 0 }], ra: [1.62, .1], la: [1.62, .1], eye: "wide", lid: 0, mouth: "grin" }),
-    // ponder: the deep think for a hard question: hand on chin, eye rolling up, antennae circling slowly.
-    ponder: (t) => ({ ra: [1.9, 2.75], la: [1.2, -1.9], tilt: .2 + .05 * Math.sin(t), look: [.3 * Math.sin(t * .8), -1], lid: .25, brows: .95, antSpin: t * 1.6, antLen: 1.15, glow: .3 + .3 * Math.abs(Math.sin(t * 2)) }),
-  };
+  // The moves themselves are the catalog's (shared/blipCatalog.js): BLIP_GESTURES[name](t, v) is a pose. Filled below.
+  const BLIP_GESTURES = {};
   const NUM = ["tilt", "brows", "headLift", "headSpin", "antSpin", "antLen", "lid", "sqx", "sqy", "spin", "hop", "bob", "glow", "mouthOpen", "antWob", "thumb", "point"];
   const DEF = { tilt: -.03, brows: .45, headLift: 0, headSpin: 0, antSpin: 0, antLen: 1, lid: .18, sqx: 1, sqy: 1, spin: 0, hop: 0, bob: 0, glow: 0, mouthOpen: 0, antWob: 0, thumb: 0, point: 0 };
   function gesturePose(name, t, v) { return Object.assign({ ra: [.28, .2], la: [.22, .16], look: [.6, -.1], mouth: "smile", legs: [{ th: 0, lift: 0 }, { th: 0, lift: 0 }] }, DEF, (BLIP_GESTURES[name] || BLIP_GESTURES.rest)(t, v || 0)); }
@@ -1083,11 +992,39 @@
     return Object.assign({}, p, { bob: p.bob * H, drop: 0, swayK: 0, walkK: 0, antWob: p.antWob * H, legs: p.legs.map((l) => ({ th: l.th, lift: l.lift * H })), lid: p.lid, eye: p.eye });
   }
 
-  /** How long a gesture plays before it is over (the ones that end); the rest loop. */
-  const GESTURE_LENGTH = { wake: 2.1, send: 1.15, done: 1.4, celebrate: 1.05, oops: 1.1, melt: 1.35, float: 2.2, jelly: 1.6, dizzy: 2.2,
-    laugh: 1.8, sneeze: 1.4, moonwalk: 2.4, headbang: 1.6, nope: 1.2, shiver: 1.6, tiptoe: 2.4, balance: 2.6, peekaboo: 2.4, propeller: 2.2 };
-  // What he does at random while he waits.
-  const QUIRKS = ["melt", "float", "jelly", "dizzy", "sneeze", "moonwalk", "headbang", "shiver", "tiptoe", "balance", "peekaboo", "propeller"];
+  /** How long a gesture plays before it is over (the ones that end; the rest loop), what he does at random while he waits,
+   *  and what he does when the pointer is on him: the catalog's. */
+  const GESTURE_LENGTH = {};
+  const QUIRKS = [];
+  const HOVER = [];
+
+  // ---- THE CATALOG: what the server sends (shared/blipCatalog.js), or the copy this build carries (blipStarter.js) -------
+  //
+  // Every table above is filled in place, so a performer, a walker or a card already on screen plays the new moves on its
+  // next frame. One that does not compile changes nothing.
+  const CATALOG = (typeof root !== "undefined" && root && root.TailzuBlipCatalog) || (typeof require === "function" ? require("./blipCatalog.js") : null);
+  let catalogV = -1;
+  const refill = (to, from) => { for (const k of Object.keys(to)) delete to[k]; Object.assign(to, from); };
+  function useCatalog(spec) {
+    if (!spec || !CATALOG) return { ok: false, v: catalogV, errors: ["no catalog"] };
+    // The same version is nothing new; any other is used, lower too (a pushed catalog taken back on the server).
+    if (typeof spec.v === "number" && spec.v === catalogV) return { ok: true, v: catalogV, errors: [] };
+    let c;
+    try { c = CATALOG.compile(spec); } catch (e) { return { ok: false, v: catalogV, errors: [String((e && e.message) || e)] }; }
+    const moves = {};
+    for (const [name, f] of Object.entries(c.gestures)) moves[name] = (t, v) => f(t, v, c.gestures, 0);
+    refill(BLIP_GESTURES, moves);
+    refill(GESTURE_LENGTH, c.lengths);
+    QUIRKS.splice(0, QUIRKS.length, ...(c.quirks.length ? c.quirks : ["rest"]));
+    HOVER.splice(0, HOVER.length, ...c.hover);
+    if (Object.keys(c.card).length) refill(POSES, c.card);
+    if (Object.keys(c.ground).length) refill(WALKER_POSES, c.ground);
+    refill(GLOW, c.groundGlow);
+    catalogV = c.v;
+    return { ok: true, v: c.v, errors: c.errors };
+  }
+  const STARTER = (typeof root !== "undefined" && root && root.TailzuBlipStarter) || (typeof require === "function" ? require("./blipStarter.js") : null);
+  useCatalog(STARTER);
 
   /**
    * A Blip that plays gestures: play(name, { speed, then }) switches to one (blended in over 220 ms; `then` follows
@@ -1121,5 +1058,5 @@
     return { play, draw, get name() { return cur.name; }, quirk: () => QUIRKS[Math.floor(Math.random() * QUIRKS.length)] };
   }
 
-  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, BLIP_GESTURES, gesturePose, blendPose, createPerformer, GESTURE_LENGTH };
+  return { createBlip, POSES, peekSpot, createWalker, burst, WALKER_POSES, BLIP_GESTURES, gesturePose, blendPose, createPerformer, GESTURE_LENGTH, QUIRKS, HOVER, useCatalog, catalogVersion: () => catalogV };
 });

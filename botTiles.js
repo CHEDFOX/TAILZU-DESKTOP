@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 5937b9d3c8cd77b4bb83bf8a4c04554bf2587e5b94a4b7f654cac235656891b3
-// body sha256 8433a0bc94ff76c0d0bfa8150a968515fcc3029407f8fe654c6839da604d8007
+// core.ts sha256 0b05ecd68547d5636284d2d14a9df89abcedce932f06463de849ad46f1b10616
+// body sha256 343a086910cf6303cfdde99d8ea3f87fbc1ce652c2c417267f53386ad3ee8d75
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -115,8 +115,9 @@
   const XO_NUM = 1, XO_VAR = 2, XO_NEG = 3, XO_NOT = 4, XO_BIN = 5, XO_TERN = 6, XO_CALL = 7;
   const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const XP0 = { c: 0, code: null };
-  /** Expression text into bytecode (a constant when it reads no name). Throws on anything it does not know. */
-  function xcompile(src) {
+  /** Expression text into bytecode (a constant when it reads no name). Throws on anything it does not know. `names` are the
+   *  names it may read, in the order their values are handed to it: a moment's (MOMENT_VARS), or a caller's own. */
+  function xcompile(src, names = MOMENT_VARS) {
       const toks = [];
       for (let i = 0; i < src.length;) {
           const ch = src.charCodeAt(i);
@@ -274,7 +275,7 @@
                   push();
                   return;
               }
-              const vi = MOMENT_VARS.indexOf(k.v);
+              const vi = names.indexOf(k.v);
               if (vi < 0)
                   throw new Error(`unknown name ${k.v}`);
               code.push(XO_VAR, vi);
@@ -427,15 +428,27 @@
       }
       return s[0];
   }
-  /** Check an expression the way a recipe's would be compiled (the server's checks and tests use this). */
-  function checkExpression(src) {
+  /** Check an expression the way a recipe's would be compiled (the server's checks and tests use this). `names`: as compileWith's. */
+  function checkExpression(src, names) {
       try {
-          xcompile(src);
+          xcompile(src, names);
           return "";
       }
       catch (e) {
           return e.message;
       }
+  }
+  /**
+   * The same language over names of a caller's own: the desktop's Blip catalog (his moves read t, seconds into the move,
+   * and v, the voice's level). Gives a function of their values, in `names` order (a Float64Array of that length); throws
+   * on anything the language does not know, as a moment's expression does.
+   */
+  function compileWith(src, names) {
+      if (names.length > 32)
+          throw new Error("too many names");
+      const xp = xcompile(src, names);
+      const code = xp.code;
+      return code ? (vals) => xrun(code, vals) : () => xp.c;
   }
   // ---- parts: small drawings in bot heights
   const PO_SHAPE = 1, PO_M = 2, PO_L = 3, PO_Q = 4, PO_Z = 5, PO_O = 6, PO_END = 7;
@@ -7019,5 +7032,5 @@
       }
       return out;
   }
-  return { CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, checkExpression, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, BotTile, BotTilesWorld, gridWorld, LiveMark, writeOnTimes };
+  return { CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, BotTile, BotTilesWorld, gridWorld, LiveMark, writeOnTimes };
 });

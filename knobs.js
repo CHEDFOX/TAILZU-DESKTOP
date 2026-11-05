@@ -37,6 +37,12 @@
     source = boot;
     labels = (boot.labels && typeof boot.labels === "object") ? boot.labels : {};
     flags = (boot.flags && typeof boot.flags === "object") ? boot.flags : {};
+    // Blip's catalog rides with the knobs the main process hands a window (src/main/blipSync.js): a window that draws
+    // him plays it from now on (src/shared/blip.js useCatalog).
+    const g = typeof globalThis !== "undefined" ? globalThis : null;
+    if (boot.blip && g && g.TailzuBlip && typeof g.TailzuBlip.useCatalog === "function") {
+      try { g.TailzuBlip.useCatalog(boot.blip); } catch { /* the copy he plays stays */ }
+    }
   }
 
   /** Text. `{name}` placeholders are filled from `vars`. */

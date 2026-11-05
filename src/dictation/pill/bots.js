@@ -93,14 +93,10 @@ function bCaption() { return HEARD() ? bTail(caption) : ""; }
 const talkAnswering = () => S.data.phase === "answer" || S.data.phase === "act";
 function bTalkWords() { return bTail(talkAnswering() ? S.data.said || "" : HEARD() ? S.data.heard || "" : ""); }
 // Hovered at rest, he does something (one that ends) instead of opening a hint: once a hover, never more than every 1.2 s.
-// Which ones is desktop.pill.hoverGestures; a name Blip does not know (shared/blip.js BLIP_GESTURES) is left out, and none
-// he knows is the list below.
-const HOVER_GESTURES = ["jelly", "peekaboo", "laugh", "sneeze", "propeller", "dizzy", "headbang", "celebrate"];
+// Which ones is Blip's catalog's (the moves marked "hover": shared/blip.js HOVER, from the server); with none, a jelly.
 function hoverGestures() {
-  const known = (window.TailzuBlip && window.TailzuBlip.BLIP_GESTURES) || {};
-  const sent = K.list("desktop.pill.hoverGestures", ["jelly", "peekaboo", "laugh", "sneeze", "propeller", "dizzy", "headbang", "celebrate"]);
-  const ok = sent.filter((g) => typeof g === "string" && g !== "rest" && Object.prototype.hasOwnProperty.call(known, g));
-  return ok.length ? ok : HOVER_GESTURES;
+  const list = (window.TailzuBlip && window.TailzuBlip.HOVER) || [];
+  return list.length ? list.slice() : ["jelly"];
 }
 let hoverGestureAt = 0;
 function blipHover() {
