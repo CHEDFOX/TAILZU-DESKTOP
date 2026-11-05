@@ -58,7 +58,7 @@ for (const live of [false, true]) {
       assert.match(say.body.thread, /^[0-9a-f-]{36}$/);
       const approve = t.server.calls.find((c) => c.path.endsWith("/approve") && c.path.includes("/flow/"));
       assert.deepStrictEqual(approve.body, { thread: say.body.thread, v: 2 });
-      assert.strictEqual(t.server.calls.some((c) => c.method === "WS"), live);
+      assert.strictEqual(t.server.calls.some((c) => c.method === "WS" && c.path.endsWith("/watch")), live);
       assert.ok(!r.all.includes(FAKE));
     } finally {
       await t.close();
@@ -144,17 +144,17 @@ test("a failed job says so plainly", async () => {
   }
 });
 
-test("chat: picks a project by number, offers the opening plan, Ctrl+C at the prompt leaves", async () => {
+test("chat: the folder's project among several, the opening plan, Ctrl+C at the prompt leaves", async () => {
   const projects = [
-    { id: "11111111-1111-4111-8111-111111111111", fullName: "ana/blog" },
-    { id: "6f1c2a3b-4d5e-4f60-8a71-92b3c4d5e6f7", fullName: "ana/storefront" },
+    { id: "11111111-1111-4111-8111-111111111111", fullName: "ana/blog", defaultBranch: "main" },
+    { id: "6f1c2a3b-4d5e-4f60-8a71-92b3c4d5e6f7", fullName: "Ana/StoreFront", defaultBranch: "main" },
   ];
   const t = await setup({ projects });
   try {
     const run = runCli([], { server: t.server, home: t.home });
-    await run.waitFor("Which project?");
-    run.type("2");
     await run.waitFor("Approve? (y/n)");
+    assert.match(run.output, /Xode · Ana\/StoreFront/);
+    assert.ok(!/Which project/.test(run.output));
     assert.match(run.output, /Where it stands/);
     assert.match(run.output, /The plan\n/);
     run.type("n");

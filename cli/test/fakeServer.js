@@ -1,7 +1,9 @@
-// A stand-in for the X0 Bot server, on this computer: the sign-in, the Xode flow, jobs, their log and their live room.
-// Scripted, so a test (or a demo) knows what happens next. Only fake tokens: they are made here, for here.
+// A stand-in for the X0 Bot server, on this computer: the sign-in, the Xode flow, jobs, their log and their live room, GitHub's
+// connect link and the repositories it lets Xode see, and the runner's side (its ticket and the presence socket a computer says
+// hello on). Scripted, so a test (or a demo) knows what happens next. Only fake tokens: they are made here, for here.
 //
-//   createFakeServer({ linkOutcome, approveAfterPolls, live, stepMs, ... }) -> { url, calls, tokens, addToken(t), jobs, close() }
+//   createFakeServer({ linkOutcome, approveAfterPolls, live, stepMs, repos, github, onJobEnd, ... })
+//     -> { url, calls, tokens, addToken(t), jobs, devices, close() }
 
 "use strict";
 
@@ -38,6 +40,9 @@ function createFakeServer(opts = {}) {
     gate: { open: true, reading: { status: "ready", pct: 100, phase: "" }, vision: "given" },
     projects: [{ id: PROJECT_ID, userId: "u1", installationId: 1, linkKind: "app", repoId: 1, fullName: "ana/storefront", defaultBranch: "main", private: true, createdAt: 1 }],
     script: defaultScript(), user: { email: "ana@example.com", name: "Ana" },
+    // GitHub as Xode sees it: not connected, and no repository visible, unless a test says otherwise.
+    github: { configured: true, connected: false, installations: [] }, repos: [],
+    installUrl: "https://github.com/apps/x0bot-test/installations/new?state=signed-state",
     ...opts,
   };
   const calls = [];
@@ -47,6 +52,8 @@ function createFakeServer(opts = {}) {
   const jobs = new Map();
   const viewers = new Map(); // jobId -> Set<conn>
   const tickets = new Set();
+  const deviceTickets = new Set();
+  const devices = []; // { hello, frames, conn, closed }
   const ws = loadWs();
   let base = "";
 
@@ -106,6 +113,7 @@ function createFakeServer(opts = {}) {
       j.phase = "done";
       j.report = { outcome: "done", text: s.done.text, prUrl: s.done.prUrl, costPaise: 400 };
       j.waitingOn = null;
+      if (o.onJobEnd) o.onJobEnd(j);
       emit(j, { t: "end", why: "done" });
       endViewers(j);
       return;
@@ -113,6 +121,7 @@ function createFakeServer(opts = {}) {
     if (s.fail) {
       j.state = "failed";
       j.reason = s.fail;
+      if (o.onJobEnd) o.onJobEnd(j);
       emit(j, { t: "end", why: "failed" });
       endViewers(j);
       return;
@@ -214,6 +223,28 @@ function createFakeServer(opts = {}) {
     if (!p.startsWith("/v1/code/") && !p.startsWith("/v1/bots/code/")) return send(res, 403, { code: "device_scope", message: "This sign-in is for Xode only." });
 
     if (req.method === "GET" && p === "/v1/code/projects") return send(res, 200, { projects: o.projects });
+    if (req.method === "POST" && p === "/v1/code/projects") {
+      const r = o.repos.find((x) => x.id === body.repoId);
+      if (!r) return send(res, 404, { code: "not_found", message: "X0 Bot can't see that repo on GitHub." });
+      let made = o.projects.find((x) => x.repoId === r.id);
+      if (!made) {
+        made = { id: crypto.randomUUID(), userId: "u1", installationId: 1, linkKind: "app", repoId: r.id, fullName: r.fullName, defaultBranch: r.defaultBranch || "main", private: true, createdAt: now() };
+        o.projects.push(made);
+      }
+      return send(res, 200, { project: made, created: true });
+    }
+    if (req.method === "GET" && p === "/v1/code/github") return send(res, 200, o.github);
+    if (req.method === "POST" && p === "/v1/code/github/connect") return send(res, 200, { installUrl: o.installUrl });
+    if (req.method === "GET" && p === "/v1/code/repos") return send(res, 200, { repos: o.repos, truncated: false });
+
+    // The runner's side: a ticket for the presence socket, and the older heartbeat.
+    if (req.method === "POST" && p === "/v1/code/runner/ticket") {
+      if (!ws) return send(res, 404, { code: "live_off", message: "The live session is not switched on." });
+      const ticket = `dt_${crypto.randomBytes(12).toString("hex")}`;
+      deviceTickets.add(ticket);
+      return send(res, 200, { url: `${base.replace(/^http/, "ws")}/v1/devices/connect`, ticket, expiresAt: now() + 120_000 });
+    }
+    if (req.method === "POST" && p === "/v1/code/runner/heartbeat") return send(res, 200, { ok: true, onlineForSec: 60, leasesRenewed: 0 });
 
     let k;
     if ((k = m(/^\/v1\/bots\/code\/flow\/([^/]+)\/(gate|plan|say|approve|work|vision)$/))) {
@@ -315,9 +346,27 @@ function createFakeServer(opts = {}) {
     });
   });
 
-  // The live room's watch socket.
+  // The live room's watch socket, and the presence socket a computer offered for Xode says hello on.
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, "http://x");
+    if (url.pathname === "/v1/devices/connect") {
+      const t = (/^Bearer\s+(\S+)$/i.exec(req.headers.authorization || "") || [])[1];
+      if (!ws || !t || !deviceTickets.delete(t)) { socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n{\"code\":\"bad_ticket\"}"); return; }
+      calls.push({ method: "WS", path: url.pathname, query: "", body: {}, auth: true });
+      const conn = ws.acceptWs(req, socket, head);
+      const d = { hello: null, frames: [], conn, closed: false };
+      devices.push(d);
+      conn.on("message", (text) => {
+        if (text === "ping") { conn.send("pong"); return; }
+        let f = null;
+        try { f = JSON.parse(text); } catch { return; }
+        d.frames.push(f);
+        if (f.t === "hello") { d.hello = f; conn.send(JSON.stringify({ t: "ack", v: 1, deviceId: f.deviceId })); }
+      });
+      conn.on("close", () => { d.closed = true; });
+      conn.on("error", () => { /* closes by itself */ });
+      return;
+    }
     const k = /^\/v1\/rooms\/([^/]+)\/watch$/.exec(url.pathname);
     const ticket = (/^Bearer\s+(\S+)$/i.exec(req.headers.authorization || "") || [])[1] || url.searchParams.get("ticket");
     const j = k && jobs.get(k[1]);
@@ -339,6 +388,7 @@ function createFakeServer(opts = {}) {
         calls,
         tokens,
         jobs,
+        devices,
         options: o,
         projectId: PROJECT_ID,
         /** A device token the server accepts, as if a sign-in had been approved. */
@@ -346,6 +396,7 @@ function createFakeServer(opts = {}) {
         close() {
           for (const j of jobs.values()) clearTimeout(j.timer);
           for (const set of viewers.values()) for (const c of set) { try { c.terminate(); } catch { /* gone */ } }
+          for (const d of devices) { try { d.conn.terminate(); } catch { /* gone */ } }
           return new Promise((r) => { server.closeAllConnections && server.closeAllConnections(); server.close(() => r()); });
         },
       });

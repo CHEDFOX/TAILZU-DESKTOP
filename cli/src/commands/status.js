@@ -1,18 +1,21 @@
-// xode status: who is signed in, on which device and server, and the job of this folder.
+// xode status: who is signed in, on which device and server, and the job of this folder (the repository's top folder, as xode
+// keeps it): where it is, or how it ended, with its work branch and pull request.
 
 "use strict";
 
 const { createClient } = require("../api/client");
 const { hostOf } = require("../config");
 const { folderState } = require("../state/folders");
+const { folderOf } = require("../state/folderOf");
 const { stageOf, isOver, STAGES } = require("../chat/stages");
+const { prOf } = require("../work/afterJob");
 
 const STATE_WORDS = {
   queued: "waiting to start", running: "working", waiting_for_compute: "waiting for a computer", waiting_for_you: "waiting for you",
   paused: "paused", done: "done", failed: "failed", cancelled: "stopped",
 };
 
-async function status({ server, store, out, cwd, env }) {
+async function status({ server, store, out, cwd: here, env }) {
   const token = await store.get(hostOf(server));
   if (!token) { out.line("Not signed in. Run xode login."); out.line(`Server: ${server}`); return 1; }
   const client = createClient({ server, token });
@@ -23,6 +26,7 @@ async function status({ server, store, out, cwd, env }) {
   out.line(`Device: ${d.name || "this computer"}`);
   out.line(`Server: ${server}`);
 
+  const cwd = await folderOf(here);
   const st = folderState(server, cwd, env);
   if (!st.jobId) return 0;
   try {
@@ -31,8 +35,10 @@ async function status({ server, store, out, cwd, env }) {
     const words = STATE_WORDS[job.state] || job.state || "unknown";
     const task = String(job.task || "").split("\n")[0].slice(0, 70);
     if (isOver(job.state)) {
-      const pr = (v.agent && ((v.agent.report && v.agent.report.prUrl) || (v.agent.pr && v.agent.pr.url))) || "";
+      const pr = prOf(v) || st.lastPr || "";
+      const branch = st.lastBranch || "";
       out.line(`Last job here: ${words}${task ? ` · ${task}` : ""}`);
+      if (branch) out.line(`Work branch: ${branch}`);
       if (pr) out.line(`Pull request: ${pr}`);
     } else {
       const s = Math.min(stageOf(v.agent && v.agent.phase, job.state), 4);
@@ -40,6 +46,9 @@ async function status({ server, store, out, cwd, env }) {
     }
   } catch (err) {
     if (err.status !== 404) out.note(`The job of this folder couldn't be read: ${err.message}`);
+    // What was kept when it ended, so the branch and the pull request can still be found.
+    if (st.lastBranch) out.line(`Work branch: ${st.lastBranch}`);
+    if (st.lastPr) out.line(`Pull request: ${st.lastPr}`);
   }
   return 0;
 }

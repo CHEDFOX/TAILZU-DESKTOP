@@ -31,10 +31,18 @@ function configDir(env = process.env) {
   return path.join(base, "xode");
 }
 
+/** Where xode keeps what can be made again (the runner's workspaces): $XDG_CACHE_HOME/xode, else the platform's cache folder. */
+function cacheDir(env = process.env, platform = process.platform) {
+  if (env.XDG_CACHE_HOME && path.isAbsolute(env.XDG_CACHE_HOME)) return path.join(env.XDG_CACHE_HOME, "xode");
+  if (platform === "darwin") return path.join(os.homedir(), "Library", "Caches", "xode");
+  if (platform === "win32" && env.LOCALAPPDATA && path.isAbsolute(env.LOCALAPPDATA)) return path.join(env.LOCALAPPDATA, "xode", "Cache");
+  return path.join(os.homedir(), ".cache", "xode");
+}
+
 /** How often to look again while following a job, in milliseconds (XODE_POLL_MS is for tests and demos). */
 function pollMs(env = process.env) {
   const n = Number(env.XODE_POLL_MS);
   return Number.isFinite(n) && n >= 10 ? n : 1500;
 }
 
-module.exports = { serverUrl, hostOf, configDir, pollMs, DEFAULT_SERVER };
+module.exports = { serverUrl, hostOf, configDir, cacheDir, pollMs, DEFAULT_SERVER };

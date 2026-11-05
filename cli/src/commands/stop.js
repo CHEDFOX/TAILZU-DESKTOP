@@ -5,12 +5,13 @@
 const { createClient } = require("../api/client");
 const { hostOf } = require("../config");
 const { folderState } = require("../state/folders");
+const { folderOf } = require("../state/folderOf");
 const { isOver } = require("../chat/stages");
 
-async function stop({ server, store, out, cwd, env }) {
+async function stop({ server, store, out, cwd: here, env }) {
   const token = await store.get(hostOf(server));
   if (!token) { out.error("Not signed in: run xode login"); return 1; }
-  const st = folderState(server, cwd, env);
+  const st = folderState(server, await folderOf(here), env);
   if (!st.jobId) { out.line("No job is running in this folder."); return 0; }
   const client = createClient({ server, token });
   const path = `/v1/code/jobs/${encodeURIComponent(st.jobId)}`;

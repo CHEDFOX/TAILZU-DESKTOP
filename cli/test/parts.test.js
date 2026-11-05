@@ -26,6 +26,8 @@ test("arguments: commands, a message, flags", () => {
   assert.strictEqual(parseArgs(["--", "login"]).message, "login");
   assert.ok(parseArgs(["--nope"]).error);
   assert.ok(parseArgs(["status", "extra"]).error);
+  assert.strictEqual(parseArgs(["--no-runner", "hi"]).noRunner, true);
+  assert.strictEqual(parseArgs(["hi"]).noRunner, false);
 });
 
 test("server address: https, or http only to this computer", () => {
@@ -39,6 +41,10 @@ test("redaction takes out tokens, bearer headers and tickets", () => {
   addSecret("supersecretvalue123");
   const s = redact("Bearer abc.def xdt_AAAA-bbbb ?ticket=zzz&x=1 supersecretvalue123");
   assert.ok(!/abc\.def|AAAA|zzz|supersecretvalue123/.test(s), s);
+  // A git remote's address with a password or token in it.
+  const g = redact("fatal: unable to access 'https://ana:ghp_tokentoken@github.com/ana/storefront.git/' and ssh://git@github.com/ana/x");
+  assert.ok(!/ghp_tokentoken|ana:/.test(g), g);
+  assert.match(g, /ssh:\/\/git@github\.com/);
 });
 
 test("errors: 401 is signed out, 403 device_scope, a server's own words otherwise, never a token", async () => {

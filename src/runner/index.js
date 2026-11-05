@@ -68,6 +68,8 @@ function repoName(cloneUrl) {
  *   txt(key, fallback, vars)  the knobs' reader for words (desktop.runner.*), so the server words what the person is told; English without it
  *   config           { image, name } from config.json
  *   powerMonitor     Electron's, for the battery
+ *   onlyProject      a project id: this computer takes that project's work and no other's, whatever the allow list says (the
+ *                    terminal, which offers this computer for the folder it was started in only). Left out: the allow list decides
  *   -- for the tests: real (the environment), fs, child { execFile, spawn }, connect, power { read }, urlPolicy, dockerStatus, sleep,
  *      timers, previewLimits, caps, graceMs, noWatchdog, leaseEveryMs
  * }
@@ -83,6 +85,9 @@ function createRunner(o) {
   const log = o.log || (() => {});
   const config = o.config || {};
   const settings = o.state;
+  const only = typeof o.onlyProject === "string" && o.onlyProject ? o.onlyProject : "";
+  /** The projects `hello` names: just the one when there is `onlyProject`, else all of the person's but the refused ones. */
+  const helloList = () => (only ? [only] : allow.helloProjects(projects.ids));
   // THE WORDS the person is told (a notification, Docker's state, this computer's name when it has none) are labels, through
   // `o.txt`; the English here is today's, and the fallback.
   const say = typeof o.txt === "function" ? o.txt : null;
@@ -184,7 +189,7 @@ function createRunner(o) {
   /** Tells the server which projects this computer takes: all of the person's, but the ones refused here. */
   async function pushProjects() {
     await refreshProjects().catch(() => {});
-    presence.sendState({ projects: allow.helloProjects(projects.ids) });
+    presence.sendState({ projects: helloList() });
   }
 
   /** The project a job belongs to: the server's own record of the job. */
@@ -204,7 +209,7 @@ function createRunner(o) {
   const presence = createPresence({
     getTicket,
     connect: o.connect || connectWs,
-    hello: () => helloFrame({ deviceId: settings.deviceId, name: computerName(), allowRun: wantOnline(), projects: allow.helloProjects(projects.ids), busy: !!job, app: "tailzu-desktop " + (o.version || "") }),
+    hello: () => helloFrame({ deviceId: settings.deviceId, name: computerName(), allowRun: wantOnline(), projects: helloList(), busy: !!job, app: "tailzu-desktop " + (o.version || "") }),
     onOffer: (offer) => { handleOffer(offer).catch((err) => log("offer: " + String((err && err.stack) || err))); },
     onCancel: (jobId, epoch) => { if (job && job.id === jobId && epoch >= job.epoch) abortJob(job, "the server took the step back", false); },
     onStatus: () => changed(),
@@ -365,7 +370,7 @@ function createRunner(o) {
     if (j.aborted) return;
     if (!j.projectId) { decline(j, "unknown_project"); return; }
     // Allowed unless the person said "Don't allow" to it in the window: nothing is asked.
-    const verdict = await allow.check({ projectId: j.projectId, name: j.project });
+    const verdict = only && j.projectId !== only ? "denied" : await allow.check({ projectId: j.projectId, name: j.project });
     if (j.aborted) return;
     if (verdict !== "allowed") {
       decline(j, "project_not_allowed");

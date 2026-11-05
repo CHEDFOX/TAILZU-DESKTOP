@@ -2,6 +2,7 @@
 // talk the plan over (POST /say), approve it by its version (POST /approve), then follow the job it starts.
 //
 // `first`: a one-shot run (xode "fix the cart rounding") sends it as the first message and ends with the job.
+// When a job ends with work to show, its branch comes into the folder (work/afterJob.js).
 
 "use strict";
 
@@ -12,6 +13,7 @@ const { followJob, reportEnd } = require("./follow");
 const { isOver } = require("./stages");
 const { threadFor } = require("./thread");
 const { saveFolderState } = require("../state/folders");
+const { afterJob, hasWork } = require("../work/afterJob");
 
 const yes = (a) => /^\s*y(es)?\s*$/i.test(a || "");
 const HELP = [
@@ -52,10 +54,13 @@ async function runSession({ client, server, cwd, env, input, out, project, userI
 
   /** Follows a job to its end. Resolves an exit code when the run should end, or null to go on chatting. */
   async function follow(jobId, o = {}) {
-    saveFolderState(server, cwd, { projectId: project.id, jobId }, env);
+    // A new job here: what the last one brought back (afterJob.js) no longer describes it.
+    saveFolderState(server, cwd, { projectId: project.id, jobId, lastBranch: "", lastPr: "" }, env);
     const res = await followJob(ctx, jobId, o);
     if (res.state === "detached") return 130;
-    const code = reportEnd(res, out);
+    const bring = hasWork(res.state, res.view);
+    const code = reportEnd(res, out, { prLater: bring });
+    if (bring) await afterJob({ state: res.state, view: res.view, project, out, server, env });
     if (res.state === "stopped") return code;
     try { plan = (await flow.plan(thread)).plan || plan; } catch { /* the next message fetches it */ }
     return oneShot ? code : null;

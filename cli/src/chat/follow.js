@@ -171,8 +171,11 @@ async function followJob(ctx, jobId, o = {}) {
   }
 }
 
-/** Says how the job ended: its summary and pull request, or that it failed or was stopped. Resolves the exit code. */
-function reportEnd(result, out) {
+/**
+ * Says how the job ended: its summary and pull request, or that it failed or was stopped. Resolves the exit code.
+ * o.prLater: the pull request is said after the work branch is brought into the folder (work/afterJob.js), not here.
+ */
+function reportEnd(result, out, o = {}) {
   const view = result.view || {};
   const job = view.job || {};
   const agent = view.agent || {};
@@ -181,13 +184,13 @@ function reportEnd(result, out) {
   out.line("");
   if (result.state === "done") {
     out.box(report.text || "The work is done.", "Done");
-    if (pr) out.good(`Pull request: ${pr}`);
+    if (pr && !o.prLater) out.good(`Pull request: ${pr}`);
     return 0;
   }
   if (result.state === "failed") {
     const why = job.reason || report.text || "it stopped before it finished";
     out.line(out.paint.red(`The job failed: ${why.replace(/\.$/, "")}.`));
-    if (pr) out.line(`Pull request (draft): ${pr}`);
+    if (pr && !o.prLater) out.line(`Pull request (draft): ${pr}`);
     return 1;
   }
   if (result.state === "cancelled" || result.state === "stopped") {

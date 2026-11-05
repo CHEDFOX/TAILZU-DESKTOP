@@ -46,6 +46,7 @@ async function rig(o = {}) {
     noWatchdog: true, sleep: async () => {}, leaseEveryMs: o.leaseEveryMs || 30000, graceMs: o.graceMs === undefined ? 100 : o.graceMs,
     baseMs: 20, maxMs: 80, pingEveryMs: o.pingEveryMs, real: { PATH: process.env.PATH, HOME: "/home/someone", LANG: "C.UTF-8", ...(o.real || {}) },
     previewLimits: { probeEveryMs: 50, probeMs: 500, readyMinSec: 1 },
+    onlyProject: o.onlyProject,
   });
   const rigged = {
     t, cloud, runner, remote, state, notes, sig, power, dockerState, saves: () => saves,
@@ -560,6 +561,17 @@ withTimeout("a refused project is left out of the hello after a reconnect, once 
   dev.close(1012, "restart");
   await r.cloud.deviceWaiter.until(2, 8000);
   assert.deepStrictEqual((await r.cloud.devices[1].waitFor("hello")).projects, ["proj-1"]);
+});
+
+withTimeout("limited to one project (the terminal's): the hello names only it, and another project's offer is declined", async () => {
+  const r = await rig({ onlyProject: "proj-1" });
+  const dev = await r.online();
+  assert.deepStrictEqual((await dev.waitFor("hello")).projects, ["proj-1"]);
+  dev.send({ t: "offer", offer: r.offer("job-2") });
+  const decline = await dev.waitFor("decline");
+  assert.deepStrictEqual([decline.jobId, decline.reason], ["job-2", "project_not_allowed"]);
+  assert.ok(!fs.existsSync(r.workspace("proj-2")), "nothing was fetched");
+  assert.strictEqual(r.cloud.api.results.length, 0);
 });
 
 withTimeout("repoName reads the project's name from its address", () => {

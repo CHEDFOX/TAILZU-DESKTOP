@@ -4,9 +4,9 @@
 
 const COMMANDS = new Set(["login", "logout", "status", "stop", "help", "chat"]);
 
-/** { command, message, project, fresh, help, version } or { error }. */
+/** { command, message, project, fresh, noRunner, help, version } or { error }. */
 function parseArgs(argv) {
-  const out = { command: "chat", message: "", project: "", fresh: false, help: false, version: false };
+  const out = { command: "chat", message: "", project: "", fresh: false, noRunner: false, help: false, version: false };
   const words = [];
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -18,6 +18,7 @@ function parseArgs(argv) {
       i += 1;
     } else if (a.startsWith("--project=")) out.project = a.slice("--project=".length);
     else if (a === "--new") out.fresh = true;
+    else if (a === "--no-runner") out.noRunner = true;
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--version" || a === "-v") out.version = true;
     else if (a.startsWith("-") && a.length > 1) return { error: `Unknown option ${a}. Try xode --help.` };

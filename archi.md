@@ -200,9 +200,10 @@ docs/microsoft-store.md the Store listing
 .github/workflows/build.yml   installers for macOS, Windows and Linux; publishing on a manual run
 
 cli/                    xode: Xode in the terminal, its own npm package (no runtime dependencies; the backend repo's xode-cli doc)
-cli/package.json        name xode, bin xode, Node 20+
+cli/package.json        name xode, bin xode, Node 20+; prepack copies the runner in (cli/scripts/bundle-runner.js)
+cli/.gitignore          cli/runner/, the packed copy of src/runner (made by npm pack, never committed)
 cli/bin/xode.js         the arguments, to a command
-cli/src/args.js         reading the arguments; cli/src/config.js: the server (XODE_SERVER) and its host
+cli/src/args.js         reading the arguments; cli/src/config.js: the server (XODE_SERVER), its host, the config and cache folders
 cli/src/api/            client.js: the server, as the terminal's sign-in; redact.js: no secret is ever printed
 cli/src/auth/           link.js: the code sign-in; store.js picks keychain.js (macOS), secretTool.js (Linux) or fileStore.js (600)
 cli/src/commands/       login, logout, status, stop, chat (xode and xode "words"), help
@@ -210,12 +211,32 @@ cli/src/chat/           session.js: one chat (plan, approve, follow); flowApi.js
                         first read; follow.js: a job to its end; live.js: the job's room, else polling; needs.js: questions
                         and yeses; stages.js, activity.js: progress words; thread.js: the app's own chat
 cli/src/net/ws.js       a copy of src/runner/ws.js (a test keeps the two the same), so the package stands alone
-cli/src/project/        resolve.js: which project (a flag, XODE_PROJECT, or picker.js)
-cli/src/state/folders.js  per server and folder: the project, the chat, the last job (~/.config/xode/state.json)
+cli/src/git/run.js      git through execFile (no shell), with a time limit and errors in one sentence; the repository's top
+cli/src/project/resolve.js     which project: a flag, XODE_PROJECT, or the folder's own (its remote against the projects)
+cli/src/project/remote.js      which remote: origin, the only one, or the person says
+cli/src/project/remoteUrl.js   a remote's address read: which GitHub repository, if any
+cli/src/project/connect.js     a repository not connected yet: the app's connect link, then a wait until it is a project
+cli/src/work/afterJob.js       after a job: its branch into the folder, its pull request, both kept for xode status
+cli/src/work/bringBack.js      the work branch into the folder: left alone with uncommitted changes, a fast-forward on the
+                               branch, else the branch made and switched to; then git's diff --stat
+cli/src/computer/host.js       this computer for Xode while xode is open: src/runner run headless, the folder's project only,
+                               shut down at the end and on SIGTERM
+cli/src/computer/load.js       finds the runner: cli/runner/ when packed, else ../src/runner
+cli/src/computer/state.js      the runner's state per server and project (~/.config/xode/runner/state.json, 600)
+cli/src/computer/power.js      the stand-in for the battery monitor (unknown reads as mains power)
+cli/src/computer/statusLine.js "This computer: online…", once and on a change
+cli/src/state/          folders.js: per server and folder, the project, the chat, the last job and its branch
+                        (~/.config/xode/state.json)
+cli/src/state/folderOf.js      the folder state is kept under: the repository's top
 cli/src/ui/             term, paint, wrap, markdown, refs (file:line), box, plan, progress, prompt, out
 cli/src/util/           atomicWrite, sleep, which
-cli/test/               node --test against fakeServer.js (runCli.js runs the real binary)
-cli/dev/demo-server.js  the fake server with a slow, realistic script, to watch a session
+cli/src/util/open.js    a link in the browser, with the platform's opener and no shell
+cli/scripts/bundle-runner.js  npm prepack: src/runner's runtime files (followed from index.js) into cli/runner/
+cli/test/               node --test against fakeServer.js (runCli.js runs the real binary in a real clone)
+cli/test/gitFixture.js  a bare "GitHub" repository and a clone of it, in a temporary folder
+cli/test/folder.test.js the folder's project, a repository not connected yet, and the branch coming back
+cli/test/computer.test.js  the runner headless, for one project, shut down at the end; the packed copy
+cli/dev/demo-server.js  the fake server with a slow, realistic script, and a project folder whose work branch comes back
 ```
 
 Unit tests sit beside the code they test (`x.test.js` next to `x.js`); `test/`

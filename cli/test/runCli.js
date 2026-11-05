@@ -7,15 +7,21 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const { makeRepos } = require("./gitFixture");
+
 const BIN = path.join(__dirname, "..", "bin", "xode.js");
 
-/** A temporary home: a config folder and a project folder. */
-function tempHome() {
+/**
+ * A temporary home: a config folder, and the project's folder `work`, a clone of ana/storefront (gitFixture.js) with Xode's work
+ * branch already on "GitHub". `plain` is a folder that is not a repository. o: makeRepos's options.
+ */
+function tempHome(o = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xode-test-"));
   const config = path.join(root, "config");
-  const work = path.join(root, "work");
-  fs.mkdirSync(work);
-  return { root, config, work, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  const plain = path.join(root, "plain");
+  fs.mkdirSync(plain);
+  const repos = makeRepos(root, o);
+  return { root, config, work: repos.work, plain, repos, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function runCli(args, { server, home, env = {}, cwd } = {}) {
@@ -23,7 +29,7 @@ function runCli(args, { server, home, env = {}, cwd } = {}) {
     cwd: cwd || home.work,
     env: {
       PATH: process.env.PATH, HOME: home.root, XDG_CONFIG_HOME: home.config, XODE_CRED_STORE: "file", XODE_SERVER: server.url,
-      XODE_POLL_MS: "30", XODE_TTY: "0", ...env,
+      XODE_POLL_MS: "30", XODE_TTY: "0", XDG_CACHE_HOME: path.join(home.root, "cache"), ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
