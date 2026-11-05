@@ -108,21 +108,26 @@ let askSilent = 0;
 // known.
 const targets = new Map();
 const targetFor = (sid) => targets.get(sid) || "Desktop";
-// Sessions in a private window or a sensitive app: the server is told, and
-// keeps nothing off the screen (not even their own prior text).
+// Sessions in a sensitive app (or a private window, while the server has them
+// off): the server is told, and keeps nothing off the screen (not even their
+// own prior text).
 const privates = new Map();   // session → true
+// Sessions in a private (incognito) window, read as any other: the server is
+// told, and keeps nothing of them.
+const incognito = new Map();  // session → true
 // The text on the screen around the field, when it was read.
 const arounds = new Map();    // session → text
 window.tailzu.onTarget && window.tailzu.onTarget((p) => {
   if (p && typeof p.targetApp === "string" && p.targetApp) targets.set(p.session, p.targetApp.slice(0, 40));
-  // A private window's field is never read, so no read is coming to wait for.
+  if (p && p.privateWindow) incognito.set(p.session, true);
+  // An off-limits window's field is never read, so no read is coming to wait for.
   if (p && p.privateField) { privates.set(p.session, true); fieldArrived(p.session); }
   // Any other: the main process starts reading the field as it sends this,
   // so the read has given up desktop.field.timeoutMs from now (see fieldRead).
   else if (p && p.session) namedAt.set(p.session, Date.now());
   // Only the recent ones are worth keeping.
   const cut = (p && p.session || 0) - 20;
-  for (const m of [targets, privates, arounds, namedAt]) for (const k of m.keys()) if (k < cut) m.delete(k);
+  for (const m of [targets, privates, incognito, arounds, namedAt]) for (const k of m.keys()) if (k < cut) m.delete(k);
 });
 window.tailzu.onAround && window.tailzu.onAround((p) => {
   if (p && typeof p.surroundings === "string" && p.surroundings && !privates.get(p.session)) {
@@ -130,9 +135,10 @@ window.tailzu.onAround && window.tailzu.onAround((p) => {
   }
 });
 /** The screen read for a session, put on a request (surroundings + the
- *  private flag), the way `put` adds fields. Private wins: nothing off the
+ *  private flags), the way `put` adds fields. Off limits wins: nothing off the
  *  screen rides with it. */
 function withScreen(sid, put) {
+  if (incognito.get(sid)) put("privateWindow", "true");
   if (privates.get(sid)) { put("privateField", "true"); return; }
   const around = arounds.get(sid);
   if (around) put("surroundings", around);
@@ -211,7 +217,7 @@ function fieldRead(sid) {
   });
 }
 /** The session's selection, for the request about to go, or "". Never off a
- *  private window (none is read there; this is the second lock). */
+ *  off-limits window (none is read there; this is the second lock). */
 function selectionFor(sid) {
   asked.add(sid);
   return privates.get(sid) ? "" : (selections.get(sid) || "");

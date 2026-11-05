@@ -10,7 +10,13 @@ JavaScript, with no bundler. It does five things:
   twice, it is talk mode: a spoken conversation with Blip, turn after turn.
 - **Ask, the on-screen agent.** A question about the app in front: the guide
   rings the thing, explains it, or does a small job, asking first before
-  anything that sends, deletes or pays.
+  anything that sends, deletes or pays. A sensitive app (money, health,
+  passwords: `frontApp.looksSensitive`) is never read, and a password field
+  never is. A private (incognito) window is read and acted in like any other
+  when the person calls X0 there, and every request from it carries
+  `privateWindow: true` so the server keeps nothing of it; the server can turn
+  that off (`desktop.agent.privateWindows`), and one is then refused as a
+  sensitive app is (`frontApp.offLimits`, `privateField`).
 - **Meeting notes.** A hidden recorder hears the microphone and, on a Mac, the
   computer's sound, and uploads it in stretches for the server to organise.
   Stop closes the microphone at once and sends what is left after; a save that
@@ -166,7 +172,9 @@ src/
     testkit.js          for tests (not shipped)
 
   shared/               used by more than one window
-    blip.js             Blip, drawn in dots (guide, app window, pill); one file, see "Contracts"
+    blip.js             Blip, drawn in dots (guide, app window, pill); one file, see "Contracts". His moves and poses
+                        are the server's catalog (the backend repo's blip doc): blipCatalog.js compiles it,
+                        blipStarter.js is the copy the build carries, main/blipSync.js fetches a newer one
     speechMeter.js      voice versus breath, keys or hum (recorder, notes)
 
 native/                 helpers built per OS (not JavaScript)

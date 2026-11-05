@@ -34,9 +34,10 @@ const BROWSERS_BUILT_IN = /^(?:google chrome|chrome|chromium|microsoft edge|msed
 
 // THE SERVER MAY ADD TO THESE LISTS, NEVER TAKE FROM THEM. A browser's label is
 // its page's, and "Always for <app>" is never remembered for one (pictureKey);
-// a private window or a money or health app is never read. So what the server
-// sends (desktop.apps.*) only joins what is built in here, and a bad list or
-// none leaves the built-in ones exactly as they are.
+// a money or health app is never read (nor a private window, while the server
+// has them off). So what the server sends (desktop.apps.*) only joins what is
+// built in here, and a bad list or none leaves the built-in ones exactly as
+// they are.
 const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 let extraFrom = {};
 let extraRe = {};
@@ -83,7 +84,10 @@ function siteOf(title, app) {
   return "";
 }
 
-// A private window names itself in its title; its screen is not read.
+// A private window names itself in its title. Called there, Ask and the rest
+// work as anywhere else, and the server is told it was a private window so it
+// keeps nothing of it (privateWindow on each request). The server can turn
+// that off (privateWindowsOk): its screen is then not read at all.
 const PRIVATE = /\b(?:incognito|inprivate|private browsing|private window|guest (?:mode|window))\b/i;
 /** True when the front window is a private/incognito one (from its title). The server may add words (desktop.apps.privateTerms). */
 function isPrivate(title) {
@@ -91,6 +95,19 @@ function isPrivate(title) {
   if (PRIVATE.test(t)) return true;
   const more = extra("private", (alt) => `\\b(?:${alt})\\b`);
   return !!more && more.test(t);
+}
+
+/** Whether a private window is read and acted in when the person calls X0
+ *  there (desktop.agent.privateWindows). On: as any other window, and nothing
+ *  of it is remembered. Off: refused, as a sensitive app is. */
+function privateWindowsOk() {
+  return knobs.bool("desktop.agent.privateWindows", true);
+}
+
+/** True when the window frontInfo named must not be read: a sensitive app,
+ *  or a private window while the server has them off. */
+function offLimits(info) {
+  return !!info && (!!info.sensitive || (!!info.private && !privateWindowsOk()));
 }
 
 // A money/health/secrets app, named loosely, mirroring the server's gate
@@ -656,8 +673,9 @@ function pictureKey(app, name) {
 }
 
 /** The front window, as the app's name plus what the screen around it may be:
- *  its label, and whether it is private (incognito) or sensitive (money,
- *  health) — in both of which the screen is not read. null when unknown. */
+ *  its label, and whether it is private (incognito: read when the person
+ *  calls X0 there, never remembered; see offLimits) or sensitive (money,
+ *  health: the screen is not read). null when unknown. */
 function infoFrom(app, title) {
   const name = label(app, title);
   if (!name) return null;
@@ -709,5 +727,5 @@ function shutDown() { if (ps) { try { ps.stdin.end(); ps.kill(); } catch { /* go
 module.exports = {
   frontInfo, focusedField, surroundings, psOcr, warmUp, shutDown,
   label, infoFrom, pictureKey, kindOf, fieldOf, windowsField, macFieldOf, macFieldScript,
-  isPrivate, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundingsScript, PS,
+  isPrivate, privateWindowsOk, offLimits, looksSensitive, joinSurroundings, mergeScreen, windowsSurroundings, macSurroundingsScript, PS,
 };

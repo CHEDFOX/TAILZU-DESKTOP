@@ -121,7 +121,8 @@ window rather than recording into a history no account owns.
   With the server's brain on (`desktop.route.brain`, `POST /v1/ask/decide`),
   the words are held to the stop and the server says what they were, in any
   language: typed, a message to send, a task, an answer, a routine, notes or a
-  bot (a private window or a money app never goes to it; slow or down, the
+  bot (a money app never goes to it, nor a private window while
+  `desktop.agent.privateWindows` is off; slow or down, the
   word lists decide). A message or task asked for in so many words, with no
   money and nothing deleted, is not asked about again at its ordinary steps.
   A permission Ask needs and the setup card has not given (using the apps,
@@ -137,8 +138,9 @@ window rather than recording into a history no account owns.
   Blip is saying stops); a tap, Esc, a press on the pill, `desktop.talk.quietMs`
   of silence after an answer or `desktop.talk.maxMs` ends it. An answer can hand
   off to Ask, type into the box in front, save a routine, start or stop notes,
-  or send to a bot. A private window or a money app sends no screen content
-  (src/dictation/talk.js).
+  or send to a bot. A money app sends no screen content. A private window sends
+  it as any other, marked `privateWindow` so the server keeps nothing of the
+  turn; with `desktop.agent.privateWindows` off it sends none (src/dictation/talk.js).
 - **Toggle** (a Linux Wayland session, or `oneKey: "off"`): press the hotkey → speak → press again.
 - **Hold-to-talk** (`hold: true`, without the one key): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you
@@ -209,7 +211,10 @@ window rather than recording into a history no account owns.
     buttons, fields and OCR'd lines (roles, labels, short values, a rough
     position), the question's audio on the live stream, plus that one
     picture when allowed. No frames or window titles, and nothing from a
-    private window or a sensitive app.
+    sensitive app. A private (incognito) window is read and acted in like any
+    other when you ask there, and every step says `privateWindow: true`, so
+    the server remembers nothing of it; `desktop.agent.privateWindows` off
+    refuses one as before.
   - **Knobs**: `desktop.agent.*` and `desktop.guide.*`; off with
     `desktop.agent.enabled`. While Ask is on, Alt twice asks instead of
     dictating. Ctrl twice dictates.

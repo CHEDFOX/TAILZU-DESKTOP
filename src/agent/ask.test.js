@@ -254,8 +254,19 @@ test("the server's voice, when on, is fetched and handed to the guide as audio",
   assert.ok(v.audio instanceof Uint8Array && v.audio.length === 3);
 });
 
-test("a private window is refused before anything is read: the microphone closes, the card says why", async () => {
+test("a private window is read and answered like any other, and every step says it was one", async () => {
   const h = harness({ info: { label: "Chrome", private: true } });
+  await h.ask.tap();
+  h.ask.audioIn({ session: h.lastSession(), mime: "audio/webm", data: new Uint8Array([1]).buffer });
+  await until(() => h.requests.length === 1 && h.sent.some((m) => m.type === "say" && m.text === "Top right."));
+  assert.strictEqual(h.calls.find((c) => c[0] === "begin")[1].privateWindow, true);
+  assert.strictEqual(h.requests[0].req.privateWindow, true, "the server is told, so it keeps nothing");
+  assert.ok(!("privateField" in h.requests[0].req), "and it is not off limits");
+  assert.ok(!h.sent.some((m) => m.type === "say" && /private/i.test(m.text)));
+});
+
+test("with private windows off on the server, one is refused before anything is read: the microphone closes, the card says why", async () => {
+  const h = harness({ info: { label: "Chrome", private: true }, knobs: { "desktop.agent.privateWindows": false } });
   await h.ask.tap();
   assert.ok(h.recorder.some(([c]) => c === "cancel-recording"), "the question's microphone is closed");
   await until(() => h.sent.some((m) => m.type === "state" && m.state === "error"));
@@ -1428,8 +1439,18 @@ test("picture: Always for an app with a long name is remembered by that whole na
   h.ask.cancel("test over");
 });
 
-test("a private window's picture is never cropped, asked about or sent", async () => {
-  const { h, f } = await pictureQuestion({ info: { label: "Safari", private: true } });
+test("a private window's picture is asked about like any other's, and goes marked as a private window's", async () => {
+  const { h } = await pictureQuestion({ info: { label: "Safari", private: true } });
+  await until(() => h.types().includes("permission"));
+  h.ipc.emit("guide:permit", { sender: h.windows[0].webContents }, "once");
+  await until(() => h.requests.length === 1);
+  assert.ok(h.requests[0].multipart && h.requests[0].parts.image, "the picture goes");
+  assert.strictEqual(h.requests[0].req.privateWindow, true);
+  h.ask.cancel("test over");
+});
+
+test("with private windows off, a private window's picture is never cropped, asked about or sent", async () => {
+  const { h, f } = await pictureQuestion({ info: { label: "Safari", private: true }, knobs: { "desktop.agent.finalTextMs": 1000, "desktop.agent.doneMs": 5000, "desktop.agent.privateWindows": false } });
   await sleep(60);
   assert.strictEqual(h.requests.length, 0);
   assert.ok(!h.types().includes("permission"));
@@ -2242,7 +2263,7 @@ function watched(o = {}) {
   const frontApp = require("../context/frontApp.js");
   const w = createPeekWatch({
     driver, ask: fakeAsk,
-    knobs: { num: (k, f) => (k in knobs ? knobs[k] : f) },
+    knobs: { num: (k, f) => (k in knobs ? knobs[k] : f), bool: (k, f) => (k in knobs ? knobs[k] : f) },
     on: o.on || (() => true),
     labelOf: o.labelOf || frontApp.label,
     sensitive: frontApp.looksSensitive,
@@ -2352,9 +2373,23 @@ test("the watch: one caret request at a time, however slow the helper; a chunk p
   p.w.end(5);
 });
 
-test("the watch: a private window or a sensitive app is never asked about at all", async () => {
-  for (const info of [Object.assign({}, NOTES, { private: true }), Object.assign({}, NOTES, { label: "Chase", sensitive: true }), null, "Notes"]) {
-    const p = watched();
+test("the watch: a private window is peeked at like any other (only the caret is read)", async () => {
+  const p = watched();
+  p.w.start(9, Promise.resolve(Object.assign({}, NOTES, { private: true })));
+  await until(() => p.told.some((t) => t[0] === "peek"));
+  assert.ok(p.asked.length >= 1);
+  p.w.end(9);
+});
+
+test("the watch: a sensitive app (or a private window, with them off) is never asked about at all", async () => {
+  const cases = [
+    [Object.assign({}, NOTES, { private: true }), { "desktop.agent.privateWindows": false }],
+    [Object.assign({}, NOTES, { label: "Chase", sensitive: true }), {}],
+    [Object.assign({}, NOTES, { label: "Chase", sensitive: true, private: true }), {}],
+    [null, {}], ["Notes", {}],
+  ];
+  for (const [info, knobs] of cases) {
+    const p = watched({ knobs });
     p.w.start(9, Promise.resolve(info));
     await sleep(80);
     assert.deepStrictEqual([p.asked.length, p.told.length], [0, 0], JSON.stringify(info));
@@ -2991,9 +3026,14 @@ test("askHeard: nothing while a dictation has the microphone, signed out, for no
   const h = harness({ frontInfo: async () => null });
   assert.strictEqual(await h.ask.askHeard("where's export"), false);
   assert.strictEqual(h.calls.filter((c) => c[0] === "begin").length, 0, "nothing was looked at");
-  // A private window: the agent refuses it, and says so on its card.
-  const p = harness({ info: { label: "Chrome", private: true } });
+  // A private window, with them off: the agent refuses it, and says so on its card.
+  const p = harness({ info: { label: "Chrome", private: true }, knobs: { "desktop.agent.privateWindows": false } });
   assert.strictEqual(await p.ask.askHeard("where's export"), false);
+  // On (the default): taken, and the run is marked a private window's.
+  const q = harness({ info: { label: "Chrome", private: true } });
+  assert.strictEqual(await q.ask.askHeard("where's export"), true);
+  assert.strictEqual(q.calls.find((c) => c[0] === "begin")[1].privateWindow, true);
+  q.ask.cancel("test over");
 });
 
 test("setup: Open Settings for Accessibility asks macOS first, once, so Tailzu is in the list on a fresh Mac", () => {

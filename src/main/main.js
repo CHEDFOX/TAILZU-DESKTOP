@@ -44,6 +44,7 @@ const { createAskSetup } = require("../agent/askSetup.js");
 const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
+const { createBlipSync } = require("./blipSync.js");
 // Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
 const { setupLiveViews } = require("../app/liveViewMain.js");
 // The server's values for everything below that used to be a literal. Each
@@ -165,7 +166,18 @@ function saveLocalState() { writeJson(localStatePath, localState); }
 
 /** The knobs as the windows need them: the last bootstrap's labels and flags. */
 function knobsPayload() {
-  return { labels: (BOOT && BOOT.labels) || {}, flags: (BOOT && BOOT.flags) || {} };
+  const blip = blipSync().catalog();
+  return Object.assign({ labels: (BOOT && BOOT.labels) || {}, flags: (BOOT && BOOT.flags) || {} }, blip ? { blip } : {});
+}
+
+// Blip's moves and poses, as the server's catalog says (blipSync.js): fetched when the bootstrap names a newer one, kept
+// for the next launch, and handed to every window with the knobs, which plays them at once (shared/blip.js useCatalog).
+let blipSyncer = null;
+function blipSync() {
+  return blipSyncer || (blipSyncer = createBlipSync({
+    userData: app.getPath("userData"), baseUrl: () => cfg.baseUrl, fetch: (url) => fetch(url),
+    onChange: () => broadcastKnobs(), log: (line) => console.warn("[X0 Bot] " + line),
+  }));
 }
 
 // ---- Server-drawn chrome -----------------------------------------------------
@@ -249,6 +261,7 @@ function adoptBoot(boot) {
   reloadConfigFromKnobs();
   refreshTray();
   broadcastKnobs();
+  void blipSync().check(boot.flags && boot.flags["desktop.blip"]);
   try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed adopt */ }
 }
 
@@ -2407,14 +2420,16 @@ function toggleDictation() {
     named
       .then((info) => {
         if (!info || sid !== activeSession) return;
-        // A private window (incognito) or a money/health app: the screen is
-        // not read — not its text around the field, not the field's own text.
-        // The request is marked private so the server keeps nothing either.
-        const off = !!info.private || !!info.sensitive;
+        // A money/health app (or a private window, while the server has them
+        // off: frontApp.offLimits): the screen is not read — not its text
+        // around the field, not the field's own text. The request is marked
+        // private so the server keeps nothing either. A private window is
+        // otherwise read as any other, marked privateWindow: nothing of it is kept.
+        const off = frontApp.offLimits(info);
         routing.target(sid, info);
-        sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off });
+        sendToRecorder("recording-target", { session: sid, targetApp: info.label, privateField: off, privateWindow: !!info.private });
         // No field will be read: the recorder is told at once, so a short
-        // first stretch does not wait for one (a private window says so
+        // first stretch does not wait for one (an off-limits window says so
         // itself, through recording-target).
         if (ours || off || !bool("desktop.field.read", true)) {
           if (!off) sendToRecorder("recording-field", { session: sid, field: null });
@@ -3063,7 +3078,7 @@ function setupAsk() {
   });
   // Where the cursor is while a dictation records, for Blip to peek over the
   // text box: asked of Ask's helper only while it is already running, of the
-  // dictation's own app, never of a private window or a sensitive app, and
+  // dictation's own app, never of a sensitive app (nor a private window, with them off), and
   // every failure silent (createPeekWatch).
   peekWatch = createPeekWatch({
     driver, ask, knobs: { num },
@@ -3216,7 +3231,7 @@ function startTalk() {
 /**
  * THE PAGE in front, for a talk turn's `page` ({ outline, text, where, source }): the whole of it, not only what is
  * on screen (src/context/pageRead.js). The turn's words decide whether a page drawn as pixels may be scrolled through.
- * talk.js never asks it for a private window or a sensitive app.
+ * talk.js never asks it for a sensitive app (nor a private window, with them off).
  */
 function pageFor(_info, words) {
   return pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), { question: String(words || "") });

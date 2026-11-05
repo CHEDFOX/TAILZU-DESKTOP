@@ -34,8 +34,9 @@
 //   picture     a question about something drawn ("explain this equation",
 //               "what does this chart show"): ONE cropped picture of it goes
 //               with the question, only with their permission for this app,
-//               and the card says it went. Never from a private window or a
-//               sensitive app; the window's picture is checked like its tree.
+//               and the card says it went. Never from a sensitive app (nor a
+//               private window while the server has them off); the window's
+//               picture is checked like its tree.
 //   text        everything else, as before; with the live caption's words
 //               as the utterance when there are some, so the server has
 //               nothing to transcribe.
@@ -219,6 +220,9 @@ function createAgent(deps) {
     try { v = knob(name, fallback); } catch { v = fallback; }
     return typeof v === "boolean" ? v : fallback;
   }
+  /** Whether a private window is read and acted in like any other (the
+   *  server's switch; frontApp.privateWindowsOk reads the same one). */
+  const privateOk = () => bool("desktop.agent.privateWindows", true);
   /** History the server takes, oldest first. Older turns fall off the front. */
   const historyMax = () => Math.max(1, Math.round(num("desktop.agent.historyMax", 16)));
   /** Words the person reads (desktop.*, through `d.txt`, the knobs' reader); the English here without it. */
@@ -323,7 +327,7 @@ function createAgent(deps) {
   function finish(run, how, text) {
     if (!alive(run)) return;
     // A tentative ring is a guess at an answer that is not coming now (the
-    // look showed a private window after preview drew it off the tree, the
+    // look showed a refused window after preview drew it off the tree, the
     // request failed): it does not stay up beside the card.
     if (run.tentative) { run.tentative = false; tell(run, "unpoint"); }
     if (how === "done") {
@@ -406,9 +410,10 @@ function createAgent(deps) {
     run.byId = new Map(elementsOf(run.snapshot).filter((e) => typeof e.id === "string").map((e) => [e.id, e]));
   }
 
-  /** adopt(), unless the screen is now a private window or a sensitive app's
-   *  — an OPEN, a link, a tab or a key of theirs landed in a bank, a password
-   *  manager or an incognito window. The check at begin saw only the window
+  /** adopt(), unless the screen is now a sensitive app's (or a private
+   *  window's, while the server has them off) — an OPEN, a link, a tab or a
+   *  key of theirs landed in a bank, a password manager or, then, an
+   *  incognito window. The check at begin saw only the window
    *  that was in front then; a browser's app name stays "Google Chrome" on
    *  every site, so the window's title is checked here too, on every screen
    *  the run takes in. Nothing of a refused screen is sent: the run ends
@@ -432,14 +437,14 @@ function createAgent(deps) {
   }
 
   /** refusal() for a look: its window's title, with the tree's app name when
-   *  there is one. The picture is of a window too, and a private one's
+   *  there is one. The picture is of a window too, and a refused one's
    *  picture is no more to be read than its tree. */
   function lookRefusal(look, snap) {
     if (!look || look.ok !== true) return "";
     const title = str(look.window && look.window.title).slice(0, 200);
     if (!title) return "";
     const name = snap && snap.ok === true && snap.app && snap.app.name ? str(snap.app.name) : "";
-    if (frontApp.isPrivate(title)) return "private";
+    if (frontApp.isPrivate(title) && !privateOk()) return "private";
     if (isSensitive(squash(name + " " + title)) || isSensitive(title)) return "sensitive";
     return "";
   }
@@ -496,12 +501,14 @@ function createAgent(deps) {
   }
 
   /** "private" or "sensitive" when this screen must not be read or acted
-   *  in, by the app's name and the window's title; "" otherwise. */
+   *  in, by the app's name and the window's title; "" otherwise. A private
+   *  window is read and acted in like any other (only never remembered:
+   *  privateWindow), unless the server has them off. */
   function refusal(snap) {
     if (!snap || snap.ok !== true) return "";
     const name = snap.app && snap.app.name ? str(snap.app.name) : "";
     const title = titleOf(snap);
-    if (title && frontApp.isPrivate(title)) return "private";
+    if (title && frontApp.isPrivate(title) && !privateOk()) return "private";
     if ((name && isSensitive(name)) || (title && isSensitive(squash(name + " " + title)))) return "sensitive";
     return "";
   }
@@ -549,6 +556,10 @@ function createAgent(deps) {
     }
     if (text) screen.text = text;
     const req = { runId: run.id, step: run.step, platform, app: appLabel(run), screen, tzOffsetMinutes: -new Date().getTimezoneOffset() };
+    // A run begun in a private window, or that has been in one since, says so
+    // on every step: the server keeps nothing of it.
+    if (!run.privateWindow && (frontApp.isPrivate(titleOf(snap)) || (run.look && run.look.window && frontApp.isPrivate(str(run.look.window.title))))) run.privateWindow = true;
+    if (run.privateWindow) req.privateWindow = true;
     // With audio, the audio is the words (step 0, or the reply to an ASK).
     // Without, the run's goal goes again: the server keeps nothing between
     // steps, so every step says what the run is for.
@@ -860,8 +871,8 @@ function createAgent(deps) {
       const seen = await race(run, takeSnapshot());
       if (!alive(run)) return { ok: false, error: "cancelled" };
       if (!seen || seen.ok !== true) return { ok: false, error: "couldn't read the focus" };
-      // Nothing is typed into a private window or a sensitive app either; the
-      // read after the step ends the run there.
+      // Nothing is typed into a sensitive app either (nor a private window,
+      // while the server has them off); the read after the step ends the run there.
       if (refusal(seen)) return { ok: false, error: "not this window" };
       if (focusLandedOn(target, before, seen)) break;
       if (look >= 1) return { ok: false, error: "focus didn't move" };
@@ -1594,7 +1605,7 @@ function createAgent(deps) {
       // step waits for it (never past each read's own timeout). A failed read
       // still asks — "what does this error mean?" can be answered from the
       // words alone. Both are checked before anything of them is used: a
-      // private window's picture is as private as its tree.
+      // refused window's picture is as refused as its tree.
       const got = await race(run, Promise.all([run.snapPromise, run.lookPromise]));
       if (!alive(run) || got === ABORTED) return;
       const [snap, look] = got;
@@ -1630,11 +1641,14 @@ function createAgent(deps) {
   }
 
   /**
-   * Alt twice. Refused outright for a private window or a sensitive app —
-   * nothing is read. Otherwise the guide starts listening and the screen is
+   * Alt twice. Refused outright for a sensitive app, or a screen marked off
+   * limits (`privateField`) — nothing is read. A private window (`privateWindow`)
+   * is read and acted in like any other, and every step tells the server so,
+   * which keeps nothing of it; while the server has them off (privateOk) it
+   * is refused too. Otherwise the guide starts listening and the screen is
    * read at the same time, while they are still speaking: the tree, and a
    * look at the window (its text and its picture), in parallel.
-   * @param {{ app?: string, privateField?: boolean, sensitive?: boolean, pointer?: { x: number, y: number }, trusted?: boolean }} [opts]
+   * @param {{ app?: string, privateField?: boolean, privateWindow?: boolean, sensitive?: boolean, pointer?: { x: number, y: number }, trusted?: boolean }} [opts]
    *        `pointer` in the driver's units (Windows: physical pixels); `trusted`: the person asked for this
    *        task or message in so many words, so its ordinary steps are not asked about (classifyRisk)
    * @returns {boolean} whether a run began
@@ -1648,9 +1662,11 @@ function createAgent(deps) {
     // The last answer's marks may still be up beside its card: this question
     // starts on a clean screen, refused or not.
     callGuide("clear");
-    if (o.privateField || o.sensitive) {
-      log(`agent: refused (${o.privateField ? "private window" : "sensitive app"})`);
-      callGuide("error", [o.privateField ? TEXT.private : TEXT.sensitive]);
+    const privateOff = !!o.privateWindow && !privateOk();
+    if (o.privateField || privateOff || o.sensitive) {
+      const priv = !!o.privateField || privateOff;
+      log(`agent: refused (${priv ? "private window" : "sensitive app"})`);
+      callGuide("error", [priv ? TEXT.private : TEXT.sensitive]);
       scheduleHide();
       return false;
     }
@@ -1662,7 +1678,7 @@ function createAgent(deps) {
       token: ++seq, id, tag: id.slice(0, 8), controller,
       aborted: new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(ABORTED), { once: true })),
       over: false, started: false, stop: "",
-      app: clip(squash(o.app), 60), firstApp: "",
+      app: clip(squash(o.app), 60), firstApp: "", privateWindow: !!o.privateWindow,
       snapshot: { ok: false, error: "not read yet", elements: [] }, frames: new Map(), byId: new Map(),
       mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
       plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null, pagePromise: null,

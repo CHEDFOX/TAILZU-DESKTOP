@@ -100,6 +100,7 @@ function mainProcess(o = {}) {
     frontInfo: async () => (infos.length > 1 ? infos.shift() : infos[0]),
     focusedField: async () => ({ kind: "message", label: "Message", before: "Dear Sam," }),
     warmUp() {}, shutDown() {}, label: realFront.label, looksSensitive: realFront.looksSensitive,
+    isPrivate: realFront.isPrivate, privateWindowsOk: realFront.privateWindowsOk, offLimits: realFront.offLimits,
   };
   const driver = {
     available: () => true, start() {}, stop() {},

@@ -24,8 +24,10 @@
 // "notes" started or stopped, "bot" sent to that bot. Talk listens again once
 // the handoff is over.
 //
-// A private window or a money or health app (frontApp.js): nothing of the
-// screen goes with the words, not its title, its field or its page.
+// A money or health app (frontApp.js), or a private window while the server
+// has them off: nothing of the screen goes with the words, not its title, its
+// field or its page. A private window is otherwise read as any other, and the
+// turn is marked privateWindow: the server keeps nothing of it.
 //
 // Every effect is a dependency (main.js passes its own), so the flow runs in
 // the tests with fakes:
@@ -37,7 +39,7 @@
 //   d.front()                  the window in front: { label, title, private, sensitive } or null
 //   d.field()                  optional: the focused field, { selection } or null
 //   d.ours()                   our own window is in front
-//   d.pageFor(info, words)     the page in front for `page`, or null (main.js; never asked for a private window)
+//   d.pageFor(info, words)     the page in front for `page`, or null (main.js; never asked for an off-limits window)
 //   d.grants()                 optional: the setup card's state
 //   d.post(path, body, { signal })  the account's authorised fetch → Response
 //   d.voice(text, { lang })    the sentence's audio, fetched as soon as it is written → a message for d.play
@@ -225,16 +227,25 @@ function createTalk(d) {
   }
 
   // ---- the server's answer ------------------------------------------------------------
-  /** Whether the screen may be read for this window: known, not private, not sensitive, not ours. */
+  /** A window whose screen is not read: a sensitive app, or a private one
+   *  while the server has them off (desktop.agent.privateWindows). A private
+   *  window is otherwise read as any other, and marked so nothing of it is kept. */
+  function offLimits(info) {
+    return !!info && (!!info.sensitive || (!!info.private && !bool("desktop.agent.privateWindows", true)));
+  }
+
+  /** Whether the screen may be read for this window: known, not off limits, not ours. */
   function screenOk(info) {
-    return !!info && !info.private && !info.sensitive && !call(() => d.ours(), false);
+    return !!info && !offLimits(info) && !call(() => d.ours(), false);
   }
 
   async function bodyFor(me, words) {
     const info = await me.infoP;
     const ours = !!call(() => d.ours(), false);
     const body = { talkId: me.id, turn: me.turn, words: words.slice(0, Math.max(1, ms("desktop.talk.wordsChars", 2000))), tz: -new Date().getTimezoneOffset(), ours };
-    if (info && (info.private || info.sensitive)) {
+    // Called in a private window: read as any other, and the server keeps nothing of the turn.
+    if (info && info.private) body.privateWindow = true;
+    if (offLimits(info)) {
       // Nothing of the screen: the field is said to be private, and that is all.
       body.field = { private: true };
     } else if (info && !ours) {

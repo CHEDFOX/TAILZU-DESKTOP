@@ -410,15 +410,41 @@ test("brain: off unless the server turns it on (desktop.route.brain): the lists 
   assert.strictEqual(h.r.chunk(1, { text: "Running late,", heard: "running late" }), "type");
 });
 
-test("brain: a private window or a money app never goes to it; the lists decide, typed as it comes", async () => {
-  const h = rig({ decide: () => { throw new Error("must not be asked"); } });
+test("brain: a money app (or a private window, with them off) never goes to it; the lists decide, typed as it comes", async () => {
+  for (const [info, knobs] of [
+    [{ label: "HDFC", sensitive: true }, {}],
+    [{ label: "HDFC", sensitive: true, private: true }, {}],
+    [{ label: "Chrome", private: true }, { "desktop.agent.privateWindows": false }],
+  ]) {
+    const h = rig({ decide: () => { throw new Error("must not be asked"); }, knobs });
+    h.r.start(1, {});
+    h.r.target(1, info);
+    h.r.field(1, BOX);
+    assert.strictEqual(h.r.chunk(1, { text: "hello", heard: "hello" }), "type");
+    assert.strictEqual(h.r.end(1, { text: "there", heard: "there" }, true), "type");
+    await settle();
+    assert.ok(!h.did.some((x) => x[0] === "decide"), JSON.stringify(info));
+  }
+});
+
+test("brain: a private window goes to it like any other, marked privateWindow, and is not among the last asks", async () => {
+  const inputs = [];
+  const h = rig({ decide: (i) => { inputs.push(i); return { do: "answer", goal: i.words, sure: 0.9, by: "model", missing: [] }; } });
   h.r.start(1, {});
-  h.r.target(1, { label: "HDFC", sensitive: true });
-  h.r.field(1, BOX);
-  assert.strictEqual(h.r.chunk(1, { text: "hello", heard: "hello" }), "type");
-  assert.strictEqual(h.r.end(1, { text: "there", heard: "there" }, true), "type");
+  h.r.target(1, { label: "Chrome", title: "Flights - Incognito", private: true });
+  h.r.field(1, null);
+  assert.strictEqual(h.r.end(1, { text: "which is cheapest", heard: "which is cheapest" }, true), "routed");
   await settle();
-  assert.ok(!h.did.some((x) => x[0] === "decide"));
+  assert.strictEqual(inputs[0].privateWindow, true);
+  assert.ok(h.did.some((x) => x[0] === "ask" && x[1] === "which is cheapest"), "Ask takes it");
+  // The next ask, in an ordinary window: nothing of the private one goes with it.
+  h.r.start(2, {});
+  h.r.target(2, { label: "WhatsApp" });
+  h.r.field(2, null);
+  h.r.end(2, { text: "what time is it", heard: "what time is it" }, true);
+  await settle();
+  assert.deepStrictEqual(inputs[1].last, []);
+  assert.ok(!("privateWindow" in inputs[1]));
 });
 
 test("brain: a message to send goes to Ask, trusted, with the goal made whole", async () => {

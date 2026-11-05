@@ -819,9 +819,14 @@ test("a run begun while another is active replaces it", async () => {
 
 // ---- refusals and failures ----------------------------------------------------
 
-test("a private window or a sensitive app is refused at begin, before anything is read", async () => {
-  for (const [opts, text] of [[{ app: "Chrome", privateField: true }, TEXT.private], [{ app: "Chase", sensitive: true }, TEXT.sensitive]]) {
-    const r = rig();
+test("an off-limits screen, a sensitive app, or a private window with them off is refused at begin, before anything is read", async () => {
+  for (const [opts, text, knobs] of [
+    [{ app: "Chrome", privateField: true }, TEXT.private],
+    [{ app: "Chrome", privateWindow: true }, TEXT.private, { "desktop.agent.privateWindows": false }],
+    [{ app: "Chase", sensitive: true }, TEXT.sensitive],
+    [{ app: "Chase", sensitive: true, privateWindow: true }, TEXT.sensitive],
+  ]) {
+    const r = rig({ knobs });
     assert.strictEqual(r.agent.begin(opts), false);
     assert.deepStrictEqual(r.guide.of("error"), [["error", text]]);
     assert.deepStrictEqual(r.guide.of("show"), []);
@@ -830,6 +835,33 @@ test("a private window or a sensitive app is refused at begin, before anything i
     await r.agent.heard(AUDIO);
     assert.strictEqual(r.post.requests.length, 0);
   }
+});
+
+test("a private window is read and acted in like any other, and every step tells the server it was one", async () => {
+  const PRIV = snap([EXPORT, COMPOSER, SEND, HEADING], { focused: "e2", window: { frame: WIN, title: "Slack - New Incognito Tab - Google Chrome" } });
+  const r = rig({ snaps: [PRIV, PRIV, PRIV], scripts: [[heardDo("export"), press("e1")], [{ t: "done" }]] });
+  assert.strictEqual(r.agent.begin({ app: "Chrome", privateWindow: true }), true);
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e1"]], "it acts");
+  assert.strictEqual(r.post.requests.length, 2);
+  assert.ok(r.post.reqs().every((q) => q.privateWindow === true && !("privateField" in q)), "marked a private window's, not off limits");
+  assert.ok(r.post.reqs()[0].screen.elements.length > 0, "its screen is read");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
+});
+
+test("a run that moves into a private window goes on, marked a private window's from then on", async () => {
+  const INCOGNITO = snap([{ id: "e1", role: "field", label: "Address and search bar", focused: true }], {
+    app: CHROME, focused: "e1", window: { frame: WIN, title: "New Incognito Tab - Google Chrome" },
+  });
+  const r = rig({
+    snaps: [GMAIL, GMAIL, INCOGNITO, INCOGNITO],
+    scripts: [[heardDo("open an incognito window"), { t: "action", kind: "key", keys: "cmd+shift+n", risk: "free" }], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Gmail" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 2);
+  assert.deepStrictEqual(r.post.reqs().map((q) => q.privateWindow === true), [false, true]);
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
 });
 
 test("an OPEN that lands in a sensitive app ends the run without sending its screen", async () => {
@@ -883,6 +915,7 @@ test("a key that opens a private window ends the run without sending it", async 
   const r = rig({
     snaps: [GMAIL, GMAIL, INCOGNITO],
     scripts: [[heardDo("open an incognito window"), { t: "action", kind: "key", keys: "cmd+shift+n", risk: "free" }], [{ t: "done" }]],
+    knobs: { "desktop.agent.privateWindows": false },
   });
   r.agent.begin({ app: "Gmail" });
   await r.agent.heard(AUDIO);
@@ -891,7 +924,7 @@ test("a key that opens a private window ends the run without sending it", async 
   assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", TEXT.blockedPrivate]);
 });
 
-test("no key, paste or select-all goes into a window that turned private while the step waited", async () => {
+test("with private windows off, no key, paste or select-all goes into a window that turned private while the step waited", async () => {
   const BAR = { id: "e1", role: "field", label: "Address and search bar", value: "", focused: true, frame: [100, 0, 600, 30] };
   const NORMAL = snap([BAR], { app: CHROME, focused: "e1", window: { frame: WIN, title: "New Tab - Google Chrome" } });
   const PRIVATE = snap([BAR], { app: CHROME, focused: "e1", window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
@@ -900,7 +933,7 @@ test("no key, paste or select-all goes into a window that turned private while t
     { t: "action", kind: "type", text: "x0bot.com", risk: "free" },
     { t: "action", kind: "set", id: "e1", text: "x0bot.com", risk: "free" },
   ]) {
-    const r = rig({ snaps: [NORMAL, PRIVATE], scripts: [[heardDo("go to tailzu"), action], [{ t: "done" }]] });
+    const r = rig({ snaps: [NORMAL, PRIVATE], scripts: [[heardDo("go to tailzu"), action], [{ t: "done" }]], knobs: { "desktop.agent.privateWindows": false } });
     r.agent.begin({ app: "Chrome" });
     await r.agent.heard(AUDIO);
     assert.deepStrictEqual(r.driver.acts().filter((c) => c[0] === "key"), [], action.kind);
@@ -910,15 +943,31 @@ test("no key, paste or select-all goes into a window that turned private while t
   }
 });
 
-test("a first screen that is private or sensitive by its title sends nothing at all", async () => {
-  for (const [title, text] of [["Private Browsing - Safari", TEXT.blockedPrivate], ["Patient portal - MyClinic", TEXT.blocked]]) {
+test("a first screen that is sensitive by its title (or private, with them off) sends nothing at all", async () => {
+  for (const [title, text, knobs] of [
+    ["Private Browsing - Safari", TEXT.blockedPrivate, { "desktop.agent.privateWindows": false }],
+    ["Patient portal - MyClinic", TEXT.blocked],
+    ["Patient portal - MyClinic - Private Browsing - Safari", TEXT.blocked],
+  ]) {
     const s = snap([{ id: "e1", role: "text", label: "Lab results" }], { app: { name: "Safari", pid: 3 }, window: { frame: WIN, title } });
-    const r = rig({ snaps: [s], scripts: [[heardShow("what is this?"), { t: "done" }]] });
+    const r = rig({ snaps: [s], scripts: [[heardShow("what is this?"), { t: "done" }]], knobs });
     r.agent.begin({ app: "Safari" });
     await r.agent.heard(AUDIO);
     assert.strictEqual(r.post.requests.length, 0, title);
     assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", text], title);
   }
+});
+
+test("a first screen that is private by its title is read and sent, marked a private window's", async () => {
+  const s = snap([{ id: "e1", role: "text", label: "Flight results" }], { app: { name: "Safari", pid: 3 }, window: { frame: WIN, title: "Private Browsing - Safari" } });
+  const r = rig({ snaps: [s], scripts: [[heardShow("what is this?"), { t: "say", text: "Flights." }, { t: "done" }]] });
+  r.agent.begin({ app: "Safari" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.strictEqual(r.post.reqs()[0].privateWindow, true);
+  assert.ok(JSON.stringify(r.post.reqs()[0].screen).includes("Flight results"));
+  assert.ok(!JSON.stringify(r.post.reqs()[0]).includes("Private Browsing"), "the title still never leaves");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done"]);
 });
 
 test("the window's title is used on this computer only: never in a request", async () => {
@@ -1783,9 +1832,9 @@ test("no tree, but a look: its lines are the screen, and can be pointed at insta
   assert.ok(r.logs.some((l) => /tree not read; using the text read off the window/.test(l)));
 });
 
-test("a private or sensitive window's look ends the run: nothing is sent, nothing pointed at, even instantly", async () => {
-  for (const [title, text] of [["New Incognito Tab - Google Chrome", TEXT.blockedPrivate], ["Chase Online - Accounts", TEXT.blocked]]) {
-    const r = rig({ look: lookOf([L_REVENUE], { window: { frame: WIN, title } }), crop: () => CROPPED, pictures: () => "always" });
+test("a sensitive window's look (or a private one's, with them off) ends the run: nothing is sent, nothing pointed at, even instantly", async () => {
+  for (const [title, text, knobs] of [["New Incognito Tab - Google Chrome", TEXT.blockedPrivate, { "desktop.agent.privateWindows": false }], ["Chase Online - Accounts", TEXT.blocked]]) {
+    const r = rig({ look: lookOf([L_REVENUE], { window: { frame: WIN, title } }), crop: () => CROPPED, pictures: () => "always", knobs });
     r.agent.begin({ app: "Slack" });
     await r.agent.heard(AUDIO, { text: "where's export?", final: true });
     assert.strictEqual(r.post.requests.length, 0, title);
@@ -1902,7 +1951,15 @@ test("preview: a tentative ring as soon as the words name one thing, moved when 
   assert.strictEqual(r.guide.of("point").length, 3, "nothing once the run has begun");
 });
 
-test("preview draws nothing before the tree is read, on a private screen, or with the instant knob off", async () => {
+test("a private window's look is used like any other's, and the run is marked a private window's", async () => {
+  const r = rig({ look: lookOf([L_REVENUE], { window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } }), crop: () => CROPPED, pictures: () => "always", scripts: [[heardShow("what does this say?"), { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.strictEqual(r.post.reqs()[0].privateWindow, true);
+});
+
+test("preview draws nothing before the tree is read, on a private screen with them off, or with the instant knob off", async () => {
   let release;
   const late = new Promise((res) => { release = res; });
   const r = rig({ snaps: [() => late.then(() => SLACK)] });
@@ -1915,14 +1972,22 @@ test("preview draws nothing before the tree is read, on a private screen, or wit
   assert.strictEqual(r.guide.of("point").length, 1);
   r.agent.cancel("test");
 
-  const priv = rig({ snaps: [snap([EXPORT], { window: { frame: WIN, title: "Private Browsing - Safari" } })] });
+  // A private screen: drawn on like any other, unless private windows are off.
+  const privOn = rig({ snaps: [snap([EXPORT], { window: { frame: WIN, title: "Private Browsing - Safari" } })] });
+  privOn.agent.begin({ app: "Safari" });
+  await sleep(1);
+  privOn.agent.preview("where's export");
+  assert.strictEqual(privOn.guide.of("point").length, 1);
+  privOn.agent.cancel("test");
+
+  const priv = rig({ snaps: [snap([EXPORT], { window: { frame: WIN, title: "Private Browsing - Safari" } })], knobs: { "desktop.agent.privateWindows": false } });
   priv.agent.begin({ app: "Safari" });
   await sleep(1);
   priv.agent.preview("where's export");
   assert.deepStrictEqual(priv.guide.of("point"), []);
   priv.agent.cancel("test");
 
-  const privLook = rig({ look: lookOf([], { window: { frame: WIN, title: "InPrivate - Edge" } }) });
+  const privLook = rig({ look: lookOf([], { window: { frame: WIN, title: "InPrivate - Edge" } }), knobs: { "desktop.agent.privateWindows": false } });
   privLook.agent.begin({ app: "Edge" });
   await sleep(1);
   privLook.agent.preview("where's export");
@@ -1937,10 +2002,10 @@ test("preview draws nothing before the tree is read, on a private screen, or wit
   off.agent.cancel("test");
 });
 
-test("a ring preview drew off the tree goes when the look then shows a private window", async () => {
+test("with private windows off, a ring preview drew off the tree goes when the look then shows a private window", async () => {
   let release;
   const late = new Promise((res) => { release = res; });
-  const r = rig({ look: () => late.then(() => lookOf([], { window: { frame: WIN, title: "InPrivate - Microsoft Edge" } })) });
+  const r = rig({ look: () => late.then(() => lookOf([], { window: { frame: WIN, title: "InPrivate - Microsoft Edge" } })), knobs: { "desktop.agent.privateWindows": false } });
   r.agent.begin({ app: "Edge" });
   await sleep(1);
   r.agent.preview("where's export");
@@ -3376,10 +3441,21 @@ test("a thin page and a question about the whole of it: the read a screen at a t
   assert.deepStrictEqual(r2.post.reqs()[0].page, { text: "Untitled", source: "tree" });
 });
 
-test("no page from a private or sensitive screen, with the knob off, or when there is none", async () => {
+test("a private screen's page is read and sent like any other's, marked a private window's", async () => {
+  const PRIV = snap([EXPORT], { window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
+  const page = fakePage(TREE_PAGE, null);
+  const r = rig({ snaps: [PRIV], page, scripts: [[heardShow("summarise this page"), { t: "done" }]] });
+  r.agent.begin({ app: "Chrome", privateWindow: true });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(r.post.requests.length, 1);
+  assert.strictEqual(r.post.reqs()[0].privateWindow, true);
+  assert.ok(r.post.reqs()[0].page && r.post.reqs()[0].page.text, "its page goes");
+});
+
+test("no page from a sensitive screen or a private one with them off, with the knob off, or when there is none", async () => {
   const PRIV = snap([EXPORT], { window: { frame: WIN, title: "New Incognito Tab - Google Chrome" } });
   const p1 = fakePage(TREE_PAGE, null);
-  const r1 = rig({ snaps: [PRIV], page: p1, scripts: [[{ t: "done" }]] });
+  const r1 = rig({ snaps: [PRIV], page: p1, scripts: [[{ t: "done" }]], knobs: { "desktop.agent.privateWindows": false } });
   r1.agent.begin({ app: "Chrome" });
   await r1.agent.heard(AUDIO);
   assert.strictEqual(r1.post.requests.length, 0, "a private first screen sends nothing at all");

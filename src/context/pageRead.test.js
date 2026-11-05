@@ -140,8 +140,16 @@ test("no read a screen at a time unless the question needs the whole page", asyn
   assert.strictEqual(off.st.scrolls.length, 0, "the knob turns it off");
 });
 
-test("nothing from a private window or a sensitive app; no scrolling while dictating or with the pointer elsewhere", async (t) => {
+test("a private window's page is read like any other's", async (t) => {
   knobs(t, { "desktop.page.maxScreens": 40 });
+  const priv = fakeWindow({ front: { label: "Chrome", title: "New Incognito Tab", private: true, sensitive: false } });
+  const p = await readPage(priv.deps, { question: "summarise this" });
+  assert.notStrictEqual(p.source, "none");
+  assert.ok(p.text.length > 0);
+});
+
+test("nothing from a sensitive app or a private window with them off; no scrolling while dictating or with the pointer elsewhere", async (t) => {
+  knobs(t, { "desktop.page.maxScreens": 40, "desktop.agent.privateWindows": false });
   const NONE = { outline: [], text: "", where: "", source: "none", truncated: false };
   const priv = fakeWindow({ front: { label: "Chrome", title: "New Incognito Tab", private: true, sensitive: false } });
   assert.deepStrictEqual(await readPage(priv.deps, { question: "summarise this" }), NONE);

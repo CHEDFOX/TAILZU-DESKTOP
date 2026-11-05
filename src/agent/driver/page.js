@@ -7,7 +7,7 @@
 //     truncated, ms, app: { name, pid }, window: { title, frame }, scale }
 //   { ok: false, error }
 //
-// The window's title is for the device's own check (a private window), as a
+// The window's title is for the device's own check (a sensitive app, a private window), as a
 // snapshot's is, and its frame (in the driver's units, `scale`) for telling
 // whether a scroll under the pointer would reach it; neither is sent.
 

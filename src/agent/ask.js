@@ -559,8 +559,8 @@ function createAsk(ctx) {
       if (confirmWait) confirmWait(false);
       if (permitWait) permitWait("no");
       dropReply();
-      // Refused before anything was shown (a private window): the card
-      // comes up to say so.
+      // Refused before anything was shown (a bank; a private window while
+      // the server has them off): the card comes up to say so.
       if (!shown) guide.show("error", {}); else phaseTo("showing");
       send({ type: "state", state: "error" });
       if (msg) send({ type: "say", text: String(msg) });
@@ -1132,10 +1132,12 @@ function createAsk(ctx) {
     // The microphone first: what they say in the moment it takes to name the
     // app is not lost.
     record(true);
-    // NOT KNOWING WHICH WINDOW IS NOT "FINE". A private window or a bank is
-    // refused before anything is read, and a front window that could not be
-    // named (System Events slow to wake or not allowed, the helper busy) may
-    // be either: it is asked once more, and then refused like them.
+    // NOT KNOWING WHICH WINDOW IS NOT "FINE". A bank is refused before
+    // anything is read (and a private window, while the server has them off;
+    // otherwise one is read, and the server is told so it keeps nothing), and
+    // a front window that could not be named (System Events slow to wake or
+    // not allowed, the helper busy) may be a bank: it is asked once more, and
+    // then refused like one.
     naming = mine;
     let info = await front();
     if (!info && mine === asking) info = await front();
@@ -1151,8 +1153,8 @@ function createAsk(ctx) {
     }
     begun = true;
     pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
-    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer });
-    if (!agent.active()) { dropListening(); return; }   // refused: a private window, a bank
+    agent.begin({ app: info.label || "", privateWindow: !!info.private, sensitive: !!info.sensitive, pointer });
+    if (!agent.active()) { dropListening(); return; }   // refused: a bank (a private window, with them off)
     if (early) { const a = early; early = null; answer(a.audio, a.said); return; }
     // Still being said: the words so far (spoken while the app was being
     // named) are shown to it now, and every partial after them as it comes.
@@ -1174,7 +1176,8 @@ function createAsk(ctx) {
    * the app in front is named, the run begins, and the words go in as the
    * question's final caption. True when it took them; false when it could
    * not (a dictation still has the microphone, signed out, the window could
-   * not be told, a private window or a bank: their cards say so).
+   * not be told, a bank, a private window while the server has them off:
+   * their cards say so).
    */
   /** `o.trusted`: the one key's brain read a task or a message they asked
    *  for in so many words (no money, nothing deleted): its ordinary steps are
@@ -1198,8 +1201,8 @@ function createAsk(ctx) {
       return false;
     }
     pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
-    agent.begin({ app: info.label || "", privateField: !!info.private, sensitive: !!info.sensitive, pointer, trusted: !!(o && o.trusted === true) });
-    if (!agent.active()) return false;     // refused: a private window, a bank
+    agent.begin({ app: info.label || "", privateWindow: !!info.private, sensitive: !!info.sensitive, pointer, trusted: !!(o && o.trusted === true) });
+    if (!agent.active()) return false;     // refused: a bank (a private window, with them off)
     void agent.heard(null, { text: words, final: true });
     return true;
   }

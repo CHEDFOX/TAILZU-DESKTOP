@@ -134,7 +134,8 @@ test("the field scripts read the selection where it can be written over", () => 
 });
 
 // THE SCREEN AROUND THE FIELD (surroundings): other people's words, read only
-// where it is safe — never a private window, never a money/health app.
+// where it is safe — never a money/health app (nor a private window, while the
+// server has them off).
 const { isPrivate, looksSensitive, joinSurroundings, windowsSurroundings } = require("./frontApp.js");
 
 test("a private or incognito window is known from its title", () => {
@@ -142,6 +143,26 @@ test("a private or incognito window is known from its title", () => {
   assert.ok(isPrivate("DuckDuckGo — Mozilla Firefox (Private Browsing)"));
   assert.ok(isPrivate("New InPrivate tab - Microsoft Edge"));
   assert.ok(!isPrivate("Inbox - you@gmail.com - Gmail - Google Chrome"));
+});
+
+test("a private window is off limits only while the server has them off; a sensitive app always is", () => {
+  const knobs = require("../../knobs.js");
+  const f = require("./frontApp.js");
+  try {
+    knobs.setKnobs({ labels: {}, flags: {} });
+    assert.strictEqual(f.privateWindowsOk(), true, "on unless the server says otherwise");
+    assert.strictEqual(f.offLimits({ label: "Chrome", private: true, sensitive: false }), false);
+    assert.strictEqual(f.offLimits({ label: "Chase", private: false, sensitive: true }), true);
+    assert.strictEqual(f.offLimits({ label: "Chase", private: true, sensitive: true }), true);
+    assert.strictEqual(f.offLimits({ label: "Notes", private: false, sensitive: false }), false);
+    assert.strictEqual(f.offLimits(null), false);
+    knobs.setKnobs({ labels: {}, flags: { "desktop.agent.privateWindows": false } });
+    assert.strictEqual(f.privateWindowsOk(), false);
+    assert.strictEqual(f.offLimits({ label: "Chrome", private: true, sensitive: false }), true);
+    assert.strictEqual(f.offLimits({ label: "Notes", private: false, sensitive: false }), false);
+  } finally {
+    knobs.setKnobs({ labels: {}, flags: {} });
+  }
 });
 
 test("Ask's Always is kept by the app's own name: never a page's title, never the frame every Store app shares", () => {
@@ -276,6 +297,31 @@ test("a rewrite keeps up to 64 characters of the selection's own whitespace each
   assert.strictEqual(sandbox.edgesOf(indent + "a")[0] + "a" + sandbox.edgesOf(indent + "a")[1], indent + "a");
 });
 
+test("a private window's dictation carries its screen as any other's, and says it was a private window's", async () => {
+  const r = loadRecorder({ "desktop.recorder.fieldWaitMs": 50 });
+  r.start(1);
+  r.on.onTarget({ session: 1, targetApp: "Chrome", privateField: false, privateWindow: true });
+  r.on.onAround({ session: 1, surroundings: "Riya: are we still on for six?" });
+  r.on.onField({ session: 1, field: { kind: "message", before: "" } });
+  await r.upload(1);
+  assert.strictEqual(r.posts[0].privateWindow, "true");
+  assert.strictEqual(r.posts[0].privateField, undefined);
+  assert.strictEqual(r.posts[0].surroundings, "Riya: are we still on for six?");
+  // Off limits as well (a bank in a private window): nothing of the screen, both said.
+  const b = loadRecorder({ "desktop.recorder.fieldWaitMs": 50 });
+  b.start(2);
+  b.on.onTarget({ session: 2, targetApp: "Chase", privateField: true, privateWindow: true });
+  b.on.onAround({ session: 2, surroundings: "Balance 1,000" });
+  await b.upload(2);
+  assert.deepStrictEqual([b.posts[0].privateField, b.posts[0].privateWindow, b.posts[0].surroundings], ["true", "true", undefined]);
+  // An ordinary window: neither.
+  const n = loadRecorder({ "desktop.recorder.fieldWaitMs": 50 });
+  n.start(3);
+  n.on.onTarget({ session: 3, targetApp: "Notes", privateField: false, privateWindow: false });
+  await n.upload(3);
+  assert.deepStrictEqual([n.posts[0].privateField, n.posts[0].privateWindow], [undefined, undefined]);
+});
+
 test("a short instruction waits for the field read, and carries the selection it found", async () => {
   const r = loadRecorder({ "desktop.recorder.fieldWaitMs": 2000 });
   r.start(1);
@@ -321,7 +367,7 @@ test("the wait is bounded, ends on an empty answer, and only the first request w
   await r.upload(2);
   assert.ok(Date.now() - t0 < 500);
 
-  // A private window: its field is never read, so nothing is waited for.
+  // An off-limits window: its field is never read, so nothing is waited for.
   r = loadRecorder({ "desktop.recorder.fieldWaitMs": 5000 });
   r.start(3);
   r.on.onTarget({ session: 3, targetApp: "Chrome", privateField: true });

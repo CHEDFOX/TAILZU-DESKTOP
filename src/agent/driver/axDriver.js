@@ -85,7 +85,7 @@ function rect(f) {
 /** A look as callers see it. The window and its frame are what everything
  *  else is placed by, so a look without them is no look; a line that cannot
  *  be placed is dropped, and a picture that is not one is null. The title is
- *  for agent.js to refuse a private window by, as a snapshot's is. */
+ *  for agent.js to check the window by (a sensitive app, a private window), as a snapshot's is. */
 function lookShape(rest) {
   const w = rest.window;
   const frame = w && typeof w === "object" && !Array.isArray(w) ? rect(w.frame) : null;

@@ -73,8 +73,10 @@ test("main: plain dictation records, sends and pastes byte-for-byte the same wit
     if (p) delete p["desktop.dictation.peek"];
     return e;
   });
+  // Private windows off (desktop.agent.privateWindows): the fourth is not
+  // read or peeked at, as before they could be.
   const run = async (o) => {
-    const m = mainProcess(Object.assign({ infos: FOUR }, o, { flags: Object.assign({}, PEEK_FAST, o.flags) }));
+    const m = mainProcess(Object.assign({ infos: FOUR }, o, { flags: Object.assign({ "desktop.agent.privateWindows": false }, PEEK_FAST, o.flags) }));
     try { return { what: asSent(await dictateFour(m)), m }; } finally { m.close(); }
   };
   const off = await run({ flags: { "desktop.dictation.peek": false } });
@@ -113,6 +115,21 @@ test("main: plain dictation records, sends and pastes byte-for-byte the same wit
     assert.deepStrictEqual(r.what, off.what, why);
     assert.ok(!r.m.guide.some((g) => g.type === "peek"), why + ": no peek");
   }
+});
+
+test("main: dictation in a private window is read and peeked at like any other, and the recorder is told it was one", async () => {
+  const m = mainProcess({ infos: FOUR, flags: Object.assign({}, PEEK_FAST, { "desktop.dictation.peek": true }) });
+  try {
+    await dictateFour(m);
+    const targets = m.dictation.filter(([w, ch]) => w === "recorder" && ch === "recording-target").map(([, , p]) => p);
+    assert.strictEqual(targets.length, 4);
+    assert.deepStrictEqual(targets.slice(0, 3).map((p) => [p.privateField, p.privateWindow]), [[false, false], [false, false], [false, false]]);
+    assert.deepStrictEqual([targets[3].privateField, targets[3].privateWindow], [false, true], "not off limits, but marked a private window's");
+    const s4 = m.sessions()[3];
+    const field = m.dictation.find(([w, ch, p]) => w === "recorder" && ch === "recording-field" && p.session === s4);
+    assert.ok(field && field[2].field && field[2].field.kind === "message", "its field is read");
+    assert.ok(m.carets.some((c) => c.during === 4), "and Blip peeks at it");
+  } finally { m.close(); }
 });
 
 test("main: the setup card's wiring: the env says so, pictures are on by default, only the app window asks or acts, and it is told on focus, after each action and at sign-out", async () => {

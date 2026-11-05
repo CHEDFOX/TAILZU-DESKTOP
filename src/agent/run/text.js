@@ -10,6 +10,8 @@ const knobs = require("../../../knobs.js");
 
 function textsFrom(txt) {
   return {
+    // private and blockedPrivate: said only while the server has private
+    // windows off (desktop.agent.privateWindows); on, one is read as any other.
     private: txt("desktop.agent.text.private", "Ask doesn't look at private windows."),
     sensitive: txt("desktop.agent.text.sensitive", "Ask doesn't look at this app."),
     declined: txt("desktop.agent.text.declined", "Okay, I left it."),

@@ -39,19 +39,22 @@ function peekFrame(f) {
  * caret it cannot find, an answer that never comes, a peek that throws. The
  * dictation goes on as if it were not here.
  *
- * And it never peeks where it should not look: into a private window or a
- * sensitive app (frontApp.js's own checks, as Ask's), or at an app the
- * dictation is not going into (the front app moved).
+ * And it never peeks where it should not look: into a sensitive app
+ * (frontApp.js's own checks, as Ask's), or at an app the dictation is not
+ * going into (the front app moved). A private window is peeked at like any
+ * other (only the caret is read), unless the server has them off
+ * (desktop.agent.privateWindows).
  *
  *   o.driver      driver.js: caret({ budgetMs }) → { ok, caret, field, app: { name, pid } }
  *   o.ask         createAsk's peek, peekLevel, unpeek
- *   o.knobs       { num }
+ *   o.knobs       { num, bool? } (without bool, frontApp.privateWindowsOk)
  *   o.on()        the peek is on: desktop.dictation.peek, and Ask is
  *   o.labelOf     frontApp.label(appName, windowTitle): how the dictation's app was named
  *   o.sensitive   frontApp.looksSensitive(name)
  */
 function createPeekWatch(o) {
   const num = o.knobs.num;
+  const privateOk = () => (typeof o.knobs.bool === "function" ? o.knobs.bool("desktop.agent.privateWindows", true) : require("../context/frontApp.js").privateWindowsOk());
   const soft = (t) => { if (t && typeof t.unref === "function") t.unref(); return t; };
   const quietly = (f) => { try { return f(); } catch { return undefined; } };
   // The end of each of its promise chains: what goes wrong inside one is
@@ -76,8 +79,8 @@ function createPeekWatch(o) {
     };
     Promise.resolve(named).then((info) => {
       if (cur !== w) return;
-      // Not named, a private window, a bank: no peek, and nothing is read.
-      if (!info || typeof info !== "object" || info.private || info.sensitive) { end(sid); return; }
+      // Not named, a bank (a private window, with them off): no peek, and nothing is read.
+      if (!info || typeof info !== "object" || info.sensitive || (info.private && quietly(privateOk) !== true)) { end(sid); return; }
       w.target = info;
       read(w, true);
       // Only while the microphone is open: a stop that came before the app

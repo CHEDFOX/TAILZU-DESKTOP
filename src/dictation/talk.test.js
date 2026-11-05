@@ -370,13 +370,29 @@ test("a handoff that fails is said, and it listens again", async () => {
   assert.deepStrictEqual(r.recorded(), [1, 2]);
 });
 
-test("a private window or a sensitive app: nothing of the screen goes, and the page is never asked for", async () => {
-  for (const front of [{ label: "Chrome", title: "Incognito - Bank", private: true }, { label: "Chase", title: "Accounts", sensitive: true }]) {
-    const r = rig({ front, page: { outline: ["x"], text: "secret", source: "tree" } });
+test("a private window: its screen and page go like any other's, and the turn is marked so nothing of it is kept", async () => {
+  const r = rig({ front: { label: "Chrome", title: "Flights - Incognito", private: true }, page: { outline: ["Flights"], text: "3 results", source: "tree" } });
+  r.t.start();
+  await r.speak("what's on screen");
+  const [b] = r.talks();
+  assert.strictEqual(b.privateWindow, true);
+  assert.strictEqual(b.app, "Chrome");
+  assert.deepStrictEqual(b.page, { outline: ["Flights"], text: "3 results", source: "tree" });
+  assert.ok(!(b.field && b.field.private), "not off limits");
+  assert.ok(r.did.some((x) => x[0] === "pageFor"));
+});
+
+test("a sensitive app, or a private window with them off: nothing of the screen goes, and the page is never asked for", async () => {
+  for (const [front, knobs, keys] of [
+    [{ label: "Chrome", title: "Incognito - Bank", private: true }, { "desktop.agent.privateWindows": false }, ["field", "ours", "privateWindow", "talkId", "turn", "tz", "words"]],
+    [{ label: "Chase", title: "Accounts", sensitive: true }, {}, ["field", "ours", "talkId", "turn", "tz", "words"]],
+    [{ label: "Chase", title: "Accounts - Incognito", sensitive: true, private: true }, {}, ["field", "ours", "privateWindow", "talkId", "turn", "tz", "words"]],
+  ]) {
+    const r = rig({ front, knobs, page: { outline: ["x"], text: "secret", source: "tree" } });
     r.t.start();
     await r.speak("what's on screen");
     const [b] = r.talks();
-    assert.deepStrictEqual(Object.keys(b).sort(), ["field", "ours", "talkId", "turn", "tz", "words"]);
+    assert.deepStrictEqual(Object.keys(b).sort(), keys);
     assert.deepStrictEqual(b.field, { private: true });
     assert.ok(!r.did.some((x) => x[0] === "pageFor"));
   }

@@ -47,11 +47,14 @@
 // THE BRAIN (d.decide, desktop.route.brain, off until the server turns it on
 // with its knobs, once /v1/ask/decide is there): with it, every session's words are
 // held until the stop (none pasted as they come, unless it is our own window or
-// a private one), and the brain says what they were: write (typed), send, task
+// a sensitive app's), and the brain says what they were: write (typed), send, task
 // and answer (Ask, a task or a message trusted as asked for), routine, notes, or
 // a bot. In any language: no word list decides. Not back in brainMs, or off,
 // and the word lists below decide as before. The last three asks go with it,
-// so "send it to Dev too" is understood.
+// so "send it to Dev too" is understood. A private (incognito) window is asked
+// about like any other, marked privateWindow so the server keeps nothing of
+// it, and its asks are not among the last three either (desktop.agent.privateWindows
+// off: it never goes to the brain, as a sensitive app's words do not).
 //   d.pill(state, data)      the pill; d.pillRest() puts a label we left back to rest
 //   d.knobs                  { num, bool, txt }
 //   d.setTimeout, d.clearTimeout, d.log
@@ -63,7 +66,7 @@ function createRouting(d) {
   const later = d.setTimeout || setTimeout;
   const cancelTimer = d.clearTimeout || clearTimeout;
   const log = d.log || (() => {});
-  const sessions = new Map();   // sid → { ours, field, mode, chunks, heard, typed }
+  const sessions = new Map();   // sid → { ours, field, mode, chunks, heard, typed, off?, privateWindow? }
   let offer = null;             // the route the pill is offering the alternative to
   let labelTimer = null;
   const recent = [];            // the last three asks: { said, did, to? }, for the brain's follow-ups
@@ -76,9 +79,9 @@ function createRouting(d) {
 
   function session(sid) { return sessions.get(sid) || null; }
 
-  /** The brain decides this session: it is on, it can be asked, and nothing here is private. */
+  /** The brain decides this session: it is on, it can be asked, and nothing here is off limits. */
   function brainFor(s) {
-    return !!s && typeof d.decide === "function" && bool("desktop.route.brain", false) && !s.ours && !s.private;
+    return !!s && typeof d.decide === "function" && bool("desktop.route.brain", false) && !s.ours && !s.off;
   }
 
   /** A dictation began. Any alternative still offered is over: the next
@@ -91,14 +94,16 @@ function createRouting(d) {
     for (const k of sessions.keys()) if (sessions.size > 16 && k !== sid) sessions.delete(k);
   }
 
-  /** The app in front: { label, private }. A private window or a money app
-   *  never goes to the brain: its words are routed here, on the lists. */
+  /** The app in front: { label, private, sensitive }. A money app never goes
+   *  to the brain: its words are routed here, on the lists. Nor does a private
+   *  window while the server has them off; otherwise it goes, marked so. */
   function target(sid, info) {
     const s = session(sid);
     if (!s || !info) return;
     s.app = typeof info.label === "string" ? info.label.slice(0, 80) : "";
     s.title = typeof info.title === "string" ? info.title.slice(0, 200) : "";
-    if (info.private || info.sensitive) s.private = true;
+    if (info.private) s.privateWindow = true;
+    if (info.sensitive || (info.private && !bool("desktop.agent.privateWindows", true))) s.off = true;
   }
 
   /** The field read answered: null (no text box), or { selection? }. */
@@ -178,10 +183,12 @@ function createRouting(d) {
       dec = await within(Promise.resolve().then(() => d.decide({
         words: all, app: s.app || undefined, title: s.title || undefined,
         field: s.field === undefined ? undefined : s.field, notesOn: !!sig.notesOn, last: recent.slice(),
+        ...(s.privateWindow ? { privateWindow: true } : {}),
       })), Math.max(300, num("desktop.route.brainMs", 2500)));
     } catch (e) { dec = null; log("route: the brain could not say: " + ((e && e.message) || e)); }
     const r = dec && typeof dec === "object" && typeof dec.do === "string" ? fromDecision(dec, local, s) : local;
-    remember(all, dec);
+    // Not remembered from a private window, here or on the server.
+    if (!s.privateWindow) remember(all, dec);
     return perform(r, sid, chunks, current);
   }
 
@@ -269,7 +276,7 @@ function createRouting(d) {
     }
     let took = false;
     try { took = !!(await d.ask(r.message, r.trusted ? { trusted: true } : undefined)); } catch { took = false; }
-    // Refused (a private window, a bank, not signed in): its card says why.
+    // Refused (a bank, a private window with them off, not signed in): its card says why.
     if (!took && offer === mine && mine) { offer = null; cancelTimer(labelTimer); d.pillRest(); }
   }
 

@@ -17,8 +17,9 @@
 //           leaves it), the overlap between screens dropped, down to the end
 //           and then up to the top, within caps of screens, characters and
 //           time; then scrolled back to where the person was, and checked.
-//           Never while a dictation records, never in a private window or a
-//           sensitive app, never when the pointer is not over the window.
+//           Never while a dictation records, never in a sensitive app (nor a
+//           private window while the server has them off), never when the
+//           pointer is not over the window.
 //
 // What goes to the server is cut to a hard cap: the outline (the headings),
 // then the part around where the person is, then the rest. The server picks
@@ -285,9 +286,10 @@ function reducePage(page, cap) {
 // ---- readPage -------------------------------------------------------------------------
 
 /** "private" or "sensitive" for a window that must not be read, by its
- *  title and app name; "" otherwise. */
+ *  title and app name; "" otherwise. A private window is read like any
+ *  other unless the server has them off (frontApp.privateWindowsOk). */
 function refusal(name, title) {
-  if (title && frontApp.isPrivate(title)) return "private";
+  if (title && frontApp.isPrivate(title) && !frontApp.privateWindowsOk()) return "private";
   if ((name && frontApp.looksSensitive(name)) || (title && frontApp.looksSensitive(title))) return "sensitive";
   return "";
 }
@@ -332,7 +334,7 @@ async function readPage(deps, opts) {
   const whole = typeof o.needWhole === "boolean" ? o.needWhole : needsWhole(question);
   try {
     const info = typeof d.front === "function" ? await d.front() : null;
-    if (info && (info.private || info.sensitive)) return { ...NONE };
+    if (frontApp.offLimits(info)) return { ...NONE };
 
     let tree = null;
     if (typeof d.page === "function") {
