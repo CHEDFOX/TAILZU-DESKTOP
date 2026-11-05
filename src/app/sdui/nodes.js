@@ -147,6 +147,9 @@ function node(n) {
           "</div>";
       }
       // falls through
+    case "Scroll":
+      // A box that scrolls on its own inside a card (the terms and privacy card): its height is the node's style (maxHeight).
+      return '<div' + cls(p) + ' style="position:relative;display:flex;flex-direction:column;overflow-y:auto;overscroll-behavior:contain;' + s + '">' + kids + "</div>";
     case "Stack": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
       // A Grid with columns is a grid. It was a column of its children, which
       // is a long way from three apps across.

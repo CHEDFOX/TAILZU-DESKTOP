@@ -47,6 +47,8 @@ const COMPONENTS = [
   "Quote", "Badge", "KeyValue", "Hero", "Switch", "SegmentedControl",
   "StatCard", "BarChart", "LineChart", "Sparkline", "PieChart", "DonutChart",
   "ProgressRing", "Gauge", "WordMeter", "Video", "Audio", "Grid",
+  // A box that scrolls on its own inside a card (nodes.js; the terms and privacy card).
+  "Scroll",
   // Drawn here as well as on the phones. Every one of these was falling
   // through to `default`, which renders a node's CHILDREN and drops the node —
   // so a Gradient, an SVG or a scrim simply did not appear, and the window was
