@@ -317,25 +317,47 @@ function mountBotTiles(root) {
       if (!document.hidden && busy) letGo();
     };
     document.addEventListener("visibilitychange", shown);
+    // A tile with a double (BotTileSpec.doubleTap: a voice chat with that bot) keeps its tap's timers, so a second click can take
+    // the tap back (its action, its press, the others' fades) and run the double instead. Its single tap waits for that.
+    const waitMs = K.num("desktop.doubleClick.waitMs", 260);
     els.forEach((el, i) => {
+      const timers = [];
+      let lastDouble = 0;
+      const later = (f, ms) => { timers.push(setTimeout(f, ms)); };
       const go = (x, y) => {
         const action = specs[i] && specs[i].action;
+        const dbl = specs[i] && specs[i].doubleTap;
         if (!action || busy) return;
-        if (reduced) { void run(action); return; }
+        if (reduced) { if (dbl) later(() => { void run(action); }, waitMs); else void run(action); return; }
         busy = true;
         world.focus(i, sizes[i] ? Math.min(x, sizes[i][0]) : x, y);
         els.forEach((o, j) => { if (j !== i) o.querySelector(".tz-bt-w").style.opacity = String(api.TAP.fadeTo); });
         el.style.transform = "scale(" + api.TAP.pressScale + ")";
-        setTimeout(() => { el.style.transform = ""; }, 140);
-        setTimeout(() => { void run(action); }, api.TAP.holdMs);
-        setTimeout(letGo, api.TAP.holdMs + api.TAP.restoreMs);
+        later(() => { el.style.transform = ""; }, 140);
+        later(() => { void run(action); }, Math.max(api.TAP.holdMs, dbl ? waitMs : 0));
+        later(letGo, api.TAP.holdMs + api.TAP.restoreMs);
       };
-      el.addEventListener("click", (e) => { const r = el.getBoundingClientRect(); go(e.clientX - r.left, e.clientY - r.top); });
+      const double = () => {
+        const dbl = specs[i] && specs[i].doubleTap;
+        if (!dbl || Date.now() - lastDouble < 300) return;
+        lastDouble = Date.now();
+        timers.splice(0).forEach(clearTimeout);
+        el.style.transform = "";
+        letGo();
+        void run(dbl);
+      };
+      el.addEventListener("click", (e) => {
+        if ((Number(e.detail) || 1) >= 2 && specs[i] && specs[i].doubleTap) { double(); return; }
+        const r = el.getBoundingClientRect(); go(e.clientX - r.left, e.clientY - r.top);
+      });
+      el.addEventListener("dblclick", () => double());
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(el.clientWidth / 2, el.clientHeight / 2); } });
     });
     if (!reduced) btLoop(grid, (dt) => world.step(dt), paint, () => world.release());
   });
   mountHomeHead(root, reduced);
+  // Spaces' stages, crowds, vanishes and @ fields (stage.js).
+  if (typeof mountStages === "function") mountStages(root);
   // BotBuddy: a bot's own tiny bot, kept by its life across screens and repaints.
   root.querySelectorAll("[data-bb]").forEach((stage) => {
     const cfg = BT_PENDING[Number(stage.getAttribute("data-bb"))];

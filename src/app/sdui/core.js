@@ -114,6 +114,15 @@ const COMPONENTS = [
   "AskStream",
   // Home's header, alive: the line that writes itself (WriteOn), the living mark (LiveMark), the compact bar (HeadBar).
   "WriteOn", "LiveMark", "HeadBar",
+  // SPACES, THE FAMILY REDESIGN (shared/types/sdui.ts 3i). BotStage: a full tiny bot on a stage of his own who roams, walks out and
+  // back in, listens and holds a thought (a box joined to his head by three bubbles) that follows him and opens; BotCrowd: a box of
+  // tiny bots playing; Vanish: a row that vaporises; MentionField: "@" for a person, "/" for a bot's thing; LiveWords: what he hears,
+  // as he hears it (sdui/stage.js, mention.js, listen.js). Not components: DoubleTap (a double-click on him or a bot tile) and
+  // KitExtras (a TextField's keyboard, autoFocus and maxLength; startAtEnd; callEndpoint's stay; a dotted border with a radius;
+  // a failed call's { code, message } at state lastError). The server sends the new Spaces and Home's ask as his thought only to a
+  // build that says all of these; an older installer keeps the screens it has. Not ActionParams: the window has always filled
+  // "$state.x" params without declaring it, and the server asks the name of the phone only.
+  "BotStage", "BotCrowd", "Vanish", "MentionField", "LiveWords", "DoubleTap", "KitExtras",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;
@@ -144,6 +153,10 @@ const micAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.micStatus 
  *  so the Bots app's arrival card moves on, and closes, once it is on. */
 const AX_STATE = "DeskAxState";
 const axAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.axStatus === "function");
+/** The bot on the screen can listen (VoiceLive: the main process records for him, src/dictation/windowVoice.js) and the one key,
+ *  with X0 in front, talks to him (DeskTalkTo): both need a main process that has the window's voice. The renderer and the main
+ *  process ship together, so this mainly keeps a page loaded without one (the backend's render tool, the tests) honest. */
+const VOICE_ON = () => !!(window.tailzuApp && typeof window.tailzuApp.voice === "function");
 // NOT declared: ScreenHoldTouches. The window does not implement it, and
 // claiming a component to unlock a layout is how a capability list stops
 // meaning anything. The backend reaches the same conclusion from
@@ -184,6 +197,8 @@ const ACTIONS = [
   "connector.connect",
   // The microphone card's button: the system's own prompt (microphone only).
   "requestPermission",
+  // The bot on the screen listens with live words, turn by turn, and stops (sdui/listen.js; capability VoiceLive, when VOICE_ON).
+  "voiceLive", "voiceStop",
 ];
 
 /**

@@ -30,6 +30,7 @@ const oneKey = require("../dictation/oneKey.js");
 const { createRouting, undoCommand } = require("../dictation/routing.js");
 // Talk mode: two taps of the one key, a conversation with Blip (talk.js).
 const { createTalk } = require("../dictation/talk.js");
+const { createWindowVoice } = require("../dictation/windowVoice.js");
 const restSpot = require("../dictation/restSpot.js");
 const { joinStretch } = require("../dictation/pasteJoin.js");
 const updater = require("./updater.js");
@@ -860,6 +861,7 @@ function createRecorderWindow() {
     // A question it was recording will not come back either.
     if (ask) ask.recorderGone();
     talk.recorderGone();
+    winVoice.recorderGone();
   });
   recorderWin.loadFile("src/dictation/recorder/recorder.html");
 }
@@ -931,6 +933,10 @@ function openAppWindow(screenId) {
   // back to the front: the person is coming back from System Settings, and
   // a row they just turned on turns to "On" without a restart.
   appWin.on("focus", () => { if (askOn()) askSetup.push(); retryOneKey(); });
+  // X0 left the front, or was put away: the bot on its screen stops listening (a voice chat never goes on behind
+  // another app). A hold ends at the key's release anyway.
+  appWin.on("blur", () => winVoice.end("blur"));
+  appWin.on("hide", () => winVoice.end("blur"));
   // "hide" puts it away and keeps its boot (a tray app's close means that);
   // "close" really closes it, and the tray builds a fresh one next time.
   appWin.on("close", (e) => {
@@ -941,6 +947,9 @@ function openAppWindow(screenId) {
   // A screen asked for while the page was loading, and not yet collected by
   // app:env, goes over as soon as the page can hear it.
   appWin.webContents.on("did-finish-load", () => {
+    // A page loaded afresh has no screen yet that takes the one key, and nothing listening on it.
+    appTalkTo = null;
+    winVoice.end("error");
     if (!pendingScreen || !appWin || appWin.isDestroyed()) return;
     const id = pendingScreen;
     pendingScreen = null;
@@ -1399,6 +1408,8 @@ ipcMain.handle("recorder:token", async (e, renew) => {
 });
 // The voice's level, band by band, from the recorder to the pill.
 ipcMain.on("dictation-level", (e, p) => {
+  // The window's own voice: the level goes to the bot on its screen (his bubbles), never to the pill.
+  if (isFrom(e, recorderWin) && winVoice.level(p)) return;
   // A talk turn's voice moves Blip in the pill while they speak.
   if (isFrom(e, recorderWin) && talk.level(p)) {
     if (talk.phase() === "listening" && pillWin && !pillWin.isDestroyed()) pillWin.webContents.send("pill-level", { bands: p.bands });
@@ -1735,12 +1746,13 @@ function trayIcon(live = false) {
 function refreshTray() {
   if (!tray) return;
   const codeWork = runner ? runner.status() : null;
-  const live = recording || !!notes || !!(codeWork && codeWork.working);
+  // The bot on X0's screen listening is the microphone open too: the dot says so, as for a dictation.
+  const live = recording || winVoice.active() || !!notes || !!(codeWork && codeWork.working);
   if (live !== trayLive) {
     trayLive = live;
     tray.setImage(trayIcon(trayLive));
   }
-  tray.setToolTip(recording ? t("tray.tooltipListening")
+  tray.setToolTip(recording || winVoice.listening() ? t("tray.tooltipListening")
     : notes ? fmt("tray.notesTooltip", { time: elapsedLabel(notesElapsed()) })
     : codeWork && codeWork.working ? txt("desktop.tray.runnerWorking", "X0 Bot is working on {project}", { project: codeWork.project })
     : signedIn() ? t("tray.tooltipReady") : t("tray.tooltipSignIn"));
@@ -2403,7 +2415,7 @@ function toggleDictation() {
   // puts away a finished answer's card, which may still be saying it: the
   // microphone would write its voice into what they are about to say.
   if (!recording && ask && (ask.active() || ask.shown())) ask.cancel("dictation");
-  if (!recording) talk.end("dictation");
+  if (!recording) { talk.end("dictation"); winVoice.end("dictation"); }
   recording = !recording;
   if (recording) {
     activeSession = ++sessionSeq;
@@ -2612,27 +2624,36 @@ let oneKeyHook = null;       // { uIOhook, UiohookKey }, once the hook is runnin
 let oneKeyState = "off";     // off | binding | bound | fallback
 let oneKeyWhy = "";          // why the last binding fell back (oneKey.bindOneKey's reason)
 let fallbackKey = null;      // the chord registered while the one key cannot be
+// With X0 in front on a screen whose bot listens (app:talkTo), the key is his: the window's own voice (windowVoice.js)
+// takes every branch below, and nothing is typed. Everywhere else it is exactly as it was.
 const oneKeyGesture = oneKey.createHoldTap({
   press: oneKeyPress,
-  finish: () => { if (recording) toggleDictation(); },
-  cancel: () => { if (recording) cancelDictation(); },
-  talking: () => recording,
+  finish: () => { if (winVoice.listening()) winVoice.finish(); else if (recording) toggleDictation(); },
+  cancel: () => { if (winVoice.active()) winVoice.end("chord"); else if (recording) cancelDictation(); },
+  talking: () => recording || winVoice.listening(),
+  // A held press that came up quickly: the bot listens hands-free until the first pause.
+  freed: () => winVoice.free(),
   tapOn: () => cfg.tap !== false,
   armMs: () => num("desktop.oneKey.armMs", 200),
   tapMs: () => num("desktop.oneKey.tapMs", 300),
-  // Two taps: talk mode (talk.js). While it is on, the key is talk's: held, their turn; a tap ends it.
-  double: () => startTalk(),
-  doubleMs: () => (talkOn() ? num("desktop.talk.doubleTapMs", 400) : 0),
-  inTalk: () => talk.active(),
-  talkHold: () => talk.bargeIn("key"),
-  talkRelease: () => talk.release(),
-  talkTap: () => talk.end("tap"),
+  // Two taps: talk mode (talk.js), or with X0 in front a voice chat with the bot on screen. While either is on, the key
+  // is theirs: held, their turn; a tap ends it.
+  double: () => (winVoiceOn("chat") ? startWindowVoice("chat", "key") : startTalk()),
+  // Two taps work in the window even while talk mode is off (the screen asked for them); elsewhere as talk mode says.
+  doubleMs: () => (talkOn() || winVoiceOn("chat") ? num("desktop.talk.doubleTapMs", 400) : 0),
+  inTalk: () => talk.active() || winVoice.mode() === "chat",
+  talkHold: () => (winVoice.mode() === "chat" ? winVoice.hold() : talk.bargeIn("key")),
+  talkRelease: () => (winVoice.mode() === "chat" ? winVoice.release() : talk.release()),
+  talkTap: () => (winVoice.mode() === "chat" ? winVoice.end("tap") : talk.end("tap")),
 });
 /** The key went down alone: talk. A question up (its card's Do it, a reply it
- *  listens for, a run at work) is answered instead, as Ask's pair did. */
-function oneKeyPress() {
+ *  listens for, a run at work) is answered instead, as Ask's pair did. With X0
+ *  in front on a screen whose bot listens, he hears it: held, one turn while it
+ *  is down; tapped, one turn until the first pause or the next tap. */
+function oneKeyPress(how) {
   if (ask && ask.active()) { void ask.tap(); return "other"; }
   if (recording) return "talk";
+  if (winVoiceOn("hold")) return startWindowVoice(how === "tap" ? "free" : "hold", "key") ? "talk" : "none";
   toggleDictation();
   return recording ? "talk" : "none";
 }
@@ -3001,7 +3022,11 @@ function setupAsk() {
     // phases (pillAsk).
     pillAsk,
     driver,
-    sendToRecorder,
+    // One microphone: a question opening it stops the bot on X0's screen listening.
+    sendToRecorder: (channel, payload) => {
+      if (channel === "start-recording") winVoice.end("dictation");
+      sendToRecorder(channel, payload);
+    },
     createRecorderWindow,
     recorderReady: () => !!recorderWin && !recorderWin.isDestroyed(),
     // Questions take their ids from the same count as dictations, so the
@@ -3089,10 +3114,11 @@ function setupAsk() {
   if (askOn()) driver.start();
 }
 // A talk turn is recorded as a question is: talk.js takes its own sessions first.
-ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && !talk.audioIn(p) && ask) ask.audioIn(p); });
-ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && !talk.paused(p) && ask) ask.paused(p); });
+// The window's own voice takes its sessions before either.
+ipcMain.on("ask-audio", (e, p) => { if (isFrom(e, recorderWin) && !winVoice.audioIn(p) && !talk.audioIn(p) && ask) ask.audioIn(p); });
+ipcMain.on("ask-pause", (e, p) => { if (isFrom(e, recorderWin) && !winVoice.paused(p) && !talk.paused(p) && ask) ask.paused(p); });
 // The live stream's final text for a question, after (or before) its clip.
-ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && !talk.textIn(p) && ask) ask.textIn(p); });
+ipcMain.on("ask-text", (e, p) => { if (isFrom(e, recorderWin) && !winVoice.textIn(p) && !talk.textIn(p) && ask) ask.textIn(p); });
 
 // ---- Where the one key's words go (routing.js, router.js) ---------------------------
 // A text box in focus: typed as they come, as dictation always was. "Tailzu,
@@ -3205,6 +3231,8 @@ const routing = createRouting({
  * stops a question, or what Ask is doing. The key reaches the app too; nothing here can hold it back.
  */
 function escPressed() {
+  // The bot on X0's screen stops listening first; what he heard of the turn is dropped.
+  if (winVoice.active()) { winVoice.end("esc"); return; }
   // Talk mode ends, and what Ask is doing for it stops too; never on the agent's own Esc.
   if (talk.active() && !(ask && ask.ownEsc())) { talk.end("esc"); if (ask) ask.escape(); return; }
   if (recording && bool("desktop.pill.escCancels", true)) { cancelDictation(); return; }
@@ -3225,6 +3253,7 @@ function startTalk() {
   if (!talkOn()) return false;
   if (recording) cancelDictation();
   if (ask && (ask.active() || ask.shown())) ask.cancel("talk");
+  winVoice.end("dictation");
   return talk.start();
 }
 
@@ -3325,6 +3354,72 @@ const talk = createTalk({
   log: (m) => console.log("[talk] " + m),
 });
 
+// ---- The window's own voice (windowVoice.js) ----------------------------------------
+// A screen of the app window can hold a bot who listens: a double-click on him, or (with X0 in front) the one key, held
+// or tapped twice. His words are recorded as a talk turn is (the recorder's "ask" mode, ended by a pause of about 0.9 s)
+// and go to the window on app:voice, which draws them and runs the screen's own action with them. No pill, nothing
+// pasted, nothing sent to /v1/talk. The window says after every paint whether its screen takes the one key (app:talkTo:
+// it does not while a text field other than the bot's own box has the focus), so with X0 in front and no talkTo the key
+// types as it always did, and with X0 not in front the pill works as it always did.
+let appTalkTo = null;
+ipcMain.on("app:talkTo", (e, v) => {
+  if (!fromApp(e)) return;
+  appTalkTo = v && typeof v === "object" ? { hold: v.hold === true, chat: v.chat === true } : null;
+});
+/** The one key goes to the bot on X0's screen: X0 is the window in front, shown, and its screen said `kind` (hold, chat). */
+function winVoiceOn(kind) {
+  if (!appTalkTo || appTalkTo[kind] !== true || !bool("desktop.window.voice", true)) return false;
+  if (!appWin || appWin.isDestroyed() || !appWin.isVisible()) return false;
+  return BrowserWindow.getFocusedWindow() === appWin;
+}
+/** This computer does not let X0 use the microphone (the window then runs the screen's onBlocked). */
+function micBlocked() {
+  try {
+    if (process.platform === "linux" || typeof systemPreferences.getMediaAccessStatus !== "function") return false;
+    const s = systemPreferences.getMediaAccessStatus("microphone");
+    return s === "denied" || s === "restricted";
+  } catch { return false; }
+}
+const winVoice = createWindowVoice({
+  nextSession: () => ++sessionSeq,
+  record: async (sid, o) => {
+    if (tokenStale()) await refreshSession();
+    if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
+    sendToRecorder("start-recording", Object.assign(recorderStart(sid), {
+      live: true, pauseFlush: false, mode: "ask", pauseEndMs: Number(o && o.pauseEndMs) || num("desktop.window.pauseEndMs", 900),
+    }));
+  },
+  stopRecording: (sid) => sendToRecorder("stop-recording", { session: sid }),
+  cancelRecording: (sid) => sendToRecorder("cancel-recording", { session: sid }),
+  send: (m) => { if (appWin && !appWin.isDestroyed()) appWin.webContents.send("app:voice", m); },
+  requireAccount: () => requireAccount() && requireWords(),
+  blocked: micBlocked,
+  changed: () => refreshTray(),
+  knobs: { num, bool, txt },
+  log: (m) => console.log("[window voice] " + m),
+});
+/** The bot on X0's screen starts listening. One microphone: a dictation, talk mode or a question gives way first, and a
+ *  turn of his own the window is still sending is let go (its words are on their way already). */
+function startWindowVoice(mode, by, silenceMs) {
+  if (winVoice.listening()) return false;
+  if (winVoice.active()) winVoice.end("tap");
+  if (recording) cancelDictation();
+  talk.end("window");
+  if (ask && (ask.active() || ask.shown())) ask.cancel("window");
+  return winVoice.start(mode, by, { silenceMs });
+}
+// The window: a double-click on him (start), a tap on him or voiceStop (stop), its action run with a chat's turn
+// (again), its own Escape (cancel). A session named that is not the one on is an old one's late word: nothing.
+ipcMain.on("app:voice", (e, m) => {
+  if (!fromApp(e) || !m || typeof m !== "object") return;
+  const cmd = String(m.cmd || ""), session = Number(m.session) || 0;
+  const current = !session || session === winVoice.session();
+  if (cmd === "start") startWindowVoice(m.mode === "chat" ? "chat" : "once", "click", Number(m.silenceMs) || 0);
+  else if (cmd === "stop") { if (current) winVoice.end("tap"); }
+  else if (cmd === "cancel") { if (current) winVoice.end("esc"); }
+  else if (cmd === "again") { if (current && !winVoice.again(session) && winVoice.phase() === "waiting") winVoice.end("tap"); }
+});
+
 // ---- IPC from the recorder window -------------------------------------------
 // Clear recording state ONLY when the message belongs to the current session.
 // A slow upload from a previous session finishing mid-recording must not flip
@@ -3416,6 +3511,7 @@ ipcMain.on("dictation-idle", (e, payload) => {
 ipcMain.on("dictation-error", (e, payload) => {
   const p = fromRecorder(e, payload);
   if (!p) return;
+  if (winVoice.error(p)) return;
   if (talk.error(p)) return;
   // A question's failure is said on the guide's card, not as a toast.
   if (ask && ask.error(p)) return;
@@ -3451,6 +3547,8 @@ ipcMain.on("dictation-error", (e, payload) => {
 // they are still being said; they are never captions, and never typed.
 ipcMain.on("live-partial", (e, payload) => {
   const p = fromRecorder(e, payload);
+  // The window's own voice: its words go to the bot on X0's screen, never to the captions or Ask.
+  if (p && winVoice.partial(p)) return;
   if (p && talk.partial(p)) return;
   if (p && ask && ask.partial(p)) return;
   if (!p || p.session !== activeSession) return;

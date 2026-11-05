@@ -50,6 +50,9 @@ async function paint(force) {
   // start one of its own.
   stopSession();
   if (MIC) { try { MIC.rec.stop(); } catch {} MIC = null; }
+  // The bot's own voice (listen.js) is the exception: it stops only when the screen changes (another screen, or other params).
+  // A write's paint(true) or a quiet reload of the same screen keeps a voice chat going while the feed updates under it.
+  if (typeof voiceLeave === "function") voiceLeave(cur);
   // A sound or an upload started on another screen stops with it (media.js).
   if (typeof mediaLeave === "function") mediaLeave(cur);
   const view = $("view");
@@ -124,6 +127,8 @@ async function paint(force) {
   settled();
   STATE = Object.assign({}, screen.state || {});
   STATE.desktop = Object.assign({}, LOCAL);
+  // The same screen fetched again (a write's refresh): an @ field still holding words keeps them (mention.js).
+  if (repaint._target === cur && typeof mentionCarry === "function") mentionCarry();
   // `online`, `outbox`, `outboxWaiting` (outbox.js), and the Offline page kept while online.
   if (typeof offlineState === "function") Object.assign(STATE, offlineState());
   if (!kept && typeof offlineKeep === "function") offlineKeep(cur, screen);
@@ -133,6 +138,8 @@ async function paint(force) {
   $("title").textContent = label(screen.title) || "";
   $("back").hidden = STACK.length <= 1;
   applyChrome(screen);
+  // The stack entry this screen is for: a repaint of it (or a fetch of it again) is the same screen; another entry is not.
+  repaint._next = cur;
   repaint(screen);
   micFollow();
   axFollow();
@@ -288,13 +295,61 @@ function findEvent(n, name) {
   return null;
 }
 
+/**
+ * KitExtras' startAtEnd: a box marked data-end (a Stack or a Scroll; a space's feed) opens at its end, and stays there as things come
+ * in while the person is within desktop.screen.endSlackPx of it; scrolled further up, their place is kept. `near`: for each box of the
+ * last paint of this screen, whether it was at its end (null: a new screen, every box starts at its end).
+ */
+function nearEnds(view) {
+  const slack = K.num("desktop.screen.endSlackPx", 80);
+  return Array.from(view.querySelectorAll("[data-end]")).map((el) => el.scrollHeight - el.scrollTop - el.clientHeight <= slack);
+}
+function keepEnds(view, near) {
+  const slack = K.num("desktop.screen.endSlackPx", 80);
+  view.querySelectorAll("[data-end]").forEach((el, i) => {
+    let pinned = !near || near[i] !== false;
+    const toEnd = () => { if (pinned && el.isConnected) el.scrollTop = el.scrollHeight; };
+    toEnd();
+    // Once laid out (a first paint measures late), and as pictures in it load.
+    requestAnimationFrame(toEnd);
+    el.addEventListener("scroll", () => { pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= slack; }, { passive: true });
+    el.addEventListener("load", toEnd, true);
+  });
+}
+
+/**
+ * KitExtras' autoFocus: a field marked data-af takes the focus when its id first appears on this screen: on the screen's first
+ * paint, or when a setState shows it (the email field after Create); never again while it stays (a repaint, a quiet reload).
+ */
+let AF_SHOWN = new Set();
+function focusNew(view, same) {
+  const now = new Set();
+  let focus = null;
+  view.querySelectorAll("[data-af]").forEach((el) => {
+    const id = el.getAttribute("data-af");
+    if (!id) return;
+    now.add(id);
+    if (!focus && !(same && AF_SHOWN.has(id))) focus = el;
+  });
+  AF_SHOWN = now;
+  if (focus && typeof focus.focus === "function") {
+    try { focus.focus({ preventScroll: true }); } catch { /* not focusable */ }
+  }
+}
+
 let CURRENT_SCREEN = null;
 function repaint(screen) {
   if (screen) CURRENT_SCREEN = screen;
-  // The sign-in stage is up in the gate: a state change (its step) is for it.
-  if (gateUp()) { paintGate(); return; }
+  // The sign-in stage is up in the gate: a state change (its step) is for it. Nothing on it takes the one key.
+  if (gateUp()) { paintGate(); if (typeof talkToFollow === "function") talkToFollow(); return; }
   const sc = CURRENT_SCREEN;
   if (!sc) return;
+  // The same screen drawn again (a state change, a write's fetch, a quiet reload): what the person was doing in it is kept, the
+  // field being typed in and every box's scroll (live.js holdView), and a box at its end stays there. Another screen starts fresh.
+  const target = repaint._next || repaint._target || STACK[STACK.length - 1] || null;
+  repaint._next = null;
+  const same = !!target && repaint._target === target;
+  repaint._target = target;
   handlers = [];
   SUBMITS = [];
   BT_PENDING = [];
@@ -313,6 +368,11 @@ function repaint(screen) {
   // (the paywall, a live training session) keeps its own dark room.
   view.dataset.look = DESK && sc.look === "desk" ? "desk" : "legacy";
   const before = stageBefore(view);
+  const live = window.TailzuLive;
+  const held = same && live && live.holdView ? live.holdView(document) : null;
+  const near = same ? nearEnds(view) : null;
+  // His stage's box and the @ field: where they were, for after (stage.js, mention.js).
+  if (typeof stagesBefore === "function") stagesBefore(view);
   view.innerHTML = html;
   // A stage glides its own steps in; a fade of the whole stage on top of that
   // would be two entrances. Anything else ends the onboarding if it was on.
@@ -337,14 +397,16 @@ function repaint(screen) {
   startFlips();
 
   bindHandlers(view);
+  // A code field (keyboard "code") is written in capitals, as it is shown.
+  const valueOf = (el) => (el.getAttribute("data-kb") === "code" ? String(el.value).toUpperCase() : el.value);
   view.querySelectorAll("[data-s]").forEach((el) => {
     const act = SUBMITS[Number(el.getAttribute("data-s")) - 1];
-    if (act) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setStatePath(el.getAttribute("data-bind"), el.value); void run(act); } });
+    if (act) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); setStatePath(el.getAttribute("data-bind"), valueOf(el)); void run(act); } });
   });
   view.querySelectorAll("[data-bind]").forEach((el) => {
     const path = el.getAttribute("data-bind");
     if (!path) return;
-    el.addEventListener("input", () => { setStatePath(path, el.value); });
+    el.addEventListener("input", () => { setStatePath(path, valueOf(el)); });
   });
   // A committed pill. `onComplete` is the phones' name for it and the catalog
   // sends the same tree to both, so the name is honoured rather than renamed.
@@ -362,8 +424,14 @@ function repaint(screen) {
   wireField(view);
   // Live pages: a layer over each slot this paint drew (liveView.js).
   if (typeof wireLive === "function") wireLive(view);
-  // Last: the living tiles and cards (an overlay card is lifted out to the body, after everything above is wired).
+  // Last: the living tiles and cards (an overlay card is lifted out to the body, after everything above is wired), his stage and
+  // its thought (stage.js), the @ field moved back in (mention.js).
   mountBotTiles(view);
+  if (held) live.restoreView(document, held);
+  keepEnds(view, near);
+  focusNew(view, same);
+  // Whether this screen's bot takes the one key now (listen.js).
+  if (typeof talkToFollow === "function") talkToFollow();
   document.querySelectorAll("#tabs .tab, #mtabs .mtab").forEach((b) => {
     b.setAttribute("aria-current", String(b.dataset.tab === TAB_ID && STACK.length <= 1));
   });

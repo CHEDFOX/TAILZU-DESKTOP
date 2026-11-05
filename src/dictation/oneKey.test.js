@@ -78,8 +78,9 @@ function rig(o = {}) {
     now: () => clock,
     setTimeout: (f, ms) => { const t = { f, at: clock + ms }; timers.push(t); return t; },
     clearTimeout: (t) => { timers = timers.filter((x) => x !== t); },
-    press: () => {
+    press: (how) => {
       did.push("press");
+      if (o.hows) o.hows.push(how);
       if (o.press) return o.press();
       recording = true;
       return "talk";
@@ -88,6 +89,7 @@ function rig(o = {}) {
     cancel: () => { did.push("cancel"); recording = false; },
     talking: () => recording,
     tapOn: () => o.tapOn !== false,
+    ...(o.freed ? { freed: () => did.push("freed") } : {}),
     armMs: 200, tapMs: 300,
     // Two taps and talk mode (talk.js), only when the test asks for them.
     ...(o.talk ? {
@@ -421,4 +423,21 @@ test("Linux: Right Ctrl and Right Super through the hook; Right Alt's left Ctrl 
   assert.deepStrictEqual(way.seen, [], "nothing is listened to under Wayland");
   const mac = run("rightCommand", "darwin", "");
   assert.deepStrictEqual(mac.said, ["bound"], "the Mac's new default needs no helper");
+});
+
+test("the press says how it came (a hold or a tap), and a held press that was short says it is hands-free now", () => {
+  // The bot on X0's screen hears a hold while it is down, and a tap until the first pause (main.js oneKeyPress, windowVoice.js).
+  const hows = [];
+  const r = rig({ hows, freed: true });
+  r.g.down(); r.wait(250); r.g.up();
+  assert.deepStrictEqual(hows, ["hold"]);
+  assert.ok(r.did.includes("freed"), "down 250 ms: past the arm, short of a hold: hands-free");
+  r.g.down(); r.g.up();
+  r.wait(500);
+  r.g.down(); r.wait(100); r.g.up();
+  assert.deepStrictEqual(hows, ["hold", "tap"], "a tap, before it armed");
+  const long = rig({ freed: true });
+  long.g.down(); long.wait(600); long.g.up();
+  assert.ok(!long.did.includes("freed"), "a real hold is not freed");
+  assert.deepStrictEqual(long.did, ["press", "finish"]);
 });

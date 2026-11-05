@@ -85,6 +85,16 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // A live page (liveView.js) wanted to leave: { guestId, url }. The window offers it only if the page's node allows.
   onLiveOpen: (cb) => ipcRenderer.on("live:open", (_e, m) => cb(m)),
   dictate: () => ipcRenderer.send("app:dictate"),
+  // The bot on the screen listens (the main process records: src/dictation/windowVoice.js). cmd: "start" (a double-click:
+  // mode "once" or "chat", the screen's pause), "stop" (a tap on him, voiceStop), "again" (a chat's next turn), "cancel"
+  // (the window's own Escape); `session`, when given, names the one it is for, so an old one's late word does nothing.
+  voice: (cmd, o) => ipcRenderer.send("app:voice", {
+    cmd: String(cmd || ""), mode: o && o.mode === "chat" ? "chat" : "once", silenceMs: Number(o && o.silenceMs) || 0, session: Number(o && o.session) || 0,
+  }),
+  // Whether this screen's bot takes the one key while X0 is in front (null: the key types, as it always did).
+  talkTo: (t) => ipcRenderer.send("app:talkTo", t && typeof t === "object" ? { hold: t.hold === true, chat: t.chat === true } : null),
+  // What he hears: listen, words, level, heard, end, error (each with its session's number).
+  onVoice: (cb) => ipcRenderer.on("app:voice", (_e, m) => cb(m)),
   // Start or stop taking notes, as the notes hotkey does.
   toggleNotes: () => ipcRenderer.send("app:notes"),
   // Stop this note: the one running here, or one the server still has as recording that nothing here holds.

@@ -30,8 +30,11 @@ function mainProcess(o = {}) {
   fs.writeFileSync(path.join(dir, "bootstrap.json"), JSON.stringify({ labels: {}, flags: Object.assign({ "desktop.paste.delayMs": 1 }, o.flags) }));
   // What an earlier launch kept on this computer, when a test starts from it.
   if (o.state) fs.writeFileSync(path.join(dir, "desktop-state.json"), JSON.stringify(o.state));
+  // This computer's own settings (config.json), when a test needs one: the one key it binds, say.
+  if (o.config) fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(o.config));
   const dictation = [];   // what plain dictation records, sends and pastes
   const guide = [];       // what the guide's window was sent
+  const pills = [];       // what the pill's window was sent
   const carets = [];      // what the helper was asked
   const timers = new Set();
   const ipc = new EventEmitter();
@@ -39,6 +42,11 @@ function mainProcess(o = {}) {
   const shortcuts = [];
   const windows = [];
   const trayMenus = [];   // the tray's menus, as built (Menu.buildFromTemplate's template)
+  // The window in front (BrowserWindow.getFocusedWindow), set by the test: null, as when another app is.
+  let focused = null;
+  // o.hook: a key hook the test presses keys on (uiohook-napi's shape), so the one key and Esc can be driven.
+  const hook = o.hook ? Object.assign(new EventEmitter(), { start() {}, stop() {} }) : null;
+  const UiohookKey = { Escape: 1, Ctrl: 29, Alt: 56, CtrlRight: 3613, AltRight: 3640, MetaRight: 3676, A: 30 };
   const copy = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
   class BW extends EventEmitter {
     constructor(opts) {
@@ -51,13 +59,14 @@ function mainProcess(o = {}) {
           if (self.file === "src/dictation/recorder/recorder.html") dictation.push(["recorder", ch, copy(m)]);
           else if (self.file === "src/agent/guide/guide.html") guide.push(copy(m));
           else if (self.file === "src/app/app.html") (self.appSent = self.appSent || []).push([ch, copy(m)]);
+          else if (self.file === "src/dictation/pill/pill.html") pills.push([ch, copy(m)]);
         },
         isLoading: () => false, isDestroyed: () => self.destroyed, getURL: () => "file://" + self.file,
         setWindowOpenHandler() {},
       });
       windows.push(this);
     }
-    static getFocusedWindow() { return null; }
+    static getFocusedWindow() { return focused && !focused.destroyed ? focused : null; }
     loadFile(f) { this.file = f; setImmediate(() => this.webContents.emit("did-finish-load")); }
     setVisibleOnAllWorkspaces() {} setIgnoreMouseEvents() {} setContentProtection() {} setAlwaysOnTop() {} moveTop() {}
     isVisible() { return this.visible; } isDestroyed() { return this.destroyed; }
@@ -118,7 +127,7 @@ function mainProcess(o = {}) {
   };
   const req = (id) => {
     if (Object.prototype.hasOwnProperty.call(fakes, id)) return fakes[id];
-    if (id === "uiohook-napi") throw new Error("no key hook in tests");
+    if (id === "uiohook-napi") { if (hook) return { uIOhook: hook, UiohookKey }; throw new Error("no key hook in tests"); }
     if (!id.startsWith(".")) return require(id);
     // main.js's own files beside it (src/main/) run as it does, fakes and all.
     const file = require.resolve(path.join(path.dirname(MAIN_JS), id));
@@ -145,7 +154,7 @@ function mainProcess(o = {}) {
   const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
   const from = (file) => ({ sender: win(file).webContents });
   return {
-    dictation, guide, carets, ipc, handles, windows, win, dir, app,
+    dictation, guide, pills, carets, ipc, handles, windows, win, dir, app,
     /** The tray's menu as it is now: its template's items. */
     tray: () => (trayMenus.length ? trayMenus[trayMenus.length - 1].t : []),
     ready: () => sleep(20),
@@ -154,6 +163,12 @@ function mainProcess(o = {}) {
     fromRecorder: (ch, p) => ipc.emit(ch, from("src/dictation/recorder/recorder.html"), p),
     fromPill: (ch, p) => ipc.emit(ch, from("src/dictation/pill/pill.html"), p),
     fromApp: (ch, ...a) => ipc.emit(ch, from("src/app/app.html"), ...a),
+    /** The window of this page in front (null: another app is). */
+    focus: (file) => { focused = file ? win(file) : null; },
+    /** A key on the fake hook (o.hook): its UiohookKey name, "down" or "up". */
+    key: (name, dir) => { if (hook) hook.emit(dir === "up" ? "keyup" : "keydown", { keycode: UiohookKey[name] }); },
+    /** What the app window was sent on a channel, in order. */
+    appSent: (ch) => ((win("src/app/app.html") || {}).appSent || []).filter(([c]) => c === ch).map(([, m]) => m),
     invoke: (ch, sender, ...a) => handles.get(ch)({ sender }, ...a),
     sessions: () => dictation.filter(([w, ch]) => w === "recorder" && ch === "start-recording").map(([, , p]) => p.session),
     close: () => {

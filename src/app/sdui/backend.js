@@ -26,7 +26,9 @@ function capabilities() {
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
       ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
       // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.
-      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : []),
+      typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : [],
+      // The bot on the screen listens, and the one key talks to him with X0 in front: only with a main process that records for him.
+      VOICE_ON() ? ["VoiceLive", "DeskTalkTo"] : []),
     actions: ACTIONS.concat(typeof outboxRun === "function" ? ["outbox"] : []),
     templates: [],
     device: {
@@ -70,7 +72,16 @@ async function api(path, body, method) {
     if (res.status === 429 && text.indexOf("quota_exceeded") !== -1) {
       const e = worded(K.txt("error.quota", "You've used this month's free words."), text); e.quota = true; throw e;
     }
-    throw worded(statusText(res.status), path + " → " + res.status);
+    const e = worded(statusText(res.status), path + " → " + res.status);
+    e.status = res.status;
+    // A refusal the server explains ({ code, message }: "They're already invited.", "You asked already. Try again next week."),
+    // kept so the screen's own failure can say it (actions.js puts it at state lastError). Never a 5xx's: those stay vague.
+    if (res.status < 500) {
+      let b = null;
+      try { b = JSON.parse(text); } catch { b = null; }
+      if (b && typeof b.message === "string" && b.message && b.message.length <= 300) e.server = { code: typeof b.code === "string" ? b.code : "", message: b.message };
+    }
+    throw e;
   }
   const ct = res.headers.get("content-type") || "";
   return ct.indexOf("application/json") !== -1 ? res.json() : res.text();

@@ -29,7 +29,13 @@ async function run(action, eventValue) {
   if (typeof action === "string") return run((CURRENT_ACTIONS || {})[action], ...(arguments.length > 1 ? [eventValue] : []));
   switch (action.kind) {
     // Params can name state ("$state.asked.id"): the screen to open is sometimes one an answer named.
-    case "navigate": go(action.screenId, action.params ? deepResolve(action.params) : action.params); return;
+    // `replace` swaps the top of the stack (Done on Spaces opens the made space's moment with nothing behind it to go back to).
+    case "navigate": {
+      const params = action.params ? deepResolve(action.params) : action.params;
+      if (action.replace === true && STACK.length && action.screenId) { STACK[STACK.length - 1] = { screenId: action.screenId, params }; paint(); return; }
+      go(action.screenId, params);
+      return;
+    }
     // TWO NAMES FOR ONE THING, and only one was answered. The catalog says
     // "navigateBack" — fifteen times, on every back control in the four inside
     // screens — and this understood only "back". So every one of those arrows
@@ -98,6 +104,9 @@ async function run(action, eventValue) {
     case "dictate":
       try { window.tailzuApp.dictate(); } catch { /* tray only */ }
       return;
+    // The bot on the screen listens, turn by turn, and stops (listen.js, loaded after this file).
+    case "voiceLive": return typeof voiceLiveRun === "function" ? voiceLiveRun(action) : run(action.onError);
+    case "voiceStop": if (typeof voiceStopRun === "function") voiceStopRun(); return;
     // Send a picked file, play a sound (media.js, loaded after this file).
     case "uploadFile": case "playAudio": case "stopAudio":
       return typeof mediaRun === "function" ? mediaRun(action) : undefined;
@@ -172,10 +181,14 @@ async function run(action, eventValue) {
           // the end) and nothing it shows depends on the answer; a fetch here
           // would rebuild the step under the person's hand. Nor while another
           // call's answer is being written in (a Stop): it would wipe the words.
-          if (!stageUp() && ASK_TAPS.size <= (unlisten ? 1 : 0)) await paint(true);
+          // `stay` (KitExtras): the screen asked to be kept as it is (a question the answer opened, "Send this to Mom only?",
+          // which a fetch would wipe before it showed; its own onSuccess refreshes when it means to).
+          if (!stageUp() && ASK_TAPS.size <= (unlisten ? 1 : 0) && action.stay !== true) await paint(true);
         }
       } catch (err) {
         if (err && err.quota) { go(K.str("quota.screenId", "paywall")); return; }
+        // What the server said about it, for the failure's own toast ("$state.lastError.message", said.ts); null when it said nothing.
+        setStatePath("lastError", err && err.server ? { code: err.server.code, message: err.server.message } : null);
         await run(action.onError);
       } finally {
         // A moment more: the last words can come over the socket just after the answer.

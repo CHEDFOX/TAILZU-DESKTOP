@@ -141,6 +141,17 @@ window rather than recording into a history no account owns.
   or send to a bot. A money app sends no screen content. A private window sends
   it as any other, marked `privateWindow` so the server keeps nothing of the
   turn; with `desktop.agent.privateWindows` off it sends none (src/dictation/talk.js).
+- **The bot on X0's screen** (Home's Ask, a space): with X0 in front on a screen
+  whose bot listens, the one key is his. Held, he listens while it is down and
+  the words go to him at the release; tapped, he listens until the first pause
+  or the next tap; tapped twice, it is a voice chat with him, turn after turn,
+  even with talk mode off. A double-click on him does the same as two taps. He
+  shows only the words he hears; a tap on him or Esc stops him and drops what
+  he heard of the turn; X0 leaving the front ends it. Nothing is typed and the
+  pill stays out of it (the tray's dot still turns amber). With a text field of
+  the page in focus (not his own box), the key types into it as it always did;
+  with X0 not in front, the pill works as always (src/dictation/windowVoice.js,
+  src/app/sdui/listen.js; `desktop.window.voice`, `desktop.window.pauseEndMs`).
 - **Toggle** (a Linux Wayland session, or `oneKey: "off"`): press the hotkey → speak → press again.
 - **Hold-to-talk** (`hold: true`, without the one key): hold `holdKey` while speaking, release to finish.
 - **Live captions** (`live: true`): a caption strip shows your words as you

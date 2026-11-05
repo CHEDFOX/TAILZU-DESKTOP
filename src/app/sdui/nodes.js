@@ -108,11 +108,26 @@ function hintOf(p) {
   return '<div class="tz-hint" role="tooltip">' + node(p.hint) + "</div>";
 }
 
+/**
+ * A TextField's extras (KitExtras, shared/types/sdui.ts TextFieldExtras): `keyboard` (email: no capitals or corrections, the
+ * address autofill; code: capitals, nothing corrected), `maxLength`, and `autoFocus`, by the field's id (navigation.js
+ * focusNew: when it first appears on a screen, also when a when() shows it after a setState, never again on a repaint).
+ */
+function fieldExtras(n, p, path, multi) {
+  const kb = multi ? "" : p.keyboard === "email" ? ' type="email" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="email"'
+    : p.keyboard === "code" ? ' autocapitalize="characters" autocorrect="off" spellcheck="false" autocomplete="one-time-code" data-kb="code"' : "";
+  const max = Number(p.maxLength) > 0 ? ' maxlength="' + Math.floor(Number(p.maxLength)) + '"' : "";
+  const af = p.autoFocus === true ? ' data-af="' + esc(String(n.id || path || "")) + '"' : "";
+  return kb + max + af;
+}
+
 function node(n) {
   if (!n) return "";
   if (!visible(n.visibleIf)) return n.fallback ? node(n.fallback) : "";
   // The onboarding stage draws the one step it is on, not all of them.
   if (n.type === "OnboardStage") return stageNode(n);
+  // A bot's stage draws his thought's content itself, and only while it is open or he listens (stage.js).
+  if (n.type === "BotStage") return botStageNode(n);
   const p = n.props || {}, st = n.style || {}, s = css(st);
   const kids = (n.children || []).map(node).join("");
   const press = n.on && (n.on.onPress || n.on.onChange || n.on.onSubmit);
@@ -149,7 +164,8 @@ function node(n) {
       // falls through
     case "Scroll":
       // A box that scrolls on its own inside a card (the terms and privacy card): its height is the node's style (maxHeight).
-      return '<div' + cls(p) + ' style="position:relative;display:flex;flex-direction:column;overflow-y:auto;overscroll-behavior:contain;' + s + '">' + kids + "</div>";
+      // startAtEnd (KitExtras): it opens at its end and stays there as things come in (a space's feed; navigation.js keepEnds).
+      return '<div' + cls(p) + (p.startAtEnd === true ? " data-end" : "") + ' style="position:relative;display:flex;flex-direction:column;overflow-y:auto;overscroll-behavior:contain;' + s + '">' + kids + "</div>";
     case "Stack": case "SafeArea": case "MorphOut": case "PullToRefresh": case "Grid":
       // A Grid with columns is a grid. It was a column of its children, which
       // is a long way from three apps across.
@@ -170,7 +186,7 @@ function node(n) {
       // means. It also fixes the containing block: an absolutely-positioned
       // child now measures against its own parent, which is what it does on
       // the phones and not what it was doing here.
-      return '<div' + bind(press) + rolePress(press) + cls(p) + hintHost(p) +
+      return '<div' + bind(press) + rolePress(press) + cls(p) + hintHost(p) + (p.startAtEnd === true ? " data-end" : "") +
         (p.accessibilityLabel ? ' aria-label="' + esc(label(p.accessibilityLabel)) + '"' : "") + ' style="' +
         (st.position ? "" : "position:relative;") + "display:flex;flex-direction:" +
         (st.direction === "row" || n.type === "Row" ? "row" : "column") +
@@ -268,14 +284,15 @@ function node(n) {
       const path = (n.bind && n.bind.value) || "";
       const val = path ? (stateAt(path) || "") : "";
       const multi = p.multiline === true;
+      const extra = fieldExtras(n, p, path, multi);
       if (p.cls && !multi) {
         const submit = n.on && n.on.onSubmit ? ' data-s="' + SUBMITS.push(n.on.onSubmit) + '"' : "";
-        return '<input value="' + esc(val) + '" data-bind="' + esc(path) + '"' + submit + cls(p) +
+        return '<input value="' + esc(val) + '" data-bind="' + esc(path) + '"' + submit + extra + cls(p) +
           ' placeholder="' + esc(label(p.placeholder) || "") + '" aria-label="' + esc(label(p.placeholder) || "") + '" style="' + s + '">';
       }
       // Enter runs on.onSubmit (the Bots app's ask bar), as it does on a desk field.
       const submit = n.on && n.on.onSubmit && !multi ? ' data-s="' + SUBMITS.push(n.on.onSubmit) + '"' : "";
-      const common = submit + ' data-bind="' + esc(path) + '" placeholder="' + esc(label(p.placeholder) || "") +
+      const common = submit + extra + ' data-bind="' + esc(path) + '" placeholder="' + esc(label(p.placeholder) || "") +
         '" style="width:100%;background:var(--input);border:1px solid var(--border);border-radius:13px;' +
         "padding:13px 14px;color:var(--text);font:inherit;outline:none;" + s + '"';
       return multi
@@ -355,6 +372,11 @@ function node(n) {
     // Sign in with the phone: the QR panel beside the sign-in form (linkSignIn.js, loaded after this file).
     case "DeskLinkSignIn": return typeof linkSignInNode === "function" ? linkSignInNode(p, s) : "";
     case "BotTiles": return botTilesNode(p);
+    // Spaces (stage.js, mention.js, listen.js): a box of tiny bots, a row that vaporises, the @ and / field, the words he hears.
+    case "BotCrowd": return botCrowdNode(n, p, kids);
+    case "Vanish": return vanishNode(p, kids);
+    case "MentionField": return mentionFieldNode(n, p);
+    case "LiveWords": return liveWordsNode(p);
     case "BotCard": return botCardNode(n, p, kids);
     case "BotBuddy": return botBuddyNode(p);
     case "WriteOn": return writeOnNode(p);

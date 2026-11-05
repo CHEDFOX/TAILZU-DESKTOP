@@ -238,6 +238,29 @@ test("preload: the app window's bridge carries the setup card's three calls, by 
     assert.ok(!(k in t), k);
   }
   for (const k of ["state", "set", "project", "checkDocker", "stop", "openAudit", "onUpdate"]) assert.strictEqual(typeof exposed.tailzuRunner[k], "function", k);
+  // The bot on the screen listens (windowVoice.js): voice, talkTo, onVoice, with what each sends pinned.
+  sent.length = 0;
+  t.voice("start", { mode: "chat", silenceMs: 900 });
+  t.voice("stop", { session: 3 });
+  t.voice("again", { mode: "loud", session: "2" });
+  t.voice();
+  t.talkTo({ hold: true, chat: true, extra: 1 });
+  t.talkTo({ hold: "yes" });
+  t.talkTo(null);
+  assert.deepStrictEqual(sent, [
+    ["app:voice", { cmd: "start", mode: "chat", silenceMs: 900, session: 0 }],
+    ["app:voice", { cmd: "stop", mode: "once", silenceMs: 0, session: 3 }],
+    ["app:voice", { cmd: "again", mode: "once", silenceMs: 0, session: 2 }],
+    ["app:voice", { cmd: "", mode: "once", silenceMs: 0, session: 0 }],
+    ["app:talkTo", { hold: true, chat: true }],
+    ["app:talkTo", { hold: false, chat: false }],
+    ["app:talkTo", null],
+  ]);
+  const heard = [];
+  t.onVoice((m) => heard.push(m));
+  listeners["app:voice"]({}, { kind: "words", session: 1, text: "hi" });
+  assert.deepStrictEqual(heard, [{ kind: "words", session: 1, text: "hi" }]);
+  for (const k of ["tailzu", "tailzuGuide", "tailzuNotes"]) assert.ok(!("voice" in exposed[k]) && !("talkTo" in exposed[k]), k);
 });
 
 test("main: what older copies kept and nothing reads is dropped at launch: the folders Ask could use, and the runner's explained mark", async () => {
@@ -278,5 +301,113 @@ test("main: Xode on this computer is on by default, its tray item opens its own 
     const snap = await m.invoke("runner:set", runnerWin.webContents, "enabled", true);
     assert.strictEqual(snap.status.enabled, true);
     await m.invoke("runner:set", runnerWin.webContents, "enabled", false);
+  } finally { m.close(); }
+});
+
+// ---- The window's own voice (windowVoice.js): the one key and a double-click talk to the bot on X0's screen ----------
+const APP = "src/app/app.html";
+// The one key this test binds (config.json), and its name on the fake key hook.
+const KEY = process.platform === "darwin" ? { id: "rightCommand", hook: "MetaRight" } : { id: "rightCtrl", hook: "CtrlRight" };
+const FAST_KEY = { "desktop.oneKey.armMs": 20, "desktop.oneKey.tapMs": 60, "desktop.talk.doubleTapMs": 150, "desktop.talk.enabled": false };
+
+/** main.js with a key hook, X0's window shown, in front (or not), its screen taking the one key (or not). */
+async function keyed(o = {}) {
+  const m = mainProcess({ hook: true, config: { oneKey: KEY.id }, flags: Object.assign({}, FAST_KEY, o.flags) });
+  await m.ready();
+  m.win(APP).show();
+  if (o.front !== false) m.focus(APP);
+  if (o.talkTo !== false) m.fromApp("app:talkTo", { hold: true, chat: true });
+  return m;
+}
+const starts = (m) => m.dictation.filter(([w, ch]) => w === "recorder" && ch === "start-recording").map(([, , p]) => p);
+const keyDown = async (m, ms) => { m.key(KEY.hook, "down"); await sleep(ms); };
+const keyUp = async (m, ms = 10) => { m.key(KEY.hook, "up"); await sleep(ms); };
+const pasted = (m) => m.dictation.filter(([k]) => k === "clipboard" || k === "keystroke");
+const pillStates = (m) => m.pills.filter(([ch, p]) => ch === "pill" && p && p.state).map(([, p]) => p.state);
+
+test("main: X0 in front on a screen that takes the one key: a hold is his to hear, in the ask mode, with no pill, no paste and no clipboard", async () => {
+  const m = await keyed();
+  try {
+    await keyDown(m, 80);
+    const [rec] = starts(m);
+    assert.ok(rec, "the microphone opened");
+    assert.strictEqual(rec.mode, "ask");
+    assert.strictEqual(rec.pauseEndMs, 900);
+    assert.strictEqual(rec.live, true);
+    const [listen] = m.appSent("app:voice");
+    assert.deepStrictEqual(listen, { kind: "listen", session: 1, mode: "hold", by: "key" });
+    m.fromRecorder("live-partial", { session: rec.session, text: "remind me to call" });
+    m.fromRecorder("ask-pause", { session: rec.session });
+    m.fromRecorder("live-partial", { session: rec.session, text: "remind me to call Nani at six" });
+    await keyUp(m);
+    assert.ok(m.dictation.some(([w, ch, p]) => w === "recorder" && ch === "stop-recording" && p.session === rec.session), "stopped at the release");
+    m.fromRecorder("ask-audio", { session: rec.session, data: null, text: "remind me to call Nani at six" });
+    m.fromRecorder("ask-text", { session: rec.session, text: "Remind me to call Nani at six.", final: true });
+    await sleep(10);
+    const voice = m.appSent("app:voice");
+    assert.deepStrictEqual(voice.filter((v) => v.kind === "words").map((v) => v.text), ["remind me to call", "remind me to call Nani at six"]);
+    assert.deepStrictEqual(voice.filter((v) => v.kind === "heard"), [{ kind: "heard", session: 1, text: "Remind me to call Nani at six." }]);
+    assert.deepStrictEqual(pasted(m), [], "nothing pasted, nothing on the clipboard");
+    assert.ok(!pillStates(m).includes("listening"), "no pill");
+    // The window ran its action: it says stop, and the session ends.
+    m.fromApp("app:voice", { cmd: "stop", session: 1 });
+    assert.strictEqual(m.appSent("app:voice").slice(-1)[0].kind, "end");
+  } finally { m.close(); }
+});
+
+test("main: X0 in front with no talkTo types as today; X0 not in front, the pill as today", async () => {
+  for (const o of [{ talkTo: false }, { front: false }]) {
+    const m = await keyed(o);
+    try {
+      await keyDown(m, 80);
+      const [rec] = starts(m);
+      assert.ok(rec, JSON.stringify(o));
+      assert.notStrictEqual(rec.mode, "ask", "a dictation, not the bot's turn");
+      await keyUp(m);
+      m.fromRecorder("dictation-result", { session: rec.session, text: "See you Friday.", join: false });
+      await until(() => m.dictation.some(([k]) => k === "keystroke"));
+      assert.deepStrictEqual(m.appSent("app:voice"), [], "the window heard nothing");
+      assert.ok(pasted(m).some(([k, t]) => k === "clipboard" && t === "See you Friday."), "pasted");
+      assert.ok(pillStates(m).includes("listening"), "the pill listened");
+    } finally { m.close(); }
+  }
+});
+
+test("main: two taps make a voice chat with the bot on screen, talk mode off; Esc ends it and cancels the recording", async () => {
+  const m = await keyed();
+  try {
+    // Tap, tap.
+    m.key(KEY.hook, "down"); await sleep(5); await keyUp(m, 20);
+    m.key(KEY.hook, "down"); await sleep(5); await keyUp(m, 20);
+    const voice = m.appSent("app:voice");
+    assert.deepStrictEqual(voice.filter((v) => v.kind === "listen").map((v) => v.mode), ["free", "chat"], "the first tap's turn gives way to the chat");
+    assert.ok(!pillStates(m).includes("talk"), "not talk mode");
+    const rec = starts(m).slice(-1)[0];
+    assert.strictEqual(rec.mode, "ask");
+    m.key("Escape", "down");
+    await sleep(5);
+    const end = m.appSent("app:voice").slice(-1)[0];
+    assert.strictEqual(end.kind, "end");
+    assert.strictEqual(end.why, "esc");
+    assert.ok(m.dictation.some(([w, ch, p]) => w === "recorder" && ch === "cancel-recording" && p.session === rec.session), "the recording cancelled");
+  } finally { m.close(); }
+});
+
+test("main: a double-click's voice chat ends when X0 leaves the front; another window's app:voice or app:talkTo does nothing", async () => {
+  const m = await keyed({ talkTo: false });
+  try {
+    m.fromApp("app:voice", { cmd: "start", mode: "chat", silenceMs: 900 });
+    const rec = starts(m)[0];
+    assert.deepStrictEqual(m.appSent("app:voice")[0], { kind: "listen", session: 1, mode: "chat", by: "click" });
+    m.win(APP).emit("blur");
+    assert.deepStrictEqual(m.appSent("app:voice").slice(-1)[0], { kind: "end", session: 1, why: "blur" });
+    assert.ok(m.dictation.some(([w, ch, p]) => w === "recorder" && ch === "cancel-recording" && p.session === rec.session));
+    // A foreign sender: nothing starts, and the key still types.
+    m.fromPill("app:voice", { cmd: "start", mode: "chat" });
+    m.fromPill("app:talkTo", { hold: true, chat: true });
+    assert.strictEqual(starts(m).length, 1);
+    await keyDown(m, 80);
+    assert.notStrictEqual(starts(m).slice(-1)[0].mode, "ask", "the pill's talkTo was not taken");
+    await keyUp(m);
   } finally { m.close(); }
 });

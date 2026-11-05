@@ -94,6 +94,9 @@ function stateAt(path) {
 
 function truthy(v) {
   if (Array.isArray(v)) return v.length > 0;
+  // An answer kept in state is there: the phone reads { truthy: "said.confirm" } (the server's question) and { truthy:
+  // "asked.shell" } (an answer came back) as true, and the server writes one tree for both, so an object is true here too.
+  if (v !== null && typeof v === "object") return true;
   return v === true || v === "true" || (typeof v === "number" && v !== 0) || (typeof v === "string" && v.length > 0);
 }
 

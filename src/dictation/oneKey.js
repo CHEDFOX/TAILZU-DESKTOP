@@ -122,9 +122,12 @@ function option(v, fallback) {
  *   other()  any other key, or a click or the wheel
  *   reset()  forget the gesture (the key was rebound)
  *
- * o.press()       start talking: "talk" when a dictation started, "other" when
+ * o.press(how)    start talking: "talk" when a dictation started, "other" when
  *                 the press went to something else (Ask's card), "none" when
- *                 nothing happened (signed out, out of words)
+ *                 nothing happened (signed out, out of words). `how`: "hold"
+ *                 (held past armMs) or "tap" (a quick tap: hands-free)
+ * o.freed()       optional: a held press came up quickly, so it is hands-free
+ *                 now (the bot on X0's screen listens until the first pause)
  * o.finish()      stop talking and write it
  * o.cancel()      throw the talking away (a chord)
  * o.talking()     a dictation is recording now (started from anywhere)
@@ -170,7 +173,7 @@ function createHoldTap(o) {
   function arm() {
     timer = null;
     if (state !== "armed") return;
-    const r = call(() => o.press(), "none");
+    const r = call(() => o.press("hold"), "none");
     state = r === "talk" ? "held" : "used";
   }
 
@@ -242,12 +245,16 @@ function createHoldTap(o) {
       // Down and up before it armed: a tap. Hands-free, when taps are on.
       cancelTimer(timer); timer = null;
       tapAt = now();
-      if (call(() => o.tapOn(), true) !== false && call(() => o.press(), "none") === "talk") state = "free";
+      if (call(() => o.tapOn(), true) !== false && call(() => o.press("tap"), "none") === "talk") state = "free";
       return;
     }
     if (was === "held") {
       // A short press is a tap: it keeps listening. Held, it was talk-while-held.
-      if (short && call(() => o.tapOn(), true) !== false && call(() => o.talking(), false)) { state = "free"; tapAt = now(); return; }
+      if (short && call(() => o.tapOn(), true) !== false && call(() => o.talking(), false)) {
+        state = "free"; tapAt = now();
+        if (typeof o.freed === "function") call(() => o.freed());
+        return;
+      }
       call(() => o.finish());
     }
     // closing, chord, used, idle: the gesture is over.
