@@ -198,6 +198,7 @@ assets/                 fonts (OFL), tray and app icons
 build/                  electron-builder resources: icon.ico, entitlements, NSIS include, Store tiles
 docs/microsoft-store.md the Store listing
 .github/workflows/build.yml   installers for macOS, Windows and Linux; publishing on a manual run
+.github/workflows/xode.yml    xode (cli/): tests on every push that touches it; publishing to npm on a manual run
 
 cli/                    xode: Xode in the terminal, its own npm package (no runtime dependencies; the backend repo's xode-cli doc)
                         `xode` in a project folder is the whole of it: sign-in inline, the folder's project, a welcome box,
