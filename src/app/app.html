@@ -41,6 +41,12 @@
   @font-face { font-family:"Tailzu Geist Bold"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-700.woff2) format("woff2"); }
   @font-face { font-family:"Tailzu Geist Mono"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-mono-400.woff2) format("woff2"); }
   @font-face { font-family:"Tailzu Geist Mono Medium"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/geist-mono-500.woff2) format("woff2"); }
+  /* A SPACE'S MESSAGES: Bricolage Grotesque at 400, 500 and 600, a family per weight as Geist's are, under the names the phones
+     register them by ("FontBricolage" in core.js COMPONENTS says they are here; without it the server sets the same words in
+     Geist). Google Fonts' static cuts at optical size 14, Latin, as Fontsource ships them. */
+  @font-face { font-family:"Tailzu Bricolage"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/bricolage-grotesque-latin-400-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Bricolage Medium"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/bricolage-grotesque-latin-500-normal.woff2) format("woff2"); }
+  @font-face { font-family:"Tailzu Bricolage SemiBold"; font-weight:100 900; font-display:swap; src:url(../../assets/fonts/bricolage-grotesque-latin-600-normal.woff2) format("woff2"); }
   /* THE BOTS APP'S THREE MOTIONS (SVG shapes, sdui/nodes.js svgShapes): a working bot breathes, a tab's icon pops in, the
      You ring draws to the month's spend. Calm by default, and none of it under Reduce Motion. */
   .tz-work { transform-box:fill-box; transform-origin:center; animation:tzBreathe 1.8s ease-in-out infinite; }
@@ -113,8 +119,7 @@
   .tz-mf-head { padding:0 12px 8px; font:600 11px/14px 'Tailzu Geist SemiBold', system-ui, sans-serif; letter-spacing:.06em; text-transform:uppercase; color:#8a8a8a; }
   .tz-mf-row { display:flex; align-items:center; gap:12px; min-height:44px; padding:0 12px; border-radius:14px; cursor:pointer; }
   .tz-mf-row:hover, .tz-mf-row.hl { background:#f2f2f2; }
-  .tz-mf-av { width:30px; height:30px; flex:none; border-radius:15px; border:1px solid #d4d4d4; background:#f2f2f2; color:#3d3d3d;
-    font:600 13px/28px 'Tailzu Geist SemiBold', system-ui, sans-serif; text-align:center; box-sizing:border-box; }
+  .tz-mf-av { width:28px; height:28px; flex:none; border-radius:50%; }
   .tz-mf-dot { width:10px; height:10px; flex:none; border-radius:5px; margin:0 10px; }
   .tz-mf-bar { width:4px; height:30px; flex:none; border-radius:2px; }
   .tz-mf-tx { display:flex; flex-direction:column; min-width:0; }
@@ -124,6 +129,9 @@
   .tz-mf-empty { padding:10px 12px 12px; font:13px/17px 'Tailzu Geist', system-ui, sans-serif; color:#8a8a8a; }
   .tz-mf-thead { display:flex; align-items:center; gap:10px; padding:0 8px 8px 6px; }
   .tz-mf-back { width:32px; height:32px; flex:none; border:1px solid #d4d4d4; border-radius:16px; background:#fff; font:18px/28px system-ui, sans-serif; cursor:pointer; padding:0; }
+  /* PersonBot (personBot.js): a person's tiny bot in a box of its own, his feet on its floor; it takes no clicks (a row's own do). */
+  .tz-pb { position:relative; display:inline-block; flex:none; vertical-align:middle; pointer-events:none; }
+  .tz-pb-c { position:absolute; left:0; top:0; pointer-events:none; }
   /* LiveWords: what he hears, word by word (listen.js writes them in place). */
   .tz-th-space .tz-lw { padding:4px 8px; }
   /* A code field (KitExtras keyboard "code") is written in capitals; its placeholder stays as it is written. */
@@ -788,8 +796,10 @@
   <script src="sdui/askSetupCard.js"></script>
   <script src="sdui/bots.js"></script>
   <script src="sdui/homeHead.js"></script>
-  <!-- Spaces: his stage, the crowd and the vanish; the @ and / field; his listening (after bots.js, whose lives and looks they use). -->
+  <!-- Spaces: his stage, the crowd and the vanish; people as their own tiny bots; the @ and / field; his listening (after bots.js,
+       whose lives and looks they use). -->
   <script src="sdui/stage.js"></script>
+  <script src="sdui/personBot.js"></script>
   <script src="sdui/mention.js"></script>
   <script src="sdui/listen.js"></script>
   <script src="sdui/chat.js"></script>

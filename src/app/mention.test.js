@@ -73,9 +73,9 @@ test("\"@\" opens the people in the space; a pick makes a chip and writes the dr
   input().type("@");
   assert.ok(list() && list().classList.contains("on"), "the list is up");
   assert.match(list().textContent, /People in this space/);
-  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["MMom", "RRohan Sharma"]);
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["Mom", "Rohan Sharma"], "their names, no initials");
   input().type("ro");
-  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["RRohan Sharma"], "filtered by what follows");
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["Rohan Sharma"], "filtered by what follows");
   list().querySelector(".tz-mf-person").click();
   assert.strictEqual(list(), null, "closed");
   assert.strictEqual(input().value, "", "\"@ro\" taken out");
@@ -155,7 +155,7 @@ test("\"@mom\" typed out with no chip: one Mom becomes the chip before it sends;
   await two.p.settle();
   assert.strictEqual(two.p.run("STATE.submitted"), undefined, "nothing sent");
   assert.ok(two.list(), "the people list, open on the word");
-  assert.deepStrictEqual(two.list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["MMom", "MMom Two"]);
+  assert.deepStrictEqual(two.list().querySelectorAll(".tz-mf-person").map((r) => r.textContent), ["Mom", "Mom Two"]);
   assert.strictEqual(list(), null, "the first field's list went once it sent");
 });
 

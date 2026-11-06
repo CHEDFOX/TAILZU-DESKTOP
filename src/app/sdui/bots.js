@@ -358,6 +358,8 @@ function mountBotTiles(root) {
   mountHomeHead(root, reduced);
   // Spaces' stages, crowds, vanishes and @ fields (stage.js).
   if (typeof mountStages === "function") mountStages(root);
+  // People as their own tiny bots (personBot.js), before an overlay card is lifted out to the body with any it holds.
+  if (typeof mountPersonBots === "function") mountPersonBots(root);
   // BotBuddy: a bot's own tiny bot, kept by its life across screens and repaints.
   root.querySelectorAll("[data-bb]").forEach((stage) => {
     const cfg = BT_PENDING[Number(stage.getAttribute("data-bb"))];

@@ -123,6 +123,11 @@ const COMPONENTS = [
   // build that says all of these; an older installer keeps the screens it has. Not ActionParams: the window has always filled
   // "$state.x" params without declaring it, and the server asks the name of the phone only.
   "BotStage", "BotCrowd", "Vanish", "MentionField", "LiveWords", "DoubleTap", "KitExtras",
+  // PEOPLE AS THEIR OWN TINY BOTS (shared/types/sdui.ts 3j): PersonBot, a person's full tiny bot standing in a size x size box,
+  // idling on one loop for the window (sdui/personBot.js), also in each row of MentionField's "@" list from the row's `bot`. Without
+  // it the server sends a plain circle in the person's colour. Not a component: FontBricolage, the three Bricolage Grotesque faces
+  // a space's messages are set in, bundled (app.html "Tailzu Bricolage", "... Medium", "... SemiBold"); without it, Geist.
+  "PersonBot", "FontBricolage",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;

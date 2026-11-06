@@ -1,5 +1,6 @@
 // MentionField (shared/types/sdui.ts 3i): a message field where "@" picks a person (a chip) and "/" picks one of the person's
-// bots, then one of its things (a chip), or one of the screen's tools. Inside a space it is his thought's box.
+// bots, then one of its things (a chip), or one of the screen's tools. Inside a space it is his thought's box. Each person in the
+// "@" list is shown by their own tiny bot (the row's `bot`, personBot.js; 3j), never a letter.
 //
 // IT OWNS ITS OWN DOM AND IS NEVER REPAINTED. A paint replaces #view's markup, and a feed repaints whenever someone else writes
 // (a live reload), so a field drawn from state each time would lose its words, its chips, an open list and the caret. Instead its
@@ -260,6 +261,41 @@ function mfPlace(L) {
   L.list.style.bottom = Math.max(8, window.innerHeight - r.top + 8) + "px";
 }
 
+/** The look a row carries (MentionFieldProps.people[].bot), when it names a person and a colour; else null. */
+function mentionLook(b) {
+  if (!b || typeof b !== "object" || typeof b.seed !== "string" || typeof b.color !== "string") return null;
+  return { seed: b.seed, avatar: typeof b.avatar === "string" ? b.avatar : "", color: b.color };
+}
+
+/** A row without a look (a server from before people were bots): a plain circle in a colour of the person's own (the phone's). */
+const MF_DOTS = ["#6E4A6B", "#4F7A3A", "#A9573A", "#3E6E8E", "#8F6A1F", "#2F5D50", "#7A6440", "#5F6B6E"];
+function mentionDot(name) {
+  let h = 0;
+  const s = String(name || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return MF_DOTS[h % MF_DOTS.length];
+}
+
+/**
+ * A person in the "@" list: their own tiny bot (personBot.js, the row's `bot`), decoration beside their name, never a letter. The
+ * list's bots live apart from the screen's ("mention" scope), each person counted so the same one twice is two.
+ */
+function mfFace(person, size, salts) {
+  const look = mentionLook(person.bot);
+  if (look && typeof personBotEl === "function") {
+    const salt = salts.get(look.seed) || 0;
+    salts.set(look.seed, salt + 1);
+    return personBotEl(look, size, "mention", salt);
+  }
+  const dot = document.createElement("span");
+  dot.className = "tz-mf-av";
+  dot.setAttribute("aria-hidden", "true");
+  dot.style.width = size + "px";
+  dot.style.height = size + "px";
+  dot.style.background = look ? look.color : mentionDot(person.name);
+  return dot;
+}
+
 /** The rows of the list now: people, bots and tools, or one bot's things. */
 function mfDrawList(L) {
   const p = L.cfg || {}, words = p.words || {};
@@ -280,10 +316,11 @@ function mfDrawList(L) {
     head(label(words.people || ""));
     const people = mentionPeople(p.people, m.query);
     if (!people.length) list.appendChild(mk("div", "tz-mf-empty", label(words.empty || "")));
+    const size = K.num("desktop.mention.botSize", 28);
+    const salts = new Map();
     people.forEach((person) => {
       const r = row("tz-mf-person", () => mfPickPerson(L, person));
-      const dot = mk("span", "tz-mf-av", String(person.name || "?").trim().charAt(0).toUpperCase());
-      r.appendChild(dot);
+      r.appendChild(mfFace(person, size, salts));
       r.appendChild(mk("span", "tz-mf-name", person.name));
       list.appendChild(r);
     });
