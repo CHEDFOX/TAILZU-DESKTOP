@@ -46,6 +46,11 @@ const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
 const { createBlipSync } = require("./blipSync.js");
+// The server's notifications on this computer: Plan Ease's reminders and day notes, on a live socket of its own (notices.js).
+const { createNotices, actKey } = require("./notices.js");
+const { connectWs } = require("../runner/ws.js");
+// "Add this": what is on the screen goes to Plan Ease with the words (addThis.js).
+const { createAddThis } = require("../dictation/addThis.js");
 // Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
 const { setupLiveViews } = require("../app/liveViewMain.js");
 // The server's values for everything below that used to be a literal. Each
@@ -263,6 +268,8 @@ function adoptBoot(boot) {
   refreshTray();
   broadcastKnobs();
   void blipSync().check(boot.flags && boot.flags["desktop.blip"]);
+  // The server may have turned its notices on or off for this computer (desktop.notices.enabled).
+  if (notices) { try { notices.sync(); } catch { /* their own */ } }
   try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed adopt */ }
 }
 
@@ -301,7 +308,12 @@ function refreshBoot() {
             // Bots app's look when the switch is on for this account (flag
             // bots.app; pill/, overlay.js, guide/), so this copy's flags,
             // the ones they are sent, must say so as the window's do.
-            components: ["DeskShell", "Keys", "BotsKit"],
+            // DeskNotices: this process shows the server's notices from its own
+            // live socket (notices.js), so the server may send Plan Ease's here
+            // and the phone's copy without a sound; DeskAddThis: "add this"
+            // carries what is on the screen to Plan Ease's box (addThis.js).
+            // The window says the same (sdui/backend.js), from app:env.
+            components: ["DeskShell", "Keys", "BotsKit"].concat(noticesCan() ? ["DeskNotices"] : [], ["DeskAddThis"]),
           },
           launchCount: Number(localState.launchCount) || 1,
         }),
@@ -540,6 +552,7 @@ function toneLabel(id) {
 // the user may never open. The window still pushes its token when it has one,
 // which only ever makes this fresher.
 let runner = null;                 // Tailzu Code on this computer (setupRunner, below)
+let notices = null;                // the server's notifications on this computer (setupNotices, below)
 let authSession = loadSession();   // { access_token, refresh_token, expires_at }
 let accountTone = null;            // last value read from the account
 let accountPreset = null;          // the voice it belongs to (personality.activePresetId), when one was read
@@ -589,6 +602,8 @@ function adoptSession(raw) {
   // Signed in, or out: the runner goes online for Xode, or stands down, forgets which projects the last person refused, and is back
   // to its default (on) for whoever signs in next.
   if (runner) { try { runner.sessionChanged(); } catch { /* the runner's own */ } }
+  // The server's notifications follow the account: up for whoever signs in, gone (and nothing of theirs left) at sign-out.
+  if (notices) { try { notices.sync(); } catch { /* their own */ } }
 }
 
 /** The session as the window holds it. The refresh token stays in this
@@ -2029,6 +2044,59 @@ function setupRunner() {
   runner.start();
 }
 
+// ---- The server's notifications on this computer (notices.js) ---------------------------
+// Plan Ease's reminders and day notes reach the phone as pushes; here they are this computer's own notifications while the person
+// is at it, with their buttons on a Mac. A live socket of its own, up while signed in and while the server sends them
+// (desktop.notices.enabled). A locked screen or a sleep says "away", so the phone rings instead.
+
+/** This computer can show a notification at all (Linux without a notification service cannot). */
+function noticesCan() {
+  try { return typeof Notification.isSupported === "function" && Notification.isSupported() === true; } catch { return false; }
+}
+
+/** No notification buttons until the server's push.categories arrive. */
+const NO_BUTTONS = Object.freeze([]);
+
+function setupNotices() {
+  if (notices) return;
+  notices = createNotices({
+    signedIn,
+    on: () => bool("desktop.notices.enabled", false) && noticesCan(),
+    baseUrl: () => cfg.baseUrl,
+    token: async () => { if (tokenStale()) await refreshSession(); return tokenNow(); },
+    connect: (url) => connectWs(url, { timeoutMs: num("desktop.notices.connectMs", 15000), maxPayload: 65536 }),
+    Notification,
+    // Electron's notification buttons are a Mac's: elsewhere a click opens the page the question waits on.
+    buttons: process.platform === "darwin",
+    // The server's buttons or none. A notice comes only from a server that sent its categories in the same bootstrap, so a fallback
+    // list here would never be used, and a copy of the phone's would only drift from it (the knobs manifest wants one fallback a key).
+    categories: () => list("push.categories", NO_BUTTONS),
+    post: async (p, body) => {
+      const res = await authorizedFetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      return { status: res.status };
+    },
+    open: (target) => openAppWindow(target || undefined),
+    idleMs: () => powerMonitor.getSystemIdleTime() * 1000,
+    locked: () => powerMonitor.getSystemIdleState(60) === "locked",
+    // A press still on its way, kept across a restart (and dropped at sign-out).
+    owed: {
+      read: () => (Array.isArray(localState.noticesOwed) ? localState.noticesOwed : []),
+      write: (l) => { localState.noticesOwed = l; saveLocalState(); },
+    },
+    knobs: { num, bool, txt, str },
+    title: () => t("notify.title") || txt("desktop.notify.title", "X0 Bot"),
+    log: (line) => { if (process.env.TAILZU_DEBUG_NOTICES) console.log("[notices] " + line); },
+  });
+  for (const ev of ["lock-screen", "suspend"]) { try { powerMonitor.on(ev, () => notices.away()); } catch { /* an event this platform lacks */ } }
+  try { powerMonitor.on("unlock-screen", () => notices.back()); } catch { /* an event this platform lacks */ }
+  try { powerMonitor.on("resume", () => notices.back({ woke: true })); } catch { /* an event this platform lacks */ }
+  notices.sync();
+  // A sign-in nothing announced, or a switch the server flipped in a bootstrap still on its way: looked at again now and then.
+  const every = setInterval(() => { try { notices.sync(); } catch { /* their own */ } }, 30000);
+  if (every.unref) every.unref();
+  app.on("will-quit", () => { clearInterval(every); try { notices.stop(); } catch { /* quitting anyway */ } });
+}
+
 function openRunnerWindow() {
   if (runnerWin && !runnerWin.isDestroyed()) { runnerWin.show(); runnerWin.focus(); return; }
   const size = fitToDisplay(num("desktop.runner.width", 860), num("desktop.runner.height", 740));
@@ -2124,6 +2192,12 @@ ipcMain.handle("app:env", (e) => {
     // Ask is here, so the window declares its one-time setup card
     // (DeskAskSetup) and reads its states with askSetup().
     askSetup: askOn(),
+    // This process shows the server's notices (notices.js), and "add this"
+    // carries what is on the screen to Plan Ease (addThis.js): the window
+    // declares DeskNotices and DeskAddThis as this process's bootstrap does,
+    // so the flags it relays here say the same.
+    notices: noticesCan(),
+    addThis: true,
     // Which desktop this is. The server draws Sign in with Apple on a Mac and
     // leaves it out on the others; the window only reports, it never decides.
     os: process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux",
@@ -2245,9 +2319,11 @@ ipcMain.handle("app:axStatus", (e) => {
   try { return systemPreferences.isTrustedAccessibilityClient(false) === true ? "granted" : "denied"; } catch { return "unknown"; }
 });
 ipcMain.on("app:openExternal", (e, url) => {
-  // Only ever http(s). A renderer handing this a file:// or a shell scheme is
-  // the whole reason this check exists.
-  if (fromApp(e) && typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+  // Only ever http(s), and mail: a renderer handing this a file:// or a shell
+  // scheme is the whole reason this check exists. A mailto: opens the mail app
+  // with a message written and nothing sent (Plan Ease's Send to an address:
+  // the person presses Send there themselves).
+  if (fromApp(e) && typeof url === "string" && /^(?:https?:\/\/|mailto:[^\s]+$)/i.test(url)) shell.openExternal(url).catch(() => {});
 });
 ipcMain.on("app:dictate", (e) => { if (fromApp(e)) toggleDictation(); });
 // The update card's button. The window names the build; updater.js checks the
@@ -3186,12 +3262,46 @@ function sendBot(message, slug) {
     method: "POST", body: JSON.stringify({ message: String(message).slice(0, 2000), bot: slug, device: "desktop", mode: "voice" }),
   }).then((j) => (j && j.shell ? { name: (j.shell.bot && j.shell.bot.name) || "", text: String(j.shell.text || ""), needs: Number(j.shell.needs) || 0 } : null));
 }
-/** The bot's answer, said; a click opens it among the rest (Activity). */
+/** The bot's answer, said; a click opens it among the rest (Activity), or the page it names ("add this": the Plan page, or its card). */
 function botAnswered(r) {
   notify(r.text
     ? txt("desktop.route.botAnswer", "{bot}: {text}", { bot: r.name, text: r.text.length > 180 ? r.text.slice(0, 179) + "…" : r.text })
-    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(bool("bots.app", false) ? "bots.activity" : undefined));
+    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(r.open || (bool("bots.app", false) ? "bots.activity" : undefined)));
 }
+
+/**
+ * "ADD THIS" (addThis.js): words that point at the screen, going to Plan Ease, carry what they point at to its one box. The
+ * selection comes from the dictation's own field read; else the page in front (the helper's tree, never scrolled for this), else
+ * the visible window's text (the same read as the words around a field). Never a sensitive app or a private window: routing.js
+ * and pageRead.js both refuse one. Off until the server's box reads it (desktop.plan.addThis).
+ */
+const addThis = createAddThis({
+  on: () => signedIn() && bool("desktop.plan.addThis", false),
+  // A private window is never read for this, whatever the server allows elsewhere: adding it to the plan keeps it.
+  page: (words) => pageRead.readPage(Object.assign(pageRead.pageDeps({ driver, dictating: () => recording }), {
+    front: async () => { const i = await frontApp.frontInfo(); return i && i.private ? Object.assign({}, i, { sensitive: true }) : i; },
+  }), { question: String(words || ""), needWhole: false }),
+  screen: async () => {
+    const info = await frontApp.frontInfo();
+    if (!info || info.private || frontApp.offLimits(info)) return "";
+    return screenRead.readScreen(info, {
+      axChars: Math.min(8000, num("desktop.plan.addThis.chars", 12000)),
+      axTimeoutMs: num("desktop.surroundings.timeoutMs", 1400),
+      ocr: bool("desktop.ocr.read", true),
+      minChars: num("desktop.ocr.minChars", 80),
+      maxSide: num("desktop.ocr.maxSide", 1600),
+      ocrTimeoutMs: num("desktop.ocr.timeoutMs", 3000),
+      cacheMs: num("desktop.ocr.cacheMs", 15000),
+    });
+  },
+  post: (p, body) => apiJson(p, { method: "POST", body: JSON.stringify(body) }),
+  act: async (item, action) => {
+    await apiJson(str("push.actions.path", "/v1/widgets/act"), { method: "POST", body: JSON.stringify({ item, action, key: actKey() }) });
+    return true;
+  },
+  tz: () => -new Date().getTimezoneOffset(),
+  knobs: { num, str },
+});
 
 const routing = createRouting({
   on: () => !!cfg.oneKey && bool("desktop.route.enabled", true),
@@ -3220,6 +3330,7 @@ const routing = createRouting({
   whichBot,
   sendBot,
   botAnswered,
+  addThis,
   pill: (state, data) => pill(state, data),
   pillRest: () => { if (!recording && (pillState === "routed" || pillState === "writing" || pillState === "done")) pill("rest"); },
   knobs: { num, bool, txt },
@@ -3722,6 +3833,8 @@ app.whenReady().then(() => {
   refreshTray();
   // Tailzu Code on this computer: on by default, online for Xode while signed in, unless the person turned it off (the tray, or its window).
   setupRunner();
+  // The server's notifications on this computer, once the server says it sends them.
+  setupNotices();
 
   // ASK THE SERVER NOW, window or no window. A login-item start never opens
   // one, and it is the launch that most needs the server's current answer —

@@ -135,6 +135,18 @@ const COMPONENTS = [
 const SELF_UPDATE = "DeskSelfUpdate";
 /** The note-taker is here: the server sends the Notes tab and its pages. */
 const NOTES = "DeskNotes";
+/** This computer shows the server's notices from the main process's own live
+ *  socket (src/main/notices.js): Plan Ease's reminders and day notes reach it,
+ *  with their buttons on a Mac, and the phone's copy then comes without a
+ *  sound. Said by the main process (env.notices: it can show one at all). A
+ *  build that says it also runs a node's onAppear (nodes.js appearAt), so the
+ *  hand-off screen a notice opens (bots.plan.go: Maps) does its job here. */
+const NOTICES = "DeskNotices";
+/** "Add this" said with something on the screen carries what is there to Plan
+ *  Ease's one box (src/dictation/addThis.js). Said by the main process
+ *  (env.addThis); the server answers with desktop.plan.addThis once its box
+ *  reads it. */
+const ADD_THIS = "DeskAddThis";
 /** A Mac that can open the computer's-sound permission from a note. */
 const SYSTEM_AUDIO = "DeskSystemAudio";
 /** Ask is on in this copy (the main process says so: env.askSetup), so the

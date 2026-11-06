@@ -156,6 +156,11 @@ const LISTS = {
     { slug: "plan", re: "^(?:whats|what is) on (?:my calendar|my schedule|today|tomorrow)(?: |$)" },
     { slug: "plan", re: "^(?:set|create) (?:a |an )?(?:reminder|meeting|event)(?: |$)" },
     { slug: "plan", re: "(?:^| )(?:plan|schedule) (?:karo|kar do|banao|bana do)$" },
+    // "Add this": something on the screen (an email, a page, a selection) to Plan Ease (addThis.js).
+    { slug: "plan", re: "^(?:add|put|save|keep) (?:this|that|these|those|it)(?: \\S+){0,3} (?:to|on|in|into|for) (?:my |the )?(?:plan|plan ease|planease|calendar|schedule|day|list|to do list|todo list|to dos|todos)(?: |$)" },
+    { slug: "plan", re: "^(?:add|save) (?:this|these)(?: (?:email|mail|message|event|invite|meeting|reminder|page|bill|date))?$" },
+    { slug: "plan", re: "(?:^| )(?:isko|ise|isse|ye|yeh|inko|inhe) (?:\\S+ ){0,3}(?:plan|calendar|list) (?:me|mein|mai|par|pe) (?:add|daal|dal|daalo|dalo|rakh|rakho|likh|likho)(?: |$)" },
+    { slug: "plan", re: "(?:^| )(?:isko|iske|is) (?:\\S+ ){0,2}(?:baare|bare) (?:me|mein|mai) yaad (?:dila|dilana|dilao|dila do|dilaana)(?: |$)" },
     { slug: "travel", re: "^(?:book|find|search|search for|look for|get) (?:me |us )?(?:a |an |some |the |cheap |cheapest )?(?:flight|flights|train|trains|train tickets|hotel|hotels|cab|taxi|bus|ticket|tickets|stay|homestay|room|rooms)(?: |$)" },
     { slug: "travel", re: "^plan (?:a |my |our |the )?(?:trip|holiday|vacation|getaway)(?: |$)" },
     { slug: "travel", re: "(?:^| )(?:flight|ticket|tickets|hotel|train) (?:book karo|book kar do)$" },
@@ -165,6 +170,20 @@ const LISTS = {
     { slug: "code", re: "^(?:fix|add|update|change|write|remove) .+ in (?:my |the )?(?:repo|project|codebase|code)(?: |$)" },
     { slug: "code", re: "^(?:write|add) (?:a |an |some )?(?:test|tests|unit test|unit tests|endpoint|api|function|migration)(?: |$)" },
     { slug: "code", re: "(?:^| )(?:bug|issue) fix (?:karo|kar do)$" },
+  ],
+  // Words that point at something on the screen ("add this", "remind me about that", "isko plan mein daal do", "इसे जोड़ दो"):
+  // "add this" then carries what they point at (addThis.js). Patterns, on normalised words.
+  pointsAt: [
+    "(?:^| )(?:this|these|those)(?: |$)",
+    "(?:^| )(?:add|save|put|keep|about|of|for) (?:that|it)(?: |$)",
+    "(?:^| )(?:ye|yeh|isko|ise|isse|iska|iske|inko|inhe|inka)(?: |$)",
+    "(?:^| )is (?:email|mail|message|page|cheez|chiz|invite|meeting|bill)(?: |$)",
+    "(?:^| )(?:यह|ये|इसे|इसको|इसका|इसके|इन्हें|इनको)(?: |$)",
+  ],
+  // A time is not a thing on the screen: "this evening", "this Friday", "is hafte" point at nothing. Taken out before pointsAt looks.
+  notThings: [
+    "(?:^| )(?:this|these|that|next) (?:morning|afternoon|evening|night|week|weekend|month|year|time|summer|winter|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)(?= |$)",
+    "(?:^| )(?:ye|yeh|is|iss) (?:hafte|hafta|week|mahine|mahina|saal|baar|shaam|subah|raat)(?= |$)",
   ],
 };
 
@@ -195,11 +214,13 @@ function served() {
     knobs.list("desktop.router.writeEnd", LISTS.writeEnd),
     knobs.list("desktop.router.bots", LISTS.bots),
     knobs.list("desktop.router.tasks", LISTS.tasks),
+    knobs.list("desktop.router.pointsAt", LISTS.pointsAt),
+    knobs.list("desktop.router.notThings", LISTS.notThings),
   ];
 }
 const KEYS = ["heardAs", "frontOnly", "greetings", "notesPre", "notesSuffix", "notesStart", "notesStartHi", "notesStartDeva", "notesStop", "notesStopHi",
   "notesStopDeva", "questionStart", "questionEnd", "commandVerbs", "commandEnd", "screenThings", "screenStrong", "explain", "explainAnywhere",
-  "writeStart", "writeEnd", "bots", "tasks"];
+  "writeStart", "writeEnd", "bots", "tasks", "pointsAt", "notThings"];
 
 /** Words, or the fallback: a list that is not one, or has no words in it, is not used. */
 function words(v, fallback) {
@@ -272,6 +293,8 @@ function compile(raw) {
     WRITE_END: new RegExp(`(?:^| )(?:${alt(w("writeEnd"))})$`, "u"),
     BUILT_IN: bots.length ? bots : LISTS.bots.map((b) => ({ slug: b.slug, names: b.names.map(norm) })),
     TASKS: tasks.length ? tasks : LISTS.tasks.map((t) => ({ slug: t.slug, re: new RegExp(t.re, "u") })),
+    POINTS: patterns(L.pointsAt, LISTS.pointsAt),
+    NOT_THINGS: patterns(L.notThings, LISTS.notThings).map((r) => new RegExp(r.source, "gu")),
   };
 }
 
@@ -399,6 +422,22 @@ function botTask(words, bots) {
   return hit ? { slug: hit.slug, named: false } : null;
 }
 
+// ---- pointing at the screen --------------------------------------------------------------
+
+/** The words point at something on the screen ("add this", "remind me about that email"), not at a time ("this evening"). Plain
+ *  words or normalised ones. Free: words only, so nothing on the screen is read unless they do. */
+function pointsAtScreen(said) {
+  let w = norm(said);
+  if (!w) return false;
+  const R = rules();
+  for (const re of R.NOT_THINGS) w = w.replace(re, " ");
+  w = w.replace(/\s+/g, " ").trim();
+  return !!w && R.POINTS.some((re) => re.test(w));
+}
+
+/** "Add this" with text selected: Plan Ease's, and the selection is the thing, not text to rewrite. */
+const addsSelection = (r) => !!(r.sel && r.bot && r.bot.slug === "plan" && pointsAtScreen(r.rest));
+
 // ---- the decision -----------------------------------------------------------------------
 
 /** Everything the two decisions read, worked out once. */
@@ -435,6 +474,7 @@ function firstLook(i) {
   // never comes): typed too, unless the words themselves say where they go.
   if (!r.known) return r.blind && (r.notes || r.addressed || (r.bot && r.bot.named)) ? "hold" : "type";
   if (r.notes || r.addressed || (r.bot && r.bot.named)) return "hold";
+  if (addsSelection(r)) return "hold";
   if (r.sel && r.askOn && (r.q || explains(r.rest))) return "hold";
   if (r.screen && r.askOn) return "hold";
   if (!r.focused && (r.q || r.cmd || r.bot)) return "hold";
@@ -455,6 +495,8 @@ function route(i) {
   // Text selected in the box: what they said is about it. A question about it
   // goes to Ask; anything else is the rewrite the server already does.
   if (r.focused && r.sel) {
+    // "Add this to my plan" said over a selection: the selection goes to Plan Ease with the words (addThis.js).
+    if (addsSelection(r)) return out("bot", { slug: "plan", named: !!r.bot.named, alt: "type", why: "selection, add this" });
     if (r.askOn && (r.q || explains(r.rest))) return out("ask", { alt: "type", why: "selection question" });
     return out("rewrite", { alt: r.addressed && r.askOn ? "ask" : null, close: r.addressed, why: "selection" });
   }
@@ -487,4 +529,6 @@ module.exports = {
   route, firstLook,
   // for the tests
   norm, address, stripName, notesCommand, isQuestion, isCommand, aboutScreen, botTask,
+  // and for addThis.js / routing.js
+  pointsAtScreen,
 };

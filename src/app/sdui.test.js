@@ -84,6 +84,15 @@ test("the window declares DeskAskSetup only when the main process says Ask is on
   for (const a of ["ask.openAccessibility", "ask.openScreenRecording", "ask.picturesAll", "ask.relaunch"]) assert.ok(actions.includes(a), a);
 });
 
+test("the window declares DeskNotices and DeskAddThis only when the main process says it shows notices and carries \"add this\"", () => {
+  const on = page({ notices: true, addThis: true });
+  assert.ok(on.run("capabilities().components").includes("DeskNotices"));
+  assert.ok(on.run("capabilities().components").includes("DeskAddThis"));
+  const off = page({ notices: false });
+  assert.ok(!off.run("capabilities().components").includes("DeskNotices"), "a computer that cannot show a notification never says it can");
+  assert.ok(!off.run("capabilities().components").includes("DeskAddThis"));
+});
+
 test("each row takes its state and its one button from the main process", () => {
   const p = page();
   const mac = rows(p, MAC);

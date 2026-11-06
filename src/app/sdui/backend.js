@@ -23,6 +23,9 @@ function capabilities() {
     // window. It reads the viewport now.
     platform: "ios",
     components: COMPONENTS.concat(ENV && ENV.selfUpdate ? [SELF_UPDATE] : [], ENV && ENV.notes ? [NOTES] : [],
+      // The main process's own: the server's notices on this computer, and "add this" with what is on the screen. Declared here as
+      // well as in its bootstrap, because this window's bootstrap is the one relayed to it (received, below).
+      ENV && ENV.notices ? [NOTICES] : [], ENV && ENV.addThis ? [ADD_THIS] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
       ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
       // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.

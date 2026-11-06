@@ -42,6 +42,10 @@ function mainProcess(o = {}) {
   const shortcuts = [];
   const windows = [];
   const trayMenus = [];   // the tray's menus, as built (Menu.buildFromTemplate's template)
+  const notifications = [];   // every native notification made, with what it was made with
+  const sockets = [];         // every WebSocket main opened (ws.js connectWs, faked): its address and what was sent on it
+  const fetches = [];         // every request main sent: [url, init]
+  const opened = [];          // every address handed to the system to open (shell.openExternal)
   // The window in front (BrowserWindow.getFocusedWindow), set by the test: null, as when another app is.
   let focused = null;
   // o.hook: a key hook the test presses keys on (uiohook-napi's shape), so the one key and Esc can be driven.
@@ -91,10 +95,14 @@ function mainProcess(o = {}) {
       getDisplayMatching: () => ({ workArea: WORK, bounds: WORK }), on() {}, screenToDipRect: (_w, r) => r,
     },
     clipboard: { writeText: (t) => dictation.push(["clipboard", t]) },
-    Notification: class { show() {} on() {} },
+    Notification: class extends EventEmitter {
+      constructor(opts) { super(); this.opts = opts; notifications.push(this); }
+      show() { this.shown = true; } close() { this.closed = true; }
+      static isSupported() { return o.notifications !== false; }
+    },
     nativeImage: { createFromPath: () => img, createEmpty: () => img, createFromBuffer: () => img },
     session: { defaultSession: { setPermissionRequestHandler() {} } },
-    shell: { openExternal: async () => {}, openPath: async () => {} },
+    shell: { openExternal: async (u) => { opened.push(u); }, openPath: async () => {} },
     nativeTheme: { shouldUseDarkColors: false }, powerMonitor: { on() {} },
     desktopCapturer: { getSources: async () => [] },
     systemPreferences: { isTrustedAccessibilityClient: () => true, getMediaAccessStatus: () => "granted" },
@@ -124,6 +132,16 @@ function mainProcess(o = {}) {
     electron, child_process: childProcess, "../context/frontApp.js": frontApp, "../agent/driver/driver.js": driver,
     "../context/screenRead.js": { readScreen: async () => "Sam: are we still on for Friday?" },
     "./updater.js": { canSelfUpdate: () => false, update: async () => ({ ok: false }) },
+    // No socket leaves the tests: each one main opens is a fake the test speaks the server's half on.
+    "../runner/ws.js": {
+      connectWs: async (url) => {
+        const c = Object.assign(new EventEmitter(), { url, sent: [], open: true });
+        c.send = (text) => { if (!c.open) return false; c.sent.push(JSON.parse(text)); return true; };
+        c.close = () => { c.open = false; };
+        sockets.push(c);
+        return c;
+      },
+    },
   };
   const req = (id) => {
     if (Object.prototype.hasOwnProperty.call(fakes, id)) return fakes[id];
@@ -143,7 +161,7 @@ function mainProcess(o = {}) {
     loaded.set(file, mod);
     const src = source || fs.readFileSync(file, "utf8");
     const wrapped = vm.runInThisContext("(function (exports, require, module, __filename, __dirname, setTimeout, setInterval, fetch) {" + src + "\n})", { filename: file });
-    wrapped(mod.exports, req, mod, file, path.dirname(file), T(setTimeout), T(setInterval), async () => new Response("{}", { status: 503 }));
+    wrapped(mod.exports, req, mod, file, path.dirname(file), T(setTimeout), T(setInterval), async (url, init) => { fetches.push([String(url), init]); return new Response("{}", { status: 503 }); });
     return mod.exports;
   }
   const quiet = { log: console.log, warn: console.warn };
@@ -154,7 +172,7 @@ function mainProcess(o = {}) {
   const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
   const from = (file) => ({ sender: win(file).webContents });
   return {
-    dictation, guide, pills, carets, ipc, handles, windows, win, dir, app,
+    dictation, guide, pills, carets, ipc, handles, windows, win, dir, app, notifications, sockets, fetches, opened,
     /** The tray's menu as it is now: its template's items. */
     tray: () => (trayMenus.length ? trayMenus[trayMenus.length - 1].t : []),
     ready: () => sleep(20),

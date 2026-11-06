@@ -73,6 +73,16 @@
     return p;
   }
 
+  /**
+   * The share-in screen's params for a drop, given the screen it was dropped on: on Plan Ease's page (or one of its own) what was
+   * dropped is Plan Ease's, so the server shows the capture card there with no bot picker (the backend's planIn.ts, from=plan).
+   */
+  function dropParams(params, onScreen) {
+    const p = Object.assign({}, params);
+    if (typeof onScreen === "string" && /^bots\.plan(?:\.|$)/.test(onScreen)) p.from = "plan";
+    return p;
+  }
+
   /** POST /v1/files with one file: its id, or the server's words for why not ("" when it gave none). */
   async function uploadFile(file, io) {
     const fd = new io.FormData();
@@ -273,7 +283,7 @@
     return { show, hide };
   }
 
-  return { acceptable, planDrop, shareParams, sendDrop, install };
+  return { acceptable, planDrop, shareParams, dropParams, sendDrop, install };
 });
 
 // In the window: wire it to the app (sdui/, loaded first, holds the session and the navigation).
@@ -291,7 +301,9 @@ if (typeof module === "undefined" && typeof window !== "undefined" && typeof go 
       // A second drop replaces the first one's screen rather than stacking on it.
       const top = STACK[STACK.length - 1];
       if (top && top.screenId === id) STACK.pop();
-      go(id, params);
+      // Dropped on the Plan page: Plan Ease's, with no bot picker.
+      const under = STACK[STACK.length - 1];
+      go(id, window.TailzuShareIn.dropParams(params, under && under.screenId));
     },
     toast: (m) => toast(m),
     txt: (k, d) => K.txt(k, d),

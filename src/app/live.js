@@ -143,7 +143,10 @@
     }
   }
 
-  /** One live socket, kept up while started. opts: { open(url), url(), token(), onEvent(topic, m), onResume(), timers, random } */
+  /**
+   * One live socket, kept up while started. opts: { open(url), url(), token(), onEvent(topic, m), onResume(), onReady(), timers, random }.
+   * onReady runs on every "ready", the first one too, for a client that has something to say once signed in (src/main/notices.js).
+   */
   class LiveClient {
     constructor(o) {
       this.o = o; this.t = o.timers || realTimers;
@@ -151,6 +154,11 @@
       this.heartbeatMs = DEFAULT_HEARTBEAT_MS; this.retry = null; this.dog = null;
     }
     get connected() { return this.ready; }
+    /** A message of the client's own on the signed-in socket; false when there is none open. */
+    send(m) {
+      if (!this.ready || !this.ws) return false;
+      try { this.ws.send(JSON.stringify(m)); return true; } catch { return false; }
+    }
     start() { if (this.running) return; this.running = true; this.attempt = 0; this.connect(); }
     stop() {
       this.running = false; this.gen++;
@@ -183,6 +191,7 @@
         const resumed = this.everReady;
         this.everReady = true;
         this.watch(this.heartbeatMs * 2.5);
+        if (this.o.onReady) { try { this.o.onReady(); } catch { /* the caller's own problem */ } }
         if (resumed && this.o.onResume) { try { this.o.onResume(); } catch { /* the screen's own problem */ } }
         return;
       }

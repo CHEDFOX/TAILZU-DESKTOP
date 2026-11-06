@@ -134,6 +134,32 @@ test("signs in by its first message, hears events once ready, answers pings", as
   assert.equal(c.pending(), 0);
 });
 
+test("onReady on every ready, the first too, and the client's own messages only on a signed-in socket", async () => {
+  const c = clock();
+  const sockets = [];
+  let readies = 0;
+  const lc = new L.LiveClient({
+    open: (u) => { const s = new FakeSocket(u); sockets.push(s); return s; },
+    url: () => "wss://api.x0bot.com/v1/live", token: () => "jwt",
+    onEvent: () => {}, onReady: () => { readies++; lc.send({ type: "notices", v: 1 }); }, timers: c.timers, random: () => 1,
+  });
+  assert.equal(lc.send({ type: "here" }), false, "no socket yet");
+  lc.start();
+  await c.flush();
+  sockets[0].open();
+  assert.equal(lc.send({ type: "here" }), false, "not signed in yet");
+  sockets[0].say({ type: "ready", heartbeatMs: 1000 });
+  assert.equal(readies, 1);
+  assert.deepEqual(JSON.parse(sockets[0].sent[1]), { type: "notices", v: 1 });
+  assert.equal(lc.send({ type: "here", idleMs: 5 }), true);
+  sockets[0].drop(1006);
+  await c.advance(1000);
+  sockets[1].open();
+  sockets[1].say({ type: "ready", heartbeatMs: 1000 });
+  assert.equal(readies, 2, "and again after a reconnect");
+  lc.stop();
+});
+
 test("reconnects with backoff, drops a quiet socket, says it is back", async () => {
   const { lc, c, sockets, resumed } = client();
   lc.start();

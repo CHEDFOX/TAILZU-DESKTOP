@@ -337,6 +337,23 @@ function focusNew(view, same) {
   }
 }
 
+/**
+ * onAppear (nodes.js appearAt): each node's action runs once as it comes onto this screen, on the screen's first paint or when a
+ * setState shows it; never again while it stays (a repaint, a quiet reload), and again if it goes and comes back. Run after the
+ * paint has landed and been wired, one turn later, so an action that repaints does so on a finished page.
+ */
+let AP_SHOWN = new Set();
+function appearNew(same) {
+  const now = new Set();
+  const due = [];
+  for (const a of APPEARS) {
+    now.add(a.key);
+    if (!(same && AP_SHOWN.has(a.key))) due.push(a.action);
+  }
+  AP_SHOWN = now;
+  for (const act of due) Promise.resolve().then(() => run(act)).catch(() => undefined);
+}
+
 let CURRENT_SCREEN = null;
 function repaint(screen) {
   if (screen) CURRENT_SCREEN = screen;
@@ -352,6 +369,7 @@ function repaint(screen) {
   repaint._target = target;
   handlers = [];
   SUBMITS = [];
+  APPEARS = [];
   BT_PENDING = [];
   // Whatever was turning words over belongs to the DOM about to be replaced.
   stopFlips();
@@ -430,6 +448,7 @@ function repaint(screen) {
   if (held) live.restoreView(document, held);
   keepEnds(view, near);
   focusNew(view, same);
+  appearNew(same);
   // Whether this screen's bot takes the one key now (listen.js).
   if (typeof talkToFollow === "function") talkToFollow();
   document.querySelectorAll("#tabs .tab, #mtabs .mtab").forEach((b) => {

@@ -43,6 +43,10 @@
 //   d.routine(goal)          optional: save a routine from what was said → { text } or null
 //   d.needGrant(missing)     optional: ask for the setup card's permissions this ask needs and has not
 //                            been given (["read"], ["see"]), at this turn → true once they are on
+//   d.addThis                optional: "add this" (addThis.js): { slug, on(), points(words), read(o), send(words, seen, name),
+//                            undo(u) }. Words that point at the screen, going to Plan Ease, carry what they point at: the
+//                            selection, else the page in front, read as the route is decided (while it is still the screen
+//                            they meant) and sent only if Plan Ease is the bot. Its answer's Undo is the pill's alternative.
 //
 // THE BRAIN (d.decide, desktop.route.brain, off until the server turns it on
 // with its knobs, once /v1/ask/decide is there): with it, every session's words are
@@ -70,6 +74,7 @@ function createRouting(d) {
   let offer = null;             // the route the pill is offering the alternative to
   let labelTimer = null;
   const recent = [];            // the last three asks: { said, did, to? }, for the brain's follow-ups
+  let seq = 0;                  // dictations started: an answer that lands after a newer one began says nothing on the pill
 
   const on = () => { try { return d.on() === true; } catch { return false; } };
   const signals = () => { try { return d.signals() || {}; } catch { return {}; } };
@@ -89,6 +94,7 @@ function createRouting(d) {
    *  waiting out its moment goes now. */
   function start(sid, o) {
     commit();
+    seq++;
     // blind: this computer cannot read a text box (Linux): the field stays unknown, whatever a read says.
     sessions.set(sid, { ours: !!(o && o.ours), blind: !!(o && o.blind), field: undefined, mode: null, chunks: [], heard: [], typed: 0, pasted: [] });
     for (const k of sessions.keys()) if (sessions.size > 16 && k !== sid) sessions.delete(k);
@@ -165,7 +171,7 @@ function createRouting(d) {
     }
     const chunks = s.chunks.concat(c && (c.text || c.heard) ? [c] : []);
     if (brainFor(s)) void decideThen(s, sid, chunks, all, current);
-    else void perform(router.route(input(s, all)), sid, chunks, current);
+    else void perform(router.route(input(s, all)), sid, chunks, current, s);
     return "routed";
   }
 
@@ -175,7 +181,7 @@ function createRouting(d) {
   async function decideThen(s, sid, chunks, all, current) {
     const local = router.route(input(s, all));
     // Said in the words the lists know for certain ("take notes"): nothing to ask.
-    if (local.to === "notesStart" || local.to === "notesStop") return perform(local, sid, chunks, current);
+    if (local.to === "notesStart" || local.to === "notesStop") return perform(local, sid, chunks, current, s);
     if (current) d.pill("writing");
     let dec = null;
     try {
@@ -189,7 +195,7 @@ function createRouting(d) {
     const r = dec && typeof dec === "object" && typeof dec.do === "string" ? fromDecision(dec, local, s) : local;
     // Not remembered from a private window, here or on the server.
     if (!s.privateWindow) remember(all, dec);
-    return perform(r, sid, chunks, current);
+    return perform(r, sid, chunks, current, s);
   }
 
   /** The brain's decision as a route this file knows how to do. */
@@ -212,10 +218,13 @@ function createRouting(d) {
         return { to: "routine", message: goal, alt: "type", close: false, why };
       case "notes":
         return { to: dec.notes === "stop" ? "notesStop" : "notesStart", message: local.message, alt: "type", close: false, why };
-      case "bot":
-        if (dec.bot && dec.bot.slug) return { to: "bot", message: goal, slug: dec.bot.slug, named: true, botName: dec.bot.name, alt: "type", close: false, why };
+      case "bot": {
+        // The brain may say whether the words point at the screen (dec.seen); without it, the words themselves decide (addThis.js).
+        const seen = typeof dec.seen === "boolean" ? { seen: dec.seen } : {};
+        if (dec.bot && dec.bot.slug) return Object.assign({ to: "bot", message: goal, slug: dec.bot.slug, named: true, botName: dec.bot.name, alt: "type", close: false, why }, seen);
         // No bot named (a reminder, a to-do, an event for the day: their bots keep X0 Bot's own calendar and to-dos): the server says which.
-        return { to: "bot", message: goal, named: false, alt: "type", close: false, why };
+        return Object.assign({ to: "bot", message: goal, named: false, alt: "type", close: false, why }, seen);
+      }
       default:
         return local;
     }
@@ -243,8 +252,9 @@ function createRouting(d) {
 
   /** `current`: the session is still the one in front. One answered after the
    *  next dictation began (`quiet`) is done all the same, but the pill is that
-   *  dictation's: nothing is said on it, and there is no moment to take it back. */
-  async function perform(r, sid, chunks, current) {
+   *  dictation's: nothing is said on it, and there is no moment to take it back.
+   *  `s`: the session (its app, its selection), for "add this". */
+  async function perform(r, sid, chunks, current, s) {
     const quiet = !current;
     log(`route: ${r.to} (${r.why})`);
     if (r.to === "type" || r.to === "rewrite") {
@@ -258,9 +268,36 @@ function createRouting(d) {
     if (r.to === "ask") return toAsk(r, sid, chunks, quiet);
     if (r.to === "routine") return toRoutine(r, sid, chunks, quiet);
     if (r.to === "notesStart" || r.to === "notesStop") return toNotes(r, sid, chunks, quiet);
-    if (r.to === "bot" || r.to === "unclear") return toBot(r, sid, chunks, quiet);
+    if (r.to === "bot" || r.to === "unclear") return toBot(r, sid, chunks, quiet, s);
     await typeAll(sid, chunks, "");
     if (!quiet) d.pill("rest");
+  }
+
+  // ---- "add this" (addThis.js) -------------------------------------------------------------
+
+  /**
+   * What "this" is, as a promise, when the words point at the screen and "add this" is on; null otherwise. Read now, while the
+   * screen is still the one they meant, and sent only if the bot turns out to be Plan Ease: read for nothing, it is dropped, never
+   * sent. Never in our own window, a sensitive app or a private window: there the words go alone.
+   */
+  function seenFor(r, s) {
+    const a = d.addThis;
+    if (!a || !s || s.ours || s.off || s.privateWindow || !a.on()) return null;
+    const points = typeof r.seen === "boolean" ? r.seen : a.points(r.message || "");
+    if (!points) return null;
+    // Started here and now, before the bot is even asked.
+    try {
+      return Promise.resolve(a.read({ words: r.message, selection: (s.field && s.field.selection) || "", app: s.app || "", title: s.title || "" }))
+        .catch(() => null);
+    } catch { return Promise.resolve(null); }
+  }
+
+  /** Plan Ease's answer: said (a notification; a click opens what it names), and its Undo offered on the pill while the pill is
+   *  still ours (no newer dictation, no newer label). */
+  function addedThis(a, at, mine, quiet) {
+    try { d.botAnswered(a); } catch { /* said nothing */ }
+    if (quiet || !a.undo || at !== seq || (offer !== null && offer !== mine)) return;
+    label({ kind: "added", sid: null, route: {}, alt: "undo", undo: a.undo, bot: a.name, chunks: [] });
   }
 
   async function toAsk(r, sid, chunks, quiet) {
@@ -307,7 +344,9 @@ function createRouting(d) {
     });
   }
 
-  async function toBot(r, sid, chunks, quiet) {
+  async function toBot(r, sid, chunks, quiet, s) {
+    // "Add this": what is on the screen, read now (seenFor), while whichever bot it is for is asked.
+    const seen = seenFor(r, s);
     // Which bot: the backend's own pick ("Ask any bot"), told the one they
     // named, if they named one. Unsure, or nobody fits: Ask, then typing.
     let who = null;
@@ -320,17 +359,29 @@ function createRouting(d) {
       return;
     }
     const name = who.name || who.slug;
+    // Plan Ease, with what they pointed at: its one box first; nothing read, or the box can't say, and the words go as before.
+    const toBox = seen && who.slug === d.addThis.slug ? seen : null;
+    const at = seq;
+    let mine = null;
+    const viaShell = () => {
+      Promise.resolve().then(() => d.sendBot(r.message, who.slug)).then((reply) => {
+        if (reply) { try { d.botAnswered(Object.assign({ name }, reply)); } catch { /* said nothing */ } }
+        else d.pill("error", { label: txt("desktop.route.botFailed", "Couldn't reach your bots") });
+      }, () => d.pill("error", { label: txt("desktop.route.botFailed", "Couldn't reach your bots") }));
+    };
     label({
       kind: "bot", sid, route: r, alt: "type", message: r.message, chunks, bot: name, quiet,
       graceMs: num("desktop.route.botGraceMs", 3500),
       pending: () => {
-        Promise.resolve().then(() => d.sendBot(r.message, who.slug)).then((reply) => {
-          if (reply) { try { d.botAnswered(Object.assign({ name }, reply)); } catch { /* said nothing */ } }
-          else d.pill("error", { label: txt("desktop.route.botFailed", "Couldn't reach your bots") });
-        }, () => d.pill("error", { label: txt("desktop.route.botFailed", "Couldn't reach your bots") }));
+        if (!toBox) { viaShell(); return; }
+        toBox.then((v) => (v ? d.addThis.send(r.message, v, name) : null)).catch(() => null).then((added) => {
+          if (added) addedThis(added, at, mine, quiet);
+          else viaShell();
+        });
       },
       done: txt("desktop.route.sent", "Sent to {bot}", { bot: name }),
     });
+    mine = offer;
   }
 
   // ---- the pill's label and its alternative --------------------------------------------
@@ -345,6 +396,8 @@ function createRouting(d) {
       case "routine": return txt("desktop.route.routine", "Saving a routine");
       case "notes": return o.route.to === "notesStart" ? txt("desktop.route.notesOn", "Taking notes") : txt("desktop.route.notesOff", "Notes stopped");
       case "bot": return txt("desktop.route.sent", "Sent to {bot}", { bot: o.bot });
+      case "added": return txt("desktop.route.added", "Added to {bot}", { bot: o.bot });
+      case "undone": return txt("desktop.route.undone", "Taken out");
       default: return "";
     }
   }
@@ -364,6 +417,7 @@ function createRouting(d) {
     if (a === "ask") return txt("desktop.route.altAsk", "Ask instead");
     if (a === "bot") return txt("desktop.route.altBot", "Send to a bot");
     if (a === "type") return txt("desktop.route.altType", "Type it instead");
+    if (a === "undo") return txt("desktop.route.altUndo", "Undo");
     return "";
   }
 
@@ -424,6 +478,14 @@ function createRouting(d) {
     cancelTimer(o.timer);
     log(`route: alternative to ${o.kind}: ${o.alt}`);
     d.pill("rest");
+    // Added from the screen: taken out again, through the box's own Undo.
+    if (o.kind === "added") {
+      let ok = false;
+      try { ok = !!(await d.addThis.undo(o.undo)); } catch { ok = false; }
+      if (ok) label({ kind: "undone", sid: null, route: {}, chunks: [] });
+      else d.pill("error", { label: txt("desktop.route.undoFailed", "Couldn't take it out") });
+      return true;
+    }
     if (o.kind === "typed") {
       // What was typed comes out with the app's own undo, once per paste.
       try { await d.undo(o.typed); } catch { /* the app had no undo; the other thing still happens */ }

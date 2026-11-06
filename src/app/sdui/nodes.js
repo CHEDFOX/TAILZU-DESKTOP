@@ -3,6 +3,7 @@
 
 let handlers = [];        // [{ id, action }] — bound after innerHTML lands
 let SUBMITS = [];         // actions an Enter in a desk field runs, by 1-based index
+let APPEARS = [];         // [{ key, action }]: the nodes with on.onAppear this paint drew (navigation.js appearNew runs them)
 
 /**
  * THE KEYS THIS COMPUTER HAS BOUND, drawn as keys.
@@ -86,6 +87,21 @@ function withItem(v) {
   return v;
 }
 
+/**
+ * A NODE'S onAppear, kept for after the paint (navigation.js appearNew): it runs when the node comes onto the screen, as the phones'
+ * renderer runs it on mount. Its key is its id, else its action and how many such came before it on this paint, so a repaint finds
+ * the same node again and never runs it twice while it stays. The hand-off screens a notification opens (bots.plan.go opens Maps,
+ * bots.plan.send WhatsApp or mail) are drawn this way: nothing on them to press, the action runs as they appear.
+ */
+function appearAt(n) {
+  const action = STATE && STATE.item !== undefined ? withItem(n.on.onAppear) : n.on.onAppear;
+  let base;
+  try { base = typeof n.id === "string" && n.id ? "id:" + n.id : "on:" + JSON.stringify(n.on.onAppear); } catch { base = "on:?"; }
+  let key = base;
+  for (let i = 2; APPEARS.some((a) => a.key === key); i++) key = base + "#" + i;
+  APPEARS.push({ key, action });
+}
+
 /** The desk's own classes, by name. Only `d-` names get through: a class is a
  *  stylesheet rule in app.html, and a server that could name any class could
  *  reach styles this window never meant to hand out. */
@@ -124,6 +140,7 @@ function fieldExtras(n, p, path, multi) {
 function node(n) {
   if (!n) return "";
   if (!visible(n.visibleIf)) return n.fallback ? node(n.fallback) : "";
+  if (n.on && n.on.onAppear) appearAt(n);
   // The onboarding stage draws the one step it is on, not all of them.
   if (n.type === "OnboardStage") return stageNode(n);
   // A bot's stage draws his thought's content itself, and only while it is open or he listens (stage.js).

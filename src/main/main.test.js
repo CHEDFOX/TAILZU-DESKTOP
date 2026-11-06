@@ -411,3 +411,66 @@ test("main: a double-click's voice chat ends when X0 leaves the front; another w
     await keyUp(m);
   } finally { m.close(); }
 });
+
+test("main: the server's notices: declared in both bootstraps, off until the server says so, then a socket of main's own that says notices and here, and shows one", async () => {
+  const off = mainProcess();
+  try {
+    await off.ready();
+    await until(() => off.fetches.some(([u]) => u.endsWith("/v1/app/bootstrap")));
+    const boot = JSON.parse(off.fetches.find(([u]) => u.endsWith("/v1/app/bootstrap"))[1].body);
+    assert.ok(boot.capabilities.components.includes("DeskNotices"), "this process shows the server's notices");
+    assert.ok(boot.capabilities.components.includes("DeskAddThis"), "and \"add this\" carries the screen");
+    // The window says the same, from app:env.
+    const env = await off.invoke("app:env", off.win("src/app/app.html").webContents);
+    assert.strictEqual(env.notices, true);
+    assert.strictEqual(env.addThis, true);
+    await sleep(30);
+    assert.strictEqual(off.sockets.length, 0, "no socket while the server has not said it sends them");
+  } finally { off.close(); }
+
+  const on = mainProcess({ flags: { "desktop.notices.enabled": true } });
+  try {
+    await on.ready();
+    await until(() => on.sockets.length === 1);
+    const s = on.sockets[0];
+    assert.match(s.url, /^wss:\/\/.+\/v1\/live$/);
+    await until(() => s.sent.length === 1);
+    assert.deepStrictEqual(s.sent[0], { type: "auth", token: "tok" }, "signed in by its first message, never in the address");
+    s.emit("message", JSON.stringify({ type: "ready", heartbeatMs: 25000 }));
+    await until(() => s.sent.length >= 3);
+    assert.deepStrictEqual(s.sent[1], { type: "notices", v: 1, buttons: process.platform === "darwin" });
+    assert.strictEqual(s.sent[2].type, "here");
+    const before = on.notifications.length;
+    s.emit("message", JSON.stringify({ type: "event", topic: "notice", at: Date.now(), data: { id: "plan_event:e1:1", kind: "plan_event", title: "Design review at 6 pm", body: "Indiranagar", screenId: "bots.plan" } }));
+    await until(() => on.notifications.length === before + 1);
+    const n = on.notifications[on.notifications.length - 1];
+    assert.strictEqual(n.opts.title, "Design review at 6 pm");
+    assert.strictEqual(n.opts.body, "Indiranagar");
+    assert.ok(n.shown);
+  } finally { on.close(); }
+});
+
+test("main: a computer that cannot show a notification never says it can, and opens no socket for them", async () => {
+  const m = mainProcess({ notifications: false, flags: { "desktop.notices.enabled": true } });
+  try {
+    await m.ready();
+    await until(() => m.fetches.some(([u]) => u.endsWith("/v1/app/bootstrap")));
+    const boot = JSON.parse(m.fetches.find(([u]) => u.endsWith("/v1/app/bootstrap"))[1].body);
+    assert.ok(!boot.capabilities.components.includes("DeskNotices"));
+    await sleep(30);
+    assert.strictEqual(m.sockets.length, 0);
+  } finally { m.close(); }
+});
+
+test("main: the window may open a web page or a mail draft, and nothing else (Plan Ease's Send to an address opens the mail app)", async () => {
+  const m = mainProcess();
+  try {
+    await m.ready();
+    const before = m.opened.length;
+    for (const u of ["https://wa.me/?text=Hi", "mailto:rahul@example.com?body=Hi%20Rahul", "file:///etc/passwd", "mailto:a b", "javascript:alert(1)", "upi://pay?pa=x"]) {
+      m.fromApp("app:openExternal", u);
+    }
+    await sleep(10);
+    assert.deepStrictEqual(m.opened.slice(before), ["https://wa.me/?text=Hi", "mailto:rahul@example.com?body=Hi%20Rahul"]);
+  } finally { m.close(); }
+});

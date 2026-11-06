@@ -131,6 +131,23 @@ window rather than recording into a history no account owns.
   they go. Esc throws a dictation away (`desktop.pill.escCancels`).
   Fn is watched by `native/tzkey.swift` (`npm run tzkey`); the others by the key
   hook. A key that cannot be bound falls back to the toggle hotkey, said once.
+- **"Add this"** (`src/dictation/addThis.js`, on while the server sends
+  `desktop.plan.addThis`): said with an email, a page or a selection in front
+  ("add this", "remind me about this on Friday", "isko plan mein daal do"), and
+  going to Plan Ease, the words carry what they point at: the selection, else the
+  page's readable text, else the visible window's. They go to Plan Ease's one box
+  (`POST /v1/botsapp/bots/plan/box` with `seen`), which adds the item or makes a
+  card of the things in it; the pill then says "Added to Plan Ease · Undo", and a
+  notification says what was added (a click opens it). Words that point at nothing
+  on the screen ("remind me to call Mom this evening") carry nothing, and a
+  sensitive app or a private window is never read for it.
+- **Plan Ease's reminders and day notes** (`src/main/notices.js`, on while the
+  server sends `desktop.notices.enabled`): while the computer is in use, they come
+  here as its own notifications, and the phone's copy comes without a sound. A
+  click opens the Plan page; on a Mac their buttons (Done, Later, Move it, Keep…)
+  answer them where they are. The computer says how long since it was last used
+  on its own `/v1/live` socket, and "away" when it locks or sleeps, so the phone
+  rings instead.
 - **Talk mode** (the one key tapped twice, `desktop.talk.enabled`): a conversation
   with Blip. The microphone opens, a pause ends the turn, the words go to
   `POST /v1/talk`, and the answer is shown in the pill and said as it streams;

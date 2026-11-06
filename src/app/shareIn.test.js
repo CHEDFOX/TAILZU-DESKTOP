@@ -3,7 +3,7 @@
 // handled end to end on a stand-in window.
 const test = require("node:test");
 const assert = require("node:assert");
-const { planDrop, shareParams, sendDrop, install, acceptable } = require("./shareIn.js");
+const { planDrop, shareParams, dropParams, sendDrop, install, acceptable } = require("./shareIn.js");
 
 const file = (name, size = 1000) => ({ name, size });
 /** A DataTransfer as a drop hands it over. */
@@ -43,6 +43,14 @@ test("at most five files, none over 50 MB; the rest are counted", () => {
   assert.deepStrictEqual(p.files.map((f) => f.name), ["a", "c", "d", "e"]);
   assert.strictEqual(p.skipped, 3);
   assert.strictEqual(p.tooBig, true);
+});
+
+test("a drop on Plan Ease's page is Plan Ease's: no bot picker", () => {
+  assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.plan"), { file: "f1", from: "plan" });
+  assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.plan.week"), { file: "f1", from: "plan" });
+  assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.home"), { file: "f1" });
+  assert.deepStrictEqual(dropParams({ text: "x" }, undefined), { text: "x" });
+  assert.deepStrictEqual(dropParams({ text: "x" }, "bots.planner"), { text: "x" });
 });
 
 test("the screen's params", () => {

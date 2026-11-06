@@ -20,6 +20,11 @@ JavaScript, with no bundler. It does five things:
   `privateWindow: true` so the server keeps nothing of it; the server can turn
   that off (`desktop.agent.privateWindows`), and one is then refused as a
   sensitive app is (`frontApp.offLimits`, `privateField`).
+- **Plan Ease on this computer.** Plan Ease's reminders and day notes come as
+  this computer's own notifications while the person is at it (the phone's copy
+  then comes without a sound), with their buttons on a Mac (src/main/notices.js).
+  "Add this" said with an email, a page or a selection in front carries what is
+  there to Plan Ease with the words (src/dictation/addThis.js).
 - **Meeting notes.** A hidden recorder hears the microphone and, on a Mac, the
   computer's sound, and uploads it in stretches for the server to organise.
   Stop closes the microphone at once and sends what is left after; a save that
@@ -58,13 +63,17 @@ src/
     shell.js            the tray's and notifications' built-in words, and their merge with the server's
     oauth.js            Apple/Google sign-in without a window: authorize URL, loopback page, code exchange
     links.js            which screen a tulmi:// link may open
+    notices.js          the server's notifications on this computer (Plan Ease's reminders and day notes): a /v1/live socket of
+                        its own, "notices" and "here" said on it, a notice shown with its buttons on a Mac, a press answered at
+                        the act door and kept until it lands
     updater.js          in-place updates: download, verify SHA-512, swap, restart
     testkit.js          for tests: main.js run whole with Electron faked (not shipped)
 
   dictation/            one-key dictation
     oneKey.js           the one key: choice and first default per OS, the Fn helper's protocol, the hold/tap/two-tap gesture
     tapDetector.js      double-tap on a modifier without false positives
-    router.js           where the words go (type, Ask, notes, a bot), from cheap local signals
+    router.js           where the words go (type, Ask, notes, a bot), from cheap local signals; words that point at the screen
+    addThis.js          "add this": what is on the screen (the selection, else the page) to Plan Ease's one box with the words
     routing.js          doing it, session by session; the server's brain when on; undoing pastes ("Ask instead")
     talk.js             talk mode: the conversation's turns, /v1/talk's stream, the voice, barge-in, handoffs
     windowVoice.js      the bot on X0's screen listening (a double-click; the one key with X0 in front): the turns, the
@@ -139,7 +148,8 @@ src/
       auth.js           Supabase email/phone codes, the session, error wording
       backend.js        capability handshake, authorised requests, bootstrap, fetching a screen
       theme.js          theme, labels, conditions, style to CSS
-      nodes.js          node(): one server node to markup; a stack's `hint` (HoverHint) drawn as a small card on hover or focus
+      nodes.js          node(): one server node to markup; a stack's `hint` (HoverHint) drawn as a small card on hover or focus; a
+                        node's on.onAppear, run once as it comes onto the screen (navigation.js appearNew), as on the phones
       askSetupCard.js   DeskAskSetup (Keylessbord's first-run Accessibility row)
       bots.js           BotTiles, BotCard, BotBuddy (with ../../botTiles.js)
       homeHead.js       WriteOn, LiveMark, HeadBar
@@ -160,7 +170,7 @@ src/
       gate.js           the sign-in gate      boot.js   where the window lands; the start
     media.js            send a file, play a sound
     linkSignIn.js       sign in with the phone (QR)
-    shareIn.js          files, links or text dropped on the window
+    shareIn.js          files, links or text dropped on the window (on the Plan page: from=plan, the capture card with no bot picker)
     live.js             live updates over /v1/live
     liveView.js         a running page in a webview (liveViewMain.js: its main-process half;
                         liveViewGuest.js: the webview's preload)
@@ -293,6 +303,8 @@ holds checks of the repository as a whole.
 | Dictation hotkey | `main.js` "Dictation toggle", "Hold-to-talk", "The one key"; `src/dictation/oneKey.js`, `tapDetector.js`; `native/tzkey.swift` |
 | Recording | `src/dictation/recorder/` |
 | Where the words go | `src/dictation/router.js` (decide), `routing.js` (do; the brain); `main.js` "routing" (`decide`, `needGrant`) |
+| "Add this" (the screen to Plan Ease) | `src/dictation/addThis.js`; `router.js` `pointsAtScreen` (lists `desktop.router.pointsAt`, `notThings`) and the "add this" tasks; `routing.js` `seenFor`, `addedThis` (the pill's Undo); `main.js` `addThis` |
+| The server's notifications (Plan Ease's reminders and notes) | `src/main/notices.js`; `main.js` "The server's notifications on this computer" (`setupNotices`, `noticesCan`); `src/app/live.js` LiveClient (`onReady`, `send`) |
 | Talk mode | `src/dictation/talk.js`; `oneKey.js` createHoldTap (two taps, the key in talk mode); `main.js` "Talk mode" (`pageFor`, the voice through the pill); `pill/bots.js`, `pill/voice.js` |
 | The bot on X0's screen listening | `src/dictation/windowVoice.js`; `main.js` "The window's own voice" (`winVoiceOn`, `app:voice`, `app:talkTo`) and the one key's branches; `sdui/listen.js`, `sdui/stage.js` |
 | Spaces' blocks (a bot with a thought, the crowd, @ and /) | `sdui/stage.js`, `sdui/mention.js`, `sdui/listen.js`; CSS `.tz-st-*`, `.tz-th-*`, `.tz-cr-*`, `.tz-vn-*`, `.tz-mf-*`, `.tz-lw*` in `app.html` |
@@ -370,7 +382,8 @@ brain) and `/v1/routines/draft` then `/v1/routines`; talk mode `/v1/talk`
 (NDJSON) and `/v1/talk/stop`, its voice `/v1/speak` when the server's voice is on; Ask `/v1/agent`
 (NDJSON; step 0 may carry the whole page as `page`) and `/v1/tasks/:id/approve|deny`; notes `/v1/notes`; the app window
 `/v1/app/screen`, `/v1/live`, `/v1/files`, `/v1/connectors/:id/connect`,
-`/v1/auth/link`; the runner `/v1/code/runner/*` and a WebSocket to the jobs
+`/v1/auth/link`; the server's notices a `/v1/live` socket of the main process's own and `/v1/widgets/act` for their buttons;
+"add this" `/v1/botsapp/bots/plan/box` (and `/v1/widgets/act` for its Undo); the runner `/v1/code/runner/*` and a WebSocket to the jobs
 Worker (protocol: `TAILZU-BACKEND/docs/desktop-runner-session.md`). Accounts
 are Supabase's (email or phone codes in the window; Apple and Google through
 the browser and a loopback port, `oauth.js`).
@@ -381,6 +394,26 @@ These are kept as they were; change them only together with the other side.
 
 - **API paths and SDUI node kinds** the server sends: unchanged. The kinds this
   build draws are `COMPONENTS` and the capability names in `src/app/sdui/core.js`.
+- **The server's notices** (`src/main/notices.js`), declared as `DeskNotices` in both
+  bootstraps (only where a notification can be shown at all), and on only while the
+  server sends `desktop.notices.enabled: true`. On the main process's own `/v1/live`
+  socket, after `ready`: `{ type: "notices", v: 1, buttons }` (true on a Mac), then
+  `{ type: "here", idleMs }` at once, every `desktop.notices.hereMs` (60 s) and on unlock
+  and waking, and `{ type: "here", away: true }` on lock and sleep. The server sends
+  `{ type: "event", topic: "notice", data: { id, kind, title, body, screenId?, params?,
+  item?, category?, silent?, until? } }` with lock-safe words, and `{ id, gone: true }`
+  when it was answered elsewhere. Buttons come from the bootstrap's `push.categories`
+  (the phone's list; `act` and `open` only, two at most) and answer at
+  `POST /v1/widgets/act { item, action, key }` with the session. A click, or an
+  `open` button, opens `screenId` in the window; a hand-off screen's `onAppear`
+  opens its link there (an `https:` page or a `mailto:` draft; a `upi://` link
+  has nothing to open it on a computer).
+- **"Add this"** (`src/dictation/addThis.js`), declared as `DeskAddThis`, and on only
+  while the server sends `desktop.plan.addThis: true`:
+  `POST /v1/botsapp/bots/plan/box { words, tz, seen: { from: "selection" | "page" |
+  "screen", text, app?, title?, where? } }`, answered with the box's own reply (a line,
+  `undo: { item, action }`, `open: { screen, params }`; `kind: "chat"` sends the words
+  the old way). The one key's brain may say `seen: true | false` with a `bot` decision.
 - **`botTiles.js` and `botLooks.js` stay at the root**: TAILZU-FRONTEND's
   `app/src/botTiles/genDesktop.mjs` and `genStarter.mjs` write them there, and
   tests on both sides compare their sha256 headers. Never edit them by hand.
