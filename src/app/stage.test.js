@@ -67,8 +67,8 @@ test("BotStage: the markup holds him, his hit area, the trail's three bubbles an
   assert.match(html, /class="tz-th-rest">Ask any bot\.\.\.</);
   assert.match(html, /data-mode="rest"/);
   assert.doesNotMatch(html, /In his thought/, "at rest the box shows only its words");
-  // 30 + 18 + the trail's room (82) + 48: whatever the height says.
-  assert.match(html, /class="tz-st" data-st="\d+" style="height:178px"/);
+  // 30 + 18 + the trail's room (43) + 48: whatever the height says.
+  assert.match(html, /class="tz-st" data-st="\d+" style="height:139px"/);
   p.ctx.__n = homeStage({ height: 40, thought: undefined });
   assert.match(p.run("node(__n)"), /style="height:48px"/, "no pill: only him");
 });
@@ -109,14 +109,14 @@ test("BotStage: his life is kept across two paints (the same bot, where he was),
   assert.strictEqual(box().getAttribute("data-mode"), "rest");
 });
 
-test("BotStage: the trail is three bubbles of 10, 17 and 26 px with 1.5, 1.75 and 2 px ink borders", needsEngine, () => {
+test("BotStage: the trail is three bubbles of 5, 8 and 12 px with 1.25, 1.5 and 1.75 px ink borders", needsEngine, () => {
   const p = fakePage();
   screen(p, homeStage(), { askOpen: false });
   p.tick(48);
   const b = stageEl(p).querySelectorAll(".tz-th-b");
   assert.strictEqual(b.length, 3);
-  assert.deepStrictEqual(b.map((x) => x.style.width), ["10.00px", "17.00px", "26.00px"]);
-  assert.deepStrictEqual(b.map((x) => x.style.borderWidth), ["1.50px", "1.75px", "2.00px"]);
+  assert.deepStrictEqual(b.map((x) => x.style.width), ["5.00px", "8.00px", "12.00px"]);
+  assert.deepStrictEqual(b.map((x) => x.style.borderWidth), ["1.25px", "1.50px", "1.75px"]);
   assert.ok(b.every((x) => Number(x.style.opacity) > 0.99));
 });
 

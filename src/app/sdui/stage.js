@@ -34,10 +34,10 @@ function stModeOf(p, th) {
   return "rest";
 }
 
-/** The trail's room at rest (the core's TRAIL), about 82 px. */
+/** The trail's room at rest (the core's TRAIL), about 43 px. */
 function stTrailRoom() {
   const api = window.TailzuBotTiles;
-  return api && typeof api.trailRoom === "function" ? api.trailRoom(1) : 82;
+  return api && typeof api.trailRoom === "function" ? api.trailRoom(1) : 43;
 }
 
 /** The stage is never drawn shorter than him and, with a pill, the trail's room and the pill (BotStageProps.size). */

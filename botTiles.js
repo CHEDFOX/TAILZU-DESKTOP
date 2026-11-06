@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
 // Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 e856cb14c96799a02fc01d8069eeedcf08ed9e917e1f644721b2b6b5006e4b00
-// body sha256 5c2c4389b7ef41f5486ed6d133144256837c993be5fd1f88570647a5ad60d9e4
+// core.ts sha256 1383f974478fc5d193b4c232880250140feb31be24156186f1738175660a1d43
+// body sha256 02226e3476050536a4b434a534294a7fb4f51619087afd11069f30278289eb74
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -7176,7 +7176,7 @@
    * plans its room for. lean: the most the trail steps toward the box's centre. bob: each bubble's own gentle bob (px).
    * pulse: how much they swell and shrink with the voice.
    */
-  const TRAIL = { sizes: [10, 17, 26], strokes: [1.5, 1.75, 2], anchorPad: 34, lift: 3, gap: 5, minGap: 4, minScale: 0.45, restGap: 7, lean: 28, bob: 1, pulse: 0.14 };
+  const TRAIL = { sizes: [5, 8, 12], strokes: [1.25, 1.5, 1.75], anchorPad: 24, lift: 2, gap: 4, minGap: 3, minScale: 0.45, restGap: 4, lean: 18, bob: 1, pulse: 0.14 };
   /** The room (px) from his crown to the bottom of a box at rest that the trail wants at full size: lift, three bubbles, gaps, gap. */
   function trailRoom(scale = 1) {
       return TRAIL.lift + (TRAIL.sizes[0] + TRAIL.sizes[1] + TRAIL.sizes[2]) * scale + 3 * TRAIL.restGap + TRAIL.gap;
