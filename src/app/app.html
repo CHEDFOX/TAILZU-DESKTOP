@@ -132,9 +132,6 @@
   /* PersonBot (personBot.js): a person's tiny bot in a box of its own, his feet on its floor; it takes no clicks (a row's own do). */
   .tz-pb { position:relative; display:inline-block; flex:none; vertical-align:middle; pointer-events:none; }
   .tz-pb-c { position:absolute; left:0; top:0; pointer-events:none; }
-  /* DotArt (dots.js): what a bot drew, as dots on springs; a click scatters them, the pointer pushes them, vertical scroll passes. */
-  .tz-da { position:relative; display:inline-block; flex:none; vertical-align:top; touch-action:pan-y; cursor:default; }
-  .tz-da-c { position:absolute; left:0; top:0; pointer-events:none; }
   /* LiveWords: what he hears, word by word (listen.js writes them in place). */
   .tz-th-space .tz-lw { padding:4px 8px; }
   /* A code field (KitExtras keyboard "code") is written in capitals; its placeholder stays as it is written. */
@@ -786,7 +783,6 @@
        its label (desktop.gate.*, desktop.rail.*) as soon as knobs are known. -->
   <script src="../../knobs.js"></script>
   <script src="../../botTiles.js"></script>
-  <script src="../../dotArt.js"></script>
   <script src="../shared/blipCatalog.js"></script>
   <script src="../shared/blipStarter.js"></script>
   <script src="../shared/blip.js"></script>
@@ -804,7 +800,6 @@
        whose lives and looks they use). -->
   <script src="sdui/stage.js"></script>
   <script src="sdui/personBot.js"></script>
-  <script src="sdui/dots.js"></script>
   <script src="sdui/mention.js"></script>
   <script src="sdui/listen.js"></script>
   <script src="sdui/chat.js"></script>

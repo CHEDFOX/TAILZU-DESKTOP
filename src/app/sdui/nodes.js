@@ -398,7 +398,6 @@ function node(n) {
     case "BotBuddy": return botBuddyNode(p);
     // A person, as their own tiny bot in a size x size box (personBot.js): never their initials.
     case "PersonBot": return personBotNode(p, s);
-    case "DotArt": return dotArtNode(p, s);
     case "WriteOn": return writeOnNode(p);
     case "LiveMark": return liveMarkNode(n, p);
     case "HeadBar": return headBarNode(p, kids);

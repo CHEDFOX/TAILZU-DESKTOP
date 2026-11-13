@@ -408,8 +408,6 @@ function mountBotTiles(root) {
   if (typeof mountStages === "function") mountStages(root);
   // People as their own tiny bots (personBot.js), before an overlay card is lifted out to the body with any it holds.
   if (typeof mountPersonBots === "function") mountPersonBots(root);
-  // What a bot drew, as dots that obey physics (dots.js).
-  if (typeof mountDotArts === "function") mountDotArts(root);
   // BotBuddy: a bot's own tiny bot, kept by its life across screens and repaints.
   root.querySelectorAll("[data-bb]").forEach((stage) => {
     const cfg = BT_PENDING[Number(stage.getAttribute("data-bb"))];

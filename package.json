@@ -44,7 +44,6 @@
       "!src/**/testkit.js",
       "knobs.js",
       "botTiles.js",
-      "dotArt.js",
       "botLooks.js",
       "assets/**"
     ],
