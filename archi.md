@@ -1,5 +1,8 @@
 # X0 Bot desktop: architecture
 
+> **Before you start:** read `WORKING-ON.md` in the repo root. It says what other sessions are building right now and which
+> files they hold. Add your own item when you start something big, and remove it when it lands.
+
 X0 Bot for Windows, macOS (and a Linux AppImage) is an Electron app in plain
 JavaScript, with no bundler. It does five things:
 
