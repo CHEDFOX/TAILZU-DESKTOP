@@ -2,6 +2,8 @@
 
 > **Before you start:** read `WORKING-ON.md` in the repo root. It says what other sessions are building right now and which
 > files they hold. Add your own item when you start something big, and remove it when it lands.
+> Building a screen, a visual or anything the app draws? Read `TAILZU-BACKEND/docs/renderer.md` first: build it as server
+> data with the existing blocks and catalogs, not as a new client component.
 
 X0 Bot for Windows, macOS (and a Linux AppImage) is an Electron app in plain
 JavaScript, with no bundler. It does five things:

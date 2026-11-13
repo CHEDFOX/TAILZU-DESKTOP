@@ -3,6 +3,9 @@
 Updated 13 Nov 2026, 22:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
+**How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
+look. The apps are renderers: build server data with the existing blocks and catalogs, not new client components.
+
 ## Landed today (on main, every switch off by default)
 
 - Native looks: the server draws the widgets, the Live Activity, the Android "Bots at work" notice and the keyboard's key
@@ -12,13 +15,13 @@ marked landed here; if you must, write a line under "Notes from other sessions" 
   behind `PERM_LOCATION`, `PERM_CONTACT_PICK`, `PERM_HEALTH_IOS`, `PERM_HEALTH_ANDROID` (`docs/perms.md`).
 - The runtime check: `tools/ci/check-runtime.mjs` and `app/native-inputs.lock` (phone). Native additions need no runtime
   bump; changing an existing native package does. Run `node tools/ci/check-runtime.mjs --write` after native changes.
+- **Safety net** (one bad node cannot crash a screen; `sdui.safe` / `sdui.off` / `sdui.motion` switches; crash-loop safe
+  mode), frontend `7ddcf31`. Not switched on until V1: the server sends no `sdui.*` knob yet.
+- **Launch animation from the server**, frontend `7ddcf31`. It rides the bootstrap as `app.launch`.
+- **Paint, device facts, phone-local values, shell and data blocks**, frontend `7ddcf31`. Not switched on until V1: no
+  screen can reach them.
 
 ## In progress (phone: TAILZU-FRONTEND/app)
-
-Needed in the next store build:
-- **Safety net** (one bad node cannot crash a screen; `sdui.safe` / `sdui.off` / `sdui.motion` switches; crash-loop safe
-  mode). Holds `src/sdui/Renderer.tsx`, `src/sdui/knobs.ts`, `src/sdui/safety*`, `src/sdui/client/capabilities.ts`.
-- **Launch animation from the server** (`GET /v1/launch`). Holds `src/launch/**`, `src/storage.ts`.
 
 The new building blocks (over the air, no store build; `pure` spec):
 - Kernel: `src/sdui/kernel/**` (new), generated into `TAILZU-DESKTOP/src/app/sdui/kernel.js` and
@@ -26,10 +29,8 @@ The new building blocks (over the air, no store build; `pure` spec):
 - Motion and gestures on any node: `src/sdui/motion/**`, `src/sdui/gesture/**`, `src/sdui/components/Screen.tsx`, `Scroll.tsx`.
 - Lists, inputs, media: `src/sdui/components/{List,Each,Video,Audio,Camera}.tsx`, `src/sdui/components/input/**`,
   `src/sdui/components/index.ts`.
-- Paint, device facts, phone-local values: `src/sdui/theme/style.ts`, `src/sdui/components/blur.tsx`,
-  `src/sdui/device/facts.ts`, `src/sdui/local.ts`.
-- Shell and data: `src/sdui/shell/**`, `src/sdui/client/endpoint.ts`, `src/sdui/live/subscribe.ts`, `src/sdui/offline/**`.
 - Shared: `tools/knobs/app-knobs.json`, `tools/ci/marked-regions.mjs`.
+- Generated kernels: `TAILZU-BACKEND/shared/sdui/kernel.cjs` and `tulmi/tests/sdui-kernel.test.ts` (both uncommitted).
 
 Next, after those land: the renderer wiring (`src/sdui/Renderer.tsx`, `actions.ts`, `state.ts`), the server's screen checker
 (`TAILZU-BACKEND/shared/types/sdui.ts`, `tulmi/src/experience/sdui2/**`, `tulmi/src/routes/app/**`) and the desktop copy
