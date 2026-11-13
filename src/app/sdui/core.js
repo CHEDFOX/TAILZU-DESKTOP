@@ -132,6 +132,10 @@ const COMPONENTS = [
   // it the server sends a plain circle in the person's colour. Not a component: FontBricolage, the three Bricolage Grotesque faces
   // a space's messages are set in, bundled (app.html "Tailzu Bricolage", "... Medium", "... SemiBold"); without it, Geist.
   "PersonBot", "FontBricolage",
+  // WHAT A BOT DRAWS, AS DOTS THAT OBEY PHYSICS (shared/types/sdui.ts 3k): DotArt, a monochrome picture of dots on damped springs,
+  // coming in by falling, growing or gathering, scattered by a click and pushed by the pointer (sdui/dots.js, ../../dotArt.js).
+  // Without it the server sends the same dots as an SVG, still.
+  "DotArt",
 ];
 // Declared only by a copy that can put an update in place of itself (the main
 // process knows: updater.js). The server then sends the one-click update card;

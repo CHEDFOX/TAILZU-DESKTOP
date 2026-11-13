@@ -54,6 +54,7 @@ config.example.json     a dev config.json (only baseUrl)
 knobs.js                the server's values (txt/num/bool/...), shared by the main process and every page
 botTiles.js             GENERATED: the living bot tiles' physics and drawing (from TAILZU-FRONTEND)
 botLooks.js             GENERATED: the bots' looks and moments, the starter catalog (from TAILZU-FRONTEND)
+dotArt.js               GENERATED: the physics of what a bot draws as dots (DotArt), from TAILZU-FRONTEND's dotArtCore.ts
 
 src/
   main/                 the Electron main process
@@ -155,6 +156,8 @@ src/
       homeHead.js       WriteOn, LiveMark, HeadBar
       stage.js          Spaces: BotStage (a bot with a thought: its trail, its box, the veil), BotCrowd, Vanish
       personBot.js      PersonBot: a person as their own tiny bot (never initials), one loop for all of them
+      dots.js           DotArt: what a bot draws, as monochrome dots on springs (../../dotArt.js); a click scatters them, the
+                        pointer pushes them; one loop, only while one moves and is in view; kept across paints
       mention.js        MentionField: "@" for a person, "/" for a bot's thing; its own DOM, kept across paints
       listen.js         voiceLive / voiceStop and LiveWords (the window's half of windowVoice.js); talkTo; Escape
       chat.js           ChatThread       voice.js     the in-page mic and the spoken session
@@ -308,6 +311,7 @@ holds checks of the repository as a whole.
 | Talk mode | `src/dictation/talk.js`; `oneKey.js` createHoldTap (two taps, the key in talk mode); `main.js` "Talk mode" (`pageFor`, the voice through the pill); `pill/bots.js`, `pill/voice.js` |
 | The bot on X0's screen listening | `src/dictation/windowVoice.js`; `main.js` "The window's own voice" (`winVoiceOn`, `app:voice`, `app:talkTo`) and the one key's branches; `sdui/listen.js`, `sdui/stage.js` |
 | Spaces' blocks (a bot with a thought, the crowd, @ and /) | `sdui/stage.js`, `sdui/mention.js`, `sdui/listen.js`; CSS `.tz-st-*`, `.tz-th-*`, `.tz-cr-*`, `.tz-vn-*`, `.tz-mf-*`, `.tz-lw*` in `app.html` |
+| What a bot draws, as dots that obey physics | `sdui/dots.js` (DotArt), `dotArt.js` at the root (generated from TAILZU-FRONTEND/app/src/sdui/bots/dotArtCore.ts by its genDotArt.mjs); CSS `.tz-da*` in `app.html`; `src/app/dots.test.js` |
 | People as their own tiny bots, and a space's messages' face | `sdui/personBot.js` (PersonBot; the "@" list's rows through `personBotEl`, `sdui/mention.js` mfFace); CSS `.tz-pb*` and the "Tailzu Bricolage" faces in `app.html`; the Bricolage Grotesque files in `assets/fonts/` |
 | Paste | `main.js` "Paste into the focused app"; `src/dictation/pasteJoin.js` |
 | The pill / captions | `src/dictation/pill/`, `src/dictation/overlay/` |
