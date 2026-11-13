@@ -33,6 +33,10 @@ All the building blocks are on main but not connected yet (see `docs/renderer.md
 - **Desktop copy (D1).** Holds `TAILZU-DESKTOP/src/app/sdui/v2/**` (new), `src/app/sdui/kernel.js` (generated),
   `core.js`, `nodes.js`, `app.html`.
 
+- **Reply to a bot from its notification** (server only, switch `NOTIFY_REPLY`, off). Holds `tulmi/src/push/defaults.ts`,
+  `tulmi/src/push/engine.ts`, the `push.categories` knob, a new route under `tulmi/src/routes/bots/`, and the bot chat turn code
+  it calls into.
+
 Do not build screens with the new blocks until these land; until then use what `docs/renderer.md` section 2 lists.
 
 ## Numbers in use
