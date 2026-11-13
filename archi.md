@@ -414,6 +414,18 @@ These are kept as they were; change them only together with the other side.
   "screen", text, app?, title?, where? } }`, answered with the box's own reply (a line,
   `undo: { item, action }`, `open: { screen, params }`; `kind: "chat"` sends the words
   the old way). The one key's brain may say `seen: true | false` with a `bot` decision.
+- **`botTiles.js` plays looks format 2 (scenes).** It is generated from TWO sources now, `scene.ts` and `core.ts`,
+  and its header carries a hash of each. A scene is data the same engine draws: morphing shapes, dot fields,
+  springs, ropes and soft rings, repeats, keyframes, and live inputs (a click inside a live tap scene's box rings
+  the scene instead of pressing the stage; the window's voice feeds `level`). The window declares `BotMoments2`
+  (`sdui/core.js`), keeps its catalog under `tz.botLooks.f2` as `{ f, spec }` and compares (v, f) rather than v
+  alone (`sdui/bots.js`): it starts at the starter's OWN format, and takes a kept copy only when its version is
+  newer, or the same version cut less far down — an older copy never wins because it carries a higher `f`, and reports `looks: { v, f, ok, why?, bad?, slow? }` on every bootstrap. The canvas has
+  no `dots()`, so a dot field is drawn as arcs at the same quantized radii the phone uses — the same picture, more
+  calls. A scene that throws is caught inside the engine and dropped alone, and the tile loop now survives three
+  failing frames instead of stopping at the first, as the phone's does. The canvas has no `dots()` and the engine
+  never asks it to `rotate` or `scale` for a scene — it works out every transform itself, so the window and the
+  phone draw the same picture; only a scene's `rig`, around the bot himself, uses those two.
 - **`botTiles.js` and `botLooks.js` stay at the root**: TAILZU-FRONTEND's
   `app/src/botTiles/genDesktop.mjs` and `genStarter.mjs` write them there, and
   tests on both sides compare their sha256 headers. Never edit them by hand.

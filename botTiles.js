@@ -1,13 +1,2191 @@
-// GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone.
-// Source: TAILZU-FRONTEND/app/src/botTiles/core.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
-// core.ts sha256 1383f974478fc5d193b4c232880250140feb31be24156186f1738175660a1d43
-// body sha256 02226e3476050536a4b434a534294a7fb4f51619087afd11069f30278289eb74
+// GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone and the server.
+// Source: TAILZU-FRONTEND/app/src/botTiles/{scene,core}.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
+// scene.ts sha256 bf9ddb40045f8c5b9259c29e1c83f2a6f097a3f25328a3b42c9a7923654454ca
+// core.ts sha256 f2e6ddc9b9ba92f047188dbb9d53993405a1373570cc1aaf79624a029d1d1614
+// body sha256 98674e213143812b2dd58c1a265fa4227433e1a0576c5fbedab795069586b365
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
   else root.TailzuBotTiles = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
+  /**
+   * SCENES: THE LOOKS FORMAT 2 ANIMATION LANGUAGE (anim/SPEC.md sections 2 and 3).
+   *
+   * A scene is data: layered shapes that morph, turn and scale; dot fields where every dot follows its own formula;
+   * springs; ropes and closed soft rings (chains); groups that act as joints; repeats; keyframes; and live inputs
+   * (taps, his voice, his own motion, the moment's events). It is interpreted here, by the one core the phone, the
+   * window and the server all run, so a new animation this language can express is a server push, not a release.
+   *
+   * Nothing here imports anything: core.ts hands in the expression compiler (so the dependency runs one way) and the
+   * host hands in a drawing context. genDesktop.mjs puts this file and core.ts into one generated module. The one
+   * exception is `renderStill` at the end, which reaches for Skia and the tile engine at call time, inside a try, so
+   * the window and the server — handed the same generated module, with neither — simply get a null back.
+   *
+   * Three rules worth knowing before reading on:
+   *   - every value is a number, an expression, keyframes or a spring; never code, never a string the host runs;
+   *   - frames never parse and never allocate: every buffer is made when a scene starts playing and reused;
+   *   - a scene that misbehaves while playing is dropped alone (SceneRun.dead), and the bot, the grid and the loop
+   *     carry on. A catalog that does not compile is refused whole, by the caller, as today.
+   */
+  /**
+   * The budgets. Starting values (anim/SPEC.md 3.7), set from the device session before format 2 is frozen. The server
+   * reads this very table out of the generated engine, so the two can never disagree.
+   */
+  const SCENE_LIMITS = {
+      /** Executed expression ops per frame, counted at compile time after hoisting. */
+      ops: 8000,
+      opsScreen: 12000,
+      dotsEl: 400,
+      dotsScene: 600,
+      dotsScreen: 600,
+      /** Drawing calls per scene per frame: each dots() group and each shape counts one. */
+      draws: 160,
+      els: 24,
+      depth: 3,
+      repeat: 32,
+      pathTokens: 900,
+      morph: 4,
+      keys: 64,
+      keysScene: 512,
+      vars: 8,
+      emit: 4,
+      events: 8,
+      chains: 3,
+      chainN: 24,
+      chainIter: 4,
+      /** Live at once: per moment, and over the whole screen. */
+      liveMoment: 2,
+      liveScreen: 4,
+      scenes: 48,
+      bytes: 24576,
+      boxW: 3,
+      boxH: 2,
+      catalogBytes: 262144,
+      /** The governor: over this many milliseconds (step, evaluation and draw together) a scene freezes, then is dropped. */
+      ms: 2.0,
+  };
+  /** The physics step, as core.ts's. Chains and springs are stepped at this, whatever the frame rate. */
+  const SSTEP = 1 / 120;
+  const SMAX_FRAME = 1 / 20;
+  const TAU2 = Math.PI * 2;
+  /**
+   * The names every scene expression may read, in the order their values are handed to it. The host writes them into
+   * SceneRun.base each frame. A scene's own `ev.<name>`s and `vars` follow these, then (inside a dot field) the per-dot
+   * names, or (inside a repeat) `j` and `nj`.
+   */
+  const SCENE_BASE = [
+      "t", "u", "T", "D", "beat", "k", "side", "rnd", "rnd2", "W", "x", "px",
+      "vx", "level", "talk", "tapx", "tapy", "tapt", "taps", "seed",
+  ];
+  const NBASE = SCENE_BASE.length;
+  /** Where the host writes each base name (the rest follow SCENE_BASE's order). */
+  const B_T = 0, B_U = 1, B_TT = 2, B_D = 3, B_BEAT = 4, B_K = 5, B_SIDE = 6, B_RND = 7, B_RND2 = 8, B_W = 9;
+  const B_X = 10, B_PX = 11, B_VX = 12, B_LEVEL = 13, B_TALK = 14, B_TAPX = 15, B_TAPY = 16, B_TAPT = 17, B_TAPS = 18, B_SEED = 19;
+  /** The per-dot names a dot field's expressions may also read, and the two a repeat's child may. */
+  const DOT_NAMES = ["i", "col", "row", "n", "qx", "qy", "d", "ang"];
+  const REP_NAMES = ["j", "nj"];
+  /** What a name costs to read: it changes every frame (FRAME), per dot or per instance (DOT), or neither (once a play). */
+  const C_FRAME = 1, C_DOT = 2;
+  /** The base names that are the same for a whole play: the rest change with the frame. */
+  const BASE_STILL = new Set(["D", "rnd", "rnd2", "W", "seed"]);
+  /** Of the per-dot names, `n` (the count) and `nj` are the same for every dot. */
+  const DOT_STILL = new Set(["n", "nj"]);
+  const sclamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const isRec2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+  const SPAINT_RE = /^#[0-9a-fA-F]{6}$/;
+  const okScenePaint = (p) => typeof p === "string" && (SPAINT_RE.test(p) || p === "$color" || p === "$paint" || p === "ink" || p === "paper");
+  // ===================================================================== values
+  const V_CONST = 0, V_EXPR = 1, V_KEYS = 2, V_SPRING = 3;
+  /** One number of a scene: a constant, an expression, keyframes over some clock, or a spring chasing a target. */
+  class Val {
+      constructor() {
+          this.kind = V_CONST;
+          this.c = 0;
+          this.code = null;
+          /** Keyframes, flat: time, value, ease, and a cubic ease's four numbers. */
+          this.keys = null;
+          this.by = null;
+          this.loop = false;
+          /** A spring: what it chases, its stiffness and damping, and where its state lives in the run. */
+          this.target = null;
+          this.k = 160;
+          this.damp = 0.8;
+          this.slot = -1;
+          /** Executed ops, for the budget. */
+          this.ops = 0;
+      }
+  }
+  const VZERO = new Val();
+  const KSTRIDE = 7;
+  const E_LIN = 0, E_IN = 1, E_OUT = 2, E_INOUT = 3, E_STEP = 4, E_CUBIC = 5;
+  const EASES = { lin: E_LIN, in: E_IN, out: E_OUT, inout: E_INOUT, step: E_STEP };
+  /** Count the ops bytecode runs: with no jumps in the language, what is compiled is what runs. */
+  function countOps(code, X) {
+      if (!code)
+          return 0;
+      const o = X.ops;
+      let n = 0;
+      for (let i = 0; i < code.length; n++) {
+          const op = code[i];
+          i += op === o.CALL ? 3 : op === o.NUM || op === o.VAR || op === o.BIN ? 2 : 1;
+      }
+      return n;
+  }
+  /** A cubic-bezier ease, solved for y at x (Newton, then bisection: a handful of steps, no allocation). */
+  function cubicEase(x1, y1, x2, y2, x) {
+      if (x <= 0)
+          return 0;
+      if (x >= 1)
+          return 1;
+      const bx = (u) => 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u;
+      const by = (u) => 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u;
+      let lo = 0, hi = 1, u = x;
+      for (let i = 0; i < 12; i++) {
+          const v = bx(u);
+          if (v < x)
+              lo = u;
+          else
+              hi = u;
+          u = (lo + hi) / 2;
+      }
+      return by(u);
+  }
+  function easeAt(kind, e, at, w) {
+      if (kind === E_STEP)
+          return w >= 1 ? 1 : 0;
+      if (kind === E_IN)
+          return w * w;
+      if (kind === E_OUT)
+          return 1 - (1 - w) * (1 - w);
+      if (kind === E_INOUT)
+          return w * w * (3 - 2 * w);
+      if (kind === E_CUBIC)
+          return cubicEase(e[at + 3], e[at + 4], e[at + 5], e[at + 6], w);
+      return w;
+  }
+  /** Compile one numeric field. `names` are what it may read; `springs` collects the springs so the run can step them. */
+  function compileVal(raw, names, X, springs, errs, at, keyBudget) {
+      const v = new Val();
+      if (raw == null)
+          return v;
+      if (typeof raw === "number") {
+          if (!Number.isFinite(raw)) {
+              errs.push(`${at}: a number`);
+              return v;
+          }
+          v.c = raw;
+          return v;
+      }
+      if (typeof raw === "string") {
+          try {
+              const xp = X.compile(raw, names);
+              if (xp.code) {
+                  v.kind = V_EXPR;
+                  v.code = xp.code;
+                  v.ops = countOps(xp.code, X);
+              }
+              else
+                  v.c = xp.c;
+          }
+          catch (e) {
+              errs.push(`${at}: ${e.message}`);
+          }
+          return v;
+      }
+      if (!isRec2(raw)) {
+          errs.push(`${at}: a number, an expression, keyframes or a spring`);
+          return v;
+      }
+      if (raw.spring !== undefined) {
+          for (const k of Object.keys(raw))
+              if (!["spring", "k", "damp"].includes(k))
+                  errs.push(`${at}: unknown field ${k}`);
+          v.kind = V_SPRING;
+          v.target = compileVal(raw.spring, names, X, springs, errs, `${at}.spring`, keyBudget);
+          if (v.target.kind === V_SPRING)
+              errs.push(`${at}: a spring cannot chase a spring`);
+          v.k = typeof raw.k === "number" && raw.k > 0 && raw.k <= 2000 ? raw.k : 160;
+          if (raw.k != null && v.k !== raw.k)
+              errs.push(`${at}.k: in (0, 2000]`);
+          v.damp = typeof raw.damp === "number" && raw.damp >= 0 && raw.damp <= 4 ? raw.damp : 0.8;
+          if (raw.damp != null && v.damp !== raw.damp)
+              errs.push(`${at}.damp: in [0, 4]`);
+          v.slot = springs.length;
+          springs.push(v);
+          v.ops = v.target.ops;
+          return v;
+      }
+      if (Array.isArray(raw.k)) {
+          for (const k of Object.keys(raw))
+              if (!["k", "by", "loop"].includes(k))
+                  errs.push(`${at}: unknown field ${k}`);
+          const list = raw.k;
+          if (!list.length || list.length > SCENE_LIMITS.keys) {
+              errs.push(`${at}.k: 1 to ${SCENE_LIMITS.keys} keys`);
+              return v;
+          }
+          keyBudget.n += list.length;
+          const flat = new Float64Array(list.length * KSTRIDE);
+          let last = -Infinity;
+          list.forEach((key, i) => {
+              const w = `${at}.k[${i}]`;
+              if (!Array.isArray(key) || key.length < 2 || key.length > 3) {
+                  errs.push(`${w}: [time, value] or [time, value, ease]`);
+                  return;
+              }
+              const time = Number(key[0]), value = Number(key[1]);
+              if (!Number.isFinite(time) || !Number.isFinite(value)) {
+                  errs.push(`${w}: numbers`);
+                  return;
+              }
+              if (time < last)
+                  errs.push(`${w}: keys go forward in time`);
+              last = time;
+              flat[i * KSTRIDE] = time;
+              flat[i * KSTRIDE + 1] = value;
+              const ease = key[2];
+              if (ease == null)
+                  flat[i * KSTRIDE + 2] = E_LIN;
+              else if (typeof ease === "string" && ease in EASES)
+                  flat[i * KSTRIDE + 2] = EASES[ease];
+              else if (Array.isArray(ease) && ease.length === 4 && ease.every((q) => typeof q === "number" && Number.isFinite(q))) {
+                  flat[i * KSTRIDE + 2] = E_CUBIC;
+                  for (let q = 0; q < 4; q++)
+                      flat[i * KSTRIDE + 3 + q] = Number(ease[q]);
+              }
+              else
+                  errs.push(`${w}: an ease (${Object.keys(EASES).join(", ")}) or [x1, y1, x2, y2]`);
+          });
+          v.kind = V_KEYS;
+          v.keys = flat;
+          v.by = raw.by === undefined ? null : compileVal(raw.by, names, X, springs, errs, `${at}.by`, keyBudget);
+          if (v.by && v.by.kind === V_SPRING)
+              errs.push(`${at}.by: not a spring`);
+          v.loop = raw.loop === true;
+          v.ops = (v.by?.ops ?? 0) + 1;
+          return v;
+      }
+      errs.push(`${at}: a number, an expression, keyframes or a spring`);
+      return v;
+  }
+  function readTree(code, X, classOf) {
+      const o = X.ops, stack = [];
+      for (let i = 0; i < code.length;) {
+          const op = code[i];
+          let node;
+          if (op === o.NUM) {
+              node = { op, a: code[i + 1], b: 0, kids: [], mask: 0 };
+              i += 2;
+          }
+          else if (op === o.VAR) {
+              node = { op, a: code[i + 1], b: 0, kids: [], mask: classOf(code[i + 1]) };
+              i += 2;
+          }
+          else if (op === o.NEG || op === o.NOT) {
+              const k = stack.pop();
+              if (!k)
+                  return null;
+              node = { op, a: 0, b: 0, kids: [k], mask: k.mask };
+              i += 1;
+          }
+          else if (op === o.BIN) {
+              const r = stack.pop(), l = stack.pop();
+              if (!l || !r)
+                  return null;
+              node = { op, a: code[i + 1], b: 0, kids: [l, r], mask: l.mask | r.mask };
+              i += 2;
+          }
+          else if (op === o.TERN) {
+              const c = stack.pop(), b = stack.pop(), a = stack.pop();
+              if (!a || !b || !c)
+                  return null;
+              node = { op, a: 0, b: 0, kids: [a, b, c], mask: a.mask | b.mask | c.mask };
+              i += 1;
+          }
+          else if (op === o.CALL) {
+              const argc = code[i + 2], kids = [];
+              for (let q = 0; q < argc; q++) {
+                  const k = stack.pop();
+                  if (!k)
+                      return null;
+                  kids.unshift(k);
+              }
+              node = { op, a: code[i + 1], b: argc, kids, mask: kids.reduce((m, k) => m | k.mask, 0) };
+              i += 3;
+          }
+          else
+              return null;
+          stack.push(node);
+      }
+      return stack.length === 1 ? stack[0] : null;
+  }
+  function emitTree(n, X, out) {
+      const o = X.ops;
+      for (const k of n.kids)
+          emitTree(k, X, out);
+      if (n.op === o.NUM || n.op === o.VAR || n.op === o.BIN)
+          out.push(n.op, n.a);
+      else if (n.op === o.CALL)
+          out.push(n.op, n.a, n.b);
+      else
+          out.push(n.op);
+  }
+  function hoist(xp, X, classOf, slot0) {
+      const out = { code: null, c: xp.c, frame: [], still: [], opsFrame: 0, opsStill: 0, opsDot: 0 };
+      if (!xp.code)
+          return out;
+      const tree = readTree(xp.code, X, classOf);
+      if (!tree) {
+          out.code = xp.code;
+          out.opsDot = countOps(xp.code, X);
+          return out;
+      }
+      const o = X.ops;
+      const leaf = (n) => n.op === o.NUM || n.op === o.VAR;
+      // A node that does not read a per-dot name runs once a frame; one that reads no frame name runs once a play.
+      const lift = (n) => {
+          if (leaf(n))
+              return n;
+          if (!(n.mask & C_DOT)) {
+              const code = [];
+              emitTree(n, X, code);
+              const bc = Float64Array.from(code);
+              out.opsFrame += countOps(bc, X);
+              out.frame.push(bc);
+              return { op: o.VAR, a: slot0 + out.frame.length - 1, b: 0, kids: [], mask: 0 };
+          }
+          if (!(n.mask & C_FRAME)) {
+              const code = [];
+              emitTree(n, X, code);
+              const bc = Float64Array.from(code);
+              out.opsStill += countOps(bc, X);
+              out.still.push(bc);
+              return { op: o.VAR, a: -1 - (out.still.length - 1), b: 0, kids: [], mask: C_DOT };
+          }
+          n.kids = n.kids.map(lift);
+          return n;
+      };
+      const top = lift(tree);
+      // Static slots sit after the frame slots, which are only counted once every subtree has been lifted.
+      const fix = (n) => {
+          if (n.op === o.VAR && n.a < 0)
+              n.a = slot0 + out.frame.length + (-n.a - 1);
+          for (const k of n.kids)
+              fix(k);
+      };
+      fix(top);
+      const code = [];
+      emitTree(top, X, code);
+      out.code = Float64Array.from(code);
+      out.opsDot = countOps(out.code, X);
+      return out;
+  }
+  // ===================================================================== paths
+  const SO_M = 1, SO_L = 2, SO_Q = 3, SO_C = 4, SO_Z = 5, SO_O = 6;
+  const SARGS = { 1: 2, 2: 2, 3: 4, 4: 6, 5: 0, 6: 3 };
+  /** The format-1 path grammar with cubics added: M x y, L x y, Q cx cy x y, C c1x c1y c2x c2y x y, Z, O cx cy r. */
+  function compilePath(d, errs, at) {
+      if (typeof d !== "string") {
+          errs.push(`${at}: d is the path`);
+          return null;
+      }
+      const toks = d.replace(/([MLQCZO])/g, " $1 ").trim().split(/[\s,]+/).filter((x) => x !== "");
+      if (toks.length > SCENE_LIMITS.pathTokens) {
+          errs.push(`${at}: at most ${SCENE_LIMITS.pathTokens} path tokens`);
+          return null;
+      }
+      const ops = [];
+      let i = 0, first = true, bad = false;
+      const num = () => {
+          const v = Number(toks[i++]);
+          if (!Number.isFinite(v) || Math.abs(v) > 3) {
+              errs.push(`${at}: a number in [-3, 3] at "${toks[i - 1] ?? "end"}"`);
+              bad = true;
+              return 0;
+          }
+          return v;
+      };
+      while (i < toks.length && !bad) {
+          const c = toks[i++];
+          if (c === "M")
+              ops.push(SO_M, num(), num());
+          else if (c === "L" && !first)
+              ops.push(SO_L, num(), num());
+          else if (c === "Q" && !first)
+              ops.push(SO_Q, num(), num(), num(), num());
+          else if (c === "C" && !first)
+              ops.push(SO_C, num(), num(), num(), num(), num(), num());
+          else if (c === "Z" && !first)
+              ops.push(SO_Z);
+          else if (c === "O")
+              ops.push(SO_O, num(), num(), num());
+          else {
+              errs.push(`${at}: "${c}" (paths are M, L, Q, C, Z and O, starting with M or O)`);
+              bad = true;
+              break;
+          }
+          first = false;
+      }
+      if (bad || !ops.length) {
+          if (!ops.length && !bad)
+              errs.push(`${at}: an empty path`);
+          return null;
+      }
+      return Float64Array.from(ops);
+  }
+  /** Two paths morph only when they are the same commands in the same order. */
+  function sameShape(a, b) {
+      if (a.length !== b.length)
+          return false;
+      for (let i = 0; i < a.length;) {
+          if (a[i] !== b[i])
+              return false;
+          i += 1 + SARGS[a[i]];
+      }
+      return true;
+  }
+  // ===================================================================== elements
+  const EL_SHAPE = 1, EL_DOTS = 2, EL_CHAIN = 3, EL_GROUP = 4, EL_REPEAT = 5, EL_PART = 6;
+  const GRID_HEX = 0, GRID_SQUARE = 1;
+  /** One element of a scene, compiled. Which fields matter depends on `kind`. */
+  class SceneEl {
+      constructor() {
+          this.id = "";
+          this.kind = EL_SHAPE;
+          /** The anchor it hangs on (core.ts's ANCHORS index), or -1 for the scene's own origin. */
+          this.on = -1;
+          this.x = VZERO;
+          this.y = VZERO;
+          this.rot = VZERO;
+          this.sx = VONE();
+          this.sy = VONE();
+          this.alpha = VONE();
+          this.show = VONE();
+          this.back = false;
+          // shape
+          this.path = null;
+          this.morph = [];
+          this.m = VZERO;
+          this.fill = "";
+          this.stroke = "";
+          this.width = VZERO;
+          // dots
+          this.grid = GRID_HEX;
+          this.cols = 0;
+          this.rows = 0;
+          this.gap = 0.1;
+          this.along = -1;
+          this.alongN = 0;
+          this.rmax = 0.05;
+          this.pal = [];
+          this.qx = null;
+          this.qy = null;
+          this.qd = null;
+          this.qa = null;
+          this.n = 0;
+          /** A dot field's dots in all: `n` per copy, times `rmul`. The run's buffers are this long, copy by copy. */
+          this.nAll = 0;
+          this.hr = null;
+          this.hdx = null;
+          this.hdy = null;
+          this.hpaint = null;
+          /** The same four, in order, and where each one's still values sit: made at compile time, so a frame makes none. */
+          this.hall = [];
+          this.hplace = new Int32Array(4);
+          /** Which dot field this is in the run's buffers (-1: not a dot field). */
+          this.dotIx = -1;
+          this.nameLen = 0;
+          this.nFrame = 0;
+          this.nStill = 0;
+          // chain
+          this.cn = 0;
+          this.clen = 0.1;
+          this.cg = 1;
+          this.cdrag = 0.92;
+          this.cstiff = 0.8;
+          this.citer = 2;
+          this.cclosed = false;
+          this.carea = 0;
+          this.cfloor = NaN;
+          this.cfrom = -1;
+          this.cto = -1; // -1 free; 0..13 an anchor; 100+ an element index
+          this.cfromX = 0;
+          this.cfromY = 0;
+          this.ctoX = 0;
+          this.ctoY = 0;
+          this.cdots = 0;
+          this.slot = -1; // which chain state in the run
+          // group / repeat
+          this.els = [];
+          this.clip = -1;
+          this.rn = 1;
+          /** How many copies of this element the repeats above it make (1: it is drawn once). */
+          this.rmul = 1;
+          // part
+          this.part = "";
+          /** The catalog part itself (core.ts owns parts; scene.ts only hands it back). Null: no such part. */
+          this.partRef = null;
+          this.paint = "$color";
+          /** Executed ops per frame this element costs, and the dots and draw calls it may ask for. */
+          this.ops = 0;
+          this.dots = 0;
+          this.draws = 0;
+      }
+  }
+  function VONE() { const v = new Val(); v.c = 1; return v; }
+  /** The bot's own look while a scene is live (SPEC 2.6). */
+  class SceneRig {
+      constructor() {
+          this.alpha = VONE();
+          this.sx = VONE();
+          this.sy = VONE();
+          this.rot = VZERO;
+          this.about = 13;
+          /** head face antennae arms legs body wear, as bits. */
+          this.hide = 0;
+          this.any = false;
+      }
+  }
+  const RIG_GROUPS = ["head", "face", "antennae", "arms", "legs", "body", "wear"];
+  /** A scene, compiled: what it draws, what it reads, and what it costs. */
+  class Scene {
+      constructor(id) {
+          this.label = "";
+          this.bw = 1;
+          this.bh = 1;
+          this.still = 0;
+          this.fixed = false;
+          this.tap = false;
+          this.events = [];
+          this.varNames = [];
+          this.vars = [];
+          this.emitNames = [];
+          this.emitWhen = [];
+          this.rig = null;
+          this.els = [];
+          this.springs = [];
+          this.chains = [];
+          /** Chain states this scene needs: one per chain element, times the repeats above it. */
+          this.chainSlots = 0;
+          /** Every element in draw order, flattened, so the run can keep one state array per element. */
+          this.flat = [];
+          this.anchors = [];
+          /** How many names a scene expression reads: the base ones, its events and its vars (a repeat's j and nj follow). */
+          this.nameLen = NBASE;
+          this.ops = 0;
+          this.dots = 0;
+          this.draws = 0;
+          this.ok = true;
+          this.why = "";
+          this.id = id;
+      }
+  }
+  const SCENE_ID_RE = /^[a-z][a-z0-9_.-]{0,23}$/;
+  const EV_NAME_RE = /^[a-z][a-z0-9_.]{0,23}$/;
+  /**
+   * Compile one scene. `anchorIndex` turns an anchor's name into core.ts's code; `partRef` gives the catalog's part
+   * by id (null: there is none), which a `part` element keeps so it can be drawn without another lookup. Errors are collected, never thrown: the caller refuses the whole catalog, as it does for everything else.
+   */
+  function compileScene(id, spec, X, anchorIndex, partRef, errs) {
+      const sc = new Scene(id);
+      const at = `scenes.${id}`;
+      const n0 = errs.length;
+      const fail = (m) => errs.push(`${at}${m}`);
+      if (!SCENE_ID_RE.test(id))
+          fail(": the id is lower case letters, digits, _ . and -, up to 24");
+      if (!isRec2(spec)) {
+          fail(": an object");
+          sc.ok = false;
+          sc.why = "not an object";
+          return sc;
+      }
+      const KEYS = ["format", "label", "note", "box", "still", "fixed", "tap", "events", "vars", "emit", "rig", "els"];
+      for (const k of Object.keys(spec))
+          if (!KEYS.includes(k))
+              fail(`: unknown field ${k}`);
+      sc.label = String(spec.label ?? "");
+      const box = spec.box;
+      if (!Array.isArray(box) || box.length !== 2 || !box.every((q) => typeof q === "number" && q > 0))
+          fail(".box: [width, height] in bot heights");
+      else {
+          sc.bw = Number(box[0]);
+          sc.bh = Number(box[1]);
+          if (sc.bw > SCENE_LIMITS.boxW || sc.bh > SCENE_LIMITS.boxH)
+              fail(`.box: at most ${SCENE_LIMITS.boxW} by ${SCENE_LIMITS.boxH} bot heights`);
+      }
+      sc.still = typeof spec.still === "number" && spec.still >= 0 ? spec.still : 0;
+      if (spec.still != null && sc.still !== spec.still)
+          fail(".still: seconds from 0");
+      sc.fixed = spec.fixed === true;
+      sc.tap = spec.tap === true;
+      // Events it reads, as ev.<name>.
+      if (spec.events != null) {
+          if (!Array.isArray(spec.events) || spec.events.length > SCENE_LIMITS.events)
+              fail(`.events: at most ${SCENE_LIMITS.events} names`);
+          else
+              for (const e of spec.events) {
+                  if (typeof e !== "string" || !EV_NAME_RE.test(e)) {
+                      fail(`.events: "${String(e)}" is not an event name (no "-")`);
+                      continue;
+                  }
+                  if (!sc.events.includes(e))
+                      sc.events.push(e);
+              }
+      }
+      const names = [...SCENE_BASE, ...sc.events.map((e) => `ev.${e}`)];
+      const keyBudget = { n: 0 };
+      // Vars, in order: each may read the ones before it.
+      if (spec.vars != null) {
+          if (!isRec2(spec.vars))
+              fail(".vars: an object");
+          else {
+              const entries = Object.entries(spec.vars);
+              if (entries.length > SCENE_LIMITS.vars)
+                  fail(`.vars: at most ${SCENE_LIMITS.vars}`);
+              for (const [vn, raw] of entries.slice(0, SCENE_LIMITS.vars)) {
+                  if (!SCENE_ID_RE.test(vn)) {
+                      fail(`.vars.${vn}: a name in lower case`);
+                      continue;
+                  }
+                  if (names.includes(vn)) {
+                      fail(`.vars.${vn}: that name is taken`);
+                      continue;
+                  }
+                  const v = compileVal(raw, names, X, sc.springs, errs, `${at}.vars.${vn}`, keyBudget);
+                  sc.varNames.push(vn);
+                  sc.vars.push(v);
+                  names.push(vn);
+                  sc.ops += v.ops;
+              }
+          }
+      }
+      // emit: a moment event, when the expression turns true.
+      if (spec.emit != null) {
+          if (!Array.isArray(spec.emit) || spec.emit.length > SCENE_LIMITS.emit)
+              fail(`.emit: at most ${SCENE_LIMITS.emit} [event, expression] pairs`);
+          else
+              for (const pair of spec.emit) {
+                  if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string" || !EV_NAME_RE.test(pair[0])) {
+                      fail(".emit: [event, expression]");
+                      continue;
+                  }
+                  const v = compileVal(pair[1], names, X, sc.springs, errs, `${at}.emit.${pair[0]}`, keyBudget);
+                  sc.emitNames.push(pair[0]);
+                  sc.emitWhen.push(v);
+                  sc.ops += v.ops;
+              }
+      }
+      // The bot himself, while the scene is live.
+      if (spec.rig != null) {
+          const r = spec.rig;
+          if (!isRec2(r))
+              fail(".rig: an object");
+          else {
+              const rig = new SceneRig();
+              for (const k of Object.keys(r))
+                  if (!["alpha", "sx", "sy", "rot", "about", "hide"].includes(k))
+                      fail(`.rig: unknown field ${k}`);
+              if (r.alpha != null)
+                  rig.alpha = compileVal(r.alpha, names, X, sc.springs, errs, `${at}.rig.alpha`, keyBudget);
+              if (r.sx != null)
+                  rig.sx = compileVal(r.sx, names, X, sc.springs, errs, `${at}.rig.sx`, keyBudget);
+              if (r.sy != null)
+                  rig.sy = compileVal(r.sy, names, X, sc.springs, errs, `${at}.rig.sy`, keyBudget);
+              if (r.rot != null)
+                  rig.rot = compileVal(r.rot, names, X, sc.springs, errs, `${at}.rig.rot`, keyBudget);
+              if (r.about != null) {
+                  const a = anchorIndex(String(r.about));
+                  if (a < 0)
+                      fail(`.rig.about: not an anchor (${String(r.about)})`);
+                  else
+                      rig.about = a;
+              }
+              if (r.hide != null) {
+                  if (!Array.isArray(r.hide))
+                      fail(".rig.hide: a list of groups");
+                  else
+                      for (const g of r.hide) {
+                          const i = RIG_GROUPS.indexOf(String(g));
+                          if (i < 0)
+                              fail(`.rig.hide: not a group (${RIG_GROUPS.join(", ")})`);
+                          else
+                              rig.hide |= 1 << i;
+                      }
+              }
+              rig.any = true;
+              sc.rig = rig;
+              sc.ops += rig.alpha.ops + rig.sx.ops + rig.sy.ops + rig.rot.ops;
+          }
+      }
+      sc.nameLen = names.length;
+      // The elements.
+      const byId = new Map();
+      const ctx = { sc, X, names, errs, keyBudget, anchorIndex, partRef, byId, at, rmul: 1 };
+      if (!Array.isArray(spec.els))
+          fail(".els: a list of elements");
+      else
+          sc.els = compileEls(spec.els, ctx, 1, `${at}.els`);
+      if (sc.flat.length > SCENE_LIMITS.els)
+          fail(`: at most ${SCENE_LIMITS.els} elements, counting a group's children`);
+      if (keyBudget.n > SCENE_LIMITS.keysScene)
+          fail(`: at most ${SCENE_LIMITS.keysScene} keyframes`);
+      // Chains are counted by instance: a chain inside a `repeat n: 2` is two ropes to step (H15-Q4).
+      if (sc.chainSlots > SCENE_LIMITS.chains) {
+          fail(sc.chainSlots > sc.chains.length
+              ? `: ${sc.chainSlots} chains counting repeats, over the ${SCENE_LIMITS.chains} a scene may have`
+              : `: at most ${SCENE_LIMITS.chains} chains`);
+      }
+      // A group's clip names a shape, which may be written after it, so it is resolved once every id is known.
+      for (const el of sc.flat) {
+          if (el.kind !== EL_GROUP || el.clip < 100)
+              continue;
+          const target = byId.get(String(el.part));
+          if (!target || target.kind !== EL_SHAPE) {
+              fail(`.${el.id}.clip: no shape "${el.part}"`);
+              el.clip = -1;
+          }
+          else
+              el.clip = sc.flat.indexOf(target);
+      }
+      for (const el of sc.flat) {
+          sc.ops += el.ops;
+          sc.dots += el.dots;
+          sc.draws += el.draws;
+      }
+      if (sc.dots > SCENE_LIMITS.dotsScene) {
+          const repeated = sc.flat.some((el) => el.kind === EL_DOTS && el.rmul > 1);
+          fail(repeated
+              ? `: ${sc.dots} dots counting repeats, over the ${SCENE_LIMITS.dotsScene} a scene may have`
+              : `: at most ${SCENE_LIMITS.dotsScene} dots`);
+      }
+      if (sc.draws > SCENE_LIMITS.draws)
+          fail(`: at most ${SCENE_LIMITS.draws} drawing calls a frame`);
+      if (sc.ops > SCENE_LIMITS.ops)
+          fail(`: ${sc.ops} expression ops a frame, over the ${SCENE_LIMITS.ops} it may run`);
+      if (errs.length > n0) {
+          sc.ok = false;
+          sc.why = errs[n0];
+      }
+      return sc;
+  }
+  function compileEls(list, ctx, depth, at) {
+      const out = [];
+      if (depth > SCENE_LIMITS.depth + 1) {
+          ctx.errs.push(`${at}: groups go ${SCENE_LIMITS.depth} deep`);
+          return out;
+      }
+      list.forEach((raw, i) => {
+          const el = compileEl(raw, ctx, depth, `${at}[${i}]`);
+          if (el)
+              out.push(el);
+      });
+      return out;
+  }
+  const COMMON = ["id", "kind", "on", "x", "y", "rot", "sx", "sy", "alpha", "show", "back", "note"];
+  function compileEl(raw, ctx, depth, at) {
+      const { X, errs, keyBudget, sc } = ctx;
+      if (!isRec2(raw)) {
+          errs.push(`${at}: an object`);
+          return null;
+      }
+      const kinds = { shape: EL_SHAPE, dots: EL_DOTS, chain: EL_CHAIN, group: EL_GROUP, repeat: EL_REPEAT, part: EL_PART };
+      const kind = kinds[String(raw.kind)];
+      if (!kind) {
+          errs.push(`${at}.kind: one of ${Object.keys(kinds).join(", ")}`);
+          return null;
+      }
+      const el = new SceneEl();
+      el.kind = kind;
+      el.id = typeof raw.id === "string" ? raw.id : "";
+      if (el.id && !SCENE_ID_RE.test(el.id))
+          errs.push(`${at}.id: lower case letters, digits, _ . and -`);
+      // Inside a repeat an element is drawn once per instance, so the names `j` and `nj` are readable there.
+      const names = ctx.rmul > 1 ? [...ctx.names, ...REP_NAMES] : ctx.names;
+      // How many copies of this element exist. A chain keeps one rope per copy and a dot field one slice per copy.
+      el.rmul = ctx.rmul;
+      const val = (k, dflt) => {
+          if (raw[k] === undefined) {
+              const v = new Val();
+              v.c = dflt ?? 0;
+              return v;
+          }
+          return compileVal(raw[k], names, X, sc.springs, errs, `${at}.${k}`, keyBudget);
+      };
+      if (raw.on != null && raw.on !== "scene") {
+          const a = ctx.anchorIndex(String(raw.on));
+          if (a < 0)
+              errs.push(`${at}.on: not an anchor (${String(raw.on)})`);
+          else {
+              el.on = a;
+              if (!sc.anchors.includes(a))
+                  sc.anchors.push(a);
+          }
+      }
+      el.x = val("x");
+      el.y = val("y");
+      el.rot = val("rot");
+      el.sx = val("sx", 1);
+      el.sy = val("sy", 1);
+      el.alpha = val("alpha", 1);
+      el.show = val("show", 1);
+      el.back = raw.back === true;
+      el.ops = el.x.ops + el.y.ops + el.rot.ops + el.sx.ops + el.sy.ops + el.alpha.ops + el.show.ops;
+      const only = (extra) => { for (const k of Object.keys(raw))
+          if (!COMMON.includes(k) && !extra.includes(k))
+              errs.push(`${at}: unknown field ${k}`); };
+      if (kind === EL_SHAPE) {
+          only(["d", "morph", "m", "fill", "stroke", "width"]);
+          el.path = compilePath(raw.d, errs, at);
+          if (Array.isArray(raw.morph)) {
+              if (raw.morph.length > SCENE_LIMITS.morph)
+                  errs.push(`${at}.morph: at most ${SCENE_LIMITS.morph} targets`);
+              for (const d of raw.morph.slice(0, SCENE_LIMITS.morph)) {
+                  const p = compilePath(d, errs, `${at}.morph`);
+                  if (p && el.path && !sameShape(el.path, p)) {
+                      errs.push(`${at}.morph: the same commands in the same order as d`);
+                      continue;
+                  }
+                  if (p)
+                      el.morph.push(p);
+              }
+          }
+          else if (raw.morph != null)
+              errs.push(`${at}.morph: a list of paths`);
+          el.m = val("m");
+          el.ops += el.m.ops;
+          if (raw.fill != null && !okScenePaint(raw.fill))
+              errs.push(`${at}.fill: bad paint`);
+          else
+              el.fill = String(raw.fill ?? "");
+          if (raw.stroke != null && !okScenePaint(raw.stroke))
+              errs.push(`${at}.stroke: bad paint`);
+          else
+              el.stroke = String(raw.stroke ?? "");
+          if (!el.fill && !el.stroke)
+              errs.push(`${at}: a fill or a stroke`);
+          el.width = val("width", 0.03);
+          el.ops += el.width.ops;
+          el.draws = (el.fill ? 1 : 0) + (el.stroke ? 1 : 0);
+      }
+      else if (kind === EL_PART) {
+          only(["part", "paint"]);
+          el.part = String(raw.part ?? "");
+          el.partRef = ctx.partRef(el.part);
+          if (!el.partRef)
+              errs.push(`${at}.part: no part "${el.part}"`);
+          if (raw.paint != null && !okScenePaint(raw.paint))
+              errs.push(`${at}.paint: bad paint`);
+          else
+              el.paint = String(raw.paint ?? "$color");
+          el.draws = 2;
+      }
+      else if (kind === EL_DOTS) {
+          only(["grid", "cols", "rows", "gap", "along", "n", "rmax", "r", "dx", "dy", "paint", "pal"]);
+          compileDots(el, raw, ctx, names, at);
+      }
+      else if (kind === EL_CHAIN) {
+          only(["n", "len", "from", "to", "g", "drag", "stiff", "iter", "closed", "floor", "area", "stroke", "width", "fill", "dots", "paint"]);
+          compileChain(el, raw, ctx, at);
+      }
+      else if (kind === EL_GROUP) {
+          only(["els", "clip"]);
+          if (raw.clip != null) {
+              if (typeof raw.clip !== "string")
+                  errs.push(`${at}.clip: a shape's id`);
+              else {
+                  el.clip = 100;
+                  el.part = raw.clip;
+              }
+          }
+      }
+      else if (kind === EL_REPEAT) {
+          only(["n", "el"]);
+          const n = Number(raw.n);
+          if (!Number.isFinite(n) || n < 1 || n > SCENE_LIMITS.repeat || Math.floor(n) !== n)
+              errs.push(`${at}.n: a whole number in [1, ${SCENE_LIMITS.repeat}]`);
+          el.rn = sclamp(Math.floor(n) || 1, 1, SCENE_LIMITS.repeat);
+      }
+      // Depth-first, so flat[] is draw order and a parent always comes before its children.
+      sc.flat.push(el);
+      // A repeated chain gets one state per copy, side by side from its own slot.
+      if (el.kind === EL_CHAIN) {
+          el.slot = sc.chainSlots;
+          sc.chainSlots += el.rmul;
+          sc.chains.push(el);
+      }
+      if (el.id)
+          ctx.byId.set(el.id, el);
+      if (kind === EL_GROUP) {
+          el.els = Array.isArray(raw.els) ? compileEls(raw.els, ctx, depth + 1, `${at}.els`) : [];
+          if (!Array.isArray(raw.els))
+              errs.push(`${at}.els: a list of elements`);
+      }
+      else if (kind === EL_REPEAT) {
+          const was = ctx.rmul;
+          ctx.rmul = was * el.rn;
+          const child = raw.el == null ? null : compileEl(raw.el, ctx, depth + 1, `${at}.el`);
+          ctx.rmul = was;
+          if (!child)
+              errs.push(`${at}.el: one element`);
+          else {
+              el.els = [child];
+              // A repeat draws its child n times, so the child's own cost counts n times.
+              const sub = subtree(child);
+              for (const s of sub) {
+                  s.ops *= el.rn;
+                  s.draws *= el.rn;
+                  s.dots *= el.rn;
+              }
+          }
+      }
+      return el;
+  }
+  function subtree(el) {
+      const out = [el];
+      for (const k of el.els)
+          out.push(...subtree(k));
+      return out;
+  }
+  function compileDots(el, raw, ctx, names, at) {
+      const { errs, X, sc, keyBudget } = ctx;
+      if (raw.along != null) {
+          const target = ctx.byId.get(String(raw.along));
+          if (!target || target.kind !== EL_SHAPE || !target.path) {
+              errs.push(`${at}.along: no shape "${String(raw.along)}" before this one`);
+              return;
+          }
+          el.along = sc.flat.indexOf(target);
+          const n = Number(raw.n);
+          if (!Number.isFinite(n) || n < 1 || n > SCENE_LIMITS.dotsEl) {
+              errs.push(`${at}.n: a whole number in [1, ${SCENE_LIMITS.dotsEl}]`);
+              return;
+          }
+          el.alongN = Math.floor(n);
+          el.n = el.alongN;
+      }
+      else {
+          el.grid = raw.grid === "square" ? GRID_SQUARE : GRID_HEX;
+          if (raw.grid != null && raw.grid !== "hex" && raw.grid !== "square")
+              errs.push(`${at}.grid: hex or square`);
+          el.cols = Math.floor(Number(raw.cols));
+          el.rows = Math.floor(Number(raw.rows));
+          if (!(el.cols >= 1 && el.rows >= 1)) {
+              errs.push(`${at}: cols and rows from 1`);
+              return;
+          }
+          el.gap = typeof raw.gap === "number" && raw.gap > 0 && raw.gap <= 1 ? raw.gap : 0.1;
+          if (raw.gap != null && el.gap !== raw.gap)
+              errs.push(`${at}.gap: in (0, 1]`);
+          el.n = el.cols * el.rows;
+      }
+      // Inside a repeat the field is drawn once per copy, so the field's own budget counts every copy's dots.
+      el.nAll = el.n * el.rmul;
+      if (el.nAll > SCENE_LIMITS.dotsEl) {
+          errs.push(el.rmul > 1
+              ? `${at}: ${el.nAll} dots counting ${el.rmul} repeats, over the ${SCENE_LIMITS.dotsEl} one field may have`
+              : `${at}: ${el.n} dots, over the ${SCENE_LIMITS.dotsEl} one field may have`);
+          return;
+      }
+      el.rmax = typeof raw.rmax === "number" && raw.rmax > 0 && raw.rmax <= 0.5 ? raw.rmax : 0.05;
+      if (raw.rmax != null && el.rmax !== raw.rmax)
+          errs.push(`${at}.rmax: in (0, 0.5]`);
+      const pal = Array.isArray(raw.pal) ? raw.pal : ["$color"];
+      if (pal.length < 1 || pal.length > 2)
+          errs.push(`${at}.pal: one or two paints`);
+      for (const p of pal.slice(0, 2)) {
+          if (!okScenePaint(p))
+              errs.push(`${at}.pal: bad paint ${String(p)}`);
+          else
+              el.pal.push(String(p));
+      }
+      if (!el.pal.length)
+          el.pal.push("$color");
+      // The per-dot names, then the slots hoisting will fill.
+      const dotNames = [...names, ...DOT_NAMES];
+      el.nameLen = dotNames.length;
+      // In a repeated field every copy's dots sit in one buffer, so `j` is a per-dot name like `i` and `nj` is still.
+      // Only the two the repeat itself appended, by place, so a var of the same name is not mistaken for one of them.
+      const repAt = el.rmul > 1 ? names.length - REP_NAMES.length : names.length;
+      const classOf = (i) => {
+          if (i < NBASE)
+              return BASE_STILL.has(SCENE_BASE[i]) ? 0 : C_FRAME;
+          if (i < repAt)
+              return C_FRAME; // an event's age, or a var
+          if (i < names.length)
+              return dotNames[i] === "j" ? C_DOT : 0;
+          return DOT_STILL.has(dotNames[i]) ? 0 : C_DOT;
+      };
+      let slot0 = el.nameLen;
+      const one = (key, dflt) => {
+          const src = raw[key] === undefined ? dflt : raw[key];
+          const v = compileVal(src, dotNames, X, sc.springs, errs, `${at}.${key}`, keyBudget);
+          if (v.kind === V_SPRING || v.kind === V_KEYS) {
+              errs.push(`${at}.${key}: a number or an expression (a dot's own value cannot be a spring or keyframes)`);
+          }
+          const xp = { c: v.c, code: v.code };
+          const h = hoist(xp, X, classOf, slot0);
+          slot0 += h.frame.length + h.still.length;
+          el.nFrame += h.frame.length;
+          el.nStill += h.still.length;
+          return h;
+      };
+      el.hr = one("r", "0.02");
+      el.hdx = one("dx", "0");
+      el.hdy = one("dy", "0");
+      el.hpaint = one("paint", "0");
+      // The lists the run walks every frame, made once here: a frame allocates nothing (SPEC 1.3).
+      el.hall = [el.hr, el.hdx, el.hdy, el.hpaint];
+      let place = el.nameLen;
+      for (let k = 0; k < 4; k++) {
+          const hh = el.hall[k];
+          if (!hh)
+              continue;
+          el.hplace[k] = place + hh.frame.length;
+          place += hh.frame.length + hh.still.length;
+      }
+      const perDot = el.hr.opsDot + el.hdx.opsDot + el.hdy.opsDot + el.hpaint.opsDot;
+      const perFrame = el.hr.opsFrame + el.hdx.opsFrame + el.hdy.opsFrame + el.hpaint.opsFrame;
+      // Half the dots are brought up to date each frame (SPEC 3.2), and all of them are drawn every frame.
+      // Inside a repeat the caller multiplies all of this by the repeat count. The per-dot part is then exact; the
+      // frame part is counted once per copy though it really runs once, which errs on the safe side of the budget.
+      el.ops = el.ops + perFrame + perDot * Math.ceil(el.n / 2);
+      el.dots = el.n;
+      // One call per non-empty (radius step, colour) group: seven steps that draw, times the palette.
+      el.draws = 7 * el.pal.length;
+  }
+  function compileChain(el, raw, ctx, at) {
+      const { errs } = ctx;
+      const n = Math.floor(Number(raw.n));
+      if (!(n >= 2 && n <= SCENE_LIMITS.chainN)) {
+          errs.push(`${at}.n: a whole number in [2, ${SCENE_LIMITS.chainN}]`);
+          return;
+      }
+      el.cn = n;
+      // `len` is the WHOLE chain's rest length in bot heights, end to end (the perimeter when closed), so lowering `n`
+      // to fit the budget makes a coarser rope, not a shorter one. One segment is len/(n-1), or len/n closed (H15-Q6).
+      el.clen = typeof raw.len === "number" && raw.len > 0 && raw.len <= 3 ? raw.len : 0.3;
+      if (raw.len != null && el.clen !== raw.len)
+          errs.push(`${at}.len: in (0, 3]`);
+      const clampNum = (k, lo, hi, dflt) => {
+          if (raw[k] == null)
+              return dflt;
+          const v = Number(raw[k]);
+          if (!(Number.isFinite(v) && v >= lo && v <= hi)) {
+              errs.push(`${at}.${k}: in [${lo}, ${hi}]`);
+              return dflt;
+          }
+          return v;
+      };
+      el.cg = clampNum("g", -10, 10, 1);
+      el.cdrag = clampNum("drag", 0, 1, 0.92);
+      el.cstiff = clampNum("stiff", 0, 1, 0.8);
+      el.citer = Math.floor(clampNum("iter", 1, SCENE_LIMITS.chainIter, 2));
+      el.cclosed = raw.closed === true;
+      el.carea = clampNum("area", 0, 2, 0);
+      if (el.carea > 0 && !el.cclosed)
+          errs.push(`${at}.area: only a closed chain has one`);
+      el.cfloor = raw.floor == null ? NaN : clampNum("floor", -10, 10, 0);
+      // A pin: nothing, an anchor, or "<element>:x,y". A named element is read as an offset in the chain's own frame,
+      // so inside a repeat each copy's rope hangs off that copy's element without naming it again.
+      const end = (k) => {
+          const v = raw[k];
+          if (v == null)
+              return [-1, 0, 0];
+          const s = String(v);
+          const colon = s.indexOf(":");
+          if (colon > 0) {
+              const target = ctx.byId.get(s.slice(0, colon));
+              const bits = s.slice(colon + 1).split(",");
+              const ox = Number(bits[0]), oy = Number(bits[1]);
+              if (!target || !Number.isFinite(ox) || !Number.isFinite(oy)) {
+                  errs.push(`${at}.${k}: "<element>:x,y", naming an element before this one`);
+                  return [-1, 0, 0];
+              }
+              return [100 + ctx.sc.flat.indexOf(target), ox, oy];
+          }
+          const a = ctx.anchorIndex(s);
+          if (a < 0) {
+              errs.push(`${at}.${k}: an anchor, "<element>:x,y", or nothing`);
+              return [-1, 0, 0];
+          }
+          if (!ctx.sc.anchors.includes(a))
+              ctx.sc.anchors.push(a);
+          return [a, 0, 0];
+      };
+      const f = end("from"), t = end("to");
+      el.cfrom = f[0];
+      el.cfromX = f[1];
+      el.cfromY = f[2];
+      el.cto = t[0];
+      el.ctoX = t[1];
+      el.ctoY = t[2];
+      if (raw.stroke != null && !okScenePaint(raw.stroke))
+          errs.push(`${at}.stroke: bad paint`);
+      else
+          el.stroke = String(raw.stroke ?? "");
+      if (raw.fill != null && !okScenePaint(raw.fill))
+          errs.push(`${at}.fill: bad paint`);
+      else
+          el.fill = String(raw.fill ?? "");
+      if (el.fill && !el.cclosed)
+          errs.push(`${at}.fill: only a closed chain is filled`);
+      if (raw.paint != null && !okScenePaint(raw.paint))
+          errs.push(`${at}.paint: bad paint`);
+      else
+          el.paint = String(raw.paint ?? "$color");
+      el.cdots = typeof raw.dots === "number" && raw.dots > 0 && raw.dots <= 0.3 ? raw.dots : 0;
+      if (raw.dots != null && !el.cdots)
+          errs.push(`${at}.dots: a radius in (0, 0.3]`);
+      const wv = raw.width;
+      el.width = new Val();
+      el.width.c = typeof wv === "number" && wv > 0 && wv <= 0.3 ? wv : 0.02;
+      if (!el.stroke && !el.fill && !el.cdots)
+          errs.push(`${at}: a stroke, a fill or dots`);
+      // Each constraint pass touches every segment; the run also integrates every point.
+      el.ops += el.cn * (1 + el.citer) * Math.ceil(1 / 60 / SSTEP);
+      el.draws = (el.stroke ? 1 : 0) + (el.fill ? 1 : 0) + (el.cdots ? 1 : 0);
+  }
+  const M_A = 0, M_B = 1, M_C = 2, M_D = 3, M_E = 4, M_F = 5;
+  /**
+   * One play of one scene: its buffers, its physics, and its drawing. Made when the scene starts and reused every
+   * frame. Nothing here allocates once `start()` has run.
+   */
+  class SceneRun {
+      constructor(scene, seed) {
+          this.dead = false;
+          this.why = "";
+          /** Events the scene asked the moment to fire this step; the host drains it. */
+          this.fired = [];
+          /** The bot's own look this frame, when the scene has a `rig`. */
+          this.rigOn = false;
+          this.rigAlpha = 1;
+          this.rigSx = 1;
+          this.rigSy = 1;
+          this.rigRot = 0;
+          this.rigAbout = 13;
+          this.rigHide = 0;
+          /** What the last frame really cost: drawing calls, and the dots drawn. */
+          this.drawCalls = 0;
+          this.chainX = [];
+          this.chainY = [];
+          this.chainPX = [];
+          this.chainPY = [];
+          this.chainArea = [];
+          /** Per dot field: its rest places, its slots and the values last worked out. */
+          this.dotVars = [];
+          this.dotStill = [];
+          this.dotR = [];
+          this.dotDX = [];
+          this.dotDY = [];
+          this.dotP = [];
+          this.dotEl = [];
+          /** Half the dots are brought up to date each frame: this says which half. */
+          this.phase = 0;
+          /** Which copy of a repeated element is being drawn, and how many copies there are in all. */
+          this.inst = 0;
+          this.instN = 1;
+          this.pending = 0;
+          this.saves = 0;
+          this.started = false;
+          /** Six numbers per level: the scene's own frame, then one per group a child sits in. */
+          this.mat = new Float64Array(6 * 12);
+          this.held = new Float64Array(6 * 12);
+          this.flatXY = new Float64Array(2 * SCENE_LIMITS.chainN);
+          /** core.ts hands its runner in once, so bytecode can be run without an import. */
+          this.api = null;
+          /** core.ts sets this so a scene can draw one of the catalog's parts without knowing what a part is. */
+          this.onPart = null;
+          /** While a path is walked: its frame, and the morph pair it blends. */
+          this.pA = 1;
+          this.pB = 0;
+          this.pC = 0;
+          this.pD = 1;
+          this.pE = 0;
+          this.pF = 0;
+          this.pP = null;
+          this.pLo = null;
+          this.pHi = null;
+          this.pW = 0;
+          /** Both ends of a chain, in its own frame: pinXY[0,1] is `from` and pinXY[2,3] is `to`. */
+          this.pinXY = new Float64Array(4);
+          this.scene = scene;
+          // The base names, the events, the vars, and two more for a repeat's `j` and `nj`.
+          this.vars = new Float64Array(scene.nameLen + REP_NAMES.length);
+          this.vars[B_SEED] = seed;
+          this.spring = new Float64Array(scene.springs.length);
+          this.springV = new Float64Array(scene.springs.length);
+          this.springOn = new Uint8Array(scene.springs.length);
+          this.emitWas = new Uint8Array(scene.emitNames.length);
+          this.emitAt = new Float64Array(scene.emitNames.length).fill(-99);
+          this.chainReady = new Uint8Array(scene.chainSlots);
+          let widest = SCENE_LIMITS.chainN;
+          for (const el of scene.flat)
+              if (el.kind === EL_DOTS && el.n > widest)
+                  widest = el.n;
+          this.scratch = new Float32Array(widest * 2);
+      }
+      /** The buffers for this play: rest places, the static per-dot values, and the chains at rest. */
+      start() {
+          if (this.started)
+              return;
+          this.started = true;
+          const sc = this.scene;
+          for (const el of sc.flat) {
+              if (el.kind === EL_CHAIN) {
+                  // One rope per copy: a chain inside a repeat keeps each copy's points apart, side by side from its slot.
+                  for (let c = 0; c < el.rmul; c++) {
+                      this.chainX.push(new Float64Array(el.cn));
+                      this.chainY.push(new Float64Array(el.cn));
+                      this.chainPX.push(new Float64Array(el.cn));
+                      this.chainPY.push(new Float64Array(el.cn));
+                      this.chainArea.push(0);
+                  }
+              }
+              if (el.kind !== EL_DOTS)
+                  continue;
+              const n = el.n;
+              // Rest places come from the compiled data alone, so they are worked out once and shared by every play.
+              if (!el.qx) {
+                  el.qx = new Float32Array(n);
+                  el.qy = new Float32Array(n);
+                  el.qd = new Float32Array(n);
+                  el.qa = new Float32Array(n);
+                  if (el.along >= 0)
+                      alongPath(sc.flat[el.along], el);
+                  else
+                      restGrid(el);
+                  for (let i = 0; i < n; i++) {
+                      el.qd[i] = Math.hypot(el.qx[i], el.qy[i]);
+                      el.qa[i] = Math.atan2(el.qy[i], el.qx[i]);
+                  }
+              }
+              el.dotIx = this.dotEl.length;
+              this.dotEl.push(el);
+              this.dotVars.push(new Float64Array(el.nameLen + el.nFrame + el.nStill));
+              // Every copy's dots live in one buffer, copy by copy: dot k belongs to copy floor(k / n) and is its dot k % n.
+              const nAll = el.nAll || n;
+              this.dotR.push(new Float32Array(nAll));
+              this.dotDX.push(new Float32Array(nAll));
+              this.dotDY.push(new Float32Array(nAll));
+              this.dotP.push(new Uint8Array(nAll));
+              const still = [];
+              for (let s = 0; s < el.nStill; s++)
+                  still.push(new Float32Array(nAll));
+              this.dotStill.push(still);
+          }
+          this.stillValues();
+      }
+      /** The per-dot values that never change through a play (SPEC 3.2): worked out once, here. */
+      stillValues() {
+          const X = this.api;
+          if (!X)
+              return;
+          const nameLen = this.scene.nameLen;
+          for (let e = 0; e < this.dotEl.length; e++) {
+              const el = this.dotEl[e], V = this.dotVars[e], buf = this.dotStill[e];
+              V.set(this.vars.subarray(0, nameLen));
+              let s = 0;
+              for (let k = 0; k < el.hall.length; k++) {
+                  const h = el.hall[k];
+                  if (!h)
+                      continue;
+                  for (let q = 0; q < h.still.length; q++, s++) {
+                      const code = h.still[q], out = buf[s];
+                      for (let i = 0; i < (el.nAll || el.n); i++) {
+                          this.dotNames(V, el, i);
+                          const v = X.run(code, V);
+                          out[i] = v === v ? v : 0;
+                      }
+                  }
+              }
+          }
+      }
+      /**
+       * The per-dot names for dot k of the element's buffer, written into its own values array. In a repeated field the
+       * buffer holds every copy's dots one after another, so dot k is dot k % n of copy floor(k / n), which the field
+       * reads as `j` (of `nj`): per dot, never per frame, so the hoisting holds.
+       */
+      dotNames(V, el, k) {
+          let i = k;
+          if (el.rmul > 1) {
+              const at0 = el.nameLen - DOT_NAMES.length - REP_NAMES.length;
+              i = k % el.n;
+              V[at0] = Math.floor(k / el.n);
+              V[at0 + 1] = el.rmul;
+          }
+          const at = el.nameLen - DOT_NAMES.length;
+          V[at] = i;
+          V[at + 1] = el.along >= 0 ? i : i % el.cols;
+          V[at + 2] = el.along >= 0 ? 0 : Math.floor(i / el.cols);
+          V[at + 3] = el.n;
+          V[at + 4] = el.qx ? el.qx[i] : 0;
+          V[at + 5] = el.qy ? el.qy[i] : 0;
+          V[at + 6] = el.qd ? el.qd[i] : 0;
+          V[at + 7] = el.qa ? el.qa[i] : 0;
+      }
+      ev(code, c) {
+          const X = this.api;
+          if (!code || !X)
+              return c;
+          const v = X.run(code, this.vars);
+          return v === v ? v : 0;
+      }
+      /** One value, now. Keyframes read their own clock; a spring reads the state the step left. */
+      value(v) {
+          if (v.kind === V_CONST)
+              return v.c;
+          if (v.kind === V_EXPR)
+              return this.ev(v.code, v.c);
+          if (v.kind === V_SPRING)
+              return this.spring[v.slot];
+          const keys = v.keys;
+          if (!keys)
+              return 0;
+          const n = keys.length / KSTRIDE;
+          let at = v.by ? this.value(v.by) : this.vars[B_T];
+          const first = keys[0], last = keys[(n - 1) * KSTRIDE];
+          if (v.loop && last > first)
+              at = first + (((at - first) % (last - first)) + (last - first)) % (last - first);
+          if (at <= first)
+              return keys[1];
+          if (at >= last)
+              return keys[(n - 1) * KSTRIDE + 1];
+          let i = 1;
+          while (i < n && keys[i * KSTRIDE] < at)
+              i++;
+          const t0 = keys[(i - 1) * KSTRIDE], v0 = keys[(i - 1) * KSTRIDE + 1];
+          const t1 = keys[i * KSTRIDE], v1 = keys[i * KSTRIDE + 1];
+          const w = t1 === t0 ? 1 : (at - t0) / (t1 - t0);
+          return v0 + (v1 - v0) * easeAt(keys[i * KSTRIDE + 2], keys, i * KSTRIDE, w);
+      }
+      /**
+       * One step: the vars in order, the springs, the rig, and the emitters. Chains are stepped where they are drawn,
+       * so a pin that follows an element is read at the place the element really is.
+       */
+      step(dt) {
+          if (this.dead)
+              return;
+          if (!this.started)
+              this.start();
+          const sc = this.scene, V = this.vars;
+          const h = dt > SMAX_FRAME ? SMAX_FRAME : dt > 0 ? dt : 0;
+          this.pending = Math.min(SMAX_FRAME, this.pending + h);
+          for (let i = 0; i < sc.vars.length; i++)
+              V[NBASE + sc.events.length + i] = this.value(sc.vars[i]);
+          // Springs, at the fixed step, so the same play looks the same at any frame rate.
+          const steps = Math.min(16, Math.round(h / SSTEP));
+          for (let s = 0; s < sc.springs.length; s++) {
+              const sp = sc.springs[s], target = sp.target ? this.value(sp.target) : 0;
+              if (!this.springOn[s]) {
+                  this.spring[s] = target;
+                  this.springV[s] = 0;
+                  this.springOn[s] = 1;
+                  continue;
+              }
+              let p = this.spring[s], v = this.springV[s];
+              const damping = 2 * sp.damp * Math.sqrt(sp.k);
+              for (let q = 0; q < steps; q++) {
+                  v += (sp.k * (target - p) - damping * v) * SSTEP;
+                  p += v * SSTEP;
+              }
+              if (!Number.isFinite(p) || !Number.isFinite(v)) {
+                  this.kill("nan");
+                  return;
+              }
+              this.spring[s] = p;
+              this.springV[s] = v;
+          }
+          if (sc.rig) {
+              this.rigOn = true;
+              this.rigAlpha = sclamp(this.value(sc.rig.alpha), 0, 1);
+              this.rigSx = sclamp(this.value(sc.rig.sx), 0, 8);
+              this.rigSy = sclamp(this.value(sc.rig.sy), 0, 8);
+              this.rigRot = sclamp(this.value(sc.rig.rot), -Math.PI * 2, Math.PI * 2);
+              this.rigAbout = sc.rig.about;
+              this.rigHide = sc.rig.hide;
+          }
+          // emit: when the expression turns from false to true, and not twice within half a second.
+          for (let i = 0; i < sc.emitWhen.length; i++) {
+              const on = this.value(sc.emitWhen[i]) > 0 ? 1 : 0;
+              const now = V[B_T];
+              if (on && !this.emitWas[i] && now - this.emitAt[i] >= 0.5) {
+                  this.emitAt[i] = now;
+                  if (this.fired.length < SCENE_LIMITS.emit)
+                      this.fired.push(sc.emitNames[i]);
+              }
+              this.emitWas[i] = on;
+          }
+          this.phase ^= 1;
+          this.updateDots();
+      }
+      /** Half the dots, this frame: each one's radius, its offset and its colour. */
+      updateDots() {
+          const X = this.api;
+          if (!X)
+              return;
+          for (let e = 0; e < this.dotEl.length; e++) {
+              const el = this.dotEl[e], V = this.dotVars[e], still = this.dotStill[e];
+              V.set(this.vars.subarray(0, this.scene.nameLen));
+              // The frame-level parts of each value, once. The lists and the slots were worked out at compile time.
+              let slot = el.nameLen, s = 0;
+              const hall = el.hall, places = el.hplace;
+              for (let k = 0; k < hall.length; k++) {
+                  const hh = hall[k];
+                  if (!hh)
+                      continue;
+                  for (let q = 0; q < hh.frame.length; q++)
+                      V[slot + q] = X.run(hh.frame[q], V);
+                  slot += hh.frame.length + hh.still.length;
+              }
+              const rbuf = this.dotR[e], xbuf = this.dotDX[e], ybuf = this.dotDY[e], pbuf = this.dotP[e];
+              const pal = el.pal.length;
+              const nAll = el.nAll || el.n;
+              for (let i = this.phase; i < nAll; i += 2) {
+                  this.dotNames(V, el, i);
+                  s = 0;
+                  for (let k = 0; k < hall.length; k++) {
+                      const hh = hall[k];
+                      if (!hh)
+                          continue;
+                      for (let q = 0; q < hh.still.length; q++)
+                          V[places[k] + q] = still[s + q][i];
+                      s += hh.still.length;
+                  }
+                  const r = el.hr ? (el.hr.code ? X.run(el.hr.code, V) : el.hr.c) : 0;
+                  const dx = el.hdx ? (el.hdx.code ? X.run(el.hdx.code, V) : el.hdx.c) : 0;
+                  const dy = el.hdy ? (el.hdy.code ? X.run(el.hdy.code, V) : el.hdy.c) : 0;
+                  const p = el.hpaint ? (el.hpaint.code ? X.run(el.hpaint.code, V) : el.hpaint.c) : 0;
+                  rbuf[i] = r === r ? sclamp(r, 0, el.rmax) : 0;
+                  xbuf[i] = dx === dx ? sclamp(dx, -10, 10) : 0;
+                  ybuf[i] = dy === dy ? sclamp(dy, -10, 10) : 0;
+                  pbuf[i] = p === p ? sclamp(Math.round(p), 0, pal - 1) : 0;
+              }
+          }
+      }
+      /** Reduce Motion, or a scene that has been slowed: the frame at `still`, with the physics settled. */
+      settle(at) {
+          if (!this.started)
+              this.start();
+          this.vars[B_T] = at;
+          this.vars[B_U] = this.vars[B_D] > 0 ? sclamp(at / this.vars[B_D], 0, 1) : 0;
+          this.phase = 0;
+          this.step(SSTEP);
+          this.phase = 1;
+          this.updateDots();
+          this.phase = 0;
+          for (let i = 0; i < this.chainReady.length; i++)
+              this.chainReady[i] = 0;
+          this.pending = 0;
+      }
+      /** A dot field's values as they stand (tests and tuning): its radii, offsets and colour choices. */
+      readDots(ix) {
+          if (ix < 0 || ix >= this.dotR.length)
+              return null;
+          return { r: this.dotR[ix], dx: this.dotDX[ix], dy: this.dotDY[ix], paint: this.dotP[ix] };
+      }
+      /** The scene went wrong while playing: it alone is dropped, and the moment carries on without it. */
+      kill(why) {
+          this.dead = true;
+          this.why = why;
+      }
+      // ------------------------------------------------------------------ drawing
+      /** Both passes of one frame: `back` draws what sits behind the bot, then the rig is drawn, then the front. */
+      draw(ctx, d, back) {
+          if (this.dead)
+              return;
+          const before = this.saves;
+          this.drawCalls = 0;
+          try {
+              const m = this.mat;
+              m[M_A] = d.S * (this.scene.fixed ? 1 : d.mirror);
+              m[M_B] = 0;
+              m[M_C] = 0;
+              m[M_D] = d.S;
+              m[M_E] = d.ox;
+              m[M_F] = d.oy;
+              this.walk(ctx, d, this.scene.els, 0, d.alpha, back);
+              if (this.drawCalls > SCENE_LIMITS.draws)
+                  this.kill("draws");
+          }
+          catch (e) {
+              // A scene's fault is its own: unwind its own saves and let the bot, the grid and the loop carry on.
+              while (this.saves > before) {
+                  try {
+                      ctx.restore();
+                  }
+                  catch {
+                      break;
+                  }
+                  this.saves--;
+              }
+              this.kill("throw");
+              void e;
+          }
+          // Both passes of one frame share the time to step: a chain drawn in front would never move if the back pass
+          // spent it. The front pass is the last one, so it is the one that clears it.
+          if (!back)
+              this.pending = 0;
+      }
+      walk(ctx, d, els, depth, alpha, back) {
+          if (depth > 9)
+              return;
+          // The frame this level was handed: an element with an anchor of its own overwrites it, so it is kept here.
+          const base0 = depth * 6;
+          for (let i = 0; i < 6; i++)
+              this.held[base0 + i] = this.mat[base0 + i];
+          for (const el of els) {
+              const mine = el.back || d.allBack;
+              if (mine !== back) {
+                  if (el.kind !== EL_GROUP && el.kind !== EL_REPEAT)
+                      continue;
+              }
+              if (this.value(el.show) <= 0)
+                  continue;
+              const a = alpha * sclamp(this.value(el.alpha), 0, 1);
+              if (a <= 0.004)
+                  continue;
+              const base = depth * 6;
+              const into = (depth + 1) * 6;
+              const m = this.mat;
+              // Where this element hangs: its own anchor, or the frame its parent gives it.
+              if (el.on >= 0 && d.anchors) {
+                  const q = el.on * 6;
+                  m[base] = d.anchors[q + 2] * d.S;
+                  m[base + 1] = d.anchors[q + 3] * d.S;
+                  m[base + 2] = d.anchors[q + 4] * d.S;
+                  m[base + 3] = d.anchors[q + 5] * d.S;
+                  m[base + 4] = d.anchors[q];
+                  m[base + 5] = d.anchors[q + 1];
+              }
+              else {
+                  for (let i = 0; i < 6; i++)
+                      m[base + i] = this.held[base + i];
+              }
+              const x = sclamp(this.value(el.x), -10, 10), y = sclamp(this.value(el.y), -10, 10);
+              const rot = this.value(el.rot), sx = sclamp(this.value(el.sx), -8, 8), sy = sclamp(this.value(el.sy), -8, 8);
+              if (!Number.isFinite(x + y + rot + sx + sy)) {
+                  this.kill("nan");
+                  return;
+              }
+              const c = Math.cos(rot), s = Math.sin(rot);
+              const a0 = m[base], b0 = m[base + 1], c0 = m[base + 2], d0 = m[base + 3];
+              m[into + 4] = m[base + 4] + a0 * x + c0 * y;
+              m[into + 5] = m[base + 5] + b0 * x + d0 * y;
+              m[into] = (a0 * c + c0 * s) * sx;
+              m[into + 1] = (b0 * c + d0 * s) * sx;
+              m[into + 2] = (c0 * c - a0 * s) * sy;
+              m[into + 3] = (d0 * c - b0 * s) * sy;
+              if (el.kind === EL_GROUP) {
+                  let clipped = false;
+                  if (el.clip >= 0 && ctx.clip) {
+                      ctx.save();
+                      this.saves++;
+                      clipped = true;
+                      const shape = this.scene.flat[el.clip];
+                      ctx.beginPath();
+                      this.path(ctx, shape, into);
+                      ctx.clip();
+                  }
+                  this.walk(ctx, d, el.els, depth + 1, a, back);
+                  if (clipped) {
+                      ctx.restore();
+                      this.saves--;
+                  }
+              }
+              else if (el.kind === EL_REPEAT) {
+                  if (!el.els.length)
+                      continue;
+                  // The child is drawn n times and reads which copy it is as `j` (of `nj`). Repeats inside repeats count
+                  // through: `j` is the copy's number among all of them, so a chain's rope and a dot field's slice line up.
+                  const at = this.scene.nameLen;
+                  const wasJ = this.vars[at], wasN = this.vars[at + 1];
+                  const wasInst = this.inst, wasInstN = this.instN;
+                  for (let j = 0; j < el.rn; j++) {
+                      this.inst = wasInst * el.rn + j;
+                      this.instN = wasInstN * el.rn;
+                      this.vars[at] = this.inst;
+                      this.vars[at + 1] = this.instN;
+                      this.walk(ctx, d, el.els, depth + 1, a, back);
+                  }
+                  this.inst = wasInst;
+                  this.instN = wasInstN;
+                  this.vars[at] = wasJ;
+                  this.vars[at + 1] = wasN;
+              }
+              else if (mine === back) {
+                  this.drawOne(ctx, d, el, into, a);
+              }
+          }
+      }
+      /** A paint token as a colour: the bot's own, the ground's ink or paper, or the colour as given. */
+      col(d, p) {
+          return p === "$color" || p === "$paint" ? d.color : p === "ink" ? d.ink : p === "paper" ? d.paper : p;
+      }
+      drawOne(ctx, d, el, m0, alpha) {
+          const m = this.mat;
+          const scale = Math.sqrt(Math.abs(m[m0] * m[m0 + 3] - m[m0 + 1] * m[m0 + 2])) || 1;
+          ctx.globalAlpha = alpha;
+          if (el.kind === EL_SHAPE) {
+              ctx.beginPath();
+              this.path(ctx, el, m0);
+              if (el.fill) {
+                  ctx.fillStyle = this.col(d, el.fill);
+                  ctx.fill();
+                  this.drawCalls++;
+              }
+              if (el.stroke) {
+                  ctx.strokeStyle = this.col(d, el.stroke);
+                  ctx.lineWidth = Math.max(0.5, this.value(el.width) * scale);
+                  ctx.lineCap = "round";
+                  ctx.lineJoin = "round";
+                  ctx.stroke();
+                  this.drawCalls++;
+              }
+          }
+          else if (el.kind === EL_DOTS) {
+              this.drawDots(ctx, d, el, m0, alpha);
+          }
+          else if (el.kind === EL_CHAIN) {
+              this.drawChain(ctx, d, el, m0, scale);
+          }
+          else if (el.kind === EL_PART) {
+              // A catalog part is drawn by core.ts, which owns parts: it hands the drawing in through onPart.
+              if (this.onPart && el.partRef) {
+                  this.onPart(ctx, el.partRef, m[m0 + 4], m[m0 + 5], m[m0], m[m0 + 1], m[m0 + 2], m[m0 + 3], this.col(d, el.paint), alpha);
+                  this.drawCalls += 2;
+              }
+          }
+      }
+      /** A path, in the element's frame, with morph targets blended in. */
+      path(ctx, el, m0) {
+          const p = el.path;
+          if (!p)
+              return;
+          const m = this.mat;
+          // The frame and the morph pair live on the run while the path is walked, so px/py/at make no closures.
+          this.pA = m[m0];
+          this.pB = m[m0 + 1];
+          this.pC = m[m0 + 2];
+          this.pD = m[m0 + 3];
+          this.pE = m[m0 + 4];
+          this.pF = m[m0 + 5];
+          this.pP = p;
+          // Morph: m runs from 0 (the path itself) to the number of targets.
+          let lo = null, hi = null, w = 0;
+          if (el.morph.length) {
+              const mm = sclamp(this.value(el.m), 0, el.morph.length);
+              const i = Math.min(el.morph.length - 1, Math.floor(mm));
+              w = mm - i;
+              lo = i === 0 ? p : el.morph[i - 1];
+              hi = el.morph[i];
+          }
+          this.pLo = lo;
+          this.pHi = hi;
+          this.pW = w;
+          for (let i = 0; i < p.length;) {
+              const cmd = p[i];
+              if (cmd === SO_M) {
+                  ctx.moveTo(this.px(this.at(i + 1), this.at(i + 2)), this.py(this.at(i + 1), this.at(i + 2)));
+                  i += 3;
+              }
+              else if (cmd === SO_L) {
+                  ctx.lineTo(this.px(this.at(i + 1), this.at(i + 2)), this.py(this.at(i + 1), this.at(i + 2)));
+                  i += 3;
+              }
+              else if (cmd === SO_Q) {
+                  ctx.quadraticCurveTo(this.px(this.at(i + 1), this.at(i + 2)), this.py(this.at(i + 1), this.at(i + 2)), this.px(this.at(i + 3), this.at(i + 4)), this.py(this.at(i + 3), this.at(i + 4)));
+                  i += 5;
+              }
+              else if (cmd === SO_C) {
+                  const x1 = this.px(this.at(i + 1), this.at(i + 2)), y1 = this.py(this.at(i + 1), this.at(i + 2));
+                  const x2 = this.px(this.at(i + 3), this.at(i + 4)), y2 = this.py(this.at(i + 3), this.at(i + 4));
+                  const x3 = this.px(this.at(i + 5), this.at(i + 6)), y3 = this.py(this.at(i + 5), this.at(i + 6));
+                  if (ctx.bezierCurveTo)
+                      ctx.bezierCurveTo(x1, y1, x2, y2, x3, y3);
+                  else {
+                      // No cubics on this host: two quadratics, which is close enough at a bot's size.
+                      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+                      ctx.quadraticCurveTo(x1, y1, mx, my);
+                      ctx.quadraticCurveTo(x2, y2, x3, y3);
+                  }
+                  i += 7;
+              }
+              else if (cmd === SO_Z) {
+                  ctx.closePath();
+                  i += 1;
+              }
+              else if (cmd === SO_O) {
+                  // A circle: the frame may squash it, so it is drawn as four quadratics.
+                  const cx = this.at(i + 1), cy = this.at(i + 2), r = this.at(i + 3), k = r * 0.5523;
+                  ctx.moveTo(this.px(cx + r, cy), this.py(cx + r, cy));
+                  ctx.quadraticCurveTo(this.px(cx + r, cy + k * 1.2), this.py(cx + r, cy + k * 1.2), this.px(cx, cy + r), this.py(cx, cy + r));
+                  ctx.quadraticCurveTo(this.px(cx - r, cy + k * 1.2), this.py(cx - r, cy + k * 1.2), this.px(cx - r, cy), this.py(cx - r, cy));
+                  ctx.quadraticCurveTo(this.px(cx - r, cy - k * 1.2), this.py(cx - r, cy - k * 1.2), this.px(cx, cy - r), this.py(cx, cy - r));
+                  ctx.quadraticCurveTo(this.px(cx + r, cy - k * 1.2), this.py(cx + r, cy - k * 1.2), this.px(cx + r, cy), this.py(cx + r, cy));
+                  ctx.closePath();
+                  i += 4;
+              }
+              else
+                  break;
+          }
+      }
+      px(x, y) { return this.pA * x + this.pC * y + this.pE; }
+      py(x, y) { return this.pB * x + this.pD * y + this.pF; }
+      at(k) {
+          const lo = this.pLo, hi = this.pHi;
+          return lo && hi ? lo[k] + (hi[k] - lo[k]) * this.pW : this.pP[k];
+      }
+      /**
+       * A dot field. The core quantizes, not the host, so the phone and the window draw the same dots: eight radius
+       * steps (step 0 draws nothing) and at most two colours, which is at most fourteen calls.
+       */
+      drawDots(ctx, d, el, m0, alpha) {
+          const e = el.dotIx;
+          if (e < 0 || e >= this.dotR.length)
+              return;
+          // Inside a repeat only this copy's slice of the buffer is drawn, under this copy's own frame and alpha.
+          const from = el.rmul > 1 ? sclamp(this.inst, 0, el.rmul - 1) * el.n : 0;
+          const m = this.mat;
+          const a = m[m0], b = m[m0 + 1], c = m[m0 + 2], dd = m[m0 + 3], ox = m[m0 + 4], oy = m[m0 + 5];
+          const scale = Math.sqrt(Math.abs(a * dd - b * c)) || 1;
+          const rbuf = this.dotR[e], xbuf = this.dotDX[e], ybuf = this.dotDY[e], pbuf = this.dotP[e];
+          const qx = el.qx, qy = el.qy;
+          if (!qx || !qy)
+              return;
+          const xy = this.scratch;
+          ctx.globalAlpha = alpha;
+          for (let p = 0; p < el.pal.length; p++) {
+              const colour = this.col(d, el.pal[p]);
+              for (let step = 1; step <= 7; step++) {
+                  let n = 0;
+                  for (let i = 0; i < el.n; i++) {
+                      const k = from + i;
+                      if (pbuf[k] !== p)
+                          continue;
+                      const q = Math.round((rbuf[k] / el.rmax) * 7);
+                      if (q !== step)
+                          continue;
+                      const lx = qx[i] + xbuf[k], ly = qy[i] + ybuf[k];
+                      xy[n * 2] = a * lx + c * ly + ox;
+                      xy[n * 2 + 1] = b * lx + dd * ly + oy;
+                      n++;
+                  }
+                  if (!n)
+                      continue;
+                  const r = ((step / 7) * el.rmax) * scale;
+                  if (ctx.dots)
+                      ctx.dots(xy, n, r, colour);
+                  else {
+                      ctx.fillStyle = colour;
+                      ctx.beginPath();
+                      for (let i = 0; i < n; i++) {
+                          ctx.moveTo(xy[i * 2] + r, xy[i * 2 + 1]);
+                          ctx.arc(xy[i * 2], xy[i * 2 + 1], r, 0, TAU2);
+                      }
+                      ctx.fill();
+                  }
+                  this.drawCalls++;
+              }
+          }
+      }
+      /**
+       * One end of a chain, in the chain's own (bot-height) frame: the element's own origin, an anchor, or another
+       * element. True: it is pinned, and the two numbers are in pinXY. It writes, so a frame allocates nothing.
+       */
+      pin(el, which, d, m0) {
+          const ref = which ? el.cto : el.cfrom;
+          const k = which * 2;
+          if (ref < 0)
+              return false;
+          if (ref >= 100) {
+              // The named element's own frame was the parent's; its offset is read in this chain's frame, which is enough
+              // for a tail that hangs off a body drawn beside it.
+              this.pinXY[k] = which ? el.ctoX : el.cfromX;
+              this.pinXY[k + 1] = which ? el.ctoY : el.cfromY;
+              return true;
+          }
+          if (!d.anchors)
+              return false;
+          const m = this.mat;
+          const a = m[m0], b = m[m0 + 1], c = m[m0 + 2], dd = m[m0 + 3], ox = m[m0 + 4], oy = m[m0 + 5];
+          // An anchor is in pixels: bring it back into this chain's frame.
+          const det = a * dd - b * c;
+          if (!det)
+              return false;
+          const q = ref * 6;
+          const dx = d.anchors[q] - ox, dy = d.anchors[q + 1] - oy;
+          this.pinXY[k] = (dd * dx - c * dy) / det;
+          this.pinXY[k + 1] = (-b * dx + a * dy) / det;
+          return true;
+      }
+      /** A rope or a closed soft ring: stepped here, where its pins are known, then drawn. */
+      drawChain(ctx, d, el, m0, scale) {
+          // One rope per copy, from the element's own slot: inside a repeat each copy keeps its own points.
+          const s = el.slot + (el.rmul > 1 ? sclamp(this.inst, 0, el.rmul - 1) : 0);
+          if (el.slot < 0 || s >= this.chainX.length)
+              return;
+          const X = this.chainX[s], Y = this.chainY[s], PX = this.chainPX[s], PY = this.chainPY[s];
+          const m = this.mat;
+          const a = m[m0], b = m[m0 + 1], c = m[m0 + 2], dd = m[m0 + 3], ox = m[m0 + 4], oy = m[m0 + 5];
+          const seg = el.clen / (el.cclosed ? el.cn : Math.max(1, el.cn - 1));
+          const P = this.pinXY;
+          const p0 = this.pin(el, 0, d, m0), p1 = this.pin(el, 1, d, m0);
+          if (!this.chainReady[s]) {
+              this.chainReady[s] = 1;
+              for (let i = 0; i < el.cn; i++) {
+                  let x, y;
+                  if (el.cclosed) {
+                      const ang = (i / el.cn) * TAU2, r = el.clen / TAU2;
+                      x = (p0 ? P[0] : 0) + Math.cos(ang) * r;
+                      y = (p0 ? P[1] : 0) + Math.sin(ang) * r;
+                  }
+                  else {
+                      x = (p0 ? P[0] : 0) + (p1 ? (P[2] - P[0]) * (i / (el.cn - 1)) : 0);
+                      y = (p0 ? P[1] : 0) + (p1 ? (P[3] - P[1]) * (i / (el.cn - 1)) : seg * i);
+                  }
+                  X[i] = x;
+                  Y[i] = y;
+                  PX[i] = x;
+                  PY[i] = y;
+              }
+              this.chainArea[s] = polyArea(X, Y, el.cn);
+          }
+          const steps = Math.min(16, Math.round(this.pending / SSTEP));
+          for (let q = 0; q < steps; q++) {
+              for (let i = 0; i < el.cn; i++) {
+                  const vx = (X[i] - PX[i]) * el.cdrag, vy = (Y[i] - PY[i]) * el.cdrag;
+                  PX[i] = X[i];
+                  PY[i] = Y[i];
+                  X[i] += vx;
+                  Y[i] += vy + el.cg * SSTEP * SSTEP;
+              }
+              for (let it = 0; it < el.citer; it++) {
+                  const last = el.cclosed ? el.cn : el.cn - 1;
+                  for (let i = 0; i < last; i++) {
+                      const j = (i + 1) % el.cn;
+                      let dx = X[j] - X[i], dy = Y[j] - Y[i];
+                      const len = Math.hypot(dx, dy) || 1e-6;
+                      const push = ((len - seg) / len) * 0.5 * el.cstiff;
+                      dx *= push;
+                      dy *= push;
+                      X[i] += dx;
+                      Y[i] += dy;
+                      X[j] -= dx;
+                      Y[j] -= dy;
+                  }
+                  if (el.carea > 0) {
+                      const now = polyArea(X, Y, el.cn), want = this.chainArea[s];
+                      const k = ((want - now) / Math.max(1e-4, Math.abs(want))) * el.carea * 0.25;
+                      for (let i = 0; i < el.cn; i++) {
+                          const pi = (i + el.cn - 1) % el.cn, ni = (i + 1) % el.cn;
+                          let nx = Y[ni] - Y[pi], ny = -(X[ni] - X[pi]);
+                          const l = Math.hypot(nx, ny) || 1e-6;
+                          nx /= l;
+                          ny /= l;
+                          X[i] += nx * k * seg;
+                          Y[i] += ny * k * seg;
+                      }
+                  }
+                  if (p0) {
+                      X[0] = P[0];
+                      Y[0] = P[1];
+                  }
+                  if (p1) {
+                      X[el.cn - 1] = P[2];
+                      Y[el.cn - 1] = P[3];
+                  }
+                  if (el.cfloor === el.cfloor)
+                      for (let i = 0; i < el.cn; i++)
+                          if (Y[i] > el.cfloor)
+                              Y[i] = el.cfloor;
+              }
+          }
+          for (let i = 0; i < el.cn; i++)
+              if (!Number.isFinite(X[i] + Y[i])) {
+                  this.kill("nan");
+                  return;
+              }
+          // Drawn: as a line, as a filled ring, or as dots.
+          const need = el.cn * 2;
+          if (this.flatXY.length < need)
+              this.flatXY = new Float64Array(need);
+          const xy = this.flatXY;
+          for (let i = 0; i < el.cn; i++) {
+              xy[i * 2] = a * X[i] + c * Y[i] + ox;
+              xy[i * 2 + 1] = b * X[i] + dd * Y[i] + oy;
+          }
+          if (el.fill || el.stroke) {
+              ctx.beginPath();
+              ctx.moveTo(xy[0], xy[1]);
+              for (let i = 1; i < el.cn; i++)
+                  ctx.lineTo(xy[i * 2], xy[i * 2 + 1]);
+              if (el.cclosed)
+                  ctx.closePath();
+              if (el.fill) {
+                  ctx.fillStyle = this.col(d, el.fill);
+                  ctx.fill();
+                  this.drawCalls++;
+              }
+              if (el.stroke) {
+                  ctx.strokeStyle = this.col(d, el.stroke);
+                  ctx.lineWidth = Math.max(0.5, el.width.c * scale);
+                  ctx.lineCap = "round";
+                  ctx.lineJoin = "round";
+                  ctx.stroke();
+                  this.drawCalls++;
+              }
+          }
+          if (el.cdots) {
+              const r = el.cdots * scale, colour = this.col(d, el.paint);
+              const buf = this.scratch.length >= need ? this.scratch : new Float32Array(need);
+              for (let i = 0; i < need; i++)
+                  buf[i] = xy[i];
+              if (ctx.dots)
+                  ctx.dots(buf, el.cn, r, colour);
+              else {
+                  ctx.fillStyle = colour;
+                  ctx.beginPath();
+                  for (let i = 0; i < el.cn; i++) {
+                      ctx.moveTo(buf[i * 2] + r, buf[i * 2 + 1]);
+                      ctx.arc(buf[i * 2], buf[i * 2 + 1], r, 0, TAU2);
+                  }
+                  ctx.fill();
+              }
+              this.drawCalls++;
+          }
+      }
+  }
+  function polyArea(x, y, n) {
+      let a = 0;
+      for (let i = 0; i < n; i++) {
+          const j = (i + 1) % n;
+          a += x[i] * y[j] - x[j] * y[i];
+      }
+      return a / 2;
+  }
+  /** The rest places of a grid field, centred on the element's origin. */
+  function restGrid(el) {
+      const qx = el.qx, qy = el.qy;
+      if (!qx || !qy)
+          return;
+      const rowGap = el.grid === GRID_HEX ? el.gap * 0.866 : el.gap;
+      for (let i = 0; i < el.n; i++) {
+          const c = i % el.cols, r = Math.floor(i / el.cols);
+          const off = el.grid === GRID_HEX && r % 2 ? el.gap / 2 : 0;
+          qx[i] = (c - (el.cols - 1) / 2) * el.gap + off;
+          qy[i] = (r - (el.rows - 1) / 2) * rowGap;
+      }
+  }
+  /** The rest places of a field laid along a shape: n points, evenly spaced by length. */
+  function alongPath(shape, el) {
+      const qx = el.qx, qy = el.qy;
+      if (!qx || !qy)
+          return;
+      const pts = [];
+      if (shape?.path)
+          flatten(shape.path, pts);
+      if (pts.length < 4) {
+          for (let i = 0; i < el.n; i++) {
+              qx[i] = 0;
+              qy[i] = 0;
+          }
+          return;
+      }
+      const m = pts.length / 2;
+      let total = 0;
+      const run = [0];
+      for (let i = 1; i < m; i++) {
+          total += Math.hypot(pts[i * 2] - pts[i * 2 - 2], pts[i * 2 + 1] - pts[i * 2 - 1]);
+          run.push(total);
+      }
+      for (let i = 0; i < el.n; i++) {
+          const want = total * (el.n === 1 ? 0 : i / (el.n - 1));
+          let k = 1;
+          while (k < m - 1 && run[k] < want)
+              k++;
+          const a = run[k - 1], b = run[k], w = b === a ? 0 : (want - a) / (b - a);
+          qx[i] = pts[k * 2 - 2] + (pts[k * 2] - pts[k * 2 - 2]) * w;
+          qy[i] = pts[k * 2 - 1] + (pts[k * 2 + 1] - pts[k * 2 - 1]) * w;
+      }
+  }
+  /** A path as a polyline: curves in eight pieces, a circle in twenty-four. */
+  function flatten(p, out) {
+      let cx = 0, cy = 0, sx = 0, sy = 0;
+      const q = (x0, y0, x1, y1, x2, y2) => {
+          for (let s = 1; s <= 8; s++) {
+              const u = s / 8, v = 1 - u;
+              out.push(v * v * x0 + 2 * v * u * x1 + u * u * x2, v * v * y0 + 2 * v * u * y1 + u * u * y2);
+          }
+      };
+      for (let i = 0; i < p.length;) {
+          const cmd = p[i];
+          if (cmd === SO_M) {
+              cx = p[i + 1];
+              cy = p[i + 2];
+              sx = cx;
+              sy = cy;
+              out.push(cx, cy);
+              i += 3;
+          }
+          else if (cmd === SO_L) {
+              cx = p[i + 1];
+              cy = p[i + 2];
+              out.push(cx, cy);
+              i += 3;
+          }
+          else if (cmd === SO_Q) {
+              q(cx, cy, p[i + 1], p[i + 2], p[i + 3], p[i + 4]);
+              cx = p[i + 3];
+              cy = p[i + 4];
+              i += 5;
+          }
+          else if (cmd === SO_C) {
+              for (let s = 1; s <= 8; s++) {
+                  const u = s / 8, v = 1 - u;
+                  out.push(v * v * v * cx + 3 * v * v * u * p[i + 1] + 3 * v * u * u * p[i + 3] + u * u * u * p[i + 5], v * v * v * cy + 3 * v * v * u * p[i + 2] + 3 * v * u * u * p[i + 4] + u * u * u * p[i + 6]);
+              }
+              cx = p[i + 5];
+              cy = p[i + 6];
+              i += 7;
+          }
+          else if (cmd === SO_Z) {
+              out.push(sx, sy);
+              cx = sx;
+              cy = sy;
+              i += 1;
+          }
+          else if (cmd === SO_O) {
+              for (let s = 0; s <= 24; s++) {
+                  const ang = (s / 24) * TAU2;
+                  out.push(p[i + 1] + Math.cos(ang) * p[i + 3], p[i + 2] + Math.sin(ang) * p[i + 3]);
+              }
+              i += 4;
+          }
+          else
+              break;
+      }
+  }
+  /** Frames settled before anything else (so he stands), the rate a moment is stepped at, and the furthest it is run. */
+  const STILL_SETTLE = 40, STILL_FPS = 30, STILL_MAX = 360;
+  /** A module this build may not have (the window and the server have none of them): null rather than a throw. */
+  function stillDep(load) {
+      try {
+          return load();
+      }
+      catch {
+          return null;
+      }
+  }
+  /** The same slug always settles the same way. */
+  function stillSeed(s) {
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) {
+          h ^= s.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+      }
+      return h >>> 0;
+  }
+  /**
+   * ONE STILL OF ANY MOMENT, AS PNG BYTES (native/SPEC.md 2.7). A widget, a Live Activity and a key print cannot
+   * animate and have no network, so the phone draws the frame itself, from the catalog it already has, and leaves the
+   * file in the art channel. Every animation the catalog gains — format 1 or a format-2 scene — gets its still here,
+   * with no new code on either native side.
+   *
+   *   at      0 to 1 of the moment's own duration, not seconds
+   *   size    pixels; the longer edge wins, and the square is drawn on a CPU raster (never a GPU or offscreen one:
+   *           iOS forbids GPU work from a background app, and a catalog sync can run in a silent-push wake)
+   *   scheme  only paints that depend on the ground follow it. The engine's ink and paper are fixed, so today both
+   *           schemes give the same bytes; it is taken now so a scheme-aware paint needs no new signature.
+   *
+   * An unknown moment, one the server has switched off, or one this build's format cannot play draws the moment's
+   * fallback act instead. Nothing personal goes anywhere to make it. Never throws: any failure is a null, and the
+   * caller falls back to a bundled pose. The window and the server have no Skia, so there it is always null.
+   */
+  function renderStill(ask, at, size, scheme) {
+      void scheme;
+      /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
+      let surface = null;
+      try {
+          const sk = stillDep(() => require("@shopify/react-native-skia"));
+          const ctxMod = stillDep(() => require("../onboard/skiaCtx"));
+          const core = stillDep(() => require("./core"));
+          if (!sk?.Skia?.Surface?.Make || !ctxMod?.SkiaCtx || !core?.BotTile)
+              return null;
+          const slug = String(ask.avatar ?? "");
+          const px = Math.max(8, Math.min(1024, Math.round(Math.max(size.w, size.h)) || 0));
+          if (!slug || !px)
+              return null;
+          // The catalog in use, with the server's off list; before the kept copy has loaded, the build's starter pack.
+          const live = stillDep(() => require("./looks"));
+          const now = typeof live?.looksNow === "function" ? live.looksNow() : null;
+          let looks = now?.looks ?? null;
+          if (!looks) {
+              const starter = stillDep(() => require("./starter"));
+              looks = starter?.STARTER ? core.compileLooks(starter.STARTER) : null;
+          }
+          const kind = core.kindOf(slug);
+          const seed = stillSeed(slug);
+          const colour = ask.color && /^#[0-9a-f]{6}$/i.test(ask.color) ? ask.color : core.PALETTE[seed % core.PALETTE.length];
+          surface = sk.Skia.Surface.Make(px, px);
+          if (!surface)
+              return null;
+          const tile = new core.BotTile({
+              kind,
+              color: colour,
+              mood: "idle",
+              seed,
+              size: px * 0.78,
+              avatar: looks?.avatar ? looks.avatar(kind, slug) : null,
+              toys: false,
+          });
+          tile.cloth = 0;
+          tile.resize(px, px, px * 0.92);
+          for (let i = 0; i < STILL_SETTLE; i++)
+              tile.step(1 / STILL_FPS);
+          const off = now?.off ? !!now.off(ask.moment) : false;
+          const moment = !off && looks?.moment ? looks.moment(String(ask.moment ?? "")) : null;
+          if (moment && tile.playMoment(moment, "once")) {
+              const u = Math.max(0, Math.min(1, Number(at) || 0));
+              const frames = Math.min(STILL_MAX, Math.round(u * moment.dur * STILL_FPS));
+              for (let i = 0; i < frames; i++)
+                  tile.step(1 / STILL_FPS);
+          }
+          else if (looks?.fallback) {
+              // Unknown, switched off, or past what this build plays: the act the catalog names instead.
+              tile.setAct(looks.fallback(String(ask.moment ?? "")));
+              for (let i = 0; i < STILL_SETTLE; i++)
+                  tile.step(1 / STILL_FPS);
+          }
+          // The physics are settled, then it is drawn once: what a person sees is a frame, never a loop.
+          tile.still = true;
+          const canvas = surface.getCanvas();
+          canvas.clear(sk.Skia.Color("transparent"));
+          tile.draw(new ctxMod.SkiaCtx(canvas), 1);
+          surface.flush();
+          const image = surface.makeImageSnapshot();
+          try {
+              return image.encodeToBytes(sk.ImageFormat.PNG, 100) ?? null;
+          }
+          finally {
+              try {
+                  image.dispose();
+              }
+              catch { /* already gone */ }
+          }
+      }
+      catch {
+          return null;
+      }
+      finally {
+          try {
+              surface?.dispose();
+          }
+          catch { /* already gone */ }
+      }
+      /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
+  }
+
   /**
    * LIVING BOT TILES: THE PHYSICS AND THE DRAWING (one core, both apps).
    *
@@ -58,6 +2236,10 @@
   };
   /** The tap: press, the other bots look, the others' words fade to fadeTo, and after holdMs the tile's action runs. */
   const TAP = { holdMs: 1000, fadeTo: 0.35, fadeMs: 260, pressScale: 0.97, restoreMs: 1400 };
+  /** Milliseconds, for the governor. The host may hand a better clock to a tile (BotTile.clock). */
+  const nowMs = typeof performance !== "undefined" && typeof performance.now === "function" ? () => performance.now() : () => Date.now();
+  /** The groups a scene's `rig` may hide, as bits (scene.ts RIG_GROUPS, in that order). */
+  const H_HEAD = 1, H_FACE = 2, H_ANT = 4, H_ARMS = 8, H_LEGS = 16, H_BODY = 32, H_WEAR = 64;
   /** The fixed step, and the longest frame that is simulated (a longer pause is not caught up). */
   const STEP = 1 / 120;
   const MAX_FRAME = 1 / 20;
@@ -102,7 +2284,7 @@
    * moment's plain act), never a crash.
    */
   /** The looks format this core draws and plays; a catalog or a recipe that says a higher one is not played. */
-  const LOOKS_FORMAT = 1;
+  const LOOKS_FORMAT = 2;
   // ---- the expression language (the mic program's, motionLang.ts on the server: same grammar, numbers only)
   /** The names an expression may read. t: seconds into the track; u: 0 to 1 through it; T: seconds into the moment; D: the track's length; beat: beats (bpm); k: loops so far; side: 1 facing right, -1 left; rnd, rnd2: random per play; W: the stage's width; x: his hips from its left; px: the other bot ahead of him (bot heights, 0: none). */
   const MOMENT_VARS = ["t", "u", "T", "D", "beat", "k", "side", "rnd", "rnd2", "W", "x", "px"];
@@ -432,6 +2614,16 @@
       }
       return s[0];
   }
+  /**
+   * The expression language, handed to the scene engine (scene.ts): it compiles and runs the same bytecode, and the
+   * opcodes let it hoist the parts of a per-dot formula that do not change with the dot. The dependency runs one way:
+   * scene.ts imports nothing.
+   */
+  const XAPI = {
+      compile: xcompile,
+      run: xrun,
+      ops: { NUM: XO_NUM, VAR: XO_VAR, NEG: XO_NEG, NOT: XO_NOT, BIN: XO_BIN, TERN: XO_TERN, CALL: XO_CALL },
+  };
   /** Check an expression the way a recipe's would be compiled (the server's checks and tests use this). `names`: as compileWith's. */
   function checkExpression(src, names) {
       try {
@@ -796,10 +2988,12 @@
   // ---- moments: recipes
   const TRACK_KINDS = {
       walk: 1, crouch: 2, sit: 3, lean: 4, tilt: 5, arm: 6, look: 7, eyes: 8, mouth: 9, lid: 10, spin: 11, shake: 12, act: 13, prop: 14, emit: 15, face: 16,
-      hop: 20, kick: 21, fabric: 22, glow: 23, sound: 24, others: 25, event: 26, blink: 27,
+      hop: 20, kick: 21, fabric: 22, glow: 23, sound: 24, others: 25, event: 26, blink: 27, scene: 28,
   };
   const TK_WALK = 1, TK_CROUCH = 2, TK_SIT = 3, TK_LEAN = 4, TK_TILT = 5, TK_ARM = 6, TK_LOOK = 7, TK_EYES = 8, TK_MOUTH = 9, TK_LID = 10, TK_SPIN = 11, TK_SHAKE = 12, TK_ACT = 13, TK_PROP = 14, TK_EMIT = 15, TK_FACE = 16;
   const TK_HOP = 20, TK_KICK = 21, TK_FABRIC = 22, TK_GLOW = 23, TK_SOUND = 24, TK_OTHERS = 25, TK_EVENT = 26, TK_BLINK = 27;
+  /** Format 2: a scene plays beside the rig, on an anchor, behind him or in front (scene.ts). */
+  const TK_SCENE = 28;
   /** Each track's own fields (besides do, at, to, after, if, chance, note). x: an expression allowed. */
   const TRACK_FIELDS = {
       walk: { x: "x", dx: "x", toward: "walk", gap: "x", speed: "x" },
@@ -817,6 +3011,7 @@
       face: { target: "face" },
       hop: { h: "x", dx: "x" }, kick: { part: "kick", vx: "x", vy: "x" }, fabric: { from: "anchor", x: "x", y: "x", v: "x", r: "x" },
       glow: { v: "x" }, sound: { name: "name" }, others: { play: "moment", n: "n", near: "n" }, event: { name: "name" }, blink: {},
+      scene: { scene: "scene", on: "anchor", x: "x", y: "x", scale: "x", back: "bool" },
   };
   const TRACK_ENUMS = {
       hand: ["front", "back", "l", "r", "both"],
@@ -857,6 +3052,8 @@
           this.m2 = -1;
           this.part = null;
           this.parts = null;
+          /** A scene track: the scene it plays (format 2). */
+          this.scene = null;
           this.paint = "$color";
           this.name = "";
           this.ref = null;
@@ -900,11 +3097,13 @@
           this.end = [];
           this.endDur = 0;
           this.events = [];
+          /** Format 2: how many scene tracks it has (at most 2, SPEC 3.7). */
+          this.scenes = 0;
           this.id = id;
       }
   }
   /** Compile one recipe's tracks; refs to other moments resolve through `all` (filled before). */
-  function buildMoment(mo, spec, parts, all, errs) {
+  function buildMoment(mo, spec, parts, all, scenes, errs) {
       const at = `moments.${mo.id}`;
       const n0 = errs.length;
       const fail = (msg) => { errs.push(`${at}${msg}`); };
@@ -915,18 +3114,22 @@
           return;
       }
       const sp = spec;
-      for (const k of Object.keys(sp))
-          if (!["label", "note", "format", "dur", "mode", "loopFrom", "bpm", "still", "fallback", "react", "tracks", "end"].includes(k))
-              fail(`: unknown field ${k}`);
+      // The fallback act is read before anything else, so a recipe this build cannot play still says what to do instead.
+      const acts = ["play", "wave", "survey", "read", "settle", "think", "carry"];
+      mo.fallback = acts.includes(String(sp.fallback)) ? sp.fallback : "play";
+      mo.label = String(sp.label ?? "");
+      // Then the format gate, before the unknown-field loop: a newer recipe is skipped, not reported as broken.
       if ((sp.format ?? 1) > LOOKS_FORMAT) {
           mo.ok = false;
           mo.why = `format ${sp.format}`;
           return;
       }
+      for (const k of Object.keys(sp))
+          if (!["label", "note", "format", "dur", "mode", "loopFrom", "bpm", "still", "fallback", "react", "tracks", "end"].includes(k))
+              fail(`: unknown field ${k}`);
       if (typeof sp.dur !== "number" || !(sp.dur > 0 && sp.dur <= MOMENT_LIMITS.dur))
           fail(`.dur: seconds in (0, ${MOMENT_LIMITS.dur}]`);
       mo.dur = Number(sp.dur) || 1;
-      mo.label = String(sp.label ?? "");
       if (sp.mode != null && sp.mode !== "once" && sp.mode !== "loop")
           fail(".mode: once or loop");
       mo.loop = sp.mode === "loop";
@@ -939,10 +3142,11 @@
       mo.still = typeof sp.still === "number" && sp.still >= 0 && sp.still <= mo.dur ? sp.still : 0;
       if (sp.still != null && mo.still !== sp.still)
           fail(".still: seconds in [0, dur]");
-      const acts = ["play", "wave", "survey", "read", "settle", "think", "carry"];
       if (sp.fallback != null && !acts.includes(sp.fallback))
           fail(`.fallback: one of ${acts.join(", ")}`);
-      mo.fallback = acts.includes(String(sp.fallback)) ? sp.fallback : "play";
+      // Every format-2 recipe must name one: on an older build that is all anybody sees (SPEC 2.5).
+      if ((sp.format ?? 1) > 1 && sp.fallback == null)
+          fail(": a format-2 recipe declares `fallback`");
       mo.react = sp.react === true;
       // Event names: those fired (event tracks, emitters' onMiss) and those followed (after).
       const evOf = (name, where) => {
@@ -996,7 +3200,8 @@
                   return v;
               };
               tr.at = tnum("at", 0, 0, dur);
-              tr.inst = tr.k >= 20 || (tr.k === TK_EMIT && !(typeof raw.every === "number" && raw.every > 0));
+              // A scene runs over a span, as the posing tracks do, though its number is in the instant range.
+              tr.inst = (tr.k >= 20 && tr.k !== TK_SCENE) || (tr.k === TK_EMIT && !(typeof raw.every === "number" && raw.every > 0));
               tr.to = tnum("to", tr.k === TK_HOP ? Math.min(dur, tr.at + 0.35) : tr.inst ? tr.at : dur, tr.at, dur);
               if (raw.to != null && tr.inst && tr.k !== TK_HOP)
                   errs.push(`${w}.to: ${kind} happens once, at "at"`);
@@ -1220,6 +3425,31 @@
                       tr.ev = evOf(raw.name, `${w}.name`);
                       fired.add(tr.ev);
                       break;
+                  case TK_SCENE: {
+                      const id = String(raw.scene);
+                      tr.scene = scenes.get(id) ?? null;
+                      if (!tr.scene)
+                          errs.push(`${w}.scene: no scene "${id}"`);
+                      else if (!tr.scene.ok)
+                          errs.push(`${w}.scene: "${id}" does not compile`);
+                      tr.m = anchor("on", AN_GROUND);
+                      tr.a = x("x", 0);
+                      tr.b = x("y", 0);
+                      tr.c = x("scale", 1);
+                      tr.pop = raw.back === true;
+                      if (++mo.scenes > SCENE_LIMITS.liveMoment)
+                          errs.push(`${w}: at most ${SCENE_LIMITS.liveMoment} scene tracks in a recipe`);
+                      // A scene's own events are the moment's: it reads them, and its `emit` fires them.
+                      for (const e of tr.scene?.events ?? []) {
+                          const i = evOf(e, `${w}.scene`);
+                          followed.push([i, `${w}.scene "${e}"`]);
+                      }
+                      for (const e of tr.scene?.emitNames ?? []) {
+                          const i = evOf(e, `${w}.scene`);
+                          fired.add(i);
+                      }
+                      break;
+                  }
                   default: break;
               }
               return tr;
@@ -1250,6 +3480,8 @@
           this.parts = new Map();
           this.avatars = new Map();
           this.moments = new Map();
+          /** Format 2: the scenes moments play. Empty on a catalog cut down to format 1. */
+          this.scenes = new Map();
           this.kinds = {};
           this.errors = [];
           /** Inline avatars (a node's own spec), compiled once each. */
@@ -1304,9 +3536,8 @@
           return L;
       }
       const sp = spec;
-      for (const k of Object.keys(sp))
-          if (!["v", "format", "note", "parts", "avatars", "moments", "kinds", "idle"].includes(k))
-              errs.push(`unknown field ${k}`);
+      // An unknown top-level section is IGNORED, not an error: a later format may add one, and this build reads the rest
+      // of the same file (SPEC 3.2, compile fix 2).
       if (typeof sp.v !== "number" || !(sp.v >= 1) || Math.floor(sp.v) !== sp.v)
           errs.push("v: a whole number from 1");
       L.v = Number(sp.v) || 0;
@@ -1350,11 +3581,29 @@
           if (errs.length === n0)
               L.avatars.set(id, a);
       }
+      // Scenes, before the moments that play them. One whose `format` is newer than this build is skipped, as a recipe is.
+      const scs = isRec(sp.scenes) ? sp.scenes : {};
+      if (sp.scenes != null && !isRec(sp.scenes))
+          errs.push("scenes: an object");
+      if (Object.keys(scs).length > SCENE_LIMITS.scenes)
+          errs.push(`scenes: at most ${SCENE_LIMITS.scenes}`);
+      for (const [id, raw] of Object.entries(scs)) {
+          const f = isRec(raw) && typeof raw.format === "number" ? raw.format : 1;
+          if (f > LOOKS_FORMAT)
+              continue;
+          if (f < 2) {
+              errs.push(`scenes.${id}: format 2 or above`);
+              continue;
+          }
+          const sc = compileScene(id, raw, XAPI, (n) => ANCHORS.indexOf(n), (pid) => L.parts.get(pid) ?? null, errs);
+          if (sc.ok)
+              L.scenes.set(id, sc);
+      }
       const moms = isRec(sp.moments) ? sp.moments : {};
       for (const id of Object.keys(moms))
           L.moments.set(id, new Moment(id));
       for (const id of Object.keys(moms))
-          buildMoment(L.moments.get(id), moms[id], L.parts, L.moments, errs);
+          buildMoment(L.moments.get(id), moms[id], L.parts, L.moments, L.scenes, errs);
       if (sp.kinds != null) {
           if (!isRec(sp.kinds))
               errs.push("kinds: an object");
@@ -1689,6 +3938,44 @@
           }
       }
   }
+  /**
+   * THE SCREEN'S OWN BUDGETS (anim/SPEC.md 3.7): at most SCENE_LIMITS.liveScreen scenes, opsScreen expression ops and
+   * dotsScreen dots over every surface at once, however many grids and stages are mounted. Over them a scene does not
+   * start and its bot plays the rig only; the moment is not dropped and no fallback act takes over, because nothing
+   * is wrong with the scene itself.
+   *
+   * Only tiles with a live scene are counted. A tile stamps itself every frame it steps, so one whose surface went
+   * away mid-scene (a screen left while a moment played) is forgotten here instead of being held against the next
+   * scene forever.
+   */
+  const SCREEN = [];
+  let SCREEN_TICK = 0;
+  /** Stamps, not seconds: with one live surface at 60 fps this is about three seconds. */
+  const SCREEN_GONE = 180;
+  function screenJoin(t) { if (SCREEN.indexOf(t) < 0)
+      SCREEN.push(t); }
+  function screenLeave(t) { const i = SCREEN.indexOf(t); if (i >= 0)
+      SCREEN.splice(i, 1); }
+  /** Room on the screen for one more scene, beside everything every surface is already playing. */
+  function screenRoom(t, sc) {
+      let live = 1, ops = sc.ops, dots = sc.dots;
+      for (let i = SCREEN.length - 1; i >= 0; i--) {
+          const o = SCREEN[i];
+          if (o !== t && SCREEN_TICK - o.scTick > SCREEN_GONE) {
+              SCREEN.splice(i, 1);
+              continue;
+          }
+          for (const r of o.scRun)
+              if (r) {
+                  live++;
+                  ops += r.scene.ops;
+                  dots += r.scene.dots;
+              }
+      }
+      return live <= SCENE_LIMITS.liveScreen && ops <= SCENE_LIMITS.opsScreen && dots <= SCENE_LIMITS.dotsScreen;
+  }
+  /** Tests: the screen is empty again (every surface of the last one is gone). */
+  function resetScreenScenes() { SCREEN.length = 0; }
   class BotTile {
       constructor(o) {
           // The tile.
@@ -1901,6 +4188,63 @@
           this.moThrow = new Uint16Array(MO_TRACKS);
           this.moEv = new Float64Array(MO_EVENTS);
           this.moVars = new Float64Array(MOMENT_VARS.length);
+          // ---- format 2: the scenes a moment plays (scene.ts)
+          /** At most SCENE_LIMITS.liveMoment live at once; each one's track, where it sits and how it is going. */
+          this.scRun = [null, null];
+          this.scTrack = new Int8Array(2).fill(-1);
+          this.scSeen = new Int32Array(2);
+          this.scOX = new Float64Array(2);
+          this.scOY = new Float64Array(2);
+          this.scS = new Float64Array(2);
+          this.scBack = new Uint8Array(2);
+          this.scT = new Float64Array(2);
+          this.scD = new Float64Array(2);
+          /** The governor: a rolling average of step, evaluation and draw, in milliseconds, and whether it has frozen. */
+          this.scMs = new Float64Array(2);
+          this.scFroze = new Uint8Array(2);
+          /** This frame's cost so far (step, then each draw pass): one sample a frame reaches the rolling average. */
+          this.scAcc = new Float64Array(2);
+          /** Frames a run has finished without dying: 0 says it never drew, so the moment's fallback act takes over. */
+          this.scFrames = new Int32Array(2);
+          /** Tracks whose scene went wrong this play: dead for the play, never started again on the next step (SPEC 3.4). */
+          this.scDead = new Uint8Array(MO_TRACKS);
+          /** When this tile last stepped its scenes, for the screen-wide tally (a surface that went away stops stamping). */
+          this.scTick = 0;
+          /**
+           * A scene's `part` element: the catalog part, drawn in the element's own frame. core.ts owns parts, so scene.ts
+           * hands the part back and this draws it. One function per tile, never one per frame.
+           */
+          this.scenePart = (ctx, part, ox, oy, fx, fy, dx, dy, paint, alpha) => {
+              const p = part;
+              if (!p)
+                  return;
+              // The frame carries the scale; drawPart wants unit axes and the scale apart, so its line widths are right.
+              const sc = Math.sqrt(Math.abs(fx * dy - fy * dx)) || 1;
+              drawPart(ctx, p, ox, oy, fx / sc, fy / sc, dx / sc, dy / sc, sc, this.kind === "make" ? this.makeColor : this.color, paint, alpha);
+          };
+          /** Every anchor's frame this step, for the scenes that hang on one. */
+          this.scAnch = new Float64Array(ANCHORS.length * 6);
+          this.scDraw = { ox: 0, oy: 0, S: 30, mirror: 1, alpha: 1, color: "#000", ink: INK, paper: PAPER, anchors: null, allBack: false };
+          /** For the bootstrap's report (SPEC 3.9): scenes that went wrong, and scenes the governor slowed. */
+          this.sceneBad = [];
+          this.sceneSlow = [];
+          /** His voice: how long it has been over the talking line. */
+          this.talkFor = 0;
+          /** The last tap inside a live scene's box (BotStage only): where, how long ago, and how many this play. */
+          this.tapX = 0;
+          this.tapY = 0;
+          this.tapT = 99;
+          this.tapN = 0;
+          /** While a scene's `rig` says so: the bot's own look. */
+          this.hideMask = 0;
+          this.rigOn = false;
+          this.rigA = 1;
+          this.rigSx = 1;
+          this.rigSy = 1;
+          this.rigRot = 0;
+          this.rigAbout = AN_GROUND;
+          /** The governor's clock (milliseconds). The surface may hand in one that knows the real frame. */
+          this.clock = null;
           /** The other bot a moment is with (his head, in this tile's space; NaN: none), and its index in the world. */
           this.peerX = NaN;
           this.peerY = NaN;
@@ -2651,13 +4995,16 @@
       step(dt) {
           if (!this.placed || this.still)
               return;
-          this.acc += clamp(dt, 0, MAX_FRAME);
+          const h = clamp(dt, 0, MAX_FRAME);
+          this.acc += h;
           let k = 0;
           while (this.acc >= STEP && k < 8) {
               this.stepOnce(STEP);
               this.acc -= STEP;
               k++;
           }
+          // Scenes step once a frame, not once per physics step: a dot field then costs the same at any frame rate.
+          this.scenesStep(h);
       }
       stepOnce(h) {
           this.t += h;
@@ -5077,6 +7424,7 @@
           this.moSide = this.faceSign;
           if (!react)
               this.partner = -1;
+          this.scenesStop();
           this.moReset(m.tracks);
           this.moEv.fill(NaN);
           this.cheerT = -1;
@@ -5107,6 +7455,9 @@
       /** A moment he played once (or was delivered) has finished, until the next one starts. */
       momentDone() { return this.moDone; }
       moReset(tracks) {
+          // A fresh set of tracks (a new moment, or its `end`): no track is dead yet. A loop going round again is NOT
+          // a fresh set — a scene that went wrong stays dead for the whole play.
+          this.scDead.fill(0);
           for (let i = 0; i < MO_TRACKS; i++) {
               this.moFired[i] = 0;
               this.moNext[i] = 0;
@@ -5122,6 +7473,7 @@
       }
       /** The moment is over; `again`: his brain picks what comes next now (false: the caller does). */
       moFinish(again = true) {
+          this.scenesStop();
           this.mo = null;
           this.moDone = true;
           this.moEnding = false;
@@ -5171,14 +7523,20 @@
           this.goalX = NaN;
           const tracks = this.moEnding ? m.end : m.tracks;
           this.moStamp++;
-          for (let i = 0; i < tracks.length; i++)
+          // A scene that cannot start ends the moment mid-loop (its fallback act takes over): stop reading tracks then.
+          for (let i = 0; i < tracks.length && this.mo; i++)
               this.momentTrack(tracks[i], i, h);
-          // A prop whose track is over pops away.
+          if (!this.mo)
+              return;
+          // A prop whose track is over pops away, and so does a scene whose track is over.
           for (let s = 0; s < WSLOTS; s++)
               if (this.wparts[s] && this.wlive[s] && this.wseen[s] !== this.moStamp) {
                   this.wlive[s] = 0;
                   this.wtrack[s] = -1;
               }
+          for (let s = 0; s < this.scRun.length; s++)
+              if (this.scRun[s] && this.scSeen[s] !== this.moStamp)
+                  this.sceneDrop(s, "");
           if (this.wallL < 3)
               this.wallL = 3;
           if (this.wallR > this.w - 3)
@@ -5197,6 +7555,328 @@
           V[9] = this.w / S;
           V[10] = this.x[HIP] / S;
           V[11] = this.peerX === this.peerX ? ((this.peerX - this.x[HEAD]) * f) / S : 0;
+      }
+      // ------------------------------------------------------------------- format 2: scenes
+      /**
+       * A scene track, while it is live: find or start its run, place it, and say it was seen this step. The scene is
+       * stepped once a frame (scenesStep), not once per physics step, so a dot field costs the same at any frame rate.
+       */
+      sceneTrack(tr, i, lt, span) {
+          const sc = tr.scene;
+          if (!sc || !sc.ok)
+              return;
+          // It already went wrong this play: dead is dead, or a scene that throws is built again every frame.
+          if (this.scDead[i])
+              return;
+          let s = -1;
+          for (let k = 0; k < this.scRun.length; k++)
+              if (this.scTrack[k] === i)
+                  s = k;
+          if (s < 0) {
+              for (let k = 0; k < this.scRun.length; k++)
+                  if (this.scTrack[k] < 0) {
+                      s = k;
+                      break;
+                  }
+              if (s < 0)
+                  return;
+              // The screen's own budgets (SPEC 3.7): over them the others play the rig only, and this one does not start.
+              if (!screenRoom(this, sc))
+                  return;
+              const run = new SceneRun(sc, Math.floor(this.moRnd * 1e6) + i);
+              run.api = XAPI;
+              run.onPart = this.scenePart;
+              this.scRun[s] = run;
+              this.scTrack[s] = i;
+              this.scMs[s] = 0;
+              this.scAcc[s] = 0;
+              this.scFrames[s] = 0;
+              this.scFroze[s] = 0;
+              this.tapT = 99;
+              this.tapN = 0;
+              screenJoin(this);
+          }
+          const S = this.S * clamp(this.xv(tr.c), 0.1, 4);
+          const a = this.anchor(tr.m);
+          const ox = a[0] + (a[2] * this.xv(tr.a) + a[4] * this.xv(tr.b)) * this.S;
+          const oy = a[1] + (a[3] * this.xv(tr.a) + a[5] * this.xv(tr.b)) * this.S;
+          if (!this.scenePlace(s, sc, ox, oy, S)) {
+              // It does not fit on this surface even after a nudge: nobody sees half a moment, so the act takes over.
+              this.sceneDrop(s, "fit");
+              this.sceneFallback();
+              return;
+          }
+          this.scS[s] = S;
+          this.scBack[s] = tr.pop ? 1 : 0;
+          this.scSeen[s] = this.moStamp;
+          this.scT[s] = lt;
+          this.scD[s] = span;
+      }
+      /**
+       * Where a scene's box sits: at its origin, moved inward by up to half a bot height when it crosses an edge (as his
+       * walks keep inside the walls). False: it still does not fit.
+       */
+      scenePlace(s, sc, ox, oy, S) {
+          const halfW = (sc.bw / 2) * S, high = sc.bh * S, give = this.S * 0.5;
+          let x = ox, y = oy;
+          if (x - halfW < 0)
+              x = Math.min(ox + give, halfW);
+          if (x + halfW > this.w)
+              x = Math.max(ox - give, this.w - halfW);
+          if (y - high < 0)
+              y = Math.min(oy + give, high);
+          if (y > this.h)
+              y = Math.max(oy - give, this.h);
+          if (x - halfW < -0.5 || x + halfW > this.w + 0.5 || y - high < -0.5 || y > this.h + 0.5)
+              return false;
+          this.scOX[s] = x;
+          this.scOY[s] = y;
+          return true;
+      }
+      /** A scene is over, or went wrong: its slot is freed. A reason makes it a report (SPEC 3.9). */
+      sceneDrop(s, why) {
+          const run = this.scRun[s];
+          const tr = this.scTrack[s];
+          if (run && why) {
+              if (this.sceneBad.length < 4)
+                  this.sceneBad.push(`${run.scene.id}:${why}`);
+              // Dead for this play: the track never starts it again (it would otherwise be built afresh every frame).
+              if (tr >= 0)
+                  this.scDead[tr] = 1;
+          }
+          // It never finished a frame: nobody saw half a moment, so the fallback act takes over (SPEC 3.4).
+          const never = !!run && !!why && this.scFrames[s] === 0;
+          this.scRun[s] = null;
+          this.scTrack[s] = -1;
+          this.scFroze[s] = 0;
+          this.scAcc[s] = 0;
+          this.scFrames[s] = 0;
+          let any = false;
+          for (const r of this.scRun)
+              if (r)
+                  any = true;
+          if (!any) {
+              this.rigOn = false;
+              this.hideMask = 0;
+              this.rigA = 1;
+              this.rigSx = 1;
+              this.rigSy = 1;
+              this.rigRot = 0;
+              screenLeave(this);
+          }
+          // sceneFallback drops the rest with no reason, so this cannot come back round.
+          if (never)
+              this.sceneFallback();
+      }
+      /** A scene that could not start: the moment stops and its fallback act plays instead. */
+      sceneFallback() {
+          const m = this.mo;
+          if (!m)
+              return;
+          const act = m.fallback;
+          this.scenesStop();
+          this.moFinish(false);
+          this.setAct(act);
+      }
+      /** Every scene stops (a new moment, the end of one), and the next play starts with no track marked dead. */
+      scenesStop() {
+          for (let s = 0; s < this.scRun.length; s++)
+              if (this.scRun[s])
+                  this.sceneDrop(s, "");
+          this.scDead.fill(0);
+          this.tapT = 99;
+          this.tapN = 0;
+          screenLeave(this);
+      }
+      /** True while any scene is playing. */
+      scenesLive() {
+          for (const r of this.scRun)
+              if (r)
+                  return true;
+          return false;
+      }
+      /**
+       * One frame of every live scene: its names, its step, the events it asked for, and the governor. Timed with the
+       * drawing, because the two together are what a frame costs.
+       */
+      scenesStep(dt) {
+          // Stamped whether or not a scene is live, so the screen-wide tally can tell a gone surface from a quiet one.
+          this.scTick = ++SCREEN_TICK;
+          if (!this.scenesLive())
+              return;
+          const m = this.mo;
+          this.talkFor = this.level > 0.15 ? this.talkFor + dt : 0;
+          this.tapT = this.tapT < 98 ? this.tapT + dt : 99;
+          const clock = this.clock ?? nowMs;
+          this.sceneAnchors();
+          for (let s = 0; s < this.scRun.length; s++) {
+              const run = this.scRun[s];
+              if (!run)
+                  continue;
+              const t0 = clock();
+              // A frozen scene is its still frame and nothing more: its names are not written again, so every value it
+              // draws (keyframes over t, anything reading level or a tap) stays where settle() left it (SPEC 3.8).
+              if (!this.scFroze[s]) {
+                  this.sceneNames(run, s);
+                  run.step(dt);
+              }
+              // What the scene asked the moment to fire: an event track's `after` follows it from the next step.
+              if (run.fired.length && m) {
+                  for (const name of run.fired) {
+                      const e = m.events.indexOf(name);
+                      if (e >= 0)
+                          this.moEv[e] = this.moT;
+                  }
+                  run.fired.length = 0;
+              }
+              if (run.dead) {
+                  this.sceneDrop(s, run.why);
+                  continue;
+              }
+              if (run.rigOn) {
+                  this.rigOn = true;
+                  this.rigA = run.rigAlpha;
+                  this.rigSx = run.rigSx;
+                  this.rigSy = run.rigSy;
+                  this.rigRot = run.rigRot;
+                  this.rigAbout = run.rigAbout;
+                  this.hideMask = run.rigHide;
+              }
+              // The step is only part of the frame: the two draw passes add to this, and the front pass hands it to the
+              // governor, so what it sees is the whole cost of the frame and not a third of it (SPEC 3.8).
+              this.scAcc[s] = clock() - t0;
+          }
+      }
+      /** The governor: over its threshold a scene freezes at its still frame, and over it again it is dropped. */
+      sceneTime(s, ms) {
+          const run = this.scRun[s];
+          if (!run)
+              return;
+          this.scMs[s] = this.scMs[s] * (29 / 30) + ms / 30;
+          if (this.scMs[s] <= SCENE_LIMITS.ms)
+              return;
+          if (!this.scFroze[s]) {
+              this.scFroze[s] = 1;
+              this.scMs[s] = 0;
+              run.settle(run.scene.still);
+              if (this.sceneSlow.length < 4)
+                  this.sceneSlow.push(run.scene.id);
+              return;
+          }
+          this.sceneDrop(s, "slow");
+      }
+      /** Every anchor a live scene hangs on, this frame, in one table the scene engine reads. */
+      sceneAnchors() {
+          for (let s = 0; s < this.scRun.length; s++) {
+              const run = this.scRun[s];
+              if (!run)
+                  continue;
+              for (const code of run.scene.anchors) {
+                  const a = this.anchor(code);
+                  const q = code * 6;
+                  for (let k = 0; k < 6; k++)
+                      this.scAnch[q + k] = a[k];
+              }
+          }
+      }
+      /** The names a scene reads this frame (SPEC 2.2), written into its own values. */
+      sceneNames(run, s) {
+          const m = this.mo, V = run.vars, S = this.S, f = this.faceSign;
+          const span = this.scD[s];
+          V[B_T] = this.scT[s];
+          V[B_U] = span > 0 ? clamp(this.scT[s] / span, 0, 1) : 1;
+          V[B_TT] = this.moT;
+          V[B_D] = span;
+          V[B_BEAT] = m && m.bpm > 0 ? (this.moT * m.bpm) / 60 : 0;
+          V[B_K] = this.moK;
+          V[B_SIDE] = f;
+          V[B_RND] = this.moRnd;
+          V[B_RND2] = this.moRnd2;
+          V[B_W] = this.w / S;
+          V[B_X] = this.x[HIP] / S;
+          V[B_PX] = this.peerX === this.peerX ? ((this.peerX - this.x[HEAD]) * f) / S : 0;
+          V[B_VX] = ((this.x[HIP] - this.px[HIP]) / STEP) / S;
+          V[B_LEVEL] = this.level;
+          V[B_TALK] = this.talkFor >= 0.15 ? 1 : 0;
+          V[B_TAPX] = this.tapX;
+          V[B_TAPY] = this.tapY;
+          V[B_TAPT] = this.tapT;
+          V[B_TAPS] = this.tapN;
+          const evs = run.scene.events;
+          for (let e = 0; e < evs.length; e++) {
+              const i = m ? m.events.indexOf(evs[e]) : -1;
+              const at = i >= 0 ? this.moEv[i] : NaN;
+              V[NBASE + e] = at === at ? this.moT - at : 99;
+          }
+      }
+      /**
+       * A tap on a stage (BotStage only). True: a live scene that wants taps took it, and the stage's own press does
+       * not run. Anything else is ignored, so a tile's tap still opens the bot's page.
+       */
+      cue(what, px, py) {
+          if (what !== "tap")
+              return false;
+          for (let s = 0; s < this.scRun.length; s++) {
+              const run = this.scRun[s];
+              if (!run || !run.scene.tap)
+                  continue;
+              const S = this.scS[s], halfW = (run.scene.bw / 2) * S, high = run.scene.bh * S;
+              const dx = px - this.scOX[s], dy = py - this.scOY[s];
+              if (Math.abs(dx) > halfW || dy > 0.5 * S || dy < -high)
+                  continue;
+              const mirror = run.scene.fixed ? 1 : this.faceSign;
+              this.tapX = (dx / S) * mirror;
+              this.tapY = dy / S;
+              this.tapT = 0;
+              this.tapN++;
+              return true;
+          }
+          return false;
+      }
+      /** What the bootstrap reports about this build's scenes (SPEC 3.9): nothing when all is well. */
+      looksReport() {
+          const out = {};
+          if (this.sceneBad.length)
+              out.bad = this.sceneBad.slice(0, 4);
+          if (this.sceneSlow.length)
+              out.slow = this.sceneSlow.slice(0, 4);
+          return out;
+      }
+      /** Every live scene, in one pass: behind the bot, or in front of him. */
+      drawScenes(ctx, alpha, back) {
+          if (!this.scenesLive())
+              return;
+          const clock = this.clock ?? nowMs;
+          const d = this.scDraw;
+          d.anchors = this.scAnch;
+          d.color = this.kind === "make" ? this.makeColor : this.color;
+          d.ink = INK;
+          d.paper = PAPER;
+          for (let s = 0; s < this.scRun.length; s++) {
+              const run = this.scRun[s];
+              if (!run)
+                  continue;
+              const t0 = clock();
+              d.ox = this.scOX[s];
+              d.oy = this.scOY[s];
+              d.S = this.scS[s];
+              d.mirror = this.faceSign;
+              d.alpha = alpha;
+              d.allBack = this.scBack[s] === 1;
+              run.draw(ctx, d, back);
+              this.scAcc[s] = this.scAcc[s] + (clock() - t0);
+              if (run.dead) {
+                  this.sceneDrop(s, run.why);
+                  continue;
+              }
+              // One sample a frame, after the front pass: step, evaluation and both draws together.
+              if (!back) {
+                  this.scFrames[s] = this.scFrames[s] + 1;
+                  const ms = this.scAcc[s];
+                  this.scAcc[s] = 0;
+                  this.sceneTime(s, ms);
+              }
+          }
       }
       momentTrack(tr, i, h) {
           if (!this.moOn[i])
@@ -5347,6 +8027,9 @@
               case TK_EMIT:
                   if (lt >= this.moNext[i])
                       this.moNext[i] = lt + tr.every + (this.emit(tr, i) ? tr.pause : 0);
+                  break;
+              case TK_SCENE:
+                  this.sceneTrack(tr, i, lt, span);
                   break;
               default: break;
           }
@@ -5815,10 +8498,22 @@
           this.momentVars();
           this.posing = true;
           this.moStamp++;
-          for (let i = 0; i < m.tracks.length; i++)
+          for (let i = 0; i < m.tracks.length && this.mo; i++)
               this.momentTrack(m.tracks[i], i, STEP);
           this.posing = false;
           this.moT = T;
+          // Reduce Motion: a live scene draws its own still frame, with its physics settled (SPEC 3.8).
+          this.sceneAnchors();
+          for (let s = 0; s < this.scRun.length; s++) {
+              const run = this.scRun[s];
+              if (!run)
+                  continue;
+              this.sceneNames(run, s);
+              run.settle(run.scene.still);
+              run.fired.length = 0;
+              if (run.dead)
+                  this.sceneDrop(s, run.why);
+          }
       }
       // ------------------------------------------------------------------- Reduce Motion
       /**
@@ -5968,10 +8663,27 @@
               this.fabric.draw(ctx, alpha * this.cloth);
           // On the floor, his toys are behind him; up in the air (a glyph, the plane), in front.
           this.drawProps(ctx, alpha, 0);
+          this.drawScenes(ctx, alpha, true);
+          // A scene's `rig` turns, squashes and fades the bot himself, about one of his anchors.
+          const rig = this.rigOn && (this.rigA !== 1 || this.rigSx !== 1 || this.rigSy !== 1 || this.rigRot !== 0);
+          if (rig) {
+              ctx.save();
+              const a = this.anchor(this.rigAbout);
+              ctx.translate(a[0], a[1]);
+              if (this.rigRot && ctx.rotate)
+                  ctx.rotate(this.rigRot);
+              if (ctx.scale)
+                  ctx.scale(this.rigSx, this.rigSy);
+              ctx.translate(-a[0], -a[1]);
+          }
+          const ra = this.rigOn ? alpha * this.rigA : alpha;
           if (this.kind === "make")
-              this.drawDust(ctx, alpha);
+              this.drawDust(ctx, ra);
           else
-              this.drawBot(ctx, alpha, this.color);
+              this.drawBot(ctx, ra, this.color);
+          if (rig)
+              ctx.restore();
+          this.drawScenes(ctx, alpha, false);
           this.drawProps(ctx, alpha, 1);
           if (this.stageCarry && this.held === 0)
               this.drawCarryArms(ctx, alpha);
@@ -6343,13 +9055,15 @@
       drawBot(ctx, alpha, col) {
           const av = this.av, x = this.x, y = this.y, S = this.S, r = this.rH;
           const f = this.face >= 0 ? 1 : -1;
+          // A scene's `rig` may hide groups of him while it plays (scene.ts RIG_GROUPS); 0 is all of him, as always.
+          const hid = this.hideMask;
           // The body's frame: up from the hips, and across.
           let ux = x[NECK] - x[HIP], uy = y[NECK] - y[HIP];
           const ul = Math.sqrt(ux * ux + uy * uy) + 1e-6;
           ux /= ul;
           uy /= ul;
           const wx = -uy, wy = ux;
-          if (av.wearBack)
+          if (av.wearBack && !(hid & H_WEAR))
               this.drawWear(ctx, alpha, col, true);
           const pb = paintOf(av.pBody, col);
           ctx.globalAlpha = alpha;
@@ -6360,7 +9074,7 @@
           // Arms (behind the body): shoulder, elbow, hand.
           ctx.lineWidth = S * av.arm;
           ctx.beginPath();
-          for (let s = 0; s < 2; s++) {
+          for (let s = 0; s < 2 && !(hid & H_ARMS); s++) {
               const side = s ? 1 : -1, elb = s ? ELB_R : ELB_L, hand = s ? HAND_R : HAND_L;
               const sx = x[NECK] + wx * side * 0.11 * S - ux * 0.05 * S, sy = y[NECK] + wy * side * 0.11 * S - uy * 0.05 * S;
               ctx.moveTo(sx, sy);
@@ -6370,7 +9084,7 @@
           // Legs and feet.
           ctx.lineWidth = S * av.leg;
           ctx.beginPath();
-          for (let s = 0; s < 2; s++) {
+          for (let s = 0; s < 2 && !(hid & H_LEGS); s++) {
               const side = s ? 1 : -1, foot = s ? FOOT_R : FOOT_L;
               ctx.moveTo(x[HIP] + wx * side * 0.07 * S + ux * 0.02 * S, y[HIP] + wy * side * 0.07 * S + uy * 0.02 * S);
               ctx.lineTo(x[foot], y[foot]);
@@ -6385,7 +9099,7 @@
           ctx.lineTo(x[HEAD], y[HEAD]);
           ctx.stroke();
           const ang = this.headAngle(), c = Math.cos(ang), sn = Math.sin(ang);
-          if (av.antN > 0) {
+          if (av.antN > 0 && !(hid & H_ANT)) {
               ctx.lineWidth = S * av.antW;
               ctx.beginPath();
               for (let s = 0; s < av.antN; s++) {
@@ -6400,7 +9114,7 @@
           // The antennae's tips (a ball, a star), and his hands.
           ctx.beginPath();
           let first = true;
-          for (let s = 0; s < av.antN; s++) {
+          for (let s = 0; s < av.antN && !(hid & H_ANT); s++) {
               const tip = av.antTip[s], j2 = s ? ANT_B2 : ANT_A2, tr = S * av.antTipR[s], tx = x[j2], ty = y[j2];
               if (tip === 1) {
                   if (!first)
@@ -6420,10 +9134,12 @@
                   first = false;
               }
           }
-          ctx.moveTo(x[HAND_L] + S * av.hand, y[HAND_L]);
-          ctx.arc(x[HAND_L], y[HAND_L], S * av.hand, 0, TAU);
-          ctx.moveTo(x[HAND_R] + S * av.hand, y[HAND_R]);
-          ctx.arc(x[HAND_R], y[HAND_R], S * av.hand, 0, TAU);
+          if (!(hid & H_ARMS)) {
+              ctx.moveTo(x[HAND_L] + S * av.hand, y[HAND_L]);
+              ctx.arc(x[HAND_L], y[HAND_L], S * av.hand, 0, TAU);
+              ctx.moveTo(x[HAND_R] + S * av.hand, y[HAND_R]);
+              ctx.arc(x[HAND_R], y[HAND_R], S * av.hand, 0, TAU);
+          }
           ctx.fill();
           // The body: a sack, wider at the bottom, its corners rounded.
           const tl = av.bodyTop * S, bl = av.bodyBottom * S, rr = av.bodyRound * S;
@@ -6440,9 +9156,10 @@
           ctx.lineTo(ax + ux * rr, ay + uy * rr);
           ctx.quadraticCurveTo(ax, ay, ax + wx * rr, ay + wy * rr);
           ctx.closePath();
-          ctx.fill();
+          if (!(hid & H_BODY))
+              ctx.fill();
           // His ears, behind his head.
-          if (av.ears) {
+          if (av.ears && !(hid & H_HEAD)) {
               const pe = paintOf(av.pEars, col);
               if (pe !== pb)
                   ctx.fillStyle = pe;
@@ -6458,18 +9175,20 @@
               this.roundBox(ctx, x[HEAD], y[HEAD], r * av.headW, r * av.headH, r * av.headRound * Math.min(av.headW, av.headH), c, sn);
           else
               this.oval(ctx, x[HEAD], y[HEAD], r * av.headW, r * av.headH, c, sn);
-          ctx.fill();
+          if (!(hid & H_HEAD))
+              ctx.fill();
           this.fillNow = pb;
           // The perforations: light dots through the head and the body.
-          if (av.dots !== 2) {
+          if (av.dots !== 2 && !(hid & (H_HEAD | H_BODY))) {
               const pd = paintOf(av.pDots, col);
               ctx.fillStyle = pd;
               this.fillNow = pd;
               ctx.globalAlpha = alpha * av.dotA;
               this.dots(ctx, null, 1, 2);
           }
-          this.drawFace(ctx, alpha, col);
-          if (av.wearFront || this.wUsed > 0)
+          if (!(hid & H_FACE))
+              this.drawFace(ctx, alpha, col);
+          if ((av.wearFront || this.wUsed > 0) && !(hid & H_WEAR))
               this.drawWear(ctx, alpha, col, false);
           if (this.handOver)
               this.drawArmsOver(ctx, alpha, pb, this.handOver);
@@ -7481,5 +10200,5 @@
       }
       return out;
   }
-  return { CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, BotTile, BotTilesWorld, gridWorld, Roam, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
+  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
 });

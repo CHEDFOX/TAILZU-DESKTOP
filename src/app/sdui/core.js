@@ -109,6 +109,10 @@ const COMPONENTS = [
   // catalog (botLooks.js is the starter, btLooks() keeps the newest), played by botTiles.js on BotTiles, BotBuddy and
   // BotCard (`avatar`, `moment`, `momentMode`, `momentEndWhen`, BotTiles `surprises`). Without it: a moment's plain act.
   "BotMoments",
+  // LOOKS FORMAT 2, SCENES (botTiles.js scene engine): drawn, formula-driven animation with springs, ropes and soft
+  // rings, reacting to clicks, the window's voice, his own motion and the moment's events, and able to change the bot
+  // himself. The window has no over-the-air update, so a constant here is the honest answer.
+  "BotMoments2",
   // callEndpoint's `stream`: an answer's words and what the bot is doing, written into state as they come over the live
   // socket (live.js, topic ask:<id>), the line bound to them changed in place (askStreamTake).
   "AskStream",

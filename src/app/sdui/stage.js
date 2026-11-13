@@ -431,8 +431,18 @@ function mountStage(host, cfg, reduced) {
     if (!reduced && bot.placed) { if (bot.mo) bot.stopMoment(); bot.cheer(); }
     void run(on.onDoubleTap);
   };
+  /**
+   * A click inside a live scene's box, on a scene that wants them (looks format 2), rings the scene instead of
+   * pressing the stage. Everything else presses as before.
+   */
+  const cueScene = (e) => {
+    if (!bot.cue) return false;
+    const r = (cv || host).getBoundingClientRect();
+    try { return bot.cue("tap", e.clientX - r.left, e.clientY - r.top); } catch { return false; }
+  };
   hit.addEventListener("click", (e) => {
     const d = Number(e.detail) || 1;
+    if (d < 2 && cueScene(e)) return;
     if (d >= 2) { if (on.onDoubleTap && onBody(e) && performance.now() - lastDouble > 300) double(); return; }
     if (!on.onDoubleTap) { press(); return; }
     clearTimeout(pending);
@@ -490,7 +500,11 @@ function mountStage(host, cfg, reduced) {
     if (listening && L.rect) {
       bot.lookAt(L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h);
       bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
+    } else if (bot.scenesLive && bot.scenesLive()) {
+      // A live scene may read the window's voice (`level`, `talk`), so it is fed while one is playing too.
+      bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
     } else bot.setLevel(0);
+    if (typeof btNoteScenes === "function" && bot.sceneBad && (bot.sceneBad.length || bot.sceneSlow.length)) btNoteScenes(bot);
     follow(dt);
     placeHit();
     trail();

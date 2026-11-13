@@ -33,6 +33,9 @@ function capabilities() {
       // The bot on the screen listens, and the one key talks to him with X0 in front: only with a main process that records for him.
       VOICE_ON() ? ["VoiceLive", "DeskTalkTo"] : []),
     actions: ACTIONS.concat(typeof outboxRun === "function" ? ["outbox"] : []),
+    // The bots' catalog as this window really has it (sdui/bots.js): its version and format, whether it compiled,
+    // and any scene that went wrong or was slowed. No person data.
+    ...(typeof btLooksReport === "function" ? { looks: btLooksReport() } : {}),
     templates: [],
     device: {
       // WHAT THIS IS, as opposed to what it can draw.

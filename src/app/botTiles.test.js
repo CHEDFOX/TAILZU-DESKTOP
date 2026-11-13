@@ -365,3 +365,89 @@ test("the window's nodes: a tile's look and moment, Home's surprises, a BotBuddy
   assert.strictEqual(p.run("BT_PENDING[BT_PENDING.length - 1].momentEnd"), true);
 });
 
+
+// ---------------------------------------------------------------- looks format 2: scenes
+
+test("the window plays format 2: the scene engine is in the generated file, and the catalog's scenes compile", () => {
+  const api = require("../../botTiles.js");
+  assert.strictEqual(api.LOOKS_FORMAT, 2, "this release plays scenes");
+  assert.ok(typeof api.compileScene === "function" && typeof api.SceneRun === "function", "the scene engine is bundled");
+  assert.ok(api.SCENE_LIMITS && api.SCENE_LIMITS.ops > 0, "and so is the table the server reads");
+  const L = api.compileLooks(require("../../botLooks.js"));
+  assert.deepStrictEqual(L.errors, []);
+  assert.ok(L.scenes.size > 0, "the starter pack is cut at format 2, so it carries the scenes");
+});
+
+test("a format-2 moment plays on a stage: finite, inside, drawn, and it ends with its track", () => {
+  const api = require("../../botTiles.js");
+  const L = api.compileLooks(require("../../botLooks.js"));
+  let played = 0;
+  for (const [id, m] of L.moments) {
+    if (m.react || !m.scenes) continue;
+    played++;
+    const t = new api.BotTile({ kind: "custom", color: "#3E6E8E", mood: "idle", seed: 4 });
+    t.resize(340, 200, 180);
+    assert.ok(t.playMoment(m, "once"), id);
+    const ctx = ctx2d();
+    for (let f = 0; f < (m.dur + 0.5) * 60; f++) { t.setLevel(0.4); t.step(1 / 60); t.draw(ctx, 1); }
+    assert.ok(t.finite() && t.inside(), id);
+    assert.ok(ctx.calls > 0, id + ": it drew");
+    assert.deepStrictEqual(t.looksReport(), {}, id + ": nothing went wrong");
+  }
+  assert.ok(played > 0, "the catalog carries at least one format-2 moment (the pond)");
+});
+
+test("a scene that throws is dropped alone: the bot goes on, and the window's loop does not die", () => {
+  const api = require("../../botTiles.js");
+  const L = api.compileLooks(require("../../botLooks.js"));
+  const m = Array.from(L.moments.values()).find((x) => x.scenes);
+  assert.ok(m, "a format-2 moment");
+  const t = new api.BotTile({ kind: "custom", color: "#3E6E8E", mood: "idle", seed: 4 });
+  t.resize(340, 200, 180);
+  t.playMoment(m, "loop");
+  for (let f = 0; f < 60; f++) t.step(1 / 60);
+  const ctx = ctx2d();
+  let depth = 0;
+  ctx.save = () => { depth++; };
+  ctx.restore = () => { depth--; };
+  // Only a scene's dot field calls dots(), so only the scene's own drawing blows up here.
+  ctx.dots = () => { throw new Error("the canvas blew up"); };
+  for (let f = 0; f < 60; f++) { t.step(1 / 60); t.draw(ctx, 1); }
+  assert.strictEqual(depth, 0, "every save the scene made was undone");
+  assert.ok(t.finite());
+  assert.ok((t.looksReport().bad || []).length > 0, "and it was reported");
+});
+
+/** A canvas-shaped context with no format-2 members, as the window's really is (bar dots). */
+function ctx2d() {
+  const c = { calls: 0, globalAlpha: 1, fillStyle: "", strokeStyle: "", lineWidth: 1, lineCap: "butt", lineJoin: "miter" };
+  for (const m of ["save", "restore", "translate", "beginPath", "closePath", "moveTo", "lineTo", "quadraticCurveTo", "bezierCurveTo", "arc", "fill", "stroke", "clip", "rotate", "scale"]) {
+    c[m] = () => { c.calls++; };
+  }
+  return c;
+}
+
+test("the kept copy carries the format: the window keeps { f, spec } under tz.botLooks.f2", () => {
+  const bots = fs.readFileSync(path.join(__dirname, "sdui", "bots.js"), "utf8");
+  assert.match(bots, /const BT_LOOKS_KEY = "tz\.botLooks\.f2"/, "a format-2 window must not read a format-1 copy");
+  assert.match(bots, /JSON\.stringify\(\{ f, spec \}\)/, "and it keeps the format beside the catalog");
+  assert.match(bots, /btLooksReport/, "the window reports what it has back to the server");
+  const core = fs.readFileSync(path.join(__dirname, "sdui", "core.js"), "utf8");
+  assert.match(core, /"BotMoments2"/, "the window says it plays scenes");
+  const stage = fs.readFileSync(path.join(__dirname, "sdui", "stage.js"), "utf8");
+  assert.match(stage, /bot\.cue\("tap"/, "a click inside a live tap scene rings the scene");
+  // (v, f), not v alone and not f alone: the starter's OWN format is where the window starts, and an older kept
+  // copy never wins because it was cut less far down.
+  assert.match(bots, /BT_LOOKS_F = btFormatOf\(window\.TailzuBotLooks, api\)/, "the starter's own format counts");
+  assert.match(bots, /L\.v > BT_LOOKS\.v \|\| \(L\.v === BT_LOOKS\.v && f > BT_LOOKS_F\)/, "newer, or the same version cut less far");
+});
+
+test("the kept copy rule itself: newer wins, the same version with a richer cut wins, an older one never does", () => {
+  // The rule as the window runs it (bots.js btLooks), on its own, so the comparison cannot drift.
+  const takes = (keptV, keptF, haveV, haveF) => keptV > haveV || (keptV === haveV && keptF > haveF);
+  assert.strictEqual(takes(4, 2, 5, 2), false, "a v4 copy over a v5 starter: no");
+  assert.strictEqual(takes(4, 2, 5, 1), false, "not even when the copy was cut less far down");
+  assert.strictEqual(takes(5, 2, 5, 1), true, "the same version, cut less far down: yes");
+  assert.strictEqual(takes(6, 1, 5, 2), true, "newer content, whatever its format: yes");
+  assert.strictEqual(takes(5, 2, 5, 2), false, "the same thing twice: no");
+});

@@ -18,19 +18,38 @@ const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibo
 // starter (botLooks.js, generated from the server's file at release), the last one the server sent (localStorage), and
 // the server's own when the bootstrap's flag "bots.looks" ({ v, url }) names another version, up or down. A catalog is
 // taken only when it compiles clean; the bots wear it from the next paint.
-const BT_LOOKS_KEY = "tz.botLooks.v1";
+// The key carries the format: this release plays format 2 (scenes), and must not go on reading the format-1 copy
+// an older window left behind at the same version. The copy itself is { f, spec }.
+const BT_LOOKS_KEY = "tz.botLooks.f2";
 let BT_LOOKS = null;
+let BT_LOOKS_F = 1;
 let BT_LOOKS_FETCHING = 0;
+/** What went wrong with a scene, for the bootstrap's report (anim/SPEC.md 3.9). */
+const BT_SCENE_BAD = [];
+const BT_SCENE_SLOW = [];
+
+/** A catalog's own format, as the projection wrote it, never above what this window plays. */
+function btFormatOf(spec, api) {
+  const f = Number(spec && spec.format);
+  return f >= 1 ? Math.min(api.LOOKS_FORMAT, Math.floor(f)) : 1;
+}
 
 function btLooks() {
   const api = window.TailzuBotTiles;
   if (BT_LOOKS || !api) return BT_LOOKS;
   BT_LOOKS = api.compileLooks(window.TailzuBotLooks || { v: 1 });
+  // The starter's own format, not 1: this release ships a format-2 starter (botLooks.js), and calling it format 1
+  // would let an OLDER format-2 copy left by a previous run win on `f` alone.
+  BT_LOOKS_F = btFormatOf(window.TailzuBotLooks, api);
   try {
     const kept = localStorage.getItem(BT_LOOKS_KEY);
     if (kept) {
-      const L = api.compileLooks(JSON.parse(kept));
-      if (!L.errors.length && L.v > BT_LOOKS.v) BT_LOOKS = L;
+      const held = JSON.parse(kept);
+      const spec = held && typeof held === "object" && "spec" in held ? held.spec : held;
+      const f = held && typeof held === "object" && "f" in held ? Math.max(1, Number(held.f) || 1) : 1;
+      const L = api.compileLooks(spec);
+      // Newer content, or the same content cut less far down; never an older catalog for its format alone.
+      if (!L.errors.length && (L.v > BT_LOOKS.v || (L.v === BT_LOOKS.v && f > BT_LOOKS_F))) { BT_LOOKS = L; BT_LOOKS_F = f; }
     }
   } catch { /* nothing kept: the starter */ }
   return BT_LOOKS;
@@ -40,8 +59,10 @@ function btLooksSync(flag) {
   const api = window.TailzuBotTiles, L = btLooks();
   if (!api || !L || !flag || typeof flag !== "object" || !ENV) return;
   const v = Number(flag.v), url = String(flag.url || "");
-  if (!(v >= 1) || !url.startsWith("/v1/") || v === L.v || v === BT_LOOKS_FETCHING) return;
-  BT_LOOKS_FETCHING = v;
+  const f = Number(flag.f) >= 1 ? Math.min(api.LOOKS_FORMAT, Math.floor(Number(flag.f))) : 1;
+  const key = v * 16 + f;
+  if (!(v >= 1) || !url.startsWith("/v1/") || (v === L.v && f === BT_LOOKS_F) || key === BT_LOOKS_FETCHING) return;
+  BT_LOOKS_FETCHING = key;
   fetch(String(ENV.baseUrl).replace(/\/$/, "") + url, { headers: { accept: "application/json" } })
     .then((r) => (r.ok ? r.json() : null))
     .then((spec) => {
@@ -49,10 +70,28 @@ function btLooksSync(flag) {
       const next = api.compileLooks(spec);
       if (next.errors.length) return;
       BT_LOOKS = next;
-      try { localStorage.setItem(BT_LOOKS_KEY, JSON.stringify(spec)); } catch { /* kept for this run only */ }
+      BT_LOOKS_F = f;
+      try { localStorage.setItem(BT_LOOKS_KEY, JSON.stringify({ f, spec })); } catch { /* kept for this run only */ }
     })
     .catch(() => {})
     .finally(() => { BT_LOOKS_FETCHING = 0; });
+}
+
+/** A tile noticed a scene misbehaving: kept for the bootstrap's report, at most four of each. */
+function btNoteScenes(bot) {
+  if (!bot || !bot.sceneBad) return;
+  for (const b of bot.sceneBad) if (BT_SCENE_BAD.length < 4 && !BT_SCENE_BAD.includes(b)) BT_SCENE_BAD.push(b);
+  for (const s of bot.sceneSlow) if (BT_SCENE_SLOW.length < 4 && !BT_SCENE_SLOW.includes(s)) BT_SCENE_SLOW.push(s);
+}
+
+/** The window's own looks report (backend.js's capabilities() puts it on every bootstrap). */
+function btLooksReport() {
+  const L = btLooks();
+  const out = { v: L ? L.v : 0, f: BT_LOOKS_F, ok: !!L && !L.errors.length };
+  if (L && L.errors.length) out.why = String(L.errors[0]).slice(0, 120);
+  if (BT_SCENE_BAD.length) out.bad = BT_SCENE_BAD.slice(0, 4);
+  if (BT_SCENE_SLOW.length) out.slow = BT_SCENE_SLOW.slice(0, 4);
+  return out;
 }
 
 /** A bot's look: the node's (an id or a spec), else his kind's. */
@@ -257,13 +296,19 @@ function btLoop(host, step, paint, gone) {
     if (seen) wake();
   }) : null;
   if (io) io.observe(host);
+  let faults = 0;
   const tick = () => {
     raf = 0;
     if (!host.isConnected) { if (io) io.disconnect(); document.removeEventListener("visibilitychange", wake); if (gone) gone(); return; }
     if (document.hidden || !seen) return;
     const now = performance.now(), dt = last ? (now - last) / 1000 : 1 / 60;
     last = now;
-    try { step(dt); paint(); } catch (e) { console.warn("[Tailzu][BotTiles] frame failed:", e); return; }
+    // One bad frame is not the end of the loop: a scene's own fault is caught inside the core, and three failing
+    // frames in a row stop it, as the phone's loop does.
+    try { step(dt); paint(); faults = 0; } catch (e) {
+      console.warn("[Tailzu][BotTiles] frame failed:", e);
+      if (++faults >= 3) return;
+    }
     raf = requestAnimationFrame(tick);
   };
   function wake() { if (!raf && host.isConnected && !document.hidden && seen) { last = 0; raf = requestAnimationFrame(tick); } }
@@ -353,7 +398,10 @@ function mountBotTiles(root) {
       el.addEventListener("dblclick", () => double());
       el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(el.clientWidth / 2, el.clientHeight / 2); } });
     });
-    if (!reduced) btLoop(grid, (dt) => world.step(dt), paint, () => world.release());
+    if (!reduced) btLoop(grid, (dt) => {
+      world.step(dt);
+      for (const t of world.tiles) if (t.sceneBad && (t.sceneBad.length || t.sceneSlow.length)) btNoteScenes(t);
+    }, paint, () => world.release());
   });
   mountHomeHead(root, reduced);
   // Spaces' stages, crowds, vanishes and @ fields (stage.js).
