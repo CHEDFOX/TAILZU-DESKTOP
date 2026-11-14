@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 14 Nov 2026, 22:15 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 14 Nov 2026, 22:37 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -75,6 +75,14 @@ look. The apps are renderers: build server data with the existing blocks and cat
   choose them. Not mine to pick.
 
 ## Landed 14 Nov 2026 (all switched off)
+
+- **The window asks on the card, where the phone asks** (`docs/window-setup.md`). The flow is the same on both — BOTS_APP is on,
+  both builds declare `BotsKit`, so sign-in goes straight to Home and the asks are cards over a blurred Home. The two steps this
+  session had added to the `onboard` screen (the window's terms and permissions) are **out again**: that screen is the older flow,
+  for builds without `BotsKit`, and it is exactly what it was. What the window needs went onto the **arrival card** instead: its one
+  Mac step now carries both switches as rows — typing for you, and answering about your screen, which was missing altogether — each
+  named for what it does, with the Mac's own names in the line under them. The camera is asked for by the moment-of-need card when a
+  call turns one on, never up front. One test of the primed walk went with the step it covered.
 
 - **The permission card, over the app, where it was missed** (`docs/window-setup.md`, "When it is missed later"). The card the phone
   has, in the window: one permission, the page behind it blurred (the overlay `BotCard`'s veil), put up when a paste is refused for
