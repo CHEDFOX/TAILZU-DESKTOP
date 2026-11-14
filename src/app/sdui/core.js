@@ -127,6 +127,10 @@ const COMPONENTS = [
   // build that says all of these; an older installer keeps the screens it has. Not ActionParams: the window has always filled
   // "$state.x" params without declaring it, and the server asks the name of the phone only.
   "BotStage", "BotCrowd", "Vanish", "MentionField", "LiveWords", "DoubleTap", "KitExtras",
+  // Not a component: BotPeek, BotStage's `stand: "peek"` (sdui/stage.js, botTiles.js Peek) — instead of standing on his stage he
+  // lives behind the bar under it, only his head over the line, and every so often jumps the ledge into full view for a few
+  // moments. A build that does not say it is sent a stage he stands on, as before.
+  "BotPeek",
   // PEOPLE AS THEIR OWN TINY BOTS (shared/types/sdui.ts 3j): PersonBot, a person's full tiny bot standing in a size x size box,
   // idling on one loop for the window (sdui/personBot.js), also in each row of MentionField's "@" list from the row's `bot`. Without
   // it the server sends a plain circle in the person's colour. Not a component: FontBricolage, the three Bricolage Grotesque faces

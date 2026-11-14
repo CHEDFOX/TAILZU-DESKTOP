@@ -1,8 +1,8 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone and the server.
 // Source: TAILZU-FRONTEND/app/src/botTiles/{scene,core}.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
 // scene.ts sha256 bf9ddb40045f8c5b9259c29e1c83f2a6f097a3f25328a3b42c9a7923654454ca
-// core.ts sha256 f2e6ddc9b9ba92f047188dbb9d53993405a1373570cc1aaf79624a029d1d1614
-// body sha256 98674e213143812b2dd58c1a265fa4227433e1a0576c5fbedab795069586b365
+// core.ts sha256 9231a10db8772a8e0052c68fb1e0993a377963073ddd37593b98aa301b046079
+// body sha256 e3b2b9dcdd4d9777c054f123b6361dcb23e62aacb9bcdb6f7efa4fd0101bb40f
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -9887,6 +9887,87 @@
               this.wait = this.pick(this.spec.pause);
       }
   }
+  class Peek {
+      constructor(bot, spec, seed) {
+          this.paused = false;
+          this.state = "behind";
+          this.left = 0;
+          /** Seconds since he left the ground: his feet drag on it for a frame or two, which is not a jump that failed. */
+          this.since = 0;
+          this.bot = bot;
+          this.spec = spec;
+          this.rand = rng((seed >>> 0) ^ 0x2fa71d);
+          this.wait = this.pick(spec.every);
+      }
+      pick(r) {
+          const a = Number(r?.[0]) || 0, b = Number(r?.[1]) || a;
+          return a + this.rand() * (b - a);
+      }
+      /** Where his feet are now: his crown, plus his height. */
+      feet() {
+          return this.bot.crown().y + this.spec.crownH;
+      }
+      /** Up: enough speed to clear the lip with a little to spare, and a lean, so he lands somewhere else along the bar. */
+      rise() {
+          const b = this.bot, climb = Math.max(1, this.spec.hidden - this.spec.ledge);
+          b.jump((this.rand() - 0.5) * b.S * 1.6, -Math.sqrt(2 * b.g * (climb + b.S * 0.55)));
+          this.state = "rising";
+          this.since = 0;
+      }
+      /** Off the ledge: the low ground is his again, so this hop drops him behind the bar. */
+      drop() {
+          const b = this.bot;
+          b.floor = this.spec.hidden;
+          b.jump((this.rand() - 0.5) * b.S * 1.1, -b.S * 0.9);
+          this.state = "falling";
+      }
+      /** Up now, whatever he was doing (something landed and he wants to be seen); already up, he stays a while longer. */
+      visit() {
+          if (this.state === "behind" && this.bot.grounded)
+              this.rise();
+          else if (this.state === "up")
+              this.left = Math.max(this.left, this.pick(this.spec.stay));
+      }
+      step(dt) {
+          const b = this.bot, s = this.spec;
+          if (this.paused)
+              return;
+          if (this.state === "behind") {
+              if (b.grounded && b.floor !== s.hidden)
+                  b.floor = s.hidden;
+              this.wait -= dt;
+              if (this.wait <= 0 && b.grounded)
+                  this.rise();
+              return;
+          }
+          if (this.state === "rising") {
+              this.since += dt;
+              if (this.feet() <= s.ledge) {
+                  b.floor = s.ledge;
+                  this.state = "up";
+                  this.left = this.pick(s.stay);
+                  return;
+              }
+              // Down again without clearing the lip: he tries the next one. (His feet drag for a frame or two as he goes, which is
+              // why nothing is read from `grounded` until he has had a moment in the air.)
+              if (b.grounded && this.since > 0.25) {
+                  this.state = "behind";
+                  this.wait = this.pick(s.every);
+              }
+              return;
+          }
+          if (this.state === "up") {
+              this.left -= dt;
+              if (this.left <= 0 && b.grounded)
+                  this.drop();
+              return;
+          }
+          if (b.grounded) {
+              this.state = "behind";
+              this.wait = this.pick(s.every);
+          }
+      }
+  }
   /**
    * His thought's trail: three bubbles from just over his antennae up to the box, growing toward it (sizes, diameters at
    * scale 1), each outlined in ink (strokes). anchorPad: how near the box's corners the trail may meet it. lift: px over
@@ -10200,5 +10281,5 @@
       }
       return out;
   }
-  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
+  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, Peek, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
 });

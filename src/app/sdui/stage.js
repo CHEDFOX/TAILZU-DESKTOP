@@ -46,12 +46,26 @@ function stMinHeight(p, th) {
   return size + 18 + (th && th.restText ? stTrailRoom() + 48 : 0);
 }
 
+/**
+ * HE LIVES BEHIND THE BAR UNDER THE STAGE (`stand: "peek"`, botTiles.js Peek), not standing on it: his ground is this far
+ * below the stage's own floor, so the canvas's bottom edge cuts him off there and only his head shows, and every so often he
+ * jumps the ledge and stands in full view for a few moments. The same numbers as the phone's (stageCore.ts PEEK).
+ */
+const PEEK = { hide: 0.62, room: 0.8, every: [7, 16], stay: [2.4, 5.2] };
+const stPeeks = (p) => p && p.stand === "peek";
+const stPeekHide = (size) => Math.max(2, Math.round(size * PEEK.hide));
+/** A peeking stage: shorter by what the bar keeps, but never shorter than him whole on the ledge with his jump's room over it. */
+function stPeekHeight(p, th) {
+  const size = Number(p.size) || 30;
+  return Math.max(size + 18 + Math.round(size * PEEK.room), Math.max(Number(p.height) || 0, stMinHeight(p, th)) - stPeekHide(size));
+}
+
 /** His life: kept for the app's life, by `life`. The bot is made when the core is there. */
 function stLife(p) {
   const life = String(p.life || "stage");
   let L = ST_LIVES.get(life);
   if (!L) {
-    L = { life, bot: null, roam: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
+    L = { life, bot: null, roam: null, peek: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
     ST_LIVES.set(life, L);
   }
   return L;
@@ -232,7 +246,8 @@ function mountStage(host, cfg, reduced) {
   const was = L.mode;
   L.mode = mode;
   const size = Number(p.size) || 30;
-  const H0 = Math.max(Number(p.height) || 0, stMinHeight(p, th));
+  const peeks = stPeeks(p);
+  const H0 = peeks ? stPeekHeight(p, th) : Math.max(Number(p.height) || 0, stMinHeight(p, th));
   const W = () => host.clientWidth || layer.clientWidth || 0;
 
   // ---- him
@@ -240,6 +255,13 @@ function mountStage(host, cfg, reduced) {
   fit(host.clientHeight || H0);
   if (p.roam && !L.roam && typeof api.Roam === "function" && btLooks()) L.roam = new api.Roam(bot, btLooks(), p.roam, W() || 300, stSeed(L.life) ^ 7);
   if (L.roam) L.roam.w = W() || L.roam.w;
+  // Peeking: his own ground is under the stage, past where resize would put a floor, and Peek owns it from here.
+  if (peeks && bot.placed && typeof api.Peek === "function") {
+    const ledge = (host.clientHeight || H0) - ST_FLOOR;
+    const spec = { hidden: ledge + stPeekHide(size), ledge, crownH: Math.max(1, Math.round(ledge - bot.crown().y)), every: PEEK.every, stay: PEEK.stay };
+    if (!L.peek) { L.peek = new api.Peek(bot, spec, stSeed(L.life) ^ 0x51a3); bot.floor = spec.hidden; }
+    else L.peek.spec = spec;
+  } else L.peek = null;
   // What he is at: thinking, listening, standing by his open thought, or his own life (a breath first after it closes). Thinking
   // comes first: a voice chat listens for all of its turns (sending included, so the box keeps its words), and he thinks while a
   // turn's words go.
@@ -252,6 +274,12 @@ function mountStage(host, cfg, reduced) {
   const act = thinking ? "think" : listening ? "listen" : opened || L.standUntil > performance.now() ? "stand" : "play";
   // The roam lets go first (pausing gives up a walk of its own), so the walks asked below are his.
   if (L.roam) L.roam.pause(reduced || act !== "play" || out);
+  // A thought open, a question being answered, an ear on them: he comes over the ledge for it and stays up while it lasts.
+  if (L.peek) {
+    const busy = reduced || act !== "play" || out;
+    if (busy) L.peek.visit();
+    L.peek.paused = busy && L.peek.state === "up";
+  }
   if (!reduced && bot.placed && bot.moment !== act) bot.setAct(act);
   // Out at a side while outWhen holds; back in when it stops (gone already at the first draw: put there at once).
   // No side named: the nearer edge, as the prototype walks him off (across a wide window the far one is a long stroll), and back
@@ -497,6 +525,7 @@ function mountStage(host, cfg, reduced) {
     }
     bot.step(dt);
     if (L.roam) L.roam.step(dt);
+    if (L.peek) L.peek.step(dt);
     if (listening && L.rect) {
       bot.lookAt(L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h);
       bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
