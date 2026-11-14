@@ -219,7 +219,7 @@ async function outboxGo() {
 function outboxRun(action) {
   const box = outboxBox();
   if (!box) return;
-  const fill = (v) => (typeof v === "string" ? v.replace(/\$state\.[A-Za-z0-9_.]*[A-Za-z0-9_]/g, (m) => { const x = stateAt(m.slice(7)); return x == null ? "" : String(x); }) : "");
+  const fill = (v) => (typeof v2Literal === "function" && v2Literal(v) ? v : typeof v === "string" ? v.replace(/\$state\.[A-Za-z0-9_.]*[A-Za-z0-9_]/g, (m) => { const x = stateAt(m.slice(7)); return x == null ? "" : String(x); }) : "");
   switch (action.op) {
     case "add": {
       const e = box.add({ path: action.path, body: deepResolve(action.body || {}), label: fill(action.label), sub: fill(action.sub) });

@@ -36,6 +36,10 @@ function capabilities() {
     // The bots' catalog as this window really has it (sdui/bots.js): its version and format, whether it compiled,
     // and any scene that went wrong or was slowed. No person data.
     ...(typeof btLooksReport === "function" ? { looks: btLooksReport() } : {}),
+    // THE BUILDING BLOCKS (sdui/v2/): `vocab: 2` says this build has the screen kernel, and `blocks` names only the
+    // ones it really draws, less anything a kill switch turned off. A screen that needs one this window has not got
+    // is served its frozen version, or the short "update" screen — never a quietly smaller version of itself.
+    ...(typeof v2Handshake === "function" ? v2Handshake() : {}),
     templates: [],
     device: {
       // WHAT THIS IS, as opposed to what it can draw.
