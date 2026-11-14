@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 14 Nov 2026, 12:00 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 14 Nov 2026, 20:27 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -56,20 +56,15 @@ Play Integrity in the app), and their Android halves. Five jobs hold:
   still have no icon of their own** and get the generic `spark`: one line each in `palette.ts` `BUILTIN_ICON` when somebody wants to
   choose them. Not mine to pick.
 
-## In progress (started 14 Nov 2026, evening)
-
-- **The permission card at the moment of need (the window)** (P1, same session as the window's onboarding steps). Someone who said
-  "Not now" in the onboarding, or turned a permission off later, meets nothing but a failure: a paste that silently only copies, a look
-  that answers "I can't see your screen". Adding the card the phone has, over the app with the blurred veil the window already draws
-  for `BotCard` overlays: one permission, why it is needed, and the most in-app way to grant it this OS allows (macOS's own prompt for
-  the microphone and the camera; the exact settings page where the OS has no prompt, Windows' privacy pages included). Shown when a
-  feature is refused — Accessibility on a failed paste, Screen Recording on a refused look, the camera when a call turns one on — and
-  only while the window is up; the notification stays for when it is not.
-  Holds: `TAILZU-DESKTOP/src/app/sdui/{permCard,permissions,core,backend,actions}.js`, `src/app/app.html`, `src/main/{main,preload}.js`,
-  `src/agent/askSetup.js`; `TAILZU-BACKEND/tulmi/src/experience/appKnobsData.ts` (the `desktop.perm.*` words) and
-  `tulmi/src/experience/onboard/perms.ts`.
-
 ## Landed 14 Nov 2026 (all switched off)
+
+- **The permission card, over the app, where it was missed** (`docs/window-setup.md`, "When it is missed later"). The card the phone
+  has, in the window: one permission, the page behind it blurred (the overlay `BotCard`'s veil), put up when a paste is refused for
+  want of Accessibility, when Ask's look is refused for want of Screen Recording, when a call cannot open the microphone or the
+  camera, and in place of the toast when a permissions row is refused for good. Only while the window is on screen; the main
+  process keeps its notification for when it is not. It asks the system itself wherever the system will ask, and opens that
+  computer's own page where it will not — `ms-settings:privacy-microphone` and `privacy-webcam` are new, so Windows is no longer a
+  dead end. Words: `appKnobsData.ts` `desktop.perm.*`.
 
 - **The window's terms and permissions, after onboarding** (`docs/window-setup.md`). A window finished its onboarding having agreed
   to nothing and granted nothing: `postAuthSteps` left Make me yours out ("the OS asks") and the AI permission is asked for by a Home
