@@ -3,8 +3,8 @@
 // The window's copy of TAILZU-FRONTEND/app/src/sdui/call: the same four seat routes, the same state written into the screen, and the
 // same `Caller` node. Electron has WebRTC of its own, so there is nothing to load and nothing to declare: `call` is always on here.
 //
-//   v2CallJoin(a)    take a seat: the microphone (and the camera) opened, an offer made, POSTed to a.join; the answer set, the loop started
-//   v2CallSet(op)    mic, cam or screen on or off
+//   v2CallJoin(a)    take a seat and start the loop. NOTHING IS CAPTURED: the microphone and the camera start off
+//   v2CallSet(op)    mic or cam on (which is what opens it, and publishes it), or off
 //   v2CallLeave()    hung up
 //   v2CallerNode()   one person's picture, or the first letter of their name while their camera is off
 //
@@ -91,27 +91,21 @@ function v2CallGathered(pc) {
   });
 }
 
-/** Take a seat and hold the call for this screen. */
+/**
+ * Take a seat and hold the call for this screen. NOTHING IS CAPTURED BY JOINING: the microphone and the camera start off and stay shut
+ * until the person turns one on, so walking into a call never opens a device. The permissions were asked for once, after onboarding.
+ */
 async function v2CallJoin(a) {
   if (V2_CALL) return;
   const statePath = typeof a.statePath === "string" && a.statePath ? a.statePath : "c";
-  const video = a.video !== false;
   const c = {
-    statePath, phase: "connecting", mic: true, cam: video, me: null, host: false,
-    people: [], waiting: [], held: [], byMid: new Map(), heard: {}, seat: "", pc: null, mine: null,
+    statePath, phase: "connecting", mic: false, cam: false, me: null, host: false,
+    people: [], waiting: [], held: [], byMid: new Map(), sent: new Map(), heard: {}, seat: "", pc: null, mine: null,
     chain: Promise.resolve(), beat: null, tries: 0, lastOk: 0, stopped: false,
   };
   V2_CALL = c;
   v2CallPush();
 
-  try {
-    c.mine = await navigator.mediaDevices.getUserMedia({ audio: true, video });
-  } catch {
-    c.phase = "failed";
-    v2CallPush();
-    V2_CALL = null;
-    return run(a.onBlocked);
-  }
   try {
     const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }], bundlePolicy: "max-bundle" });
     c.pc = pc;
@@ -122,21 +116,10 @@ async function v2CallJoin(a) {
         v2CallPush();
       }
     });
-    const audio = c.mine.getAudioTracks()[0];
-    const cam = c.mine.getVideoTracks()[0];
-    if (!audio) throw new Error("no microphone");
-    const aT = pc.addTransceiver(audio, { direction: "sendonly" });
-    const vT = cam ? pc.addTransceiver(cam, { direction: "sendonly" }) : null;
-
-    await pc.setLocalDescription(await pc.createOffer());
-    await v2CallGathered(pc);
-
-    const body = { sdp: pc.localDescription && pc.localDescription.sdp, audioMid: aT.mid || "0" };
-    if (vT && vT.mid) body.videoMid = vT.mid;
+    // A seat with no tracks of its own: the first SDP exchange happens when we pull someone in.
+    const body = {};
     if (typeof a.knock === "string" && a.knock) body.knock = a.knock;
     const out = await v2CallPost(a.join, body);
-
-    await pc.setRemoteDescription({ type: "answer", sdp: out.answer });
     c.seat = out.seat;
     c.me = { identity: out.identity, name: out.name };
     c.host = !!out.host;
@@ -222,22 +205,71 @@ async function v2CallPull(c, want) {
   }
 }
 
-/** The person's own switches. The window has no earpiece and no second camera, so mic, cam and the screen are all of them. */
+/** The person's own switches. Turning one on is what opens that device, and publishes it; the window has no earpiece and no second camera. */
 async function v2CallSet(op, value) {
   const c = V2_CALL;
-  if (!c) return;
-  const on = (was) => (value === undefined ? !was : value);
-  if (op === "mic") {
-    c.mic = on(c.mic);
-    for (const t of c.mine ? c.mine.getAudioTracks() : []) t.enabled = c.mic;
-  } else if (op === "cam") {
-    c.cam = on(c.cam);
-    for (const t of c.mine ? c.mine.getVideoTracks() : []) t.enabled = c.cam;
+  if (!c || (op !== "mic" && op !== "cam")) return;
+  const was = op === "mic" ? c.mic : c.cam;
+  const want = value === undefined ? !was : value;
+  if (want) {
+    if (!(await v2CallOpen(c, op))) return;
   } else {
-    return;  // speaker and flip are the phone's
+    v2CallShut(c, op);
   }
+  if (op === "mic") c.mic = want; else c.cam = want;
   v2CallPush();
   await v2CallStep(c, () => v2CallBeat(c)).catch(() => undefined);
+}
+
+/** A microphone or a camera opened for the first time, and published. Opening is what asks, so it happens here and never at joining. */
+async function v2CallOpen(c, op) {
+  const pc = c.pc;
+  if (!pc) return false;
+  const have = (op === "mic" ? (c.mine ? c.mine.getAudioTracks() : []) : (c.mine ? c.mine.getVideoTracks() : []))
+    .find((t) => t.readyState !== "ended");
+  if (have) { have.enabled = true; return true; }
+
+  let got;
+  try {
+    got = await navigator.mediaDevices.getUserMedia(op === "mic" ? { audio: true } : { video: true });
+  } catch {
+    return false;
+  }
+  const track = (op === "mic" ? got.getAudioTracks() : got.getVideoTracks())[0];
+  if (!track) return false;
+  const kept = (c.mine ? c.mine.getTracks() : []).filter((t) => t.readyState !== "ended");
+  c.mine = new MediaStream(kept.concat([track]));
+
+  try {
+    // Coming back to the m-line it was published on: the track is simply put back, with no new offer.
+    const spare = c.sent.get(op);
+    if (spare) { await spare.sender.replaceTrack(track); return true; }
+    const t = pc.addTransceiver(track, { direction: "sendonly" });
+    c.sent.set(op, t);
+    await pc.setLocalDescription(await pc.createOffer());
+    await v2CallGathered(pc);
+    const body = { seat: c.seat, sdp: pc.localDescription && pc.localDescription.sdp };
+    body[op === "mic" ? "audioMid" : "videoMid"] = t.mid || "0";
+    const out = await v2CallPost(V2_CALL_SEAT + "/publish", body);
+    await pc.setRemoteDescription({ type: "answer", sdp: out.answer });
+    return true;
+  } catch {
+    try { track.stop(); } catch { /* already stopped */ }
+    return false;
+  }
+}
+
+/** Turned off: the microphone is disabled (instant to turn back on), the camera really let go so its light goes out. */
+function v2CallShut(c, op) {
+  if (op === "mic") {
+    for (const t of c.mine ? c.mine.getAudioTracks() : []) t.enabled = false;
+    return;
+  }
+  const sender = c.sent.get("cam");
+  if (sender) { const go = sender.sender.replaceTrack(null); if (go && go.catch) go.catch(() => undefined); }
+  for (const t of c.mine ? c.mine.getVideoTracks() : []) { try { t.stop(); } catch { /* already stopped */ } }
+  const left = (c.mine ? c.mine.getTracks() : []).filter((t) => t.readyState !== "ended");
+  c.mine = left.length ? new MediaStream(left) : null;
 }
 
 async function v2CallLeave() {
@@ -265,6 +297,7 @@ function v2CallFinish(c, phase) {
   if (c.beat) { clearTimeout(c.beat); c.beat = null; }
   v2CallStop(c);
   c.byMid = new Map();
+  c.sent = new Map();
   c.held = [];
   c.people = [];
   c.waiting = [];
