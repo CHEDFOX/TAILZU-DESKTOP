@@ -1022,6 +1022,38 @@ test("a page that asks after the microphone gets the system's answer in $state.m
   assert.strictEqual(p.run("STATE.micGranted"), undefined);
 });
 
+// ---- screen recording: the Mac's answer, for the window's permissions step ------------------
+
+test("the window declares DeskSeeState only with a main process that reads Screen Recording, and follows it", async () => {
+  const status = { value: "denied" };
+  const p = page({ askSetup: false });
+  p.g.tailzuApp.seeStatus = async () => status.value;
+  p.run("globalThis.__repaints = 0; repaint = () => { globalThis.__repaints++; }");
+  assert.ok(p.run("capabilities().components").includes("DeskSeeState"));
+  assert.ok(!page({ askSetup: false }).run("capabilities().components").includes("DeskSeeState"));
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  p.run("CURRENT_SCREEN = { state: { seeGranted: true }, root: { type: 'Stack' } }; STATE = { seeGranted: true }");
+  p.run("seeFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.seeGranted"), false);
+  // Allowed in System Settings, then back to the window: read again. A system with no such switch is nothing to ask for.
+  status.value = "granted";
+  p.run("seeFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.seeGranted"), true);
+  status.value = "unknown";
+  p.run("seeFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.seeGranted"), true);
+  assert.strictEqual(p.run("__repaints"), 2);
+  // A page that does not ask is left alone.
+  p.run("CURRENT_SCREEN = { state: {}, root: { type: 'Stack' } }; STATE = {}");
+  status.value = "denied";
+  p.run("seeFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.seeGranted"), undefined);
+});
+
 test("the notes keys: the notes chord as keycaps; with the one key there is none, so it says to say it with that key", () => {
   const p = page();
   const keys = () => p.run('keysNode({ source: "notes" }, "")');

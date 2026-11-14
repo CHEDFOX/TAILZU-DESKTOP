@@ -2320,6 +2320,18 @@ ipcMain.handle("app:camStatus", (e) => {
       ? systemPreferences.getMediaAccessStatus("camera") : "unknown";
   } catch { return "unknown"; }
 });
+// Whether this Mac lets Tailzu see the screen (Screen Recording), for the
+// window's permissions step: Ask looks at the window in front of you with it,
+// and a note hears the other side of a call. Only the Mac keeps such an
+// answer, so anywhere else it is "unknown" — nothing to ask for.
+ipcMain.handle("app:seeStatus", (e) => {
+  if (!fromApp(e)) return null;
+  if (process.platform !== "darwin") return "unknown";
+  try {
+    return typeof systemPreferences.getMediaAccessStatus === "function"
+      ? systemPreferences.getMediaAccessStatus("screen") : "unknown";
+  } catch { return "unknown"; }
+});
 // Whether this Mac lets Tailzu type into other apps (Accessibility), for the
 // Bots app's arrival card: "granted" or "denied", read without prompting
 // (isTrustedAccessibilityClient(false)). Other systems have no such switch:

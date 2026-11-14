@@ -175,6 +175,12 @@ const micAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.micStatus 
 const CAM_ASK = "DeskCamAsk";
 const camAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.camStatus === "function" &&
   navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+/** This window can say whether this Mac lets Tailzu see the screen (Screen
+ *  Recording: tailzuApp.seeStatus), which Ask looks with and a note hears a
+ *  call with. A page that asks after it gets the answer in $state.seeGranted
+ *  (seeFollow); the Mac's own page is opened with ask.openScreenRecording. */
+const SEE_STATE = "DeskSeeState";
+const seeAskOn = () => !!(window.tailzuApp && typeof window.tailzuApp.seeStatus === "function");
 /** This window can say whether the computer lets Tailzu type into other apps
  *  (tailzuApp.axStatus: the Mac's Accessibility; any other system has none):
  *  a page that asks after it gets the answer in $state.axGranted (axFollow),

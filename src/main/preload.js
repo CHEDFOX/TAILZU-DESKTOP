@@ -109,6 +109,7 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   // Whether this computer lets Tailzu use the microphone (the Bots app's card).
   micStatus: () => ipcRenderer.invoke("app:micStatus"),
   camStatus: () => ipcRenderer.invoke("app:camStatus"),
+  seeStatus: () => ipcRenderer.invoke("app:seeStatus"),
   // A screenshot for Attach (the Mac's own picker): { name, bytes }, { cancelled }, or { unavailable, why? }.
   captureScreen: () => ipcRenderer.invoke("app:captureScreen"),
   // Whether this Mac lets Tailzu type into other apps (Accessibility): the arrival card's second step.

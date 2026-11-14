@@ -142,6 +142,8 @@ async function paint(force) {
   repaint._next = cur;
   repaint(screen);
   micFollow();
+  camFollow();
+  seeFollow();
   axFollow();
 }
 
