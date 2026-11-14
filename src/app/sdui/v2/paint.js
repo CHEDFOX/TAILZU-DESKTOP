@@ -66,8 +66,11 @@ function v2Gradient(layer) {
     const kind = m[1].toLowerCase();
     const out = [];
     let i = 0;
-    if (kind === "linear" && parts.length && (/^to\s/i.test(parts[0]) || /deg$/i.test(parts[0]))) { out.push(parts[0].toLowerCase()); i = 1; }
-    if (kind === "radial" && parts.length && /^(circle|ellipse)/i.test(parts[0])) { out.push(parts[0].toLowerCase()); i = 1; }
+    // The direction is written into the CSS as it stands, so it must be exactly a direction: "to x);background:url(…"
+    // starts with "to " too, and would have been a second declaration on the box.
+    const side = "(?:left|right|top|bottom|center)";
+    if (kind === "linear" && parts.length && (new RegExp("^to\\s+" + side + "(?:\\s+" + side + ")?$", "i").test(parts[0]) || /^-?\d+(?:\.\d+)?deg$/i.test(parts[0]))) { out.push(parts[0].toLowerCase()); i = 1; }
+    if (kind === "radial" && parts.length && new RegExp("^(?:circle|ellipse)(?:\\s+(?:closest|farthest)-(?:side|corner))?(?:\\s+at\\s+" + side + "(?:\\s+" + side + ")?)?$", "i").test(parts[0])) { out.push(parts[0].toLowerCase()); i = 1; }
     for (; i < parts.length && out.length <= V2_PAINT_LIMITS.stops; i++) {
       const bits = parts[i].trim().split(/\s+/);
       const stop = v2Stop(bits[0], bits[1]);

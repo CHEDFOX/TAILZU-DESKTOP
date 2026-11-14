@@ -68,6 +68,9 @@ function mediaRefusal(status, body) {
 }
 /** "$state.x" in a path or an address, each value made safe for a URL. */
 function mediaFill(url) {
+  // A string a screen expression made (sdui/v2/data.js) is data, whatever it holds: a person's own words that read
+  // like a token must not pull other stored values into the address this fetches.
+  if (typeof v2Literal === "function" && v2Literal(url)) return url;
   return String(url || "").replace(/\$state\.[A-Za-z0-9_.]*[A-Za-z0-9_]/g, (m) => {
     const v = stateAt(m.slice(7));
     return v == null ? "" : encodeURIComponent(String(v));

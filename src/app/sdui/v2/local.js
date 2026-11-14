@@ -7,6 +7,7 @@ const V2_LOCAL_PREFIX = "tailzu.local.";
 const V2_LOCAL_LIMITS = { totalBytes: 256 * 1024, valueBytes: 8 * 1024, keys: 256 };
 let V2_LOCAL_NS = null;
 let V2_LOCAL_CACHE = null;
+let V2_LOCAL_TOKEN = null;
 
 /** localStorage, or nothing in a page that has none (a test page, a window with site data blocked). */
 function v2Store() {
@@ -42,9 +43,15 @@ function v2LocalKeys(store) {
  * wipes everything — which also covers a second person signing in on the same computer.
  */
 function v2LocalNs() {
-  if (V2_LOCAL_NS) return V2_LOCAL_NS;
-  const store = v2Store();
+  // Signing in by code does not reload the window, so the session is looked at every time: a namespace worked out
+  // before sign-in ("anon") must not go on holding — and serving — the next account's values.
+  const token = typeof SESSION !== "undefined" && SESSION ? SESSION.access_token || null : null;
+  if (V2_LOCAL_NS && token === V2_LOCAL_TOKEN) return V2_LOCAL_NS;
+  V2_LOCAL_TOKEN = token;
   const who = v2Account();
+  if (V2_LOCAL_NS === V2_LOCAL_PREFIX + who + ".") return V2_LOCAL_NS;
+  V2_LOCAL_CACHE = null;
+  const store = v2Store();
   V2_LOCAL_NS = V2_LOCAL_PREFIX + who + ".";
   if (!store) return V2_LOCAL_NS;
   try {
@@ -59,10 +66,10 @@ function v2LocalNs() {
 
 /** Everything `local.*` holds for this account, as one object for the expression scope. */
 function v2LocalAll() {
+  const ns = v2LocalNs();
   if (V2_LOCAL_CACHE) return V2_LOCAL_CACHE;
   const out = {};
   const store = v2Store();
-  const ns = v2LocalNs();
   if (store) {
     try {
       for (const k of v2LocalKeys(store)) {

@@ -10,6 +10,19 @@ let V2_MARKS = new Map();
 let V2_ENTERED = new Set();
 /** The `motion.drive` appliers alive on this screen: a gesture or a scroll calls them as it moves. */
 let V2_DRIVES = [];
+/**
+ * Listeners a paint put on something that outlives it (the window, the view that scrolls). The markup is replaced
+ * on every paint, so each of these is taken off when the next paint starts — or they pile up, one set per keystroke,
+ * each holding the rows and the state of a page that is gone.
+ */
+let V2_OFF = [];
+
+/** addEventListener, undone when the next paint starts. */
+function v2Listen(target, type, fn, opts) {
+  if (!target || typeof target.addEventListener !== "function") return;
+  target.addEventListener(type, fn, opts);
+  V2_OFF.push(() => { try { target.removeEventListener(type, fn, opts); } catch { /* already gone */ } });
+}
 
 /** The screen is going: what it entered, and what it drew, is forgotten. */
 function v2MarksLeave() {
@@ -20,6 +33,9 @@ function v2MarksLeave() {
 
 /** A new paint: the per-paint registries start again. What survives a repaint (lists, rules) is kept elsewhere. */
 function v2PaintStart() {
+  for (const off of V2_OFF) off();
+  V2_OFF = [];
+  if (typeof v2MotionPaintStart === "function") v2MotionPaintStart();
   V2_MARKS = new Map();
   V2_DRIVES = [];
   if (typeof v2InputsPaintStart === "function") v2InputsPaintStart();
@@ -100,7 +116,7 @@ function v2MarksWire(root) {
         V2.ui[name] = host.scrollTop || 0;
         for (const apply of V2_DRIVES) apply();
       };
-      if (host && typeof host.addEventListener === "function") host.addEventListener("scroll", follow, { passive: true });
+      v2Listen(host, "scroll", follow, { passive: true });
       follow();
     }
   });

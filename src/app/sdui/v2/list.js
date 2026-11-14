@@ -225,7 +225,7 @@ function v2ListsWire(root) {
         : scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < Math.max(1, (scroller.clientHeight || 0) * 0.4);
       if (near) void v2ListPage(st, el);
     };
-    if (scroller && typeof scroller.addEventListener === "function") scroller.addEventListener("scroll", onScroll, { passive: true });
+    v2Listen(scroller, "scroll", onScroll, { passive: true });
     v2ListFill(el, st);
     // Nothing in hand and a page to ask for: ask now, so an empty list is a loading list and not a dead one.
     if (!st.rows.length) void v2ListPage(st, el);

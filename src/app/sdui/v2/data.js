@@ -152,10 +152,13 @@ function v2CallIsOurs(a) {
 
 /** `callEndpoint` with the new options. Everything else about it stays as actions.js has it. */
 async function v2Call(action) {
-  if (action.queue === "outbox" && typeof outboxRun === "function") return outboxRun(action);
   const path = String(action.path || "");
   const k = v2Kernel();
   if (k && !k.networkPathOk(path)) { v2Bad("call:path"); await run(action.onError); return; }
+  // Kept to send once online: the outbox's own `add`, which is the only shape outboxRun understands.
+  if (action.queue === "outbox" && typeof outboxRun === "function") {
+    return outboxRun({ kind: "outbox", op: "add", path, body: action.body, label: action.label, sub: action.sub });
+  }
   const method = (action.method || "POST").toUpperCase();
   const undo = [];
   if (action.optimistic && typeof action.optimistic.path === "string") {
@@ -172,12 +175,14 @@ async function v2Call(action) {
     }
   }
   const times = Math.max(0, Math.min(V2_ENDPOINT_LIMITS.retryMax, Number(action.retry && action.retry.times) || 0));
+  // Read once, now, while the strings this action's expressions made are still marked as data (v2Literal).
+  const body = action.body != null ? deepResolve(action.body) : undefined;
   let error = null;
   for (let attempt = 0; attempt <= times; attempt++) {
     try {
       const res = action.multipart
         ? await v2Multipart(path, action.multipart, typeof action.progressInto === "string" ? action.progressInto : "")
-        : await api(path, action.body != null ? deepResolve(action.body) : undefined, method);
+        : await api(path, body, method);
       if (method === "GET") v2CachePut(action.cache, res);
       else v2CacheClear();
       if (action.assignTo) setStatePath(action.assignTo, res);
@@ -198,20 +203,41 @@ async function v2Call(action) {
   await run(action.onError);
 }
 
+/**
+ * The keys that hold ANOTHER action. They are resolved when that action runs (run() comes back through the hook),
+ * not now: an `onSuccess` reads the answer its call wrote, and a sequence's second step sees what the first did.
+ */
+const V2_LATER_KEYS = new Set([
+  "onSuccess", "onError", "onCommit", "onCancel", "onDismiss", "onResult", "onChange", "onSubmit", "onComplete",
+  "onLeft", "onRight", "onUp", "onDown", "then", "else", "actions", "do",
+]);
+/**
+ * Strings an expression made for the action being handed to actions.js right now. actions.js reads a bare
+ * "$state.x" or "$event" as a token; a person's own words that happen to start that way must reach it as data.
+ */
+let V2_LIT = null;
+function v2Literal(v) { return V2_LIT !== null && typeof v === "string" && V2_LIT.has(v); }
+
 /** An action's own `$` and `$t` values, resolved. A path's holes are URL-encoded; display values are not. */
-function v2ResolveAction(a, depth) {
+function v2ResolveAction(a, depth, made) {
   const k = v2Kernel();
   if (!k || depth > 6) return a;
-  if (k.isEvaluable(a)) return v2Value(a, v2Scope());
-  if (Array.isArray(a)) return a.map((x) => v2ResolveAction(x, depth + 1));
+  const value = (v, encode) => {
+    const r = v2Value(v, v2Scope(), encode);
+    if (made && typeof r === "string") made.add(r);
+    return r;
+  };
+  if (k.isEvaluable(a)) return value(a, false);
+  if (Array.isArray(a)) return a.map((x) => v2ResolveAction(x, depth + 1, made));
   if (a && typeof a === "object") {
     const out = {};
     for (const key of Object.keys(a)) {
       const v = a[key];
+      if (V2_LATER_KEYS.has(key) && typeof a.kind === "string") { out[key] = v; continue; }
       // A path field's holes are URL-encoded (a `$t`); a whole `{ $: … }` value is the path or the URL as stored,
       // which is what `encode` leaves alone in the kernel.
       const isPath = key === "path" || key === "endpoint" || key === "url" || key === "topic";
-      out[key] = k.isEvaluable(v) ? v2Value(v, v2Scope(), isPath) : v2ResolveAction(v, depth + 1);
+      out[key] = k.isEvaluable(v) ? value(v, isPath) : v2ResolveAction(v, depth + 1, made);
     }
     return out;
   }
@@ -229,20 +255,35 @@ function v2RunHook() {
   // eslint-disable-next-line no-global-assign
   run = function (action, eventValue) {
     if (!V2.on || !action || typeof action !== "object") return inner.apply(this, arguments);
-    const a = v2Has("expr") ? v2ResolveAction(action, 0) : action;
-    if (a && typeof a === "object") {
-      if (a.kind === "subscribe" && v2Has("data")) return v2Subscribe(a);
-      if (a.kind === "local.set" && v2Has("local")) {
-        const why = v2LocalSet(a.path, a.value);
-        if (why) { v2Bad("local:" + why); return inner.call(this, a.onError); }
-        return typeof repaint === "function" ? repaint() : undefined;
+    const made = new Set();
+    const a = v2Has("expr") ? v2ResolveAction(action, 0, made) : action;
+    // actions.js and outbox.js read their tokens synchronously, before their first await, so the set only has to
+    // live that long.
+    const was = V2_LIT;
+    V2_LIT = made.size ? made : was;
+    try {
+      if (a && typeof a === "object") {
+        // A path an expression made is checked like every other network path before actions.js sends it.
+        const k = v2Kernel();
+        if (a.kind === "callEndpoint" && k && k.isEvaluable(action.path) && !k.networkPathOk(String(a.path || ""))) {
+          v2Bad("call:path");
+          return inner.call(this, a.onError);
+        }
+        if (a.kind === "subscribe" && v2Has("data")) return v2Subscribe(a);
+        if (a.kind === "local.set" && v2Has("local")) {
+          const why = v2LocalSet(a.path, a.value);
+          if (why) { v2Bad("local:" + why); return inner.call(this, a.onError); }
+          return typeof repaint === "function" ? repaint() : undefined;
+        }
+        if (a.kind === "local.remove" && v2Has("local")) {
+          v2LocalRemove(a.path);
+          return typeof repaint === "function" ? repaint() : undefined;
+        }
+        if (a.kind === "callEndpoint" && v2Has("data") && v2CallIsOurs(a)) return v2Call(a);
       }
-      if (a.kind === "local.remove" && v2Has("local")) {
-        v2LocalRemove(a.path);
-        return typeof repaint === "function" ? repaint() : undefined;
-      }
-      if (a.kind === "callEndpoint" && v2Has("data") && v2CallIsOurs(a)) return v2Call(a);
+      return arguments.length > 1 ? inner.call(this, a, eventValue) : inner.call(this, a);
+    } finally {
+      V2_LIT = was;
     }
-    return arguments.length > 1 ? inner.call(this, a, eventValue) : inner.call(this, a);
   };
 }

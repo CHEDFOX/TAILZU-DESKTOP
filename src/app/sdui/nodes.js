@@ -518,17 +518,26 @@ function nodeDraw(n) {
       });
       const h = Number(p.height) || d.height;
       const disc = Number(p.disc) || d.disc;
+      // These colours are the one place a PROP goes straight into a style attribute, so each one is a value and
+      // nothing more: a screen expression can fill it from the store, where a person's own words live, and esc()
+      // leaves a ";" alone — which would be a second declaration on the pill (sdui/v2/resolve.js v2CssSafe).
+      const cssColor = (v, fallback) => {
+        const got = tok(v == null || v === "" ? fallback : v);
+        const ok = typeof got !== "string" || typeof v2CssSafe !== "function" || v2CssSafe(got) === got;
+        return esc(ok ? got : tok(fallback));
+      };
+      const weight = /^(?:[1-9]00|normal|bold)$/.test(String(p.weight)) ? String(p.weight) : d.weight;
       return '<button class="tz-press" data-ev="onComplete" style="' + s +
         ";position:relative;height:" + h + "px;border-radius:" + (Number(p.radius) || d.radius) + "px" +
-        ";background:" + esc(tok(p.background || d.background)) +
-        ";border:" + (p.borderWidth ? p.borderWidth + "px solid " + esc(tok(p.borderColor)) : "none") +
-        ";color:" + esc(tok(p.color || d.color)) +
-        ";font-size:" + (Number(p.fontSize) || d.fontSize) + "px;font-weight:" + (p.weight || d.weight) +
+        ";background:" + cssColor(p.background, d.background) +
+        ";border:" + (Number(p.borderWidth) > 0 ? Number(p.borderWidth) + "px solid " + cssColor(p.borderColor, "transparent") : "none") +
+        ";color:" + cssColor(p.color, d.color) +
+        ";font-size:" + (Number(p.fontSize) || d.fontSize) + "px;font-weight:" + weight +
         ";letter-spacing:" + (Number(p.tracking) || d.tracking) + 'px;width:100%;cursor:pointer">' +
         esc(label(p.label || "")) +
         '<span style="position:absolute;right:6px;top:50%;transform:translateY(-50%);width:' +
         disc + "px;height:" + disc +
-        "px;border-radius:50%;background:" + esc(tok(p.targetBackground || d.target)) +
+        "px;border-radius:50%;background:" + cssColor(p.targetBackground, d.target) +
         ';opacity:.45"></span></button>';
     }
 

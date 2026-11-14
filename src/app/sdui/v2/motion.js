@@ -17,6 +17,14 @@ const V2_EASES = {
   step: (x) => (x < 1 ? 0 : 1),
 };
 let V2_MOTION_LIVE = 0;
+/** The loops playing on this paint. A loop never ends by itself and keeps its element alive after it is replaced. */
+let V2_LOOPS = [];
+
+/** A new paint: every loop of the last one stops (the elements it moved are about to be replaced). */
+function v2MotionPaintStart() {
+  for (const a of V2_LOOPS) { try { a.cancel(); } catch { /* already gone */ } }
+  V2_LOOPS = [];
+}
 
 const v2Fin = (n, d) => (typeof n === "number" && Number.isFinite(n) ? n : d);
 
@@ -142,11 +150,13 @@ function v2Play(el, section, opts) {
   if (!o.loop && V2_MOTION_LIVE >= V2_MOTION_LIMITS.nodes) return null;
   const { frames, ms } = v2Keyframes(tracks);
   if (!ms) return null;
-  V2_MOTION_LIVE += 1;
+  // Only what ends is counted: a loop never finishes, so counting it would use the ceiling up for good.
+  if (!o.loop) V2_MOTION_LIVE += 1;
   let anim = null;
   try {
     anim = el.animate(frames, { duration: ms, iterations: o.loop ? Infinity : 1, fill: o.loop ? "none" : "both" });
-  } catch { V2_MOTION_LIVE -= 1; return null; }
+  } catch { if (!o.loop) V2_MOTION_LIVE -= 1; return null; }
+  if (o.loop && anim) V2_LOOPS.push(anim);
   if (!o.loop && anim && anim.finished && typeof anim.finished.then === "function") {
     anim.finished.then(() => { V2_MOTION_LIVE = Math.max(0, V2_MOTION_LIVE - 1); }, () => { V2_MOTION_LIVE = Math.max(0, V2_MOTION_LIVE - 1); });
   }

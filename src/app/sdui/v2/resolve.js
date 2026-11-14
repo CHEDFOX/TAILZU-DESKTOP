@@ -99,6 +99,58 @@ function v2Deep(v, scope, depth) {
   return v;
 }
 
+/**
+ * A value that may go into a style attribute. A `$` in a style can read the store, and the store holds people's
+ * own words: one that carries a `;`, a brace or a url() would be more CSS (a box over the whole window, a picture
+ * fetched from anywhere), not a value. Such a value is dropped, as any value that cannot be read is.
+ */
+const V2_CSS_BAD = /[;{}<>\\@!]|(?:url|image|image-set|cross-fade|element|src|expression)\s*\(/i;
+function v2CssSafe(v) {
+  if (typeof v !== "string") return v;
+  if (v.length > 512 || V2_CSS_BAD.test(v)) { v2Bad("style:value"); return undefined; }
+  return v;
+}
+
+/**
+ * True when an expression made any part of this style value.
+ *
+ * Not only `color: { $: … }`. theme.js's styleValue() also picks between the two sides of a `{ then, else }` style
+ * value, and the paint keys take layers and lists — so an expression one level down ends up in the same attribute,
+ * and is held to the same rule.
+ */
+function v2CssFromExpr(v, depth) {
+  const k = v2Kernel();
+  if (!k || depth > V2_DEEP) return false;
+  if (k.isEvaluable(v)) return true;
+  if (Array.isArray(v)) return v.some((x) => v2CssFromExpr(x, depth + 1));
+  if (v && typeof v === "object" && typeof v.type !== "string") {
+    for (const key of Object.keys(v)) if (v2CssFromExpr(v[key], depth + 1)) return true;
+  }
+  return false;
+}
+
+/** True when every string inside a resolved style value is a value, and not more CSS. */
+function v2CssClean(v, depth) {
+  if (typeof v === "string") return v2CssSafe(v) === v;
+  if (depth > V2_DEEP || !v || typeof v !== "object") return true;
+  if (Array.isArray(v)) return v.every((x) => v2CssClean(x, depth + 1));
+  for (const key of Object.keys(v)) if (!v2CssClean(v[key], depth + 1)) return false;
+  return true;
+}
+
+/** A style after its expressions ran: every value an expression made is checked; what the server wrote is not. */
+function v2CssValues(raw, resolved) {
+  const k = v2Kernel();
+  if (!k || resolved === raw || !resolved || typeof resolved !== "object") return resolved;
+  let out = resolved;
+  for (const key of Object.keys(raw)) {
+    if (!v2CssFromExpr(raw[key], 0) || v2CssClean(resolved[key], 0)) continue;
+    if (out === resolved) out = Object.assign({}, resolved);
+    delete out[key];
+  }
+  return out;
+}
+
 /** A `{ expr }` condition. Anything else is not ours — the tree's own conditions stay with visible(). */
 function v2Cond(c, scope) {
   const k = v2Kernel();
@@ -149,6 +201,16 @@ function v2Args(node, scope) {
   return args;
 }
 
+/** The screen is going: every block forgets what belonged to it. */
+function v2Gone() {
+  if (typeof v2RulesLeave === "function") v2RulesLeave();
+  if (typeof v2DataLeave === "function") v2DataLeave();
+  if (typeof v2ListLeave === "function") v2ListLeave();
+  if (typeof v2MediaLeave === "function") v2MediaLeave();
+  if (typeof v2ShellLeave === "function") v2ShellLeave();
+  if (typeof v2MarksLeave === "function") v2MarksLeave();
+}
+
 /** A new paint of a new screen: forget what the last one compiled, and look at what this one needs. */
 function v2Frame(screen) {
   const k = v2Kernel();
@@ -160,11 +222,7 @@ function v2Frame(screen) {
     V2_CACHE = new Map();
     V2.bad = [];
     V2.ui = {};
-    if (typeof v2RulesLeave === "function") v2RulesLeave();
-    if (typeof v2DataLeave === "function") v2DataLeave();
-    if (typeof v2ListLeave === "function") v2ListLeave();
-    if (typeof v2MediaLeave === "function") v2MediaLeave();
-    if (typeof v2MarksLeave === "function") v2MarksLeave();
+    v2Gone();
   }
   V2.screenId = screen.screenId || "";
   V2.needs = needs;
@@ -193,6 +251,21 @@ function v2Frame(screen) {
 function v2Prepare(n) {
   const k = v2Kernel();
   const screen = typeof CURRENT_SCREEN !== "undefined" ? CURRENT_SCREEN : null;
+  // A screen drawn from `blocks` (no root) never states what it needs, and must not inherit what the screen before
+  // it was given: it is drawn exactly as it always was. v2Frame() never runs for it, so the screen it replaces is
+  // put down here instead — its loops stopped, the listeners its paint left on the window taken off, its lists,
+  // subscriptions and overlays forgotten. Nothing on this screen would ever do it for them.
+  if (screen && !screen.root) {
+    if (V2.on || V2.needs.length || V2.missing.length || V2.screenId) {
+      V2.on = false;
+      V2.missing = [];
+      V2.needs = [];
+      V2.screenId = "";
+      v2PaintStart();
+      v2Gone();
+    }
+    return n;
+  }
   if (screen && n === screen.root) v2Frame(screen);
   if (V2.missing.length && screen && n === screen.root) {
     return screen.fallback && typeof screen.fallback === "object" ? node(screen.fallback) : v2GateHtml(V2.missing);
@@ -218,7 +291,7 @@ function v2Prepare(n) {
     delete it.visibleIf;
   }
   let props = expr && it.props ? v2Deep(it.props, scope, 1) : it.props;
-  let style = expr && it.style ? v2Deep(it.style, scope, 1) : it.style;
+  let style = expr && it.style ? v2CssValues(it.style, v2Deep(it.style, scope, 1)) : it.style;
   // Paint keys (gradients, shadows, filters, blend, blur) become CSS here, so css() in theme.js only ever sees
   // values it can write straight into the style attribute.
   if (style && v2Has("paint")) style = v2Paint(style);

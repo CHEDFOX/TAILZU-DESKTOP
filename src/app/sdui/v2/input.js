@@ -93,7 +93,15 @@ function v2InputNode(n, p, s) {
   const lab = p.label != null ? '<span style="display:block;color:var(--label);font-size:12px;margin-bottom:6px">' + esc(label(p.label)) + "</span>" : "";
   const off = p.disabled === true ? " disabled" : "";
   const box = "background:var(--input);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 12px;width:100%;box-sizing:border-box";
-  const head = '<label data-v2-in="' + id + '" data-kind="' + kind + '" style="' + s + ';display:block">' + lab;
+  // A <label> wraps exactly one control. A kind made of several buttons is a named group instead: wrapped in a label,
+  // a click on its words (or on a stepper's number) presses its first button, and that button takes the label as
+  // its name.
+  const group = kind === "segmented" || kind === "chips" || kind === "rating" || kind === "stepper" || kind === "slideToConfirm";
+  const name = p.label != null ? esc(label(p.label)) : "";
+  const head = group
+    ? '<div data-v2-in="' + id + '" data-kind="' + kind + '" role="group"' + (name ? ' aria-label="' + name + '"' : "") +
+      ' style="' + s + ';display:block">' + lab
+    : '<label data-v2-in="' + id + '" data-kind="' + kind + '" style="' + s + ';display:block">' + lab;
   const place = p.placeholder != null ? ' placeholder="' + esc(label(p.placeholder)) + '"' : "";
   switch (kind) {
     case "multiline":
@@ -118,7 +126,7 @@ function v2InputNode(n, p, s) {
         opts.map((o) => '<button data-v2-f type="button" data-value="' + esc(o.value) + '"' + off +
           ' aria-pressed="' + (o.value === now ? "true" : "false") + '" style="border:0;border-radius:8px;padding:6px 12px;cursor:pointer;background:' +
           (o.value === now ? "var(--accent)" : "transparent") + ";color:" + (o.value === now ? "var(--bg)" : "var(--body)") + '">' +
-          esc(o.label) + "</button>").join("") + "</span></label>";
+          esc(o.label) + "</button>").join("") + "</span></div>";
     }
     case "picker": {
       const opts = v2Options(p.options);
@@ -130,9 +138,11 @@ function v2InputNode(n, p, s) {
     case "chips": {
       const list = Array.isArray(value) ? value.slice(0, V2_INPUT_LIMITS.chipsMax) : [];
       return head + '<span style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
-        list.map((c, i) => '<button data-v2-chip="' + i + '" type="button" style="border:1px solid var(--border);border-radius:999px;padding:4px 10px;background:var(--input);color:var(--body);cursor:pointer">' +
+        list.map((c, i) => '<button data-v2-chip="' + i + '" type="button"' + off + ' aria-label="' +
+          esc(K.txt("desktop.input.removeChip", "Remove {chip}", { chip: v2Line(c, V2_INPUT_LIMITS.chipMax) })) + '" style="border:1px solid var(--border);border-radius:999px;padding:4px 10px;background:var(--input);color:var(--body);cursor:pointer">' +
           esc(v2Line(c, V2_INPUT_LIMITS.chipMax)) + " ×</button>").join("") +
-        '<input data-v2-f type="text"' + place + off + ' style="' + box + ';width:auto;flex:1;min-width:90px"></span></label>';
+        '<input data-v2-f type="text"' + place + off + (name ? ' aria-label="' + name + '"' : "") +
+        ' style="' + box + ';width:auto;flex:1;min-width:90px"></span></div>';
     }
     case "date": case "time":
       return head + '<input data-v2-f type="' + kind + '" value="' + esc(v2Line(value, 16)) + '"' + off +
@@ -144,24 +154,30 @@ function v2InputNode(n, p, s) {
       let out = "";
       for (let i = 1; i <= stars; i++) {
         out += '<button data-v2-f type="button" data-value="' + i + '"' + off + ' aria-pressed="' + (i <= now ? "true" : "false") +
+          '" aria-label="' + esc(K.txt("desktop.input.stars", "{n} of {max}", { n: i, max: stars })) +
           '" style="border:0;background:none;cursor:pointer;font-size:18px;color:' + (i <= now ? "var(--accent)" : "var(--border)") + '">★</button>';
       }
-      return head + '<span style="display:inline-flex;gap:2px">' + out + "</span></label>";
+      return head + '<span style="display:inline-flex;gap:2px">' + out + "</span></div>";
     }
     case "stepper": {
       const min = Number.isFinite(Number(p.min)) ? Number(p.min) : 0;
       const max = Number.isFinite(Number(p.max)) ? Number(p.max) : 100;
       const now = v2Step(value, min, max, Number(p.step) || 1);
       const b = "border:1px solid var(--border);background:var(--input);color:var(--text);border-radius:8px;width:30px;height:30px;cursor:pointer";
-      return head + '<span style="display:inline-flex;gap:8px;align-items:center"><button data-v2-f type="button" data-step="-1" style="' + b + '">−</button>' +
-        '<span style="min-width:2em;text-align:center">' + esc(String(now)) + "</span>" +
-        '<button data-v2-f type="button" data-step="1" style="' + b + '">+</button></span></label>';
+      return head + '<span style="display:inline-flex;gap:8px;align-items:center"><button data-v2-f type="button" data-step="-1"' + off +
+        ' aria-label="' + esc(K.txt("desktop.input.less", "Less")) + '" style="' + b + '">−</button>' +
+        '<span aria-live="polite" style="min-width:2em;text-align:center">' + esc(String(now)) + "</span>" +
+        '<button data-v2-f type="button" data-step="1"' + off + ' aria-label="' + esc(K.txt("desktop.input.more", "More")) +
+        '" style="' + b + '">+</button></span></div>';
     }
     case "slideToConfirm":
       return head + '<span data-v2-slide style="display:block;position:relative;height:46px;border-radius:999px;background:var(--input);border:1px solid var(--border);overflow:hidden">' +
         '<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--label);pointer-events:none">' +
         esc(label(p.placeholder) || K.txt("desktop.input.slide", "Slide to confirm")) + "</span>" +
-        '<span data-v2-f style="position:absolute;top:3px;left:3px;width:40px;height:38px;border-radius:999px;background:var(--accent);cursor:grab"></span></span></label>';
+        // The thumb is a button for the keyboard: Enter or Space confirms, as a full slide does.
+        '<span data-v2-f' + (p.disabled === true ? ' aria-disabled="true"' : ' tabindex="0"') + ' role="button" aria-label="' +
+        esc(label(p.placeholder) || K.txt("desktop.input.slide", "Slide to confirm")) +
+        '" style="position:absolute;top:3px;left:3px;width:40px;height:38px;border-radius:999px;background:var(--accent);cursor:grab"></span></span></div>';
     case "code":
       return head + '<input data-v2-f type="text" inputmode="' + (p.digitsOnly === true ? "numeric" : "text") +
         '" maxlength="' + Math.max(1, Math.min(V2_INPUT_LIMITS.codeMax, Math.floor(Number(p.length) || 6))) + '"' + place + off +
@@ -206,7 +222,8 @@ function v2InputsWire(root) {
           if (v !== field.value) field.value = v;
           v2InputWrite(st, v, false);
         });
-        field.addEventListener("keydown", (e) => { if (e.key === "Enter" && st.kind !== "multiline") { e.preventDefault(); submit(v2Line(field.value, cap)); } });
+        // Enter while an input method is composing (Chinese, Japanese, Korean) picks a word; it does not send.
+        field.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && st.kind !== "multiline") { e.preventDefault(); submit(v2Line(field.value, cap)); } });
         break;
       }
       case "code": {
@@ -225,7 +242,7 @@ function v2InputsWire(root) {
           if (got.text !== field.value) field.value = got.text;
           v2InputWrite(st, got.value, false);
         });
-        field.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(v2Number(field.value, p).value); } });
+        field.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(v2Number(field.value, p).value); } });
         break;
       }
       case "switch": case "toggle":
@@ -272,7 +289,7 @@ function v2InputsWire(root) {
       case "chips": {
         const held = () => (Array.isArray(st.path ? stateAt(st.path) : null) ? stateAt(st.path).slice() : []);
         field.addEventListener("keydown", (e) => {
-          if (e.key !== "Enter" || !field.value) return;
+          if (e.key !== "Enter" || e.isComposing || !field.value) return;
           e.preventDefault();
           const list = held();
           if (list.length >= Math.min(V2_INPUT_LIMITS.chipsMax, Number(p.max) > 0 ? Number(p.max) : V2_INPUT_LIMITS.chipsMax)) return;
@@ -288,6 +305,7 @@ function v2InputsWire(root) {
         break;
       }
       case "slideToConfirm": {
+        if (p.disabled === true) break;
         const track = host.querySelector("[data-v2-slide]");
         const want = Number(p.threshold) >= 0.5 && Number(p.threshold) <= 1 ? Number(p.threshold) : 0.9;
         let from = null;
@@ -305,8 +323,15 @@ function v2InputsWire(root) {
           if (at >= want) { v2InputWrite(st, true, false); if (on.onCommit) void run(on.onCommit, true); else submit(true); }
           else { field.style.left = "3px"; if (on.onDismiss) void run(on.onDismiss, false); }
         };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
+        v2Listen(window, "pointermove", move);
+        v2Listen(window, "pointerup", up);
+        field.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          if (e.preventDefault) e.preventDefault();
+          field.style.left = (width()) + "px";
+          v2InputWrite(st, true, false);
+          if (on.onCommit) void run(on.onCommit, true); else submit(true);
+        });
         break;
       }
       default:

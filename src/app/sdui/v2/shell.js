@@ -8,6 +8,13 @@
 const V2_DETENTS = { small: 0.25, medium: 0.5, large: 0.9 };
 const V2_MAX_DETENTS = 4;
 let V2_SHELL = new Map();
+let V2_SHELL_SEQ = 0;
+/** Overlays closed on this screen whose `open` is bound to nothing: nothing in the store can say they are shut. */
+let V2_SHELL_SHUT = new Set();
+/** When each toast on this screen goes, so a repaint under it does not start its clock again. */
+let V2_TOAST_DUE = new Map();
+/** The overlays on this paint that Escape may close, the topmost last. */
+let V2_SHELL_ESC = [];
 
 /** The heights a sheet may rest at, as fractions of the window, biggest last. */
 function v2Detents(raw) {
@@ -23,12 +30,14 @@ const v2Radius = (v, d) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(40
 
 /** A sheet, a modal or a toast. Nothing is drawn while its `open` is false. */
 function v2ShellNode(n, p, s, kids) {
-  const open = p.open === undefined ? true : truthy(p.open);
-  if (!open) return "";
-  const id = "v2s" + V2_SHELL.size;
-  V2_SHELL.set(id, { id, node: n, props: p });
-  const back = typeof p.backdrop === "string" ? p.backdrop : "rgba(0,0,0,.45)";
-  const bg = typeof p.background === "string" ? p.background : "var(--card)";
+  const id = "v2s" + V2_SHELL_SEQ++;
+  const key = typeof n.id === "string" && n.id ? n.id : "#" + id;
+  const open = p.open === undefined ? !V2_SHELL_SHUT.has(key) : truthy(p.open);
+  if (!open) { V2_TOAST_DUE.delete(key); return ""; }
+  V2_SHELL.set(id, { id, key, node: n, props: p });
+  // The two colours can come from an expression, so they pass the same check as any style value (resolve.js).
+  const back = typeof p.backdrop === "string" && v2CssSafe(p.backdrop) ? p.backdrop : "rgba(0,0,0,.45)";
+  const bg = typeof p.background === "string" && v2CssSafe(p.background) ? p.background : "var(--card)";
   if (n.type === "Toast") {
     const bottom = Math.max(0, Math.min(400, Number(p.bottom) || 32));
     return '<div data-v2-shell="' + id + '" role="status" style="position:fixed;left:50%;transform:translateX(-50%);bottom:' +
@@ -37,13 +46,13 @@ function v2ShellNode(n, p, s, kids) {
   }
   if (n.type === "Modal") {
     return '<div data-v2-shell="' + id + '" style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:' + esc(back) + '">' +
-      '<div data-v2-stop style="max-width:min(680px,88vw);max-height:84vh;overflow:auto;background:' + esc(bg) +
+      '<div data-v2-stop role="dialog" aria-modal="true" style="max-width:min(680px,88vw);max-height:84vh;overflow:auto;background:' + esc(bg) +
       ';border:1px solid var(--border);border-radius:' + v2Radius(p.radius, 16) + "px;padding:18px;" + s + '">' + kids + "</div></div>";
   }
   const detents = v2Detents(p.detents);
   const at = Math.max(0, Math.min(detents.length - 1, Math.floor(Number(p.initial) || 0)));
   return '<div data-v2-shell="' + id + '" style="position:fixed;inset:0;z-index:50;background:' + esc(back) + '">' +
-    '<div data-v2-stop data-v2-sheet style="position:absolute;left:0;right:0;bottom:0;height:' + Math.round(detents[at] * 100) +
+    '<div data-v2-stop data-v2-sheet role="dialog" aria-modal="true" style="position:absolute;left:0;right:0;bottom:0;height:' + Math.round(detents[at] * 100) +
     "vh;overflow:auto;background:" + esc(bg) + ";border-top:1px solid var(--border);border-radius:" + v2Radius(p.radius, 18) +
     "px " + v2Radius(p.radius, 18) + "px 0 0;padding:16px;" + s + '">' +
     '<div data-v2-grab style="width:40px;height:4px;border-radius:999px;background:var(--border);margin:0 auto 12px;cursor:grab"></div>' +
@@ -56,7 +65,11 @@ function v2ShellClose(el, st) {
   const go = () => {
     const on = st.node.on || {};
     const p = st.props;
-    if (typeof p.openPath === "string" && p.openPath) setStatePath(p.openPath, false);
+    const held = typeof p.openPath === "string" && p.openPath;
+    if (held) setStatePath(p.openPath, false);
+    // Bound to nothing, it would simply be drawn again by the repaint below: this window remembers it is shut.
+    else if (p.open === undefined) V2_SHELL_SHUT.add(st.key);
+    V2_TOAST_DUE.delete(st.key);
     if (on.onDismiss) void run(on.onDismiss);
     else if (typeof repaint === "function") repaint();
   };
@@ -73,6 +86,18 @@ function v2ShellWire(root) {
     if (inner) inner.addEventListener("click", (e) => { if (e.stopPropagation) e.stopPropagation(); });
     if (p.dismissible !== false && st.node.type !== "Toast") {
       el.addEventListener("click", () => v2ShellClose(el, st));
+      // Escape closes the topmost one, before the window's own Escape (listen.js) hears it.
+      if (!V2_SHELL_ESC.length) {
+        v2Listen(document, "keydown", (e) => {
+          if (e.key !== "Escape" || e.defaultPrevented || !V2_SHELL_ESC.length) return;
+          const top = V2_SHELL_ESC[V2_SHELL_ESC.length - 1];
+          if (!top.el.isConnected) return;
+          if (e.preventDefault) e.preventDefault();
+          V2_SHELL_ESC = [];
+          v2ShellClose(top.el, top.st);
+        }, true);
+      }
+      V2_SHELL_ESC.push({ el, st });
     }
     // A sheet is dragged by its grab bar, and settles on the nearest detent it was let go near.
     const grab = el.querySelector("[data-v2-grab]");
@@ -81,12 +106,12 @@ function v2ShellWire(root) {
       const detents = v2Detents(p.detents);
       let from = null;
       grab.addEventListener("pointerdown", (e) => { from = { y: e.clientY || 0, h: sheet.clientHeight || 0 }; });
-      window.addEventListener("pointermove", (e) => {
+      v2Listen(window, "pointermove", (e) => {
         if (!from) return;
         const h = Math.max(60, from.h - ((e.clientY || 0) - from.y));
         sheet.style.height = h + "px";
       });
-      window.addEventListener("pointerup", () => {
+      v2Listen(window, "pointerup", () => {
         if (!from) return;
         from = null;
         const tall = (window.innerHeight || 800);
@@ -99,10 +124,16 @@ function v2ShellWire(root) {
     }
     if (st.node.type === "Toast") {
       const ms = Math.max(800, Math.min(10000, Number(p.ms) || 2600));
-      setTimeout(() => { if (el.isConnected) v2ShellClose(el, st); }, ms);
+      const now = v2Now();
+      const due = V2_TOAST_DUE.has(st.key) ? V2_TOAST_DUE.get(st.key) : now + ms;
+      V2_TOAST_DUE.set(st.key, due);
+      setTimeout(() => { if (el.isConnected) v2ShellClose(el, st); }, Math.max(0, due - now));
     }
   });
 }
 
 /** A new paint starts from no overlays. */
-function v2ShellPaintStart() { V2_SHELL = new Map(); }
+function v2ShellPaintStart() { V2_SHELL = new Map(); V2_SHELL_SEQ = 0; V2_SHELL_ESC = []; }
+
+/** The screen is going: what it shut and when its toasts go are forgotten. */
+function v2ShellLeave() { V2_SHELL_SHUT = new Set(); V2_TOAST_DUE = new Map(); }

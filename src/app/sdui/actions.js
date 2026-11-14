@@ -18,6 +18,8 @@ function toast(msg) {
 let EVENT = undefined;
 
 function resolveValue(v) {
+  // A string a screen expression made (sdui/v2/data.js) is data, whatever it starts with: never read as a token.
+  if (typeof v2Literal === "function" && v2Literal(v)) return v;
   if (typeof v === "string" && v.indexOf("$state.") === 0) return stateAt(v.slice(7));
   if (v === "$event") return EVENT;
   return v;
@@ -159,7 +161,8 @@ async function run(action, eventValue) {
       // `stream`: the answer's words, written into state as they come over the live socket (askStreamTake).
       let unlisten = null;
       try {
-        const path = String(action.path || "").replace(/\$state\.[A-Za-z0-9_.]+/g, (m) => {
+        const raw = String(action.path || "");
+        const path = typeof v2Literal === "function" && v2Literal(raw) ? raw : raw.replace(/\$state\.[A-Za-z0-9_.]+/g, (m) => {
           const v = stateAt(m.slice(7));
           return v == null ? "" : encodeURIComponent(String(v));
         });
