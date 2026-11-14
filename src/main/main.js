@@ -2309,6 +2309,17 @@ ipcMain.handle("app:micStatus", (e) => {
       ? systemPreferences.getMediaAccessStatus("microphone") : "unknown";
   } catch { return "unknown"; }
 });
+// Whether the OS lets Tailzu use the camera, for the window's permissions step
+// and a call's own camera button. Read here because only the main process can
+// see it; "unknown" where the system keeps no such answer (Linux), which the
+// window treats as nothing to ask.
+ipcMain.handle("app:camStatus", (e) => {
+  if (!fromApp(e)) return null;
+  try {
+    return typeof systemPreferences.getMediaAccessStatus === "function" && process.platform !== "linux"
+      ? systemPreferences.getMediaAccessStatus("camera") : "unknown";
+  } catch { return "unknown"; }
+});
 // Whether this Mac lets Tailzu type into other apps (Accessibility), for the
 // Bots app's arrival card: "granted" or "denied", read without prompting
 // (isTrustedAccessibilityClient(false)). Other systems have no such switch:

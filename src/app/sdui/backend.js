@@ -27,7 +27,7 @@ function capabilities() {
       // well as in its bootstrap, because this window's bootstrap is the one relayed to it (received, below).
       ENV && ENV.notices ? [NOTICES] : [], ENV && ENV.addThis ? [ADD_THIS] : [],
       ENV && ENV.systemAudioSettings ? [SYSTEM_AUDIO] : [], ENV && ENV.store ? ["DeskStore"] : [],
-      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], axAskOn() ? [AX_STATE] : [],
+      ENV && ENV.askSetup ? [ASK_SETUP_CARD] : [], [CONNECTORS_CAN], micAskOn() ? [MIC_ASK] : [], camAskOn() ? [CAM_ASK] : [], axAskOn() ? [AX_STATE] : [],
       // A live page (liveView.js, where this window can make a webview) and the outbox (outbox.js), loaded after this file.
       typeof liveViewOn === "function" && liveViewOn() ? ["LiveView"] : [], typeof outboxRun === "function" ? ["Outbox"] : [],
       // The bot on the screen listens, and the one key talks to him with X0 in front: only with a main process that records for him.
@@ -45,9 +45,11 @@ function capabilities() {
       // WHAT THIS IS, as opposed to what it can draw.
       //
       // `platform` above is a drawing question and answers "iOS". This is the
-      // other one: there is no keyboard extension to add here, and the
-      // microphone is granted by the OS outside the app, so the two setup
-      // steps have nothing to ask a window. The server used to answer
+      // other one: there is no keyboard extension to add here, and what this
+      // window has to ask the computer for is not what a phone asks for — it
+      // gets its own step (the microphone and the camera through the system's
+      // prompt, Accessibility and Screen Recording through its settings),
+      // which the server serves on this form factor. The server used to answer
       // `onboarding_keyboard` and this file quietly threw the answer away —
       // the renderer overruling the creator. It tells the truth instead and
       // gets the right screen back.

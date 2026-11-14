@@ -32,6 +32,11 @@
   <true/>
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- The camera, for one of our own calls (TAILZU-BACKEND/docs/rooms.md). Nothing opens it until the person turns it on in a call:
+       the prompt's words are NSCameraUsageDescription in package.json, and this is the PERMISSION. Without it a hardened build is
+       refused the camera outright, however the person answers. -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
   <key>com.apple.security.automation.apple-events</key>
   <true/>
 </dict>

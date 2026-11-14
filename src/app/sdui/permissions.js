@@ -5,6 +5,7 @@
 window.addEventListener("focus", () => {
   if (ASK_LISTENING && CURRENT_SCREEN && findNode(CURRENT_SCREEN.root, "DeskAskSetup")) askSetupRead();
   micFollow();
+  camFollow();
   axFollow();
 });
 
@@ -29,6 +30,28 @@ function micFollow() {
   micReading().then((on) => {
     if (on === null || CURRENT_SCREEN !== screen || STATE.micGranted === on) return;
     setStatePath("micGranted", on);
+    repaint();
+  });
+}
+
+/**
+ * THE CAMERA'S ANSWER, read the same way as the microphone's, for a page that
+ * asks after it ($state.camGranted: the window's permissions step). Nothing
+ * opens the camera until the person turns it on in a call (docs/rooms.md).
+ */
+async function camReading() {
+  try {
+    const st = String(await window.tailzuApp.camStatus() || "unknown");
+    return st === "granted" || st === "unknown";
+  } catch { return null; }
+}
+
+function camFollow() {
+  if (!camAskOn() || !CURRENT_SCREEN || !CURRENT_SCREEN.state || !Object.hasOwn(CURRENT_SCREEN.state, "camGranted")) return;
+  const screen = CURRENT_SCREEN;
+  camReading().then((on) => {
+    if (on === null || CURRENT_SCREEN !== screen || STATE.camGranted === on) return;
+    setStatePath("camGranted", on);
     repaint();
   });
 }
@@ -76,6 +99,25 @@ async function askMic(action) {
     blocked = !!err && err.name === "NotAllowedError";
   }
   if (ok && micAskOn()) ok = (await micReading()) !== false;
+  if (ok) return run(action.onGranted);
+  return run(blocked ? (action.onBlocked || action.onDenied) : action.onDenied);
+}
+
+/**
+ * ASK FOR THE CAMERA, exactly as for the microphone: open it once, which is
+ * what makes the system ask, and close it at once. Refused, the page's
+ * onBlocked (only the system's settings can turn it back on).
+ */
+async function askCam(action) {
+  let ok = false, blocked = false;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream.getTracks().forEach((t) => t.stop());
+    ok = true;
+  } catch (err) {
+    blocked = !!err && err.name === "NotAllowedError";
+  }
+  if (ok && camAskOn()) ok = (await camReading()) !== false;
   if (ok) return run(action.onGranted);
   return run(blocked ? (action.onBlocked || action.onDenied) : action.onDenied);
 }

@@ -882,6 +882,14 @@ function micAskPage(status, getUserMedia) {
   p.run("globalThis.__repaints = 0; repaint = () => { globalThis.__repaints++; }");
   return p;
 }
+
+/** The same page for the camera (camStatus): what a call needs before it can turn one on. */
+function camAskPage(status, getUserMedia) {
+  const p = page({ askSetup: false }, { globals: { navigator: { language: "en-US", mediaDevices: { getUserMedia } } } });
+  p.g.tailzuApp.camStatus = async () => status.value;
+  p.run("globalThis.__repaints = 0; repaint = () => { globalThis.__repaints++; }");
+  return p;
+}
 const MIC_ACTION = {
   kind: "requestPermission", permission: "microphone",
   onGranted: { kind: "setState", path: "flag", value: "granted" },
@@ -915,11 +923,75 @@ test("asking opens the microphone once (the system's prompt) and closes it, then
   none.ctx.__a = MIC_ACTION;
   await none.run("run(__a)");
   assert.strictEqual(none.run("stateAt('flag')"), "denied");
-  // Anything but the microphone is not this window's to ask for.
-  const cam = micAskPage(status, async () => stream());
-  cam.ctx.__a = Object.assign({}, MIC_ACTION, { permission: "camera" });
-  await cam.run("run(__a)");
-  assert.strictEqual(cam.run("stateAt('flag')"), "denied");
+  // A permission this window has no way to ask for is a no, not a silent yes.
+  const other = micAskPage(status, async () => stream());
+  other.ctx.__a = Object.assign({}, MIC_ACTION, { permission: "contacts" });
+  await other.run("run(__a)");
+  assert.strictEqual(other.run("stateAt('flag')"), "denied");
+});
+
+// ---- the camera: the same two, for the one thing a call turns on ----------------------------
+
+test("the window declares DeskCamAsk only with a main process that reads the camera", () => {
+  const on = camAskPage({ value: "granted" }, async () => stream());
+  assert.ok(on.run("capabilities().components").includes("DeskCamAsk"));
+  assert.ok(on.run("capabilities().actions").includes("requestPermission"));
+  // The microphone's own page says nothing about the camera.
+  const mic = micAskPage({ value: "granted" }, async () => stream());
+  assert.ok(!mic.run("capabilities().components").includes("DeskCamAsk"));
+});
+
+test("asking for the camera opens it once and closes it, then runs the page's answer", async () => {
+  const CAM_ACTION = Object.assign({}, MIC_ACTION, { permission: "camera" });
+  const status = { value: "granted" };
+  stream.stopped = 0;
+  const p = camAskPage(status, async () => stream());
+  p.ctx.__a = CAM_ACTION;
+  await p.run("run(__a)");
+  assert.strictEqual(p.run("stateAt('flag')"), "granted");
+  assert.strictEqual(stream.stopped, 1);
+  // Refused at the system's switch: blocked. No camera on the computer: denied.
+  const blocked = camAskPage(status, async () => { throw Object.assign(new Error("no"), { name: "NotAllowedError" }); });
+  blocked.ctx.__a = CAM_ACTION;
+  await blocked.run("run(__a)");
+  assert.strictEqual(blocked.run("stateAt('flag')"), "blocked");
+  const none = camAskPage(status, async () => { throw Object.assign(new Error("none"), { name: "NotFoundError" }); });
+  none.ctx.__a = CAM_ACTION;
+  await none.run("run(__a)");
+  assert.strictEqual(none.run("stateAt('flag')"), "denied");
+  // The window opened it, but the Mac says no: the system's reading wins.
+  const lying = camAskPage({ value: "denied" }, async () => stream());
+  lying.ctx.__a = CAM_ACTION;
+  await lying.run("run(__a)");
+  assert.strictEqual(lying.run("stateAt('flag')"), "denied");
+});
+
+test("a page that asks after the camera gets the system's answer in $state.camGranted, and only such a page", async () => {
+  const status = { value: "denied" };
+  const p = camAskPage(status, async () => stream());
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  p.run("CURRENT_SCREEN = { state: { camGranted: true }, root: { type: 'Stack' } }; STATE = { camGranted: true }");
+  p.run("camFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.camGranted"), false);
+  assert.strictEqual(p.run("__repaints"), 1);
+  // Allowed in System Settings, then back to the window: read again.
+  status.value = "granted";
+  p.run("camFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.camGranted"), true);
+  // A system with no such switch is nothing to ask for.
+  status.value = "unknown";
+  p.run("camFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.camGranted"), true);
+  assert.strictEqual(p.run("__repaints"), 2);
+  // A page that does not ask is left alone.
+  p.run("CURRENT_SCREEN = { state: {}, root: { type: 'Stack' } }; STATE = {}");
+  status.value = "denied";
+  p.run("camFollow()");
+  await settle();
+  assert.strictEqual(p.run("STATE.camGranted"), undefined);
 });
 
 test("a page that asks after the microphone gets the system's answer in $state.micGranted, and only such a page", async () => {
