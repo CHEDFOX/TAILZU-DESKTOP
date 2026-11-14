@@ -208,6 +208,8 @@ function v2Gone() {
   if (typeof v2ListLeave === "function") v2ListLeave();
   if (typeof v2MediaLeave === "function") v2MediaLeave();
   if (typeof v2ShellLeave === "function") v2ShellLeave();
+  // Leaving the screen hangs up: a microphone is never left open behind a page nobody is looking at.
+  if (typeof v2CallLeaveScreen === "function") v2CallLeaveScreen();
   if (typeof v2MarksLeave === "function") v2MarksLeave();
 }
 

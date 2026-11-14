@@ -8,6 +8,9 @@
 /** What this window really implements, in the kernel's own order. Nothing is named here that is not drawn. */
 const V2_BLOCKS = [
   "expr", "defs", "rules", "device", "local", "paint", "motion", "gesture", "list", "input", "media", "data", "shell",
+  // One of our own calls (TAILZU-BACKEND/docs/rooms.md). Electron has WebRTC of its own, so unlike the phone there is nothing to
+  // load and nothing to check: the window can always hold a call.
+  "call",
 ];
 
 /** The one place the v2 half keeps what it is doing for the screen that is up. */

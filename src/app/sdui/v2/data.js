@@ -279,6 +279,9 @@ function v2RunHook() {
           v2LocalRemove(a.path);
           return typeof repaint === "function" ? repaint() : undefined;
         }
+        if (a.kind === "call.join" && v2Has("call")) return v2CallJoin(a);
+        if (a.kind === "call.set" && v2Has("call")) return v2CallSet(a.op, a.value);
+        if (a.kind === "call.leave" && v2Has("call")) return v2CallLeave();
         if (a.kind === "callEndpoint" && v2Has("data") && v2CallIsOurs(a)) return v2Call(a);
       }
       return arguments.length > 1 ? inner.call(this, a, eventValue) : inner.call(this, a);
