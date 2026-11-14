@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 14 Nov 2026, 22:15 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 14 Nov 2026, 22:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -17,12 +17,16 @@ look. The apps are renderers: build server data with the existing blocks and cat
   bump; changing an existing native package does. Run `node tools/ci/check-runtime.mjs --write` after native changes.
 - **Safety net** (one bad node cannot crash a screen; `sdui.safe` / `sdui.off` / `sdui.motion` switches; crash-loop safe
   mode), frontend `7ddcf31`. Not switched on until V1: the server sends no `sdui.*` knob yet.
-- **Launch animation from the server**, frontend `7ddcf31`. It rides the bootstrap as `app.launch`. Launch **v4** (backend
-  `b787e42`): the gloves only slide, and sit on the bar's face when they come back. Why: builds up to 8.9.1 give React Native
-  their pivots as `transformOrigin` strings, whose parser drops decimals, so every squeeze, flip, twist or shrink happened
-  about a point far off screen and took the gloves (and the feelers) with it; a browser drew it right. The next phone build
-  gives numbers (`LaunchCurtain.tsx` `pivot`, guarded by `launchCore.test.ts`). Keep the gloves to `dy`, `edge`, `lift`,
-  `gx`, `shown` until the older builds are gone (`docs/launch.md`).
+- **Launch animation from the server**, frontend `7ddcf31`. It rides the bootstrap as `app.launch`. Launch **v5** (backend
+  `41e9c38`) is the owner's original motion again (v1's, only `v` is new). Builds up to 8.9.1 give React Native their pivots
+  as `transformOrigin` strings, whose parser drops decimals, so on those phones the gloves and feelers vanish while it plays
+  (the owner chose this over an over-the-air update). Frontend `cba544d` on main gives numbers (`LaunchCurtain.tsx` `pivot`,
+  guarded by `launchCore.test.ts`), so the NEXT store build draws all of it. **Before that build, bring the phone's own copy
+  to v5** (held off main, because any push of `app/**` to main sends an over-the-air update): in TAILZU-FRONTEND run
+  `node ../TAILZU-BACKEND/tulmi/scripts/gen-launch-starter.mjs`, restore `app/src/launch/launchCore.ts` and
+  `launchCore.test.ts` from `2193692` (`git show 2193692:<path>`), keep the pivot test from `cba544d`, and push it WITH a
+  native change. Until then `launchCore.test.ts` "the copy this build carries is the launch the backend generated it from"
+  fails when the two repos sit side by side: expected, not a bug.
 - **Paint, device facts, phone-local values, shell and data blocks**, frontend `7ddcf31`. Not switched on until V1: no
   screen can reach them.
 
