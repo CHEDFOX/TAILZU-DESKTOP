@@ -38,7 +38,7 @@ test("kernel.js is the generated file, untouched (regenerate it from the phone, 
 test("the kernel runs as the window loads it: expressions, text, templates, rules", () => {
   const k = require("./kernel.js");
   assert.strictEqual(k.VOCAB, 2);
-  assert.strictEqual(k.BLOCKS.length, 13);
+  assert.strictEqual(k.BLOCKS.length, 14);
   assert.strictEqual(k.LIMITS.exprOps, 256);
 
   const state = { done: [1, 2], items: [1, 2, 3], busy: false, title: "{{ state.secret }}", secret: "s3cret" };
