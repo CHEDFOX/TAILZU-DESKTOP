@@ -45,8 +45,8 @@
 const PERM_CARDS = {
   ax: {
     icon: "keys",
-    h: ["desktop.perm.ax.h", "Let me type for you"],
-    p: ["desktop.perm.ax.p", "Your words were copied, but I couldn’t put them where your cursor is. Allow X0 Bot under Accessibility and I’ll type them straight in."],
+    h: ["desktop.perm.ax.h", "Let me type that for you"],
+    p: ["desktop.perm.ax.p", "Your words were copied, but I couldn’t put them where your cursor is. Switch X0 Bot on in your Mac’s settings — it lists this under Accessibility — and they’ll land in whatever you’re writing in."],
     cta: ["desktop.perm.open", "Open Settings"],
     reading: () => (typeof axReading === "function" ? axReading() : Promise.resolve(null)),
     on: () => typeof axAskOn === "function" && axAskOn(),
@@ -54,8 +54,8 @@ const PERM_CARDS = {
   },
   see: {
     icon: "eye",
-    h: ["desktop.perm.see.h", "Let me see your screen"],
-    p: ["desktop.perm.see.p", "Ask answers about the window you’re looking at, and it can’t see it yet. Allow X0 Bot under Screen Recording."],
+    h: ["desktop.perm.see.h", "Let me read the window you’re in"],
+    p: ["desktop.perm.see.p", "Ask answers about what’s in front of you, and it can’t read your screen yet. Your Mac lists this under Screen Recording. It looks only when you ask it something, and the picture is never kept."],
     cta: ["desktop.perm.open", "Open Settings"],
     reading: () => (typeof seeReading === "function" ? seeReading() : Promise.resolve(null)),
     on: () => typeof seeAskOn === "function" && seeAskOn(),
@@ -64,7 +64,7 @@ const PERM_CARDS = {
   mic: {
     icon: "mic",
     h: ["desktop.perm.mic.h", "Let me hear you"],
-    p: ["desktop.perm.mic.p", "I couldn’t open the microphone, so there was nothing to write down."],
+    p: ["desktop.perm.mic.p", "I couldn’t open the microphone, so there was nothing to write down. It’s off every other moment."],
     cta: ["desktop.perm.allow", "Allow"],
     reading: () => (typeof micReading === "function" ? micReading() : Promise.resolve(null)),
     on: () => typeof micAskOn === "function" && micAskOn(),
@@ -72,8 +72,8 @@ const PERM_CARDS = {
   },
   cam: {
     icon: "cam",
-    h: ["desktop.perm.cam.h", "Let me use the camera"],
-    p: ["desktop.perm.cam.p", "A call can’t turn your camera on until your computer lets X0 Bot use it. Nothing is sent until you turn it on in the call."],
+    h: ["desktop.perm.cam.h", "Your camera, when you want it"],
+    p: ["desktop.perm.cam.p", "A call can’t turn your camera on until your computer lets X0 Bot use it. It stays off until you switch it on in the call."],
     cta: ["desktop.perm.allow", "Allow"],
     reading: () => (typeof camReading === "function" ? camReading() : Promise.resolve(null)),
     on: () => typeof camAskOn === "function" && camAskOn(),
@@ -118,7 +118,7 @@ async function permAskMedia(permission, openKind) {
   const btn = card && card.querySelector(".tz-pc-go");
   if (btn) btn.textContent = permWord(["desktop.perm.open", "Open Settings"]);
   const line = card && card.querySelector(".tz-pc-foot");
-  if (line) line.textContent = K.txt("desktop.perm.blocked", "Your computer is holding this one. Open its settings, turn X0 Bot on, and come back.");
+  if (line) line.textContent = K.txt("desktop.perm.blocked", "Your computer keeps this one. Open its settings, switch X0 Bot on, and come back.");
 }
 
 /** The answer turned yes (or the person closed it): the card goes. */

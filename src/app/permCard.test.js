@@ -40,7 +40,7 @@ test("the card goes up for the one thing that was missed, and its button opens t
   const p = win();
   await p.need("ax");
   assert.ok(p.card(), "a card");
-  assert.match(p.text(), /Let me type for you/);
+  assert.match(p.text(), /Let me type that for you/);
   assert.match(p.text(), /Accessibility/);
   assert.match(p.text(), /Open Settings/);
   assert.match(p.text(), /Not now/);
@@ -52,7 +52,7 @@ test("the card goes up for the one thing that was missed, and its button opens t
   // two cards in the same millisecond.
   const q = win();
   await q.need("see");
-  assert.match(q.text(), /Let me see your screen/);
+  assert.match(q.text(), /Let me read the window/);
   q.press(".tz-pc-go");
   assert.deepStrictEqual(q.acts, [{ kind: "openScreenRecording", on: null }]);
 });
@@ -88,7 +88,7 @@ test("the microphone is asked of the system first; its settings page only once t
   await p.settle();
   assert.deepStrictEqual(p.acts, [], "no page opened on the first press");
   assert.match(p.text(), /Open Settings/);
-  assert.match(p.text(), /Your computer is holding this one/);
+  assert.match(p.text(), /Your computer keeps this one/);
   p.press(".tz-pc-go");
   await p.settle();
   assert.deepStrictEqual(p.acts, [{ kind: "openMicrophone", on: null }]);
@@ -99,7 +99,7 @@ test("allowed at the system's prompt, the card says so and goes", async () => {
   const stream = { getTracks: () => [{ stop() { opened.push("stopped"); } }] };
   const p = win({ cam: "denied" }, async () => { opened.push("asked"); return stream; });
   await p.need("cam");
-  assert.match(p.text(), /Let me use the camera/);
+  assert.match(p.text(), /Your camera, when you want it/);
   p.press(".tz-pc-go");
   await p.settle();
   assert.deepStrictEqual(opened, ["asked", "stopped"], "opened once and shut at once");
@@ -165,4 +165,21 @@ test("a row refused for good puts the card up, and not the page's own line as we
   await bare.settle();
   assert.strictEqual(bare.card(), null);
   assert.strictEqual(bare.run("STATE.flag"), "blocked");
+});
+
+test("what a system's answer means is that system's own: Windows asks nobody, a Mac asks once", async () => {
+  // Windows: a desktop app records unless the person turned it off, and the
+  // answer for one that has never recorded is "not-determined". Nothing to ask
+  // for, so no card and no trip to Settings.
+  const w = win({ mic: "not-determined" });
+  w.run('ENV = { os: "windows" }');
+  assert.strictEqual(await w.need("mic"), false);
+  // Turned off there, it is a real no.
+  const off = win({ mic: "denied" });
+  off.run('ENV = { os: "windows" }');
+  assert.strictEqual(await off.need("mic"), true);
+  // A Mac has a prompt to put, so the same answer is a question still to ask.
+  const mac = win({ mic: "not-determined" });
+  mac.run('ENV = { os: "mac" }');
+  assert.strictEqual(await mac.need("mic"), true);
 });
