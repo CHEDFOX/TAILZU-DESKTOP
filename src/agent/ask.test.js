@@ -2673,6 +2673,7 @@ function setupCard(o = {}) {
     screenDenied: () => denied,
     openAccessibility: () => did.push(["open", "accessibility"]),
     openScreenRecording: () => did.push(["open", "screen recording"]),
+    promptScreenRecording: () => did.push(["prompt", "screen recording"]),
     openMediaSettings: (what) => { did.push(["open", what]); return o.mediaPage !== false; },
     relaunch: () => did.push(["relaunch"]),
     send: (s) => pushed.push(s),
@@ -2733,11 +2734,16 @@ test("setup: only the app window may ask or act", () => {
 });
 
 test("setup: each button does its one thing, and the window is told the state after it", () => {
-  const c = setupCard();
+  const c = setupCard({ trusted: false });
+  // The first press on each of the Mac's two is the system's own dialog; the
+  // press after it is the page (the test below holds that in full).
+  c.act({ kind: "openAccessibility" });
   c.act({ kind: "openAccessibility" });
   c.act({ kind: "openScreenRecording" });
-  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "accessibility"], ["open", "screen recording"]]);
-  assert.strictEqual(c.pushed.length, 2);
+  c.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open" || d[0] === "prompt"),
+    [["open", "accessibility"], ["prompt", "screen recording"], ["open", "screen recording"]]);
+  assert.strictEqual(c.pushed.length, 4);
   // Look at the screen when it's needed: on, and off again. Saved each time.
   c.act({ kind: "picturesAll", on: true });
   assert.strictEqual(c.localState.askPicturesAlwaysAll, true);
@@ -3063,24 +3069,36 @@ test("askHeard: nothing while a dictation has the microphone, signed out, for no
   q.ask.cancel("test over");
 });
 
-test("setup: Open Settings for Accessibility asks macOS first, once, so Tailzu is in the list on a fresh Mac", () => {
+test("setup: the Mac's two ask the system in the app first, and open the page only on the press after", () => {
+  // macOS has a dialog of its own for each of these and shows it the first
+  // time an app asks, over whatever is in front. So the first press is that
+  // dialog and nothing else — no page, no leaving the app — and because macOS
+  // never shows it again, the press after it opens the page where the switch
+  // is. (The asking is also what puts Tailzu in that page's list at all.)
   const c = setupCard({ trusted: false });
   c.act({ kind: "openAccessibility" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "trusted?" && d[1] === true).length, 1, "the system asked");
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [], "and nowhere sent");
   c.act({ kind: "openAccessibility" });
-  const asked = c.did.filter((d) => d[0] === "trusted?" && d[1] === true);
-  assert.strictEqual(asked.length, 1, "once a launch");
-  const first = c.did.findIndex((d) => d[0] === "trusted?" && d[1] === true);
-  assert.ok(first < c.did.findIndex((d) => d[0] === "open"), "asked before the page opens");
-  assert.strictEqual(c.did.filter((d) => d[0] === "open").length, 2, "the page opens each time");
-  // Already allowed: never the prompt.
-  const on = setupCard({ trusted: true });
-  on.act({ kind: "openAccessibility" });
-  assert.ok(!on.did.some((d) => d[0] === "trusted?" && d[1] === true));
-  // Screen Recording's button does not ask for Accessibility; nor does anything off a Mac.
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "accessibility"]], "the page, on the press after");
+  assert.strictEqual(c.did.filter((d) => d[0] === "trusted?" && d[1] === true).length, 1, "asked once a launch");
+  // The screen is asked for the same way: its own dialog, then the page.
   const sr = setupCard({ trusted: false });
   sr.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(sr.did.filter((d) => d[0] === "prompt" || d[0] === "open"), [["prompt", "screen recording"]]);
+  sr.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(sr.did.filter((d) => d[0] === "prompt" || d[0] === "open"), [["prompt", "screen recording"], ["open", "screen recording"]]);
+  // It does not ask for Accessibility on the way.
   assert.ok(!sr.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  // Already allowed: nothing is asked and nowhere is opened.
+  const on = setupCard({ trusted: true });
+  on.act({ kind: "openAccessibility" });
+  on.act({ kind: "openAccessibility" });
+  assert.ok(!on.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  assert.deepStrictEqual(on.did.filter((d) => d[0] === "open"), []);
+  // Nothing of this off a Mac.
   const win = setupCard({ trusted: false, platform: "win32" });
+  win.act({ kind: "openAccessibility" });
   win.act({ kind: "openAccessibility" });
   assert.deepStrictEqual(win.did, []);
 });

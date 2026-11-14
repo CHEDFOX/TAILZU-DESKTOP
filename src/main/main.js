@@ -3085,12 +3085,19 @@ function deviceKinds() {
 // look was refused for want of it (run/text.js TEXT.needScreen). A fixed
 // address: the card's button opens this and nothing else.
 const SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+/**
+ * ASK macOS FOR THE SCREEN, which is the system's own dialog and the whole of
+ * the ask the first time: "X0 Bot would like to record this computer's
+ * screen", over whatever app is in front. It is asking for the window list
+ * that does it — the helper never asks (tzax.swift) — and the same asking is
+ * what puts Tailzu in the settings page's list, so there is a switch there to
+ * turn on afterwards.
+ */
+function promptScreenRecording() {
+  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* nothing else to try */ }
+}
 function openScreenRecordingSettings() {
-  // macOS lists in that page only the apps that have asked to record the
-  // screen, and the helper never asks (tzax.swift): asking for the window
-  // list once puts Tailzu there (the first time with the system's own
-  // prompt), so there is a switch to turn on.
-  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* the page still opens */ }
+  promptScreenRecording();
   shell.openExternal(SCREEN_RECORDING_SETTINGS).catch(() => {});
 }
 
@@ -3125,6 +3132,8 @@ const askSetup = createAskSetup({
   // The guide's own path: macOS is asked for the window list once, so
   // Tailzu is in the page's list to be switched on, and the page opens.
   openScreenRecording: openScreenRecordingSettings,
+  // The first press is the system's own dialog, with nowhere to go.
+  promptScreenRecording,
   openMediaSettings,
   // Through quit, not exit: a note being taken is finished on the server
   // (before-quit), and the helpers are stopped (will-quit), as on any quit.
