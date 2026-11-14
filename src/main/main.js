@@ -2982,8 +2982,26 @@ function pasteIntoFocusedApp(done) {
   }
 }
 
+/**
+ * ONE PERMISSION IS MISSED, AND THE WINDOW IS THERE TO SAY SO: its card goes
+ * up over the app (sdui/permCard.js), the page behind it blurred, with the
+ * one thing that is missing and the furthest this system lets us go towards
+ * granting it. True when the window took it.
+ *
+ * Only while the window is actually on screen. A card drawn behind a hidden
+ * window is not an ask, so the caller keeps whatever it did before — a
+ * notification, usually — for that case.
+ */
+function permNeeded(kind) {
+  if (!appWin || appWin.isDestroyed() || !appWin.isVisible() || appWin.isMinimized()) return false;
+  if (appWin.webContents.isLoading()) return false;
+  try { appWin.webContents.send("perm-needed", String(kind)); return true; } catch { return false; }
+}
+
 let warnedAccessibility = false;
 function notifyAccessibility() {
+  // The window is up: its card says it, with the button that opens the page.
+  if (permNeeded("ax")) return;
   if (warnedAccessibility) return;
   warnedAccessibility = true;
   new Notification({
@@ -3081,6 +3099,21 @@ function openScreenRecordingSettings() {
 // its buttons. Each button opens one fixed page, the same way the note's and
 // the guide's do, and the window can open nothing else with them.
 const ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+// The microphone and camera pages, for the two systems that keep such a
+// switch. A Mac shows its own prompt the first time, and never again once it
+// has been told no; Windows has no prompt for an app to show at all. So when
+// opening one of these is the only way left, the window asks for it by name
+// and the address is fixed here, as every other settings page is.
+const MEDIA_SETTINGS = {
+  darwin: { microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone", camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera" },
+  win32: { microphone: "ms-settings:privacy-microphone", camera: "ms-settings:privacy-webcam" },
+};
+function openMediaSettings(what) {
+  const page = (MEDIA_SETTINGS[process.platform] || {})[what];
+  if (!page) return false;
+  shell.openExternal(page).catch(() => {});
+  return true;
+}
 const askSetup = createAskSetup({
   ipcMain, fromApp, platform: process.platform, systemPreferences,
   knobs: { str },
@@ -3092,6 +3125,7 @@ const askSetup = createAskSetup({
   // The guide's own path: macOS is asked for the window list once, so
   // Tailzu is in the page's list to be switched on, and the page opens.
   openScreenRecording: openScreenRecordingSettings,
+  openMediaSettings,
   // Through quit, not exit: a note being taken is finished on the server
   // (before-quit), and the helpers are stopped (will-quit), as on any quit.
   relaunch: () => { app.relaunch(); app.quit(); },
@@ -3172,8 +3206,10 @@ function setupAsk() {
     // setup card; back to the default at sign-out, like the list.
     picturesAlwaysAll: picturesForAll,
     // A look's word on Screen Recording changed: the setup card is told, so
-    // it can offer the restart a granted permission still needs.
-    lookPermission: () => askSetup.push(),
+    // it can offer the restart a granted permission still needs — and when the
+    // look was refused for want of it, the window's own card asks for it where
+    // the person just missed it.
+    lookPermission: (denied) => { askSetup.push(); if (denied === true) permNeeded("see"); },
     // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
     pillBlip: pillBlipAt,
     page: (o) => pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), o),

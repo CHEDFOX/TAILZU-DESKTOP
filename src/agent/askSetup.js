@@ -2,7 +2,10 @@
 // the main process's side of it (createAskSetup).
 
 // The "ask" actions the card may ask for. Anything else is ignored.
-const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "picturesAll", "relaunch"]);
+// openMicrophone and openCamera are the two the person can only turn on in
+// their own settings: a Mac that has already been told no (it never asks
+// twice), and Windows, which has no prompt for an app to show at all.
+const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "openMicrophone", "openCamera", "picturesAll", "relaunch"]);
 
 /**
  * ASK'S ONE-TIME SETUP, the main process's side of it: "Let Ask see what you
@@ -34,6 +37,7 @@ const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "pictur
  *   o.screenDenied()       the last look was refused for want of Screen Recording
  *   o.openAccessibility()  the Mac's Accessibility page
  *   o.openScreenRecording()  the guide's Screen Recording path (main.js)
+ *   o.openMediaSettings(w)  the microphone or camera page (a Mac's, or Windows')
  *   o.relaunch()
  *   o.send(state)          to the app window, as "ask-setup"
  */
@@ -66,6 +70,13 @@ function createAskSetup(o) {
   /** One of the card's buttons. True when it was one it may ask for. */
   function act(p) {
     if (!p || typeof p !== "object" || !SETUP_KINDS.has(p.kind)) return false;
+    if (p.kind === "openMicrophone" || p.kind === "openCamera") {
+      // The microphone and the camera page, on the two systems that keep one.
+      // Nothing to open on Linux, where neither is a permission.
+      const what = p.kind === "openMicrophone" ? "microphone" : "camera";
+      if (!mac && o.platform !== "win32") return false;
+      return call(() => o.openMediaSettings(what), false) !== false;
+    }
     if (p.kind === "openAccessibility" || p.kind === "openScreenRecording") {
       // A Mac's own settings pages; there is nothing to open elsewhere.
       if (!mac) return false;

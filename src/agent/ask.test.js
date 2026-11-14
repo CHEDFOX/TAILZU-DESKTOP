@@ -2673,6 +2673,7 @@ function setupCard(o = {}) {
     screenDenied: () => denied,
     openAccessibility: () => did.push(["open", "accessibility"]),
     openScreenRecording: () => did.push(["open", "screen recording"]),
+    openMediaSettings: (what) => { did.push(["open", what]); return o.mediaPage !== false; },
     relaunch: () => did.push(["relaunch"]),
     send: (s) => pushed.push(s),
   });
@@ -2753,6 +2754,32 @@ test("setup: each button does its one thing, and the window is told the state af
   for (const p of [{ kind: "openSystemAudio" }, { kind: "openExternal", url: "https://x.test" }, { kind: "__proto__" }, "relaunch", null, 7, {}]) c.act(p);
   assert.strictEqual(c.pushed.length, before, "nothing done, nothing said");
   assert.ok(!c.did.some((d) => d[0] === "relaunch"));
+});
+
+test("setup: the microphone and camera pages open where the system keeps such a switch, and nowhere else", () => {
+  // A Mac asks for these two itself, the first time; once it has been told no
+  // it never asks again, and this page is the only way back. Windows never
+  // asks at all. Both have a page; Linux has neither.
+  for (const platform of ["darwin", "win32"]) {
+    const c = setupCard({ platform });
+    c.act({ kind: "openMicrophone" });
+    c.act({ kind: "openCamera" });
+    assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "microphone"], ["open", "camera"]], platform);
+    assert.strictEqual(c.pushed.length, 2, platform);
+  }
+  const none = setupCard({ platform: "linux" });
+  none.act({ kind: "openMicrophone" });
+  none.act({ kind: "openCamera" });
+  assert.deepStrictEqual(none.did, []);
+  assert.deepStrictEqual(none.pushed, []);
+  // A page this build cannot open is not reported as done.
+  const old = setupCard({ platform: "win32", mediaPage: false });
+  old.act({ kind: "openMicrophone" });
+  assert.deepStrictEqual(old.pushed, []);
+  // And only the app window may ask for one.
+  const c = setupCard();
+  c.act({ kind: "openMicrophone" }, c.OTHER);
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), []);
 });
 
 test("setup: the Mac's pages are opened only on a Mac", () => {

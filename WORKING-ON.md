@@ -56,6 +56,19 @@ Play Integrity in the app), and their Android halves. Five jobs hold:
   still have no icon of their own** and get the generic `spark`: one line each in `palette.ts` `BUILTIN_ICON` when somebody wants to
   choose them. Not mine to pick.
 
+## In progress (started 14 Nov 2026, evening)
+
+- **The permission card at the moment of need (the window)** (P1, same session as the window's onboarding steps). Someone who said
+  "Not now" in the onboarding, or turned a permission off later, meets nothing but a failure: a paste that silently only copies, a look
+  that answers "I can't see your screen". Adding the card the phone has, over the app with the blurred veil the window already draws
+  for `BotCard` overlays: one permission, why it is needed, and the most in-app way to grant it this OS allows (macOS's own prompt for
+  the microphone and the camera; the exact settings page where the OS has no prompt, Windows' privacy pages included). Shown when a
+  feature is refused — Accessibility on a failed paste, Screen Recording on a refused look, the camera when a call turns one on — and
+  only while the window is up; the notification stays for when it is not.
+  Holds: `TAILZU-DESKTOP/src/app/sdui/{permCard,permissions,core,backend,actions}.js`, `src/app/app.html`, `src/main/{main,preload}.js`,
+  `src/agent/askSetup.js`; `TAILZU-BACKEND/tulmi/src/experience/appKnobsData.ts` (the `desktop.perm.*` words) and
+  `tulmi/src/experience/onboard/perms.ts`.
+
 ## Landed 14 Nov 2026 (all switched off)
 
 - **The window's terms and permissions, after onboarding** (`docs/window-setup.md`). A window finished its onboarding having agreed

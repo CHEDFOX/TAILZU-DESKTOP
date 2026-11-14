@@ -125,6 +125,10 @@ async function askMic(action) {
   }
   if (ok && micAskOn()) ok = (await micReading()) !== false;
   if (ok) return run(action.onGranted);
+  // Refused for good (the system will not ask twice): the card says where the
+  // switch is, which is more use than a line of toast. Only if it can be put
+  // up — otherwise the page's own onBlocked still speaks.
+  if (blocked && typeof permNeed === "function" && await permNeed("mic")) return;
   return run(blocked ? (action.onBlocked || action.onDenied) : action.onDenied);
 }
 
@@ -144,5 +148,6 @@ async function askCam(action) {
   }
   if (ok && camAskOn()) ok = (await camReading()) !== false;
   if (ok) return run(action.onGranted);
+  if (blocked && typeof permNeed === "function" && await permNeed("cam")) return;
   return run(blocked ? (action.onBlocked || action.onDenied) : action.onDenied);
 }
