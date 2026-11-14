@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 13 Nov 2026, 23:30 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 14 Nov 2026, 00:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -21,23 +21,17 @@ look. The apps are renderers: build server data with the existing blocks and cat
 - **Paint, device facts, phone-local values, shell and data blocks**, frontend `7ddcf31`. Not switched on until V1: no
   screen can reach them.
 
-## In progress (started 13 Nov 2026, 23:30 UTC)
+## In progress
 
-All the building blocks are on main but not connected yet (see `docs/renderer.md`, section 3). Three jobs connect them now:
-- **Phone renderer wiring (V1).** Holds `app/src/sdui/Renderer.tsx`, `actions.ts`, `state.ts`, `types.ts`, `registry.ts`,
-  `fill.ts`, `client/capabilities.ts`, `live/live.ts`, `components/Screen.tsx`, the SDUI app root and navigation files, and
-  the new `app/src/sdui/blocks/**`.
-- **Server screen checker (S1).** Holds `TAILZU-BACKEND/shared/types/sdui.ts`, `tulmi/src/experience/sdui2/**` (new),
-  `tulmi/src/experience/bots/lint.ts`, `tulmi/src/experience/phone/launch.ts`, the screen route in `tulmi/src/routes/app/**`,
-  and adds `SDUI_V2` / `SDUI_V2_USERS` to `config.ts` (off by default).
-- **Desktop copy (D1).** Holds `TAILZU-DESKTOP/src/app/sdui/v2/**` (new), `src/app/sdui/kernel.js` (generated),
-  `core.js`, `nodes.js`, `app.html`.
+- Nothing held right now. Reviews of the pieces below may push small follow-up fixes to the same files.
 
-- **Reply to a bot from its notification** (server only, switch `NOTIFY_REPLY`, off). Holds `tulmi/src/push/defaults.ts`,
-  `tulmi/src/push/engine.ts`, the `push.categories` knob, a new route under `tulmi/src/routes/bots/`, and the bot chat turn code
-  it calls into.
+## Landed 14 Nov 2026 (all switched off)
 
-Do not build screens with the new blocks until these land; until then use what `docs/renderer.md` section 2 lists.
+- Screen vocabulary 2 connected: phone renderer wiring (`app/src/sdui/blocks/**`, Renderer, actions, state), the server's
+  checker (`tulmi/src/experience/sdui2/**`, switch `SDUI_V2` / `SDUI_V2_USERS`) and the window (`src/app/sdui/v2/**`).
+  How to use it: `docs/renderer.md` section 3.
+- Reply to a bot from its notification (`tulmi/src/bots/notifyReply.ts`, route `POST /v1/bots/:slug/notify-reply`,
+  category `x0_bot_reply`, switch `NOTIFY_REPLY` / `NOTIFY_REPLY_USERS` / `NOTIFY_REPLY_PER_HOUR`). Server only.
 
 ## Numbers in use
 
