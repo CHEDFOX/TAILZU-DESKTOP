@@ -11,6 +11,23 @@ window.addEventListener("focus", () => {
 });
 
 /**
+ * WHAT A SYSTEM'S ANSWER MEANS, which is not the same on every system.
+ *
+ * A Mac keeps one answer per app and asks for it once: "not-determined" there
+ * is a question still to put, so the row shows its button. Windows has no
+ * prompt for an app to show at all — a desktop app simply records unless the
+ * person has turned it off in Settings, where the answer becomes "denied" — so
+ * anything short of that no is nothing to ask for, and a row that said
+ * otherwise would send someone to Settings to turn on what already worked.
+ * "unknown" is a system that keeps no such answer (Linux).
+ */
+function permAnswer(st) {
+  if (st === "granted" || st === "unknown") return true;
+  if (st === "denied" || st === "restricted") return false;
+  return (ENV && ENV.os) !== "mac";
+}
+
+/**
  * THE MICROPHONE'S ANSWER, for a page that asks after it ($state.micGranted:
  * the Bots app's microphone card). The OS keeps it, outside this window, so
  * it is the main process that reads it (granted, denied, not-determined,
@@ -19,10 +36,7 @@ window.addEventListener("focus", () => {
  * painted and again on coming back to the window (from System Settings).
  */
 async function micReading() {
-  try {
-    const st = String(await window.tailzuApp.micStatus() || "unknown");
-    return st === "granted" || st === "unknown";
-  } catch { return null; }
+  try { return permAnswer(String(await window.tailzuApp.micStatus() || "unknown")); } catch { return null; }
 }
 
 function micFollow() {
@@ -41,10 +55,7 @@ function micFollow() {
  * opens the camera until the person turns it on in a call (docs/rooms.md).
  */
 async function camReading() {
-  try {
-    const st = String(await window.tailzuApp.camStatus() || "unknown");
-    return st === "granted" || st === "unknown";
-  } catch { return null; }
+  try { return permAnswer(String(await window.tailzuApp.camStatus() || "unknown")); } catch { return null; }
 }
 
 function camFollow() {
@@ -66,6 +77,8 @@ function camFollow() {
  */
 async function seeReading() {
   try {
+    // A Mac's alone, and its own prompt is shown by looking, not by asking:
+    // anything but a yes leaves something to do.
     const st = String(await window.tailzuApp.seeStatus() || "unknown");
     return st === "granted" || st === "unknown";
   } catch { return null; }

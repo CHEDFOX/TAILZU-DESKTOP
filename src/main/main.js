@@ -3856,17 +3856,27 @@ app.whenReady().then(() => {
 
   // The microphone, auto-granted, to the two pages that record — the hidden
   // recorder and the app window (its Train tab has a mic of its own) — and
-  // nothing else to anyone: not the camera, not to the pill or the captions,
-  // and never to remote content loaded by mistake.
+  // the camera to the app window alone, where a call is (docs/rooms.md).
+  // Nothing to anyone else: not to the pill or the captions, and never to
+  // remote content loaded by mistake.
+  //
+  // THE CAMERA USED TO BE REFUSED HERE, to everyone, which was right while
+  // nothing in the app had one. A call does now, and this said no before the
+  // computer was ever asked — so the camera button in a call could not have
+  // worked on any system, however the person answered. Only the app window
+  // may ask, and only for a camera: a window asking to record the screen
+  // comes through a different permission, which is still nobody's.
   session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {
     const types = (details && details.mediaTypes) || [];
     const audioOnly = types.length > 0 && types.every((m) => m === "audio");
     const fromNotesWin = !!notesWin && !notesWin.isDestroyed() && notesWin.webContents === wc;
+    const fromApp = !!appWin && !appWin.isDestroyed() && appWin.webContents === wc;
+    const records = fromApp || (!!recorderWin && !recorderWin.isDestroyed() && recorderWin.webContents === wc) || fromNotesWin;
     // The note-taker's capture of the computer's sound on Windows asks for the
     // screen's video too; it drops it at once. Only that window, only then.
     const notesDesktop = fromNotesWin && process.platform === "win32" && notes && notes.system === "desktop";
-    done(permission === "media" && types.length > 0 && (audioOnly || notesDesktop) &&
-      ([recorderWin, appWin].some((w) => !!w && !w.isDestroyed() && w.webContents === wc) || fromNotesWin));
+    done(permission === "media" && types.length > 0 &&
+      ((audioOnly && records) || notesDesktop || (fromApp && types.every((m) => m === "audio" || m === "video"))));
   });
 
   // One launch, counted once — here, where only the copy that holds the lock
