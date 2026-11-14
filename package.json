@@ -80,6 +80,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "X0 Bot records your voice to transcribe and clean it into text.",
+        "NSCameraUsageDescription": "X0 Bot uses the camera when you turn it on in a call.",
         "NSAudioCaptureUsageDescription": "X0 Bot hears your computer's sound while you take notes, so a call's other voices are in the notes.",
         "NSAppleEventsUsageDescription": "X0 Bot pastes what you said into the app you are typing in.",
         "LSUIElement": true

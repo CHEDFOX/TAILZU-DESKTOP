@@ -131,6 +131,7 @@ async function run(action, eventValue) {
     case "connector.connect": return connectApp(action);
     case "requestPermission":
       if (action.permission === "microphone") return askMic(action);
+      if (action.permission === "camera") return askCam(action);
       return run(action.onDenied);
 
     // ── buying ────────────────────────────────────────────────────────────

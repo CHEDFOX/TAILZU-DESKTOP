@@ -16,7 +16,7 @@ test("the handshake names vocab 2 and only the blocks this window draws", () => 
   const page = fakePage();
   const hand = JSON.parse(page.run("JSON.stringify(v2Handshake())"));
   assert.strictEqual(hand.vocab, 2);
-  assert.deepStrictEqual(hand.blocks, ["expr", "defs", "rules", "device", "local", "paint", "motion", "gesture", "list", "input", "media", "data", "shell"]);
+  assert.deepStrictEqual(hand.blocks, ["expr", "defs", "rules", "device", "local", "paint", "motion", "gesture", "list", "input", "media", "data", "shell", "call"]);
   // Camera is a phone's: a window has no viewfinder, so `media` here means Video and Audio and the node falls back.
   assert.strictEqual(page.run('v2Node({ type: "Camera" }, {}, "", "")'), null);
 });
@@ -58,4 +58,33 @@ test("a kill switch takes a block out of the handshake and off every screen", ()
   assert.match(html, /Update X0/);
   page.run('K.setKnobs({ labels: {}, flags: { "sdui.safe": true } })');
   assert.deepStrictEqual(JSON.parse(page.run("JSON.stringify(v2Declared())")), []);
+});
+
+test("a Caller draws its ground before anyone is in the call, and a letter once someone is", () => {
+  const page = fakePage();
+  page.run('V2.on = true; V2.needs = ["call"];');
+  // No call yet: the tile is laid out, and draws nothing in it.
+  const empty = page.run('v2CallerNode({ type: "Caller" }, { who: "me", background: "#111" }, "")');
+  assert.match(empty, /background:#111/);
+  assert.doesNotMatch(empty, /<video/);
+
+  // In a call, with nobody's camera on: their initial.
+  page.run('V2_CALL = { statePath: "c", phase: "live", mic: true, cam: false, me: { identity: "h_1", name: "Aanya" }, people: [{ identity: "g_1", name: "Ravi", role: "guest" }], waiting: [], held: [], byMid: new Map(), heard: {} };');
+  const mine = page.run('v2CallerNode({ type: "Caller" }, { who: "me" }, "")');
+  assert.match(mine, />A</);
+  const theirs = page.run('v2CallerNode({ type: "Caller" }, { who: "g_1" }, "")');
+  assert.match(theirs, />R</);
+  // "speaker" with nobody talking is the first person, so a one-tile screen is never blank.
+  assert.match(page.run('v2CallerNode({ type: "Caller" }, { who: "speaker" }, "")'), />R</);
+  page.run("V2_CALL = null;");
+});
+
+test("the screen reads the call, and never its seat", () => {
+  const page = fakePage();
+  page.run('V2_CALL = { statePath: "c", phase: "live", mic: true, cam: true, seat: "r.SECRET", me: { identity: "h_1", name: "Aanya" }, people: [{ identity: "g_1", name: "Ravi", role: "guest", audio: "g_1-audio" }], waiting: [{ id: "k1", name: "Asha" }], held: [], byMid: new Map(), heard: {} };');
+  const state = JSON.parse(page.run("JSON.stringify(v2CallState(V2_CALL))"));
+  assert.deepStrictEqual(state.people, [{ identity: "g_1", name: "Ravi", role: "guest", speaking: false, mic: true, cam: false }]);
+  assert.deepStrictEqual(state.waiting, [{ id: "k1", name: "Asha" }]);
+  assert.strictEqual(JSON.stringify(state).includes("SECRET"), false);
+  page.run("V2_CALL = null;");
 });

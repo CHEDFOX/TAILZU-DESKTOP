@@ -40,6 +40,7 @@ function v2PaintStart() {
   V2_DRIVES = [];
   if (typeof v2InputsPaintStart === "function") v2InputsPaintStart();
   if (typeof v2MediaPaintStart === "function") v2MediaPaintStart();
+  if (typeof v2CallPaintStart === "function") v2CallPaintStart();
   if (typeof v2ShellPaintStart === "function") v2ShellPaintStart();
   if (typeof v2RulesPaintStart === "function") v2RulesPaintStart();
 }
@@ -57,6 +58,8 @@ function v2Node(n, p, s, kids) {
       return v2Has("input") ? v2InputNode(n, p, s) : null;
     case "Video": case "Audio":
       return v2Has("media") && (typeof p.source === "string" || (p.source && typeof p.source === "object")) ? v2MediaNode(n, p, s, kids) : null;
+    case "Caller":
+      return v2Has("call") ? v2CallerNode(n, p, s) : null;
     case "Sheet": case "Modal": case "Toast":
       return v2Has("shell") ? v2ShellNode(n, p, s, kids) : null;
     default:
@@ -128,6 +131,7 @@ function v2WireIn(root) {
   if (typeof v2ListsWire === "function") v2ListsWire(root);
   if (typeof v2InputsWire === "function") v2InputsWire(root);
   if (typeof v2MediaWire === "function") v2MediaWire(root);
+  if (typeof v2CallWire === "function") v2CallWire(root);
   if (typeof v2ShellWire === "function") v2ShellWire(root);
   v2MarksWire(root);
 }

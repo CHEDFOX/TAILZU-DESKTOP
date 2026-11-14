@@ -1,7 +1,7 @@
 // GENERATED: do not edit. The screen kernel: expressions, formats, templates, rules, limits and paths.
 // Source: TAILZU-FRONTEND/app/src/sdui/kernel/; regenerate with `node src/sdui/kernel/genKernel.mjs` there.
 // limits.ts sha256 0c95980b0a8278dcd537470d537ab32027a360673c7a599a9a4be67cdd870a24
-// blocks.ts sha256 effce3c5ce8618170a1a7d76d966fbabd3c52be42e615e4edd7ee4944583cf14
+// blocks.ts sha256 df0a80bf817e469c4dae6fb45bd597b73a60dc433b06c1a6d7f2d6e0e8503131
 // paths.ts sha256 d93249b80fcef3f6b0bd12a8130210ad5bd936d1a5ccb2c55694dcb3438aeae1
 // coreGrammar.ts sha256 da975175d31b7fae75a323fe081da3d4f9dbbc3f9488a4a186be4092741a82fe
 // format.ts sha256 0df4bdcb8e5abfc43fb88567aa7881339b4a31b2122e2ade6fcf59538d4ac174
@@ -9,7 +9,7 @@
 // text.ts sha256 1327d4f359cbdc9b31731450afe442a65339bae2e69bfa4715ed2c678c007d30
 // defs.ts sha256 0f483c84ac2a7c53426f530688e51b46841efa00f94f8e7f2a8238cb123af03d
 // rules.ts sha256 97a79a2facd1ab5dfa7da45e6cb46e5b58f58530ecb7153a64c3d28d76ca575c
-// body sha256 1e57780ac60948dc288201337d43fe1e256ba7ea86d7dc1a9739c3a3747204b9
+// body sha256 0c8bf3870da21281520e5b80cf900755810c2ed410350f04b8176b52c7662c42
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -160,6 +160,9 @@
       "media",
       "data",
       "shell",
+      // One of our own calls, held for a screen (TAILZU-BACKEND/docs/rooms.md): take a seat, change the microphone and camera, leave,
+      // and a `Caller` node that draws one person. The phone says it only where its binary links the live client; the window always can.
+      "call",
   ]);
   const BLOCK_SET = new Set(BLOCKS);
   /**
