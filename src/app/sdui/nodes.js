@@ -139,12 +139,27 @@ function fieldExtras(n, p, path, multi) {
 
 function node(n) {
   if (!n) return "";
+  // THE BUILDING BLOCKS (sdui/v2/). A screen that states what it `needs` gets its `$` and `$t` props worked out,
+  // its templates expanded and its paint turned into CSS here; a screen that states nothing is untouched, so every
+  // screen that exists today draws exactly as it did. A string back is the markup itself — the node was hidden by
+  // an expression, or the screen needs a block this build has not got.
+  if (typeof v2Prepare === "function") {
+    const ready = v2Prepare(n);
+    if (typeof ready === "string") return ready;
+    n = ready;
+  }
   if (!visible(n.visibleIf)) return n.fallback ? node(n.fallback) : "";
   if (n.on && n.on.onAppear) appearAt(n);
   // The onboarding stage draws the one step it is on, not all of them.
   if (n.type === "OnboardStage") return stageNode(n);
   // A bot's stage draws his thought's content itself, and only while it is open or he listens (stage.js).
   if (n.type === "BotStage") return botStageNode(n);
+  // A node's motion and its gestures need its element after the paint, so its markup is marked (v2/index.js).
+  return typeof v2Mark === "function" ? v2Mark(n, nodeDraw(n)) : nodeDraw(n);
+}
+
+/** One node's own markup, by type. */
+function nodeDraw(n) {
   const p = n.props || {}, st = n.style || {}, s = css(st);
   const kids = (n.children || []).map(node).join("");
   const press = n.on && (n.on.onPress || n.on.onChange || n.on.onSubmit);
@@ -337,6 +352,9 @@ function node(n) {
     }
 
     case "List": {
+      // The windowed, paged List of the `list` block (v2/list.js). Null means this is the old one, below.
+      const v2 = typeof v2Node === "function" ? v2Node(n, p, s, kids) : null;
+      if (v2 !== null) return v2;
       const items = Array.isArray(p.items) ? p.items : [];
       if (!items.length) {
         const empty = label(p.emptyLabel);
@@ -353,6 +371,9 @@ function node(n) {
     }
 
     case "Image": case "Video": {
+      // The `media` block's own player (v2/media.js), when the screen asked for it; else the picture below.
+      const v2m = n.type === "Video" && typeof v2Node === "function" ? v2Node(n, p, s, kids) : null;
+      if (v2m !== null) return v2m;
       const src = p.source && (p.source.url || p.source.uri);
       if (!src) return "";
       // The PARENT usually owns the box. A hero is a Stack carrying the aspect
@@ -476,10 +497,14 @@ function node(n) {
         (K.num("desktop.flip.fadeMs", 250) / 1000) + 's">' + words[0] + "</span>";
     }
 
-    case "Modal":
+    case "Modal": {
+      // The `shell` block's Modal (v2/shell.js), when the screen asked for it; else the one below.
+      const v2mod = typeof v2Node === "function" ? v2Node(n, p, s, kids) : null;
+      if (v2mod !== null) return v2mod;
       // Open state lives in the screen's own state, exactly as on the phone.
       if (!truthy(stateAt((n.bind && n.bind.open) || ""))) return "";
       return '<div class="tz-modal"><div class="tz-sheet" style="' + s + '">' + kids + "</div></div>";
+    }
 
     case "SwipeAction": {
       // THE WAY IN. On a phone it is dragged, because a live microphone
@@ -609,7 +634,12 @@ function node(n) {
     // render, so a card built around one is not lost, and a node that shipped
     // a fallback gets it — the same rule the phone renderer follows, so the
     // server can keep emitting one tree for both.
-    default:
+    default: {
+      // The node types the building blocks add (Each, Input, Audio, Sheet, Modal, Toast), for a screen that said
+      // it needs them. Null means no block draws this type, so it degrades as everything else always has.
+      const v2n = typeof v2Node === "function" ? v2Node(n, p, s, kids) : null;
+      if (v2n !== null) return v2n;
       return kids || (n.fallback ? node(n.fallback) : "");
+    }
   }
 }
