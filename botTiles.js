@@ -1,8 +1,8 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone and the server.
 // Source: TAILZU-FRONTEND/app/src/botTiles/{scene,core}.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
 // scene.ts sha256 bf9ddb40045f8c5b9259c29e1c83f2a6f097a3f25328a3b42c9a7923654454ca
-// core.ts sha256 9231a10db8772a8e0052c68fb1e0993a377963073ddd37593b98aa301b046079
-// body sha256 e3b2b9dcdd4d9777c054f123b6361dcb23e62aacb9bcdb6f7efa4fd0101bb40f
+// core.ts sha256 102b65bbe41d43187d6e14b85dc8269df430ae8482409cbbb2fa2847e721fdb4
+// body sha256 599a1e90bc0ca22465f571e2807de36a185cb6f93ade66938803c93cfd841b2d
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -9968,6 +9968,131 @@
           }
       }
   }
+  /** n: points round the edge. k/c: each one's spring back and its damping. wave: how fast a knock runs round. */
+  const MARK = {
+      n: 24, k: 70, c: 4.2, wave: 90, push: 0.055, cap: 7,
+      follow: 120, drag: 9,
+      edge: 1.45, inner: 3.3, quiet: 2.2,
+      pingEvery: 2.9, pingSpeed: 30, pingMax: 26, pingDots: 18, kick: 55,
+  };
+  class Mark {
+      constructor(spec, seed = 1) {
+          /** Where it rides, and how fast: a weight on a spring, so it is always a little behind him. */
+          this.x = NaN;
+          this.y = NaN;
+          this.vx = 0;
+          this.vy = 0;
+          /** The rings on their way out, each a radius. */
+          this.rings = [];
+          this.since = 0;
+          this.xy = new Float32Array(MARK.pingDots * 2);
+          this.spec = spec;
+          this.rr = new Float64Array(MARK.n);
+          this.rv = new Float64Array(MARK.n);
+          this.rand = rng((seed >>> 0) ^ 0x7a31c5);
+          this.since = this.rand() * MARK.pingEvery;
+      }
+      /** Something landed: the whole edge is knocked at once, and it bobs. */
+      knock() {
+          for (let i = 0; i < MARK.n; i++)
+              this.rv[i] = this.rv[i] - 55 * Math.cos((i / MARK.n) * Math.PI * 2 - Math.PI / 2);
+          this.vy -= 110;
+      }
+      /** A ring leaves it, and it takes the kick back. */
+      ping() {
+          this.rings.push(this.spec.r * 0.4);
+          this.vy += MARK.kick;
+      }
+      step(dt, x, y) {
+          if (this.x !== this.x) {
+              this.x = x;
+              this.y = y;
+          }
+          // where it rides: a weight on a spring, so it lags him and settles after he stops
+          this.vx += (-MARK.follow * (this.x - x) - MARK.drag * this.vx) * dt;
+          this.vy += (-MARK.follow * (this.y - y) - MARK.drag * this.vy) * dt;
+          this.x += this.vx * dt;
+          this.y += this.vy * dt;
+          // the edge answers that travel, and the knock runs round it
+          const sp = Math.hypot(this.vx, this.vy), ang = Math.atan2(this.vy, this.vx), n = MARK.n;
+          for (let i = 0; i < n; i++) {
+              const a = (i / n) * Math.PI * 2;
+              const push = Math.cos(a - ang) * sp * MARK.push;
+              const wave = (this.rr[(i - 1 + n) % n] + this.rr[(i + 1) % n] - 2 * this.rr[i]) * MARK.wave;
+              this.rv[i] = this.rv[i] + (-MARK.k * this.rr[i] - MARK.c * this.rv[i] + wave - push * 9) * dt;
+              this.rr[i] = clamp(this.rr[i] + this.rv[i] * dt, -MARK.cap, MARK.cap);
+          }
+          // the rings on their way out, and the next one
+          for (let i = 0; i < this.rings.length; i++)
+              this.rings[i] = this.rings[i] + MARK.pingSpeed * dt;
+          while (this.rings.length && this.rings[0] > MARK.pingMax)
+              this.rings.shift();
+          if (this.spec.urgent) {
+              this.since += dt;
+              if (this.since >= MARK.pingEvery) {
+                  this.since = 0;
+                  this.ping();
+              }
+          }
+          else
+              this.rings.length = 0;
+      }
+      /** Where it stands now, for the trail to meet it and a finger to find it. */
+      rect() {
+          const r = this.spec.r + MARK.cap;
+          return { x: this.x - r, y: this.y - r, w: r * 2, h: r * 2 };
+      }
+      /** A point on the edge as it is now. */
+      at(i) {
+          const a = (i / MARK.n) * Math.PI * 2, rr = this.spec.r + this.rr[i % MARK.n];
+          return [this.x + Math.cos(a) * rr, this.y + Math.sin(a) * rr * 0.94];
+      }
+      draw(ctx, ink, paper) {
+          if (this.spec.dots <= 0 || this.x !== this.x)
+              return;
+          const n = MARK.n;
+          // what is inside it is white, so the page does not read through: the wavy edge, filled
+          ctx.fillStyle = paper;
+          ctx.beginPath();
+          const first = this.at(0), last = this.at(n - 1);
+          ctx.moveTo((last[0] + first[0]) / 2, (last[1] + first[1]) / 2);
+          for (let i = 0; i < n; i++) {
+              const c = this.at(i), p = this.at(i + 1);
+              ctx.quadraticCurveTo(c[0], c[1], (c[0] + p[0]) / 2, (c[1] + p[1]) / 2);
+          }
+          ctx.closePath();
+          ctx.fill();
+          // the edge itself: ink dots, which is the whole of the drawing language
+          ctx.fillStyle = ink;
+          for (let i = 0; i < n; i++) {
+              const p = this.at(i);
+              ctx.beginPath();
+              ctx.arc(p[0], p[1], MARK.edge, 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // what it holds: one dot for each, side by side
+          const k = Math.min(3, this.spec.dots), r = this.spec.urgent ? MARK.inner : MARK.quiet;
+          for (let i = 0; i < k; i++) {
+              ctx.beginPath();
+              ctx.arc(this.x + (i - (k - 1) / 2) * (r * 2.6), this.y, r, 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // the rings on their way out: dots again, thinning as they spread
+          for (const rad of this.rings) {
+              const a = clamp(1 - rad / MARK.pingMax, 0, 1);
+              if (a <= 0.02)
+                  continue;
+              ctx.globalAlpha = a * 0.5;
+              for (let i = 0; i < MARK.pingDots; i++) {
+                  const t = (i / MARK.pingDots) * Math.PI * 2;
+                  ctx.beginPath();
+                  ctx.arc(this.x + Math.cos(t) * rad, this.y + Math.sin(t) * rad * 0.94, 0.9 + a * 0.6, 0, Math.PI * 2);
+                  ctx.fill();
+              }
+          }
+          ctx.globalAlpha = 1;
+      }
+  }
   /**
    * His thought's trail: three bubbles from just over his antennae up to the box, growing toward it (sizes, diameters at
    * scale 1), each outlined in ink (strokes). anchorPad: how near the box's corners the trail may meet it. lift: px over
@@ -10281,5 +10406,5 @@
       }
       return out;
   }
-  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, Peek, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
+  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, Peek, MARK, Mark, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
 });

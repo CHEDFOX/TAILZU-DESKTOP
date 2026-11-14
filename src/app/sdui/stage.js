@@ -52,12 +52,32 @@ function stMinHeight(p, th) {
  * jumps the ledge and stands in full view for a few moments. The same numbers as the phone's (stageCore.ts PEEK).
  */
 const PEEK = { hide: 0.62, room: 0.8, every: [7, 16], stay: [2.4, 5.2] };
+
+/** The ink and the paper the mark is drawn in (the app's own two colours). */
+const ST_INK = "#0a0a0a", ST_PAPER = "#ffffff";
+/** He carries a mark rather than words at rest (BotThoughtSpec.restMark). */
+const stMarks = (th) => !!(th && th.restMark && Number(th.restMark.dots) > 0);
+/** How long the trail is under what he carries: a mark rides a short one, a pill the full one. */
+const ST_MARK_TRAIL = 0.55;
+function stTrailK(th) { return stMarks(th) ? ST_MARK_TRAIL : 1; }
+function stRoomFor(th) {
+  const api = window.TailzuBotTiles;
+  const k = stTrailK(th);
+  return api && typeof api.trailRoom === "function" ? api.trailRoom(k) : 43 * k;
+}
+/** How wide and tall the mark is, room for its wobble included; 0 when he carries no mark. */
+function stMarkSize(th) {
+  return stMarks(th) ? 2 * (12 + Math.min(3, Number(th.restMark.dots) || 1) * 1.8 + 7) : 0;
+}
 const stPeeks = (p) => p && p.stand === "peek";
 const stPeekHide = (size) => Math.max(2, Math.round(size * PEEK.hide));
 /** A peeking stage: shorter by what the bar keeps, but never shorter than him whole on the ledge with his jump's room over it. */
 function stPeekHeight(p, th) {
   const size = Number(p.size) || 30;
-  return Math.max(size + 18 + Math.round(size * PEEK.room), Math.max(Number(p.height) || 0, stMinHeight(p, th)) - stPeekHide(size));
+  const d = stMarkSize(th);
+  // A mark costs much less room than a pill did: a short trail and the blob, with none of the pill's room over it.
+  const box = d > 0 ? Math.ceil(size + 18 + stRoomFor(th) + d) : Math.max(Number(p.height) || 0, stMinHeight(p, th));
+  return Math.max(size + 18 + Math.round(size * PEEK.room), box - stPeekHide(size));
 }
 
 /** His life: kept for the app's life, by `life`. The bot is made when the core is there. */
@@ -65,7 +85,7 @@ function stLife(p) {
   const life = String(p.life || "stage");
   let L = ST_LIVES.get(life);
   if (!L) {
-    L = { life, bot: null, roam: null, peek: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
+    L = { life, bot: null, roam: null, peek: null, mark: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
     ST_LIVES.set(life, L);
   }
   return L;
@@ -84,7 +104,9 @@ function botStageNode(n) {
   const style = th ? (th.style === "home" ? "home" : "space") : "";
   const r = L.rect;
   const boxAt = r ? "left:" + r.x + "px;top:" + r.y + "px;width:" + r.w + "px;height:" + r.h + "px;" : "";
-  const rest = th && th.restText ? '<button type="button" class="tz-th-rest">' + esc(label(th.restText)) + "</button>" : "";
+  // A mark instead of words: nothing is written at rest, and nothing is a button — the blob is drawn on his own canvas and
+  // the stage's own hit area opens it (botTiles.js Mark).
+  const rest = th && th.restText && !stMarks(th) ? '<button type="button" class="tz-th-rest">' + esc(label(th.restText)) + "</button>" : "";
   // No pill at rest: no box, except the moment it closes (drawn where it was, and faded out by the mount).
   const closing = mode === "rest" && !rest && (L.mode === "open" || L.mode === "full");
   const box = th ? '<div class="tz-th-box tz-th-' + style + (th.place === "low" ? " tz-th-low" : "") + '" data-mode="' + mode + '" style="' + boxAt + (mode === "rest" && !rest && !closing ? "display:none;" : "") + '">' +
@@ -194,11 +216,14 @@ function stTarget(s, g, measure) {
   const th = s.th, L = s.L, mode = s.mode;
   const gut = K.num("desktop.stage.gutter", 16);
   const pillH = K.num("desktop.stage.pillHeight", 40), pillMax = K.num("desktop.stage.pillMaxWidth", 320);
-  const room = stTrailRoom() + K.num("desktop.stage.pillLift", 8);
+  const room = stRoomFor(th) + K.num("desktop.stage.pillLift", 8);
   const restBottom = g.crown - room;
   const clampX = (cx, w) => Math.max(gut, Math.min(g.W - gut - w, cx - w / 2));
   const headX = L.follow.x === L.follow.x ? L.follow.x : g.headX;
   if (mode === "rest") {
+    // What he carries: a mark is as wide as it is tall, a pill as wide as its words.
+    const d = stMarkSize(th);
+    if (d > 0) return { x: clampX(headX, d), y: restBottom - d, w: d, h: d };
     const w = Math.min(pillMax, L.restW || pillMax, g.W - 2 * gut);
     return { x: clampX(headX, w), y: restBottom - pillH, w, h: pillH };
   }
@@ -262,6 +287,16 @@ function mountStage(host, cfg, reduced) {
     if (!L.peek) { L.peek = new api.Peek(bot, spec, stSeed(L.life) ^ 0x51a3); bot.floor = spec.hidden; }
     else L.peek.spec = spec;
   } else L.peek = null;
+  // The mark he carries at rest, drawn on his canvas with the rest of him.
+  if (stMarks(th) && typeof api.Mark === "function") {
+    const spec = { dots: Math.max(1, Math.min(3, Number(th.restMark.dots) || 1)), urgent: th.restMark.urgent !== false, r: stMarkSize(th) / 2 - 7 };
+    if (!L.mark) L.mark = new api.Mark(spec, stSeed(L.life) ^ 0x4d17);
+    else {
+      const was = L.mark.spec;
+      L.mark.spec = spec;
+      if (was.dots !== spec.dots || was.urgent !== spec.urgent) L.mark.knock();
+    }
+  } else L.mark = null;
   // What he is at: thinking, listening, standing by his open thought, or his own life (a breath first after it closes). Thinking
   // comes first: a voice chat listens for all of its turns (sending included, so the box keeps its words), and he thinks while a
   // turn's words go.
@@ -493,7 +528,7 @@ function mountStage(host, cfg, reduced) {
     const rect = br.width > 0 ? { x: br.left - lr.left, y: br.top - lr.top, w: br.width, h: br.height } : L.rect;
     if (!rect || hidden) { bubbles.forEach((b) => { b.style.opacity = "0"; }); return; }
     const level = listening ? (typeof voiceLevel === "function" ? voiceLevel() : 0) : -1;
-    const bs = api.thoughtTrail(bot.crown(), rect, t, level, 1);
+    const bs = api.thoughtTrail(bot.crown(), rect, t, level, stTrailK(th));
     bs.forEach((b, i) => {
       const el = bubbles[i];
       if (!el) return;
@@ -526,6 +561,7 @@ function mountStage(host, cfg, reduced) {
     bot.step(dt);
     if (L.roam) L.roam.step(dt);
     if (L.peek) L.peek.step(dt);
+    if (L.mark && L.rect) L.mark.step(dt, L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h / 2);
     if (listening && L.rect) {
       bot.lookAt(L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h);
       bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
@@ -539,7 +575,9 @@ function mountStage(host, cfg, reduced) {
     trail();
     if (fixed || lifted) place(false);
   };
-  const paint = () => { const w = W(), h = host.clientHeight || H0; if (w > 0) btPaint(cv, bot, w, h); };
+  // Him, and over him the mark, both on the one canvas.
+  const drawable = { draw: (g) => { bot.draw(g); if (L.mark) L.mark.draw(g, ST_INK, ST_PAPER); } };
+  const paint = () => { const w = W(), h = host.clientHeight || H0; if (w > 0) btPaint(cv, L.mark ? drawable : bot, w, h); };
   bot.settle(reduced);
   placeHit();
   paint();
