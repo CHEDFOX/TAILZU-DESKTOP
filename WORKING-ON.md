@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 14 Nov 2026, 15:50 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 15 Nov 2026, 17:39 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -17,22 +17,43 @@ look. The apps are renderers: build server data with the existing blocks and cat
   bump; changing an existing native package does. Run `node tools/ci/check-runtime.mjs --write` after native changes.
 - **Safety net** (one bad node cannot crash a screen; `sdui.safe` / `sdui.off` / `sdui.motion` switches; crash-loop safe
   mode), frontend `7ddcf31`. Not switched on until V1: the server sends no `sdui.*` knob yet.
-- **Launch animation from the server**, frontend `7ddcf31`. It rides the bootstrap as `app.launch`.
+- **Launch animation from the server**, frontend `7ddcf31`. It rides the bootstrap as `app.launch`. Launch **v5** (backend
+  `41e9c38`) is the owner's original motion again (v1's, only `v` is new). Builds up to 8.9.1 give React Native their pivots
+  as `transformOrigin` strings, whose parser drops decimals, so on those phones the gloves and feelers vanish while it plays
+  (the owner chose this over an over-the-air update). Frontend `cba544d` on main gives numbers (`LaunchCurtain.tsx` `pivot`,
+  guarded by `launchCore.test.ts`), so the NEXT store build draws all of it. **Before that build, bring the phone's own copy
+  to v5** (held off main, because any push of `app/**` to main sends an over-the-air update): in TAILZU-FRONTEND run
+  `node ../TAILZU-BACKEND/tulmi/scripts/gen-launch-starter.mjs`, restore `app/src/launch/launchCore.ts` and
+  `launchCore.test.ts` from `2193692` (`git show 2193692:<path>`), keep the pivot test from `cba544d`, and push it WITH a
+  native change. Until then `launchCore.test.ts` "the copy this build carries is the launch the backend generated it from"
+  fails when the two repos sit side by side: expected, not a bug.
 - **Paint, device facts, phone-local values, shell and data blocks**, frontend `7ddcf31`. Not switched on until V1: no
   screen can reach them.
 
-## Landed: build 8.9.1 (14 Nov 2026, every switch off)
+## Landed: build 8.9.1 (14 Nov 2026; the three Android halves on, Health Connect and sleep off)
 
 - **Build 8.9.1** (backend `e296bff`, frontend `84b67b0`). Calendar busy times and adding through the system editor, one
   "X0 Bot" Reminders list, the Focus Filter (iPhone) and Do Not Disturb (Android), steps and the driving check, sleep (Health /
   Health Connect), arrival reminders, App Attest / DeviceCheck / Play Integrity, and the server's abuse and fraud prevention
   signals (`docs/trust.md`; `TRUST` off, then shadow, then on; counted, never joined). The Android calendar, motion and arrival
-  halves are behind build switches `TULMI_ANDROID_CALENDAR` / `_MOTION` / `_ARRIVAL` (off in every shipping profile; `n0` is the
-  proof build) and their own server switches `PERM_*_ANDROID`. Migrations **0093** and **0094**. Owner steps:
+  halves are behind build switches `TULMI_ANDROID_CALENDAR` / `_MOTION` / `_ARRIVAL` (**on in `preview` and `production`
+  from 8.9.1**; `n0` is still the proof build, and Health Connect and sleep are the two that stay off) and their own server
+  switches `PERM_*_ANDROID`. The Android release may not be uploaded until Play has approved the background-location
+  declaration arrival needs, with its demo video. Migrations **0093** and **0094**. Owner steps:
   `TAILZU-BACKEND/docs/owner-8.9.1.md`. Every file it held is free again.
-  Open, a decision and not a bug: a server permission card is followed by the phone's own "One permission first" card, because
-  `app/src/sdui/actions.ts` skips its `primedCard` only on `primed: true` and the server never sends it (not in the contract).
-  One card too many, still one Continue path; adding `primed` is a contract field plus a lint rule.
+  Fixed on the server: `primed: true` (`shared/types/sdui.ts`) is set on the seven asks fired by our own explaining card's
+  Continue (planCall `askMic`, `arrivalCard` and `keybotCard` mic, `notifyDesk` motion, `planItem` Android
+  `backgroundLocation`, `keyboard_primer`, and the old onboarding voice step, whose ✕ is gone and whose pill now says
+  Continue); every other ask keeps the phone's own box, which now names the permission (`experience/appKnobs.ts`
+  `PERM_CARD_LABELS`). The asks that only existed to make iOS give the app a Settings page, and `flow_arm`'s ask on appear,
+  read the permission first (`checkPermission`), so a phone that already allowed the microphone sees no box at all. Held by
+  `tests/primed.test.ts`, which refuses both an unmarked ask behind our own card and a marked one anywhere else;
+  `docs/perms.md` rule 2. The field is the phone's half only: the window and any build older than it draw no box.
+- **8.9.1 store fixes** (backend `2af924d`). People no longer here: messages from a deleted account, or from someone the
+  viewer no longer shares a space with, stay; the name is faded, says "No longer here" and opens nothing (`threads.ts` `gone`,
+  `tests/spaces-gone.test.ts`). The About you card has Not now and saves with nothing filled in. The privacy policy names the
+  AI services inline. The iPhone Meta knob is gone from the server. The AI permission card is unchanged ("Terms and privacy",
+  the owner's decision). Owner checklist for both stores: `docs/owner-8.9.1.md` sections 7 and 7A.
 
 ## In progress
 
@@ -57,7 +78,70 @@ look. The apps are renderers: build server data with the existing blocks and cat
   still have no icon of their own** and get the generic `spark`: one line each in `palette.ts` `BUILTIN_ICON` when somebody wants to
   choose them. Not mine to pick.
 
+## In progress (started 15 Nov 2026)
+
+- **The brief: the document the bot makes while a meeting runs** (`docs/brief.md`; switch `MEETING_BRIEF`, off; migration **0095**).
+  A meeting left a note behind — what was said. The brief is what it was about, written as it happens: the overview, the flow they
+  described DRAWN, the numbers charted, the options as a table, what was decided, who does what, what is still open. Its blocks are
+  the ones a bot already draws under its words (`src/show`), so nothing is new in the apps. It grows in edits, never rewrites, one
+  model call a pass on the meeting's own tick, with a last pass when the meeting ends; the one line it may have for the people goes
+  to the call's chat.
+  **On main and tested, both halves.** Recall's meetings (`meet/service.ts`) and **our own calls**: the bot takes its seat with the
+  first person in, hears the call through the SFU's WebSocket adapter (one a person, 48 kHz PCM, so who said what is never
+  guessed), writes the note, makes the document, answers when asked, and on the last person out writes the last pass and
+  organises the note. The call screen says it is there and draws the document beside the call (a window) or under it (a phone),
+  and the link everyone joined by carries the document once the call is over — all server data, nothing new in either app.
+  Migrations **0095** (meetings.brief) and **0096** (rooms.note_id, rooms.brief). Switch `MEETING_BRIEF`, off.
+  Left: the bot speaking in a call out loud (the same adapter takes PCM back in), and a wake word in the transcript so it can be
+  asked by voice rather than in writing.
+  Holds: `tulmi/src/brief/**`, `tulmi/src/rooms/**`, `tulmi/src/meet/**`, `tulmi/src/experience/bots/screens/bots/{meetScreens,callRoom}.ts`,
+  the `MEETING_BRIEF*` lines of `config.ts`, migrations **0095** and **0096**, `docs/brief.md`.
+
+- **One month to spend as you like** (`docs/bots-app.md` 12 and 12a). The month was cut into five "stretches" (4, 5, 6, 7 days
+  then the rest), so a person could be refused on a Tuesday with two thirds of the month unspent. Now one allowance for the
+  month, the same total as the five summed: Lite $35, Elite $450, Free $3. `USAGE_STRETCHES` (off) puts the windows back, and
+  every screen already had the "this month" wording, so none of it needed an app update. What the stretch was quietly doing, a
+  **burn brake** does on its own: a ceiling per hour of about ten heavy hours' spend (`USAGE_BURN_TIMES`, 48 — Lite $2.33/hour,
+  Elite $30), so a looping job stops in an hour instead of eating the month. It is never advertised and meeting it says the
+  server is busy, never that you have run out. A free account is no longer held to one request at a time; an account the
+  signals slow down still gets exactly one, through `perUserSlowed`. 12a lists every per-day cap left and what must happen
+  before each can go — several are the only brake on surfaces whose spend is not on the meter yet.
+
+- **Sharing a plan with friends and family** (`docs/plan-share.md`; switch `PLAN_SHARE`, off, with `PLAN_SHARE_USERS`;
+  migration **0096**). A plan is a month's allowance on ONE account, so sharing it means other accounts draw on that SAME
+  allowance: one shared pot, no seat price and no seat count. `payerFor(userId)` (`src/billing/planShare.ts`) is the one rule —
+  their own live plan always wins, only someone with none draws on another's — and the whole meter is keyed on its answer at
+  two points and no others, `Spending.read` and `Spending.record`, so a member's spend lands on the owner's month. Spaces only
+  (no email, no link, no code), nobody across a block, nothing about anybody else's money on any screen, and a held account may
+  neither share, be shared with, nor ask. A `promised` ask becomes a real share the moment a plan is bought.
+  **All of it is on main and tested** (`tests/plan-share.test.ts`, `tests/bots-plan-share.test.ts`, `tests/widgets.test.ts`):
+  the store and routes, the screens (You > Plan and billing's sharing card, `bots.plan.share`, the row on a person's page, the
+  second way out of the refused screen), the ask in Activity, and the notification's Share / Not now, which answers through
+  `/v1/widgets/act` as `psa:<askId>`. Migration 0096 was run against a real Postgres 16, twice, to check it is safe to re-run.
+  Also here: the usage gate `metering.enforceQuota` asks now answers a whole 429 body, not a sentence, so the **burn brake**
+  guards Keylessbord's dictation and rewrites, the old Ask, notes and the front door too — with the `overloaded` code and the
+  busy words, never the quota ones. It only ever guarded the bots platform and Xode's jobs before.
+  Holds: `tulmi/src/billing/planShare.ts`, `tulmi/src/routes/bots/botsPlanShare.ts`, `tulmi/src/you/{limits,store}.ts`,
+  `tulmi/src/usage/metering.ts` and its callers, the `PLAN_SHARE*` lines of `config.ts`, migration **0096**,
+  `docs/plan-share.md`.
+
 ## Landed 14 Nov 2026 (all switched off)
+
+- **The window asks on the card, where the phone asks** (`docs/window-setup.md`). The flow is the same on both — BOTS_APP is on,
+  both builds declare `BotsKit`, so sign-in goes straight to Home and the asks are cards over a blurred Home. The two steps this
+  session had added to the `onboard` screen (the window's terms and permissions) are **out again**: that screen is the older flow,
+  for builds without `BotsKit`, and it is exactly what it was. What the window needs went onto the **arrival card** instead: its one
+  Mac step now carries both switches as rows — typing for you, and answering about your screen, which was missing altogether — each
+  named for what it does, with the Mac's own names in the line under them. The camera is asked for by the moment-of-need card when a
+  call turns one on, never up front. One test of the primed walk went with the step it covered.
+
+- **The permission card, over the app, where it was missed** (`docs/window-setup.md`, "When it is missed later"). The card the phone
+  has, in the window: one permission, the page behind it blurred (the overlay `BotCard`'s veil), put up when a paste is refused for
+  want of Accessibility, when Ask's look is refused for want of Screen Recording, when a call cannot open the microphone or the
+  camera, and in place of the toast when a permissions row is refused for good. Only while the window is on screen; the main
+  process keeps its notification for when it is not. It asks the system itself wherever the system will ask, and opens that
+  computer's own page where it will not — `ms-settings:privacy-microphone` and `privacy-webcam` are new, so Windows is no longer a
+  dead end. Words: `appKnobsData.ts` `desktop.perm.*`.
 
 - **The window's terms and permissions, after onboarding** (`docs/window-setup.md`). A window finished its onboarding having agreed
   to nothing and granted nothing: `postAuthSteps` left Make me yours out ("the OS asks") and the AI permission is asked for by a Home
@@ -99,7 +183,7 @@ look. The apps are renderers: build server data with the existing blocks and cat
 ## Numbers in use
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
-  0093 trust signals, 0094 phone things. Next free: **0095**. Take the next free number and
+  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 a call's note and brief. Next free: **0097**. Take the next free number and
   check `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today.
 - Phone runtime: `tailzu-2026-11-x0-blip`. Do not change it.
 

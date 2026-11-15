@@ -2982,8 +2982,26 @@ function pasteIntoFocusedApp(done) {
   }
 }
 
+/**
+ * ONE PERMISSION IS MISSED, AND THE WINDOW IS THERE TO SAY SO: its card goes
+ * up over the app (sdui/permCard.js), the page behind it blurred, with the
+ * one thing that is missing and the furthest this system lets us go towards
+ * granting it. True when the window took it.
+ *
+ * Only while the window is actually on screen. A card drawn behind a hidden
+ * window is not an ask, so the caller keeps whatever it did before — a
+ * notification, usually — for that case.
+ */
+function permNeeded(kind) {
+  if (!appWin || appWin.isDestroyed() || !appWin.isVisible() || appWin.isMinimized()) return false;
+  if (appWin.webContents.isLoading()) return false;
+  try { appWin.webContents.send("perm-needed", String(kind)); return true; } catch { return false; }
+}
+
 let warnedAccessibility = false;
 function notifyAccessibility() {
+  // The window is up: its card says it, with the button that opens the page.
+  if (permNeeded("ax")) return;
   if (warnedAccessibility) return;
   warnedAccessibility = true;
   new Notification({
@@ -3067,12 +3085,19 @@ function deviceKinds() {
 // look was refused for want of it (run/text.js TEXT.needScreen). A fixed
 // address: the card's button opens this and nothing else.
 const SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+/**
+ * ASK macOS FOR THE SCREEN, which is the system's own dialog and the whole of
+ * the ask the first time: "X0 Bot would like to record this computer's
+ * screen", over whatever app is in front. It is asking for the window list
+ * that does it — the helper never asks (tzax.swift) — and the same asking is
+ * what puts Tailzu in the settings page's list, so there is a switch there to
+ * turn on afterwards.
+ */
+function promptScreenRecording() {
+  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* nothing else to try */ }
+}
 function openScreenRecordingSettings() {
-  // macOS lists in that page only the apps that have asked to record the
-  // screen, and the helper never asks (tzax.swift): asking for the window
-  // list once puts Tailzu there (the first time with the system's own
-  // prompt), so there is a switch to turn on.
-  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* the page still opens */ }
+  promptScreenRecording();
   shell.openExternal(SCREEN_RECORDING_SETTINGS).catch(() => {});
 }
 
@@ -3081,6 +3106,21 @@ function openScreenRecordingSettings() {
 // its buttons. Each button opens one fixed page, the same way the note's and
 // the guide's do, and the window can open nothing else with them.
 const ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+// The microphone and camera pages, for the two systems that keep such a
+// switch. A Mac shows its own prompt the first time, and never again once it
+// has been told no; Windows has no prompt for an app to show at all. So when
+// opening one of these is the only way left, the window asks for it by name
+// and the address is fixed here, as every other settings page is.
+const MEDIA_SETTINGS = {
+  darwin: { microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone", camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera" },
+  win32: { microphone: "ms-settings:privacy-microphone", camera: "ms-settings:privacy-webcam" },
+};
+function openMediaSettings(what) {
+  const page = (MEDIA_SETTINGS[process.platform] || {})[what];
+  if (!page) return false;
+  shell.openExternal(page).catch(() => {});
+  return true;
+}
 const askSetup = createAskSetup({
   ipcMain, fromApp, platform: process.platform, systemPreferences,
   knobs: { str },
@@ -3092,6 +3132,9 @@ const askSetup = createAskSetup({
   // The guide's own path: macOS is asked for the window list once, so
   // Tailzu is in the page's list to be switched on, and the page opens.
   openScreenRecording: openScreenRecordingSettings,
+  // The first press is the system's own dialog, with nowhere to go.
+  promptScreenRecording,
+  openMediaSettings,
   // Through quit, not exit: a note being taken is finished on the server
   // (before-quit), and the helpers are stopped (will-quit), as on any quit.
   relaunch: () => { app.relaunch(); app.quit(); },
@@ -3172,8 +3215,10 @@ function setupAsk() {
     // setup card; back to the default at sign-out, like the list.
     picturesAlwaysAll: picturesForAll,
     // A look's word on Screen Recording changed: the setup card is told, so
-    // it can offer the restart a granted permission still needs.
-    lookPermission: () => askSetup.push(),
+    // it can offer the restart a granted permission still needs — and when the
+    // look was refused for want of it, the window's own card asks for it where
+    // the person just missed it.
+    lookPermission: (denied) => { askSetup.push(); if (denied === true) permNeeded("see"); },
     // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
     pillBlip: pillBlipAt,
     page: (o) => pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), o),
@@ -3820,17 +3865,27 @@ app.whenReady().then(() => {
 
   // The microphone, auto-granted, to the two pages that record — the hidden
   // recorder and the app window (its Train tab has a mic of its own) — and
-  // nothing else to anyone: not the camera, not to the pill or the captions,
-  // and never to remote content loaded by mistake.
+  // the camera to the app window alone, where a call is (docs/rooms.md).
+  // Nothing to anyone else: not to the pill or the captions, and never to
+  // remote content loaded by mistake.
+  //
+  // THE CAMERA USED TO BE REFUSED HERE, to everyone, which was right while
+  // nothing in the app had one. A call does now, and this said no before the
+  // computer was ever asked — so the camera button in a call could not have
+  // worked on any system, however the person answered. Only the app window
+  // may ask, and only for a camera: a window asking to record the screen
+  // comes through a different permission, which is still nobody's.
   session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {
     const types = (details && details.mediaTypes) || [];
     const audioOnly = types.length > 0 && types.every((m) => m === "audio");
     const fromNotesWin = !!notesWin && !notesWin.isDestroyed() && notesWin.webContents === wc;
+    const fromApp = !!appWin && !appWin.isDestroyed() && appWin.webContents === wc;
+    const records = fromApp || (!!recorderWin && !recorderWin.isDestroyed() && recorderWin.webContents === wc) || fromNotesWin;
     // The note-taker's capture of the computer's sound on Windows asks for the
     // screen's video too; it drops it at once. Only that window, only then.
     const notesDesktop = fromNotesWin && process.platform === "win32" && notes && notes.system === "desktop";
-    done(permission === "media" && types.length > 0 && (audioOnly || notesDesktop) &&
-      ([recorderWin, appWin].some((w) => !!w && !w.isDestroyed() && w.webContents === wc) || fromNotesWin));
+    done(permission === "media" && types.length > 0 &&
+      ((audioOnly && records) || notesDesktop || (fromApp && types.every((m) => m === "audio" || m === "video"))));
   });
 
   // One launch, counted once — here, where only the copy that holds the lock

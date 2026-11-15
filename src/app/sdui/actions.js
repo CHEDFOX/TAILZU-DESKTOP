@@ -124,8 +124,10 @@ async function run(action, eventValue) {
     case "installUpdate": return installUpdate(action);
     // The Ask setup card. The window names which setting, never an address;
     // the main process opens its own fixed pages and ignores any other kind.
-    case "ask.openAccessibility": askAction("openAccessibility"); return;
-    case "ask.openScreenRecording": askAction("openScreenRecording"); return;
+    // The key names the row, so its button can say "Allow" until the system
+    // has had its turn and "Open Settings" after (askSetupCard.js).
+    case "ask.openAccessibility": askAction("openAccessibility", undefined, "read"); return;
+    case "ask.openScreenRecording": askAction("openScreenRecording", undefined, "see"); return;
     case "ask.picturesAll": askAction("picturesAll", action.on === true || action.on === "true"); return;
     case "ask.relaunch": askAction("relaunch"); return;
     case "connector.connect": return connectApp(action);

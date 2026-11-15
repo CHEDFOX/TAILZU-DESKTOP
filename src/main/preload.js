@@ -116,6 +116,10 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   axStatus: () => ipcRenderer.invoke("app:axStatus"),
   askSetup: () => ipcRenderer.invoke("app:askSetup"),
   onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
+  // Something the person asked for could not be done for want of one
+  // permission ("ax", "see", "mic", "cam"): the window puts its card up, if it
+  // is on screen to be read (sdui/permCard.js).
+  onPermNeeded: (cb) => ipcRenderer.on("perm-needed", (_e, kind) => cb(String(kind || ""))),
   askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
