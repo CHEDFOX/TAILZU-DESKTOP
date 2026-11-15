@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 14 Nov 2026, 22:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 15 Nov 2026, 13:29 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -77,6 +77,21 @@ look. The apps are renderers: build server data with the existing blocks and cat
   in the palette it would change which colour `colourFor` hands every future bot a person makes. **The Oracle and the meeting bot
   still have no icon of their own** and get the generic `spark`: one line each in `palette.ts` `BUILTIN_ICON` when somebody wants to
   choose them. Not mine to pick.
+
+## In progress (started 15 Nov 2026)
+
+- **The brief: the document the bot makes while a meeting runs** (`docs/brief.md`; switch `MEETING_BRIEF`, off; migration **0095**).
+  A meeting left a note behind — what was said. The brief is what it was about, written as it happens: the overview, the flow they
+  described DRAWN, the numbers charted, the options as a table, what was decided, who does what, what is still open. Its blocks are
+  the ones a bot already draws under its words (`src/show`), so nothing is new in the apps. It grows in edits, never rewrites, one
+  model call a pass on the meeting's own tick, with a last pass when the meeting ends; the one line it may have for the people goes
+  to the call's chat.
+  **On main and tested** (`src/brief/**`, `tests/brief.test.ts`, the Recall feed in `meet/service.ts`, the meeting page).
+  Next, in this order: our own rooms' ears (the SFU's WebSocket adapter gives 48 kHz PCM a track at a time, so a room's words reach
+  the same pipeline and the same brief — `docs/rooms.md` section 10), the bot sitting in every mail-bot call by default and visible
+  in it, answering in the room, and the document shared with everyone who was there.
+  Holds: `tulmi/src/brief/**`, `tulmi/src/meet/**`, `tulmi/src/rooms/**`, `tulmi/src/experience/bots/screens/bots/meetScreens.ts`,
+  the `MEETING_BRIEF*` lines of `config.ts`, migration **0095**, `docs/brief.md`.
 
 ## Landed 14 Nov 2026 (all switched off)
 
