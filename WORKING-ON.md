@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 15 Nov 2026, 13:29 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 15 Nov 2026, 17:39 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -86,12 +86,16 @@ look. The apps are renderers: build server data with the existing blocks and cat
   the ones a bot already draws under its words (`src/show`), so nothing is new in the apps. It grows in edits, never rewrites, one
   model call a pass on the meeting's own tick, with a last pass when the meeting ends; the one line it may have for the people goes
   to the call's chat.
-  **On main and tested** (`src/brief/**`, `tests/brief.test.ts`, the Recall feed in `meet/service.ts`, the meeting page).
-  Next, in this order: our own rooms' ears (the SFU's WebSocket adapter gives 48 kHz PCM a track at a time, so a room's words reach
-  the same pipeline and the same brief — `docs/rooms.md` section 10), the bot sitting in every mail-bot call by default and visible
-  in it, answering in the room, and the document shared with everyone who was there.
-  Holds: `tulmi/src/brief/**`, `tulmi/src/meet/**`, `tulmi/src/rooms/**`, `tulmi/src/experience/bots/screens/bots/meetScreens.ts`,
-  the `MEETING_BRIEF*` lines of `config.ts`, migration **0095**, `docs/brief.md`.
+  **On main and tested, both halves.** Recall's meetings (`meet/service.ts`) and **our own calls**: the bot takes its seat with the
+  first person in, hears the call through the SFU's WebSocket adapter (one a person, 48 kHz PCM, so who said what is never
+  guessed), writes the note, makes the document, answers when asked, and on the last person out writes the last pass and
+  organises the note. The call screen says it is there and draws the document beside the call (a window) or under it (a phone),
+  and the link everyone joined by carries the document once the call is over — all server data, nothing new in either app.
+  Migrations **0095** (meetings.brief) and **0096** (rooms.note_id, rooms.brief). Switch `MEETING_BRIEF`, off.
+  Left: the bot speaking in a call out loud (the same adapter takes PCM back in), and a wake word in the transcript so it can be
+  asked by voice rather than in writing.
+  Holds: `tulmi/src/brief/**`, `tulmi/src/rooms/**`, `tulmi/src/meet/**`, `tulmi/src/experience/bots/screens/bots/{meetScreens,callRoom}.ts`,
+  the `MEETING_BRIEF*` lines of `config.ts`, migrations **0095** and **0096**, `docs/brief.md`.
 
 - **One month to spend as you like** (`docs/bots-app.md` 12 and 12a). The month was cut into five "stretches" (4, 5, 6, 7 days
   then the rest), so a person could be refused on a Tuesday with two thirds of the month unspent. Now one allowance for the
@@ -179,9 +183,16 @@ look. The apps are renderers: build server data with the existing blocks and cat
 ## Numbers in use
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
-  0093 trust signals, 0094 phone things, 0095 meeting brief, 0096 plan share. Next free: **0097**. Take the next free
-  number and check `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today.
-  `LIVE_MIGRATION` is **0096**: everything newer than it runs on the next deploy, by itself.
+  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share AND 0096 a call's note and brief —
+  **two files share 0096, and one of them can never run.** Next free: **0097**. Take the next free number and check
+  `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today, and now a third time.
+
+  **`0096_room_brief.sql` will not be applied, silently.** `LIVE_MIGRATION` is `0096` (set by 61fb099, for the meeting
+  brief and plan sharing, both of which did run). `migrate-pending.sh` keeps a file only when its number is GREATER than
+  that, so a second `0096` is skipped for ever and the deploy says nothing is pending. Whoever owns the call's note and
+  brief: rename it `0097_room_brief.sql` and it runs on the next deploy. It is written to be safe to run twice, so the
+  rename costs nothing even if some of it reached the database another way. Until then its tables do not exist and the
+  code that expects them fails at runtime.
 - Phone runtime: `tailzu-2026-11-x0-blip`. Do not change it.
 
 ## Notes from other sessions
