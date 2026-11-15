@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 15 Nov 2026, 17:39 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 15 Nov 2026, 22:19 UTC. One session is building the items below. Do not edit the files they hold until the item is
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -92,8 +92,9 @@ look. The apps are renderers: build server data with the existing blocks and cat
   organises the note. The call screen says it is there and draws the document beside the call (a window) or under it (a phone),
   and the link everyone joined by carries the document once the call is over — all server data, nothing new in either app.
   Migrations **0095** (meetings.brief) and **0096** (rooms.note_id, rooms.brief). Switch `MEETING_BRIEF`, off.
-  Left: the bot speaking in a call out loud (the same adapter takes PCM back in), and a wake word in the transcript so it can be
-  asked by voice rather than in writing.
+  **It speaks, too**: a session and a track of its own at the SFU (the same adapter the other way, `location: "local"`), a seat in
+  the room that never beats and counts as nobody, the words read as 24 kHz PCM and let out in 20 ms frames — so every app hears
+  it as it hears a person. And it answers to its name: a line that starts with "X0" is a question, out loud and in writing.
   Holds: `tulmi/src/brief/**`, `tulmi/src/rooms/**`, `tulmi/src/meet/**`, `tulmi/src/experience/bots/screens/bots/{meetScreens,callRoom}.ts`,
   the `MEETING_BRIEF*` lines of `config.ts`, migrations **0095** and **0096**, `docs/brief.md`.
 
