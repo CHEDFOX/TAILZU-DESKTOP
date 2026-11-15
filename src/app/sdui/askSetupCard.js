@@ -29,6 +29,12 @@ let ASK_HOLD = false;
 // two relaunches. A second press inside the moment of a double-click is the
 // same press.
 let ASK_PRESSED_AT = 0;
+// Which rows have been pressed on this run. The first press on one of the
+// Mac's two is the system's own dialog, over this window; only the press
+// after it opens the settings page (src/agent/askSetup.js says why). So the
+// button says "Allow" until it has been pressed, and what the server calls it
+// afterwards ("Open Settings") from then on.
+const ASK_PRESSED = new Set();
 
 /** Which button each kind of row has while it is off, and what turns it off
  *  again. Only these keys are drawn: a row the window has no state for has
@@ -94,7 +100,8 @@ function askSetupNode(p, s) {
     if (r.mode === "on") {
       act = '<span class="d-ask-state">' + tick + t(p.on) + "</span>" + (r.off ? btn(r.off, label(p.turnOff) || "", true, r.title) : "");
     } else if (r.mode === "allow") {
-      act = btn(r.action, label(p.allow) || "", false, r.title);
+      const again = ASK_PRESSED.has(r.key) && label(p.allowAgain);
+      act = btn(r.action, again || label(p.allow) || "", false, r.title);
     } else if (r.mode === "restart") {
       act = btn(r.action, label(p.restartButton) || "", false, r.title);
     } else if (r.mode === "never") {
@@ -164,11 +171,12 @@ function askSetupTook(st) {
 /** A button on the card. The main process checks the kind and pushes the
  *  new state back. The picture switch is this computer's own flag, so it is
  *  drawn at once rather than after the round trip; the push confirms it. */
-function askAction(kind, on) {
+function askAction(kind, on, key) {
   // A clock set back reads as a long gap, never as a card that stops answering.
   const now = Date.now(), gap = now - ASK_PRESSED_AT;
   if (gap >= 0 && gap < K.num("desktop.askSetup.repeatMs", 500)) return;
   ASK_PRESSED_AT = now;
+  if (key) ASK_PRESSED.add(key);
   try { window.tailzuApp.askSetupAction(kind, on); } catch { return; /* an older main process */ }
   if (kind === "picturesAll" && ASK_SETUP && ASK_SETUP.pictures !== "never") {
     askSetupTook(Object.assign({}, ASK_SETUP, { pictures: on ? "on" : "off" }));

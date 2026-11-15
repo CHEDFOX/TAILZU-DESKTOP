@@ -388,6 +388,14 @@
   .d-ask-state svg { width:11px; height:11px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   .d-ask-never { color:var(--d-ink3); }
   .d-ask-foot { margin:14px 0 0; color:var(--d-ink3); font-size:13px; }
+  /* THE SAME ROWS INSIDE A CARD (the arrival card's Mac step, a BotCard 360
+     wide): side by side, the text column came out about 160px and every line
+     broke after two words, which made one row as tall as the card. In a card
+     the row stacks — the text full width, its button under it. */
+  .tz-bc .d-ask-row { grid-template-columns:30px minmax(0,1fr); row-gap:10px; padding:14px 16px; }
+  .tz-bc .d-ask-act { grid-column:2; justify-self:start; flex-direction:row; }
+  .tz-bc .d-ask-card { border-radius:14px; }
+  .tz-bc .d-ask-n { width:26px; height:26px; }
 
   /* THE PERMISSION CARD, over the app (sdui/permCard.js): one thing the
      computer has not allowed, asked for where it was missed. The page behind

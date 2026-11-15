@@ -37,6 +37,7 @@ const SETUP_KINDS = new Set(["openAccessibility", "openScreenRecording", "openMi
  *   o.screenDenied()       the last look was refused for want of Screen Recording
  *   o.openAccessibility()  the Mac's Accessibility page
  *   o.openScreenRecording()  the guide's Screen Recording path (main.js)
+ *   o.promptScreenRecording()  the system's own screen dialog, and nothing else
  *   o.openMediaSettings(w)  the microphone or camera page (a Mac's, or Windows')
  *   o.relaunch()
  *   o.send(state)          to the app window, as "ask-setup"
@@ -45,6 +46,7 @@ function createAskSetup(o) {
   const mac = o.platform === "darwin";
   const call = (f, fallback) => { try { return f(); } catch { return fallback; } };
   let axPrompted = false;   // macOS asked to list Tailzu under Accessibility, this launch
+  const asked = new Set();  // which of the Mac's two the person has pressed, so the second press opens the page
 
   function state() {
     let read = "na", see = "na";
@@ -78,20 +80,37 @@ function createAskSetup(o) {
       return call(() => o.openMediaSettings(what), false) !== false;
     }
     if (p.kind === "openAccessibility" || p.kind === "openScreenRecording") {
-      // A Mac's own settings pages; there is nothing to open elsewhere.
+      // A Mac's own, and nothing to ask for elsewhere.
       if (!mac) return false;
-      // ON A FRESH MAC TAILZU IS NOT IN THE ACCESSIBILITY LIST until it has
-      // asked once, so the page opened on a list with nothing to switch on.
-      // Asked here, once a launch and only while it is still off: macOS adds
-      // Tailzu to the list (and shows its own prompt), then the page opens.
-      if (p.kind === "openAccessibility" && !axPrompted) {
+      // THE SYSTEM ASKS FIRST, IN THE APP. macOS has a dialog of its own for
+      // each of these and shows it the FIRST time an app asks, over whatever
+      // is in front: "X0 Bot would like to control this computer…". So the
+      // first press is that dialog and nothing else — no page, no leaving the
+      // app. macOS never shows it again, so the press after it opens the page
+      // where the switch is, which is the only way it can be turned on (no
+      // system lets an app grant these two itself).
+      //
+      // The asking also matters on a fresh Mac: until an app has asked once it
+      // is not in that page's list at all, so the page would open on a list
+      // with nothing to switch on.
+      const first = !asked.has(p.kind);
+      asked.add(p.kind);
+      if (p.kind === "openAccessibility") {
         const sp = o.systemPreferences || {};
-        if (call(() => sp.isTrustedAccessibilityClient(false), false) !== true) {
+        if (call(() => sp.isTrustedAccessibilityClient(false), false) === true) return true;
+        if (first && !axPrompted) {
           axPrompted = true;
           call(() => sp.isTrustedAccessibilityClient(true));
+          return true;
         }
+        call(() => o.openAccessibility());
+        return true;
       }
-      call(() => (p.kind === "openAccessibility" ? o.openAccessibility() : o.openScreenRecording()));
+      if (first) {
+        call(() => (o.promptScreenRecording ? o.promptScreenRecording() : o.openScreenRecording()));
+        return true;
+      }
+      call(() => o.openScreenRecording());
       return true;
     }
     if (p.kind === "picturesAll") {
