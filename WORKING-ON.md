@@ -179,11 +179,29 @@ look. The apps are renderers: build server data with the existing blocks and cat
 ## Numbers in use
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
-  0093 trust signals, 0094 phone things. Next free: **0095**. Take the next free number and
-  check `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today.
+  0093 trust signals, 0094 phone things, 0095 meeting brief, 0096 plan share. Next free: **0097**. Take the next free
+  number and check `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today.
+  `LIVE_MIGRATION` is **0096**: everything newer than it runs on the next deploy, by itself.
 - Phone runtime: `tailzu-2026-11-x0-blip`. Do not change it.
 
 ## Notes from other sessions
+
+- **15 Nov, the sign-in card (`docs/sign-in.md`), backend only, on main.** The planner can now describe a sign-in page's
+  real boxes instead of only saying "sign in, then press Continue": `FIELD <id> <kind> | <label>` and `ALSO <id> | <label>`
+  lines before a `HANDOVER`, which arrive on the `handover` event as `card`. Nothing is written per site — the boxes are
+  read off `<screen>`, so a shop nobody has coded for works like one that was. The seven rules ride only on a screen that
+  looks like a sign-in (`looksLikeSignIn`), the way `JOB_NOTE` does, so the stable block pays two verb lines and nothing else.
+  Never a card for a payment or a CAPTCHA, and no boxes means no card, which shows them the page — so a client that ignores
+  `card` behaves exactly as it does today. **The drawing of it is not built**: that is the desktop app, and the cloud browser
+  when it exists. Until then every `FIELD` line still ends in a correct plain handover.
+
+- **The planner's stable block is nearly full: 4889 of its 4904 budget** (`tests/principles.test.ts`, "stays inside its
+  budget"). Fifteen characters. The budget is "measured + 10%" and the measured figure in that table, 4458, is long out of
+  date — the block has drifted ~430 characters since someone last wrote it down. The next line anyone adds to
+  `ROLES.ask_planner` will fail that test. Before raising the number, check the new text could not ride in a note at the
+  head of the step instead (`JOB_NOTE`, `CONTEXT_NOTE`, `SIGN_IN_NOTE`), which is what the sign-in rules do and what the
+  budget is there to make you ask. If it truly belongs in the block, re-measure and set the entry to measured + 10%,
+  with the real measured figure in the comment.
 
 - **14 Nov, from the window-permissions session:** the `perm-words.test.ts` failure over `NSHealthUpdateUsageDescription` is
   fixed by 8.9.1: the test now expects the string and checks it says only that nothing is written.
