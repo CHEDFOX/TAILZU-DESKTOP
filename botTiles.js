@@ -1,8 +1,8 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone and the server.
 // Source: TAILZU-FRONTEND/app/src/botTiles/{scene,core}.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
 // scene.ts sha256 bf9ddb40045f8c5b9259c29e1c83f2a6f097a3f25328a3b42c9a7923654454ca
-// core.ts sha256 102b65bbe41d43187d6e14b85dc8269df430ae8482409cbbb2fa2847e721fdb4
-// body sha256 599a1e90bc0ca22465f571e2807de36a185cb6f93ade66938803c93cfd841b2d
+// core.ts sha256 ce1be68ed056c432bc4d1496fd6e3f8887861eacd2a1e60ef76344b6208ac9d7
+// body sha256 f46dd87df5b819cdc318d0272e9d6e822cecf47e46282b15cadf717e82598c50
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -9890,6 +9890,8 @@
   class Peek {
       constructor(bot, spec, seed) {
           this.paused = false;
+          /** While it holds he does not hide: up he goes, and up he stays (something is waiting on them, and he shows it). */
+          this.hold = false;
           this.state = "behind";
           this.left = 0;
           /** Seconds since he left the ground: his feet drag on it for a frame or two, which is not a jump that failed. */
@@ -9936,7 +9938,8 @@
               if (b.grounded && b.floor !== s.hidden)
                   b.floor = s.hidden;
               this.wait -= dt;
-              if (this.wait <= 0 && b.grounded)
+              // Something waiting on them brings him up at once, and keeps him there: hiding is for having nothing to say.
+              if ((this.hold || this.wait <= 0) && b.grounded)
                   this.rise();
               return;
           }
@@ -9958,7 +9961,7 @@
           }
           if (this.state === "up") {
               this.left -= dt;
-              if (this.left <= 0 && b.grounded)
+              if (this.left <= 0 && b.grounded && !this.hold)
                   this.drop();
               return;
           }

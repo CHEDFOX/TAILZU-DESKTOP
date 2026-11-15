@@ -59,6 +59,9 @@ const ST_INK = "#0a0a0a", ST_PAPER = "#ffffff";
 const stMarks = (th) => !!(th && th.restMark && Number(th.restMark.dots) > 0);
 /** How long the trail is under what he carries: a mark rides a short one, a pill the full one. */
 const ST_MARK_TRAIL = 0.55;
+/** The mark's own words: in, a few seconds, out — so a dot is never the first thing a person has to work out. */
+const ST_SAY = { hold: 3400, out: 520 };
+const stSays = (th) => (stMarks(th) && typeof th.restMark.says === "string" ? th.restMark.says : "");
 function stTrailK(th) { return stMarks(th) ? ST_MARK_TRAIL : 1; }
 function stRoomFor(th) {
   const api = window.TailzuBotTiles;
@@ -85,7 +88,7 @@ function stLife(p) {
   const life = String(p.life || "stage");
   let L = ST_LIVES.get(life);
   if (!L) {
-    L = { life, bot: null, roam: null, peek: null, mark: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
+    L = { life, bot: null, roam: null, peek: null, mark: null, sayUntil: 0, saidWhat: "", mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
     ST_LIVES.set(life, L);
   }
   return L;
@@ -117,6 +120,7 @@ function botStageNode(n) {
     (th && th.veil ? '<div class="tz-th-veil' + (veilWas ? " on" : "") + '" aria-hidden="true"></div>' : "") +
     '<div class="tz-st-layer">' +
     '<canvas class="tz-bt-c tz-st-c" aria-hidden="true"></canvas>' +
+    '<div class="tz-st-says" aria-hidden="true"></div>' +
     (th ? '<div class="tz-th-trail" aria-hidden="true"><i class="tz-th-b"></i><i class="tz-th-b"></i><i class="tz-th-b"></i></div>' : "") +
     '<button type="button" class="tz-st-hit' + (p.hit === "stage" ? " tz-st-all" : "") + '" aria-label="' + esc(label(p.label || "")) + '"></button>' +
     box + "</div></div>";
@@ -264,6 +268,7 @@ function mountStage(host, cfg, reduced) {
   host.__life = L;
   const bot = stBot(L, p, api);
   const layer = host.querySelector(".tz-st-layer"), cv = host.querySelector(".tz-st-c"), hit = host.querySelector(".tz-st-hit");
+  const saysEl = host.querySelector(".tz-st-says");
   const box = host.querySelector(".tz-th-box"), veil = host.querySelector(".tz-th-veil");
   const bubbles = Array.from(host.querySelectorAll(".tz-th-b"));
   const s = { host, n, p, th, mode, L };
@@ -290,13 +295,24 @@ function mountStage(host, cfg, reduced) {
   // The mark he carries at rest, drawn on his canvas with the rest of him.
   if (stMarks(th) && typeof api.Mark === "function") {
     const spec = { dots: Math.max(1, Math.min(3, Number(th.restMark.dots) || 1)), urgent: th.restMark.urgent !== false, r: stMarkSize(th) / 2 - 7 };
+    const fresh = !L.mark || L.mark.spec.dots !== spec.dots || L.mark.spec.urgent !== spec.urgent;
     if (!L.mark) L.mark = new api.Mark(spec, stSeed(L.life) ^ 0x4d17);
-    else {
-      const was = L.mark.spec;
-      L.mark.spec = spec;
-      if (was.dots !== spec.dots || was.urgent !== spec.urgent) L.mark.knock();
-    }
-  } else L.mark = null;
+    else { L.mark.spec = spec; if (fresh) L.mark.knock(); }
+    // Something waiting on them: he comes up and stays up. Hiding is for having nothing to say.
+    if (L.peek) L.peek.hold = spec.urgent;
+    // The mark announces itself in a few words, then falls silent again.
+    const words = stSays(th);
+    if (saysEl && words && (fresh || L.saidWhat !== words)) {
+      L.saidWhat = words;
+      saysEl.textContent = words;
+      saysEl.style.opacity = "1";
+      L.sayUntil = performance.now() + ST_SAY.hold;
+    } else if (saysEl && !words) { saysEl.textContent = ""; L.sayUntil = 0; }
+  } else {
+    L.mark = null;
+    if (saysEl) { saysEl.textContent = ""; L.sayUntil = 0; }
+    if (L.peek) L.peek.hold = false;
+  }
   // What he is at: thinking, listening, standing by his open thought, or his own life (a breath first after it closes). Thinking
   // comes first: a voice chat listens for all of its turns (sending included, so the box keeps its words), and he thinks while a
   // turn's words go.
@@ -562,6 +578,13 @@ function mountStage(host, cfg, reduced) {
     if (L.roam) L.roam.step(dt);
     if (L.peek) L.peek.step(dt);
     if (L.mark && L.rect) L.mark.step(dt, L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h / 2);
+    if (saysEl && L.mark && L.sayUntil) {
+      const w = saysEl.offsetWidth, gut = K.num("desktop.stage.gutter", 16), Wn = W();
+      const r = L.mark.spec.r + 10, right = L.mark.x + r, left = L.mark.x - r - w;
+      saysEl.style.left = (right + w <= Wn - gut || left < gut ? Math.min(right, Wn - gut - w) : left) + "px";
+      saysEl.style.top = (L.mark.y - 9) + "px";
+      if (performance.now() > L.sayUntil) { saysEl.style.opacity = "0"; L.sayUntil = 0; }
+    }
     if (listening && L.rect) {
       bot.lookAt(L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h);
       bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
