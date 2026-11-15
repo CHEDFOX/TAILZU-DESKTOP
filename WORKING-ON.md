@@ -97,6 +97,34 @@ look. The apps are renderers: build server data with the existing blocks and cat
   Holds: `tulmi/src/brief/**`, `tulmi/src/rooms/**`, `tulmi/src/meet/**`, `tulmi/src/experience/bots/screens/bots/{meetScreens,callRoom}.ts`,
   the `MEETING_BRIEF*` lines of `config.ts`, migrations **0095** and **0096**, `docs/brief.md`.
 
+- **One month to spend as you like** (`docs/bots-app.md` 12 and 12a). The month was cut into five "stretches" (4, 5, 6, 7 days
+  then the rest), so a person could be refused on a Tuesday with two thirds of the month unspent. Now one allowance for the
+  month, the same total as the five summed: Lite $35, Elite $450, Free $3. `USAGE_STRETCHES` (off) puts the windows back, and
+  every screen already had the "this month" wording, so none of it needed an app update. What the stretch was quietly doing, a
+  **burn brake** does on its own: a ceiling per hour of about ten heavy hours' spend (`USAGE_BURN_TIMES`, 48 — Lite $2.33/hour,
+  Elite $30), so a looping job stops in an hour instead of eating the month. It is never advertised and meeting it says the
+  server is busy, never that you have run out. A free account is no longer held to one request at a time; an account the
+  signals slow down still gets exactly one, through `perUserSlowed`. 12a lists every per-day cap left and what must happen
+  before each can go — several are the only brake on surfaces whose spend is not on the meter yet.
+
+- **Sharing a plan with friends and family** (`docs/plan-share.md`; switch `PLAN_SHARE`, off, with `PLAN_SHARE_USERS`;
+  migration **0096**). A plan is a month's allowance on ONE account, so sharing it means other accounts draw on that SAME
+  allowance: one shared pot, no seat price and no seat count. `payerFor(userId)` (`src/billing/planShare.ts`) is the one rule —
+  their own live plan always wins, only someone with none draws on another's — and the whole meter is keyed on its answer at
+  two points and no others, `Spending.read` and `Spending.record`, so a member's spend lands on the owner's month. Spaces only
+  (no email, no link, no code), nobody across a block, nothing about anybody else's money on any screen, and a held account may
+  neither share, be shared with, nor ask. A `promised` ask becomes a real share the moment a plan is bought.
+  **All of it is on main and tested** (`tests/plan-share.test.ts`, `tests/bots-plan-share.test.ts`, `tests/widgets.test.ts`):
+  the store and routes, the screens (You > Plan and billing's sharing card, `bots.plan.share`, the row on a person's page, the
+  second way out of the refused screen), the ask in Activity, and the notification's Share / Not now, which answers through
+  `/v1/widgets/act` as `psa:<askId>`. Migration 0096 was run against a real Postgres 16, twice, to check it is safe to re-run.
+  Also here: the usage gate `metering.enforceQuota` asks now answers a whole 429 body, not a sentence, so the **burn brake**
+  guards Keylessbord's dictation and rewrites, the old Ask, notes and the front door too — with the `overloaded` code and the
+  busy words, never the quota ones. It only ever guarded the bots platform and Xode's jobs before.
+  Holds: `tulmi/src/billing/planShare.ts`, `tulmi/src/routes/bots/botsPlanShare.ts`, `tulmi/src/you/{limits,store}.ts`,
+  `tulmi/src/usage/metering.ts` and its callers, the `PLAN_SHARE*` lines of `config.ts`, migration **0096**,
+  `docs/plan-share.md`.
+
 ## Landed 14 Nov 2026 (all switched off)
 
 - **The window asks on the card, where the phone asks** (`docs/window-setup.md`). The flow is the same on both — BOTS_APP is on,
