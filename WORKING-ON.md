@@ -1,6 +1,7 @@
 # Being built right now (read before you start)
 
 Updated 15 Nov 2026, 22:19 UTC. One session is building the items below. Do not edit the files they hold until the item is
+
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
 **How to build things now:** read `TAILZU-BACKEND/docs/renderer.md` before adding any screen, visual, animation or widget
@@ -64,11 +65,15 @@ look. The apps are renderers: build server data with the existing blocks and cat
   language picker (85 languages, the list is the server's), and seven routes under `/v1/lingo/`. 165 tests.
   Holds: `tulmi/src/lingo/**`, `tulmi/src/routes/bots/lingo.ts`, `tulmi/scripts/lingo-seed.ts`, `tulmi/tests/lingo-*.test.ts`,
   migrations **0087**, **0089**, **0092**.
-  Next, none of it client code: Lingo's `l.*` moments as data in `shared/bots/looks.json` (one gesture per grader reason, so the
-  movement carries the information: the missing accent plucked out of the air and set over the word, the wrong letter spat out and
-  the right one caught, two cards swapped for the wrong order, the right word mouthed slowly, a hand cupped to the ear when nothing
-  was heard), then its screens in `experience/bots/screens/bots/lingoPage.ts`, **vocabulary 1** so a lesson can never answer
-  "Open X0 again", then sentences from the bank into sessions.
+  Its `l.*` moments are in `shared/bots/looks.json` (v5) and its four screens in `experience/bots/screens/bots/lingoPage.ts`,
+  **vocabulary 1** so a lesson can never answer "Open X0 again". One gesture per grader reason, so the movement carries the
+  information: the missing accent plucked out of the air and set over the word, the wrong letter spat out and the right one caught,
+  two cards swapped for the wrong order, the right word mouthed slowly, a hand cupped to the ear when nothing was heard. Two more are
+  idlings on a loop, asked for by its own screens and in nobody's `idle.moments`: `l.mutter` and `l.hum`. The territory wears one of
+  them instead of a heading — Lingo alive across the top of the page, muttering while a word is due anywhere, humming once nothing
+  is. Holds `shared/bots/looks.json` and, generated from it, `TAILZU-FRONTEND/app/src/botTiles/starter.ts` and
+  `TAILZU-DESKTOP/botLooks.js` (`node src/botTiles/genStarter.mjs` in TAILZU-FRONTEND/app writes both).
+  Next: sentences from the bank into sessions, and the call that rings the phone to practise speaking.
   **A colour question that was open here is now answered and done** (`6222f21`): `bots/builtin.ts` and `experience/bots/palette.ts`
   each carried their own copy of the four shipped bots' colours and had disagreed for as long as both existed — builtin.ts said Xode
   was pine while palette.ts drew it moss. palette.ts keeps the icons and reads the colour from builtin.ts now, and builtin.ts was set
@@ -95,6 +100,7 @@ look. The apps are renderers: build server data with the existing blocks and cat
   **It speaks, too**: a session and a track of its own at the SFU (the same adapter the other way, `location: "local"`), a seat in
   the room that never beats and counts as nobody, the words read as 24 kHz PCM and let out in 20 ms frames — so every app hears
   it as it hears a person. And it answers to its name: a line that starts with "X0" is a question, out loud and in writing.
+
   Holds: `tulmi/src/brief/**`, `tulmi/src/rooms/**`, `tulmi/src/meet/**`, `tulmi/src/experience/bots/screens/bots/{meetScreens,callRoom}.ts`,
   the `MEETING_BRIEF*` lines of `config.ts`, migrations **0095** and **0096**, `docs/brief.md`.
 
@@ -184,16 +190,17 @@ look. The apps are renderers: build server data with the existing blocks and cat
 ## Numbers in use
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
-  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share AND 0096 a call's note and brief —
-  **two files share 0096, and one of them can never run.** Next free: **0097**. Take the next free number and check
-  `git log origin/main -- tulmi/supabase/migrations` first: two sessions have collided twice today, and now a third time.
+  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief.
+  Next free: **0098**. Take the next free number and check `git log origin/main -- tulmi/supabase/migrations` first:
+  sessions have collided three times now, and the third one nearly shipped.
 
-  **`0096_room_brief.sql` will not be applied, silently.** `LIVE_MIGRATION` is `0096` (set by 61fb099, for the meeting
-  brief and plan sharing, both of which did run). `migrate-pending.sh` keeps a file only when its number is GREATER than
-  that, so a second `0096` is skipped for ever and the deploy says nothing is pending. Whoever owns the call's note and
-  brief: rename it `0097_room_brief.sql` and it runs on the next deploy. It is written to be safe to run twice, so the
-  rename costs nothing even if some of it reached the database another way. Until then its tables do not exist and the
-  code that expects them fails at runtime.
+  **The third collision, and what it teaches.** A call's note and brief was written as a second `0096` while
+  `LIVE_MIGRATION` was already `0096`. `migrate-pending.sh` keeps a file only when its number is GREATER than that,
+  so it was not pending, would never have run, and the deploy would have said there was nothing to do — the tables
+  missing and the code that wants them failing at runtime, with nothing anywhere saying why. Renamed to
+  `0097_room_brief.sql`, which the runner now picks up; it is two `add column if not exists`, so running it is safe
+  whatever already reached the database. **A duplicate number does not fail loudly, it fails silently** — which is
+  why the list above is worth keeping straight.
 - Phone runtime: `tailzu-2026-11-x0-blip`. Do not change it.
 
 ## Notes from other sessions
