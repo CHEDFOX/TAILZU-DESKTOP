@@ -27,6 +27,33 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
+**A FIFTH BUILT-IN: THE BOT YOU JUST TALK TO** (slug `talk`, name **provisional**). Every other built-in is for a job —
+code, a trip, a calendar, a film — so a person who just wanted to ask something had nowhere to go. This is the plainest
+bot here: no service, no store, no tick, no migration. It is the chat loop (`botsBots/chat.ts`) and the role `bot_run`,
+with `web` and `files` on, so it can look things up and read what they attach.
+
+THE NAMES ARE NOT SETTLED. All the bots get named together later; `talk` is a working slug and "Talk" a working name.
+Until `BOTS` is on there is no chat history keyed to the slug, so renaming costs nothing. After that it does.
+
+Three things found while adding it, each a trap somebody else would have hit:
+
+* **`tailzu` is NOT free, and is not a bot.** It is X0 itself: `palette.ts` gives that slug the app's own ink and mark,
+  and `live.ts` reads it back as **"X0"** on an approval that came from no bot. It was the obvious name to take and
+  taking it would have put a bot's face on the app's own voice. `chat` is no better — a live route segment under the
+  bots area. Both are in `RESERVED_SLUGS` now, with `lingo` (a built-in that was never listed there) and the other
+  route segments a slug would be matched before: `listing`, `rules`, `session`, `sessions`, `share`, `store`, `trip`.
+* **A built-in wearing a shipped-only colour could not pass its own schema.** `parseBotInput` refuses `ash` and
+  `slate` on purpose — that refusal is what stops somebody's own bot coming out the colour of one of ours — but
+  `bots-validate` puts every built-in through that same schema. Lingo has worn ash since it landed and only escapes
+  because `builtinBots()` leaves it out while `LINGO` is off: **switching Lingo on would have failed that test.**
+  The colour is held to its own rule now (PALETTE or SHIPPED_ONLY), and the schema check keeps the rest.
+* **Order is not cosmetic.** Home's grid draws three bots and "Make a bot", and the Bots tab glyph draws four. A fifth
+  built-in placed first silently pushed Plan off the grid and Travel off the glyph, so `talk` goes LAST.
+
+It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is never offered in the picker, and three
+balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
+mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
+
 ## WHAT IS OFF, AND WHICH KIND OF OFF IT IS (16 Nov)
 
 Fifty-three switches are off and twenty-six are on, which sounds alarming and mostly is not: most of the off ones are
