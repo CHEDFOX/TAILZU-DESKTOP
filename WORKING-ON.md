@@ -190,8 +190,8 @@ look. The apps are renderers: build server data with the existing blocks and cat
 ## Numbers in use
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
-  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief.
-  Next free: **0098**. Take the next free number and check `git log origin/main -- tulmi/supabase/migrations` first:
+  0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief,
+  0098 a browser that belongs to the person. Next free: **0099**. Take the next free number and check `git log origin/main -- tulmi/supabase/migrations` first:
   sessions have collided three times now, and the third one nearly shipped.
 
   **The third collision, and what it teaches.** A call's note and brief was written as a second `0096` while
@@ -204,6 +204,15 @@ look. The apps are renderers: build server data with the existing blocks and cat
 - Phone runtime: `tailzu-2026-11-x0-blip`. Do not change it.
 
 ## Notes from other sessions
+
+- **16 Nov, the cloud browser, read-only half (`docs/sites.md`, `CLOUD_BROWSER` — off), on main.** A browser per
+  person, signed in once, read when there is a reason: "where is my order" for a site with no API. Built:
+  `src/sites/` (gate, store, service), `engine.visit()` in `src/web/browser/engine.ts`, the `site_read` role,
+  migration **0098**, `tests/sites.test.ts`. **Not built: the routes, the screens, the clock, and signing in** —
+  nothing in the app can reach it yet, which is why it is safe to have on main.
+  Two things worth knowing before touching it. `CLOUD_BROWSER_SITES` is **empty means NONE**, inverted from every
+  other list in the config on purpose. And the browser keeps nothing between visits: a fresh context filled from
+  the saved session each time, so there is no live login anywhere and a crash costs a visit, not a sign-in.
 
 - **15 Nov, the sign-in card (`docs/sign-in.md`), backend only, on main.** The planner can now describe a sign-in page's
   real boxes instead of only saying "sign in, then press Continue": `FIELD <id> <kind> | <label>` and `ALSO <id> | <label>`
