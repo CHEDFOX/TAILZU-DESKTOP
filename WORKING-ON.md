@@ -89,7 +89,8 @@ and `OPENROUTER_API_KEY`, which the config requires outright — the server does
 
 These are the ones worth knowing about, because turning them on gives you a feature that draws and does nothing.
 
-* **Lingo — a course cannot get any words.** Everything downstream is built and tested: the scheduler, marking on the
+* **Lingo — a course cannot get any words.** (Still true after another session's 16 Nov work, which added what a
+  learner wants the language FOR and fixed the language picker — migration 0105 — but did not touch this.) Everything downstream is built and tested: the scheduler, marking on the
   server, the seven exercise kinds, the sets, the grader's gestures, the 85-language picker, 165 tests. But words arrive
   only through `POST /v1/lingo/words`, and **nothing calls it** — not the app, not a screen, and not the bot, which
   `builtin.ts` says outright has no tools. Switch it on today and you can start a Spanish course with nothing in it. The
@@ -358,8 +359,9 @@ LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
   0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief,
   0098 a browser that belongs to the person, 0099 discover, 0100 Xode's standing job. **These are live.**
   Then, merged but NOT yet on the live database: 0101 the cinema's films, 0102 bot sessions, 0103 the cinema's places,
-  0104 the cinema's 3D creations. They go in by themselves on the next deploy, and LIVE_MIGRATION moves to 0104 after.
-  Next free: **0105**. Take the next free number and check both
+  0104 the cinema's 3D creations, 0105 what a learner wants a language FOR (another session's). They go in by
+  themselves on the next deploy, and LIVE_MIGRATION moves to 0105 after.
+  Next free: **0106**. Take the next free number and check both
   `git log origin/main -- tulmi/supabase/migrations` and the open branches first:
   sessions have collided three times now, and the third one nearly shipped.
 
