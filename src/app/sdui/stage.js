@@ -46,12 +46,49 @@ function stMinHeight(p, th) {
   return size + 18 + (th && th.restText ? stTrailRoom() + 48 : 0);
 }
 
+/**
+ * HE LIVES BEHIND THE BAR UNDER THE STAGE (`stand: "peek"`, botTiles.js Peek), not standing on it: his ground is this far
+ * below the stage's own floor, so the canvas's bottom edge cuts him off there and only his head shows, and every so often he
+ * jumps the ledge and stands in full view for a few moments. The same numbers as the phone's (stageCore.ts PEEK).
+ */
+const PEEK = { hide: 0.62, room: 0.8, every: [7, 16], stay: [2.4, 5.2] };
+
+/** The ink and the paper the mark is drawn in (the app's own two colours). */
+const ST_INK = "#0a0a0a", ST_PAPER = "#ffffff";
+/** He carries a mark rather than words at rest (BotThoughtSpec.restMark). */
+const stMarks = (th) => !!(th && th.restMark && Number(th.restMark.dots) > 0);
+/** How long the trail is under what he carries: a mark rides a short one, a pill the full one. */
+const ST_MARK_TRAIL = 0.55;
+/** The mark's own words: in, a few seconds, out — so a dot is never the first thing a person has to work out. */
+const ST_SAY = { hold: 3400, out: 520 };
+const stSays = (th) => (stMarks(th) && typeof th.restMark.says === "string" ? th.restMark.says : "");
+function stTrailK(th) { return stMarks(th) ? ST_MARK_TRAIL : 1; }
+function stRoomFor(th) {
+  const api = window.TailzuBotTiles;
+  const k = stTrailK(th);
+  return api && typeof api.trailRoom === "function" ? api.trailRoom(k) : 43 * k;
+}
+/** How wide and tall the mark is, room for its wobble included; 0 when he carries no mark. */
+function stMarkSize(th) {
+  return stMarks(th) ? 2 * (12 + Math.min(3, Number(th.restMark.dots) || 1) * 1.8 + 7) : 0;
+}
+const stPeeks = (p) => p && p.stand === "peek";
+const stPeekHide = (size) => Math.max(2, Math.round(size * PEEK.hide));
+/** A peeking stage: shorter by what the bar keeps, but never shorter than him whole on the ledge with his jump's room over it. */
+function stPeekHeight(p, th) {
+  const size = Number(p.size) || 30;
+  const d = stMarkSize(th);
+  // A mark costs much less room than a pill did: a short trail and the blob, with none of the pill's room over it.
+  const box = d > 0 ? Math.ceil(size + 18 + stRoomFor(th) + d) : Math.max(Number(p.height) || 0, stMinHeight(p, th));
+  return Math.max(size + 18 + Math.round(size * PEEK.room), box - stPeekHide(size));
+}
+
 /** His life: kept for the app's life, by `life`. The bot is made when the core is there. */
 function stLife(p) {
   const life = String(p.life || "stage");
   let L = ST_LIVES.get(life);
   if (!L) {
-    L = { life, bot: null, roam: null, mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
+    L = { life, bot: null, roam: null, peek: null, mark: null, sayUntil: 0, saidWhat: "", mode: null, rect: null, follow: { x: NaN, v: 0, target: NaN }, cheer: null, out: null, outAt: "right", lowY: 0, h: 0, standUntil: 0, gliding: false, animUntil: 0, restW: 0 };
     ST_LIVES.set(life, L);
   }
   return L;
@@ -70,7 +107,9 @@ function botStageNode(n) {
   const style = th ? (th.style === "home" ? "home" : "space") : "";
   const r = L.rect;
   const boxAt = r ? "left:" + r.x + "px;top:" + r.y + "px;width:" + r.w + "px;height:" + r.h + "px;" : "";
-  const rest = th && th.restText ? '<button type="button" class="tz-th-rest">' + esc(label(th.restText)) + "</button>" : "";
+  // A mark instead of words: nothing is written at rest, and nothing is a button — the blob is drawn on his own canvas and
+  // the stage's own hit area opens it (botTiles.js Mark).
+  const rest = th && th.restText && !stMarks(th) ? '<button type="button" class="tz-th-rest">' + esc(label(th.restText)) + "</button>" : "";
   // No pill at rest: no box, except the moment it closes (drawn where it was, and faded out by the mount).
   const closing = mode === "rest" && !rest && (L.mode === "open" || L.mode === "full");
   const box = th ? '<div class="tz-th-box tz-th-' + style + (th.place === "low" ? " tz-th-low" : "") + '" data-mode="' + mode + '" style="' + boxAt + (mode === "rest" && !rest && !closing ? "display:none;" : "") + '">' +
@@ -81,6 +120,7 @@ function botStageNode(n) {
     (th && th.veil ? '<div class="tz-th-veil' + (veilWas ? " on" : "") + '" aria-hidden="true"></div>' : "") +
     '<div class="tz-st-layer">' +
     '<canvas class="tz-bt-c tz-st-c" aria-hidden="true"></canvas>' +
+    '<div class="tz-st-says" aria-hidden="true"></div>' +
     (th ? '<div class="tz-th-trail" aria-hidden="true"><i class="tz-th-b"></i><i class="tz-th-b"></i><i class="tz-th-b"></i></div>' : "") +
     '<button type="button" class="tz-st-hit' + (p.hit === "stage" ? " tz-st-all" : "") + '" aria-label="' + esc(label(p.label || "")) + '"></button>' +
     box + "</div></div>";
@@ -180,11 +220,14 @@ function stTarget(s, g, measure) {
   const th = s.th, L = s.L, mode = s.mode;
   const gut = K.num("desktop.stage.gutter", 16);
   const pillH = K.num("desktop.stage.pillHeight", 40), pillMax = K.num("desktop.stage.pillMaxWidth", 320);
-  const room = stTrailRoom() + K.num("desktop.stage.pillLift", 8);
+  const room = stRoomFor(th) + K.num("desktop.stage.pillLift", 8);
   const restBottom = g.crown - room;
   const clampX = (cx, w) => Math.max(gut, Math.min(g.W - gut - w, cx - w / 2));
   const headX = L.follow.x === L.follow.x ? L.follow.x : g.headX;
   if (mode === "rest") {
+    // What he carries: a mark is as wide as it is tall, a pill as wide as its words.
+    const d = stMarkSize(th);
+    if (d > 0) return { x: clampX(headX, d), y: restBottom - d, w: d, h: d };
     const w = Math.min(pillMax, L.restW || pillMax, g.W - 2 * gut);
     return { x: clampX(headX, w), y: restBottom - pillH, w, h: pillH };
   }
@@ -225,6 +268,7 @@ function mountStage(host, cfg, reduced) {
   host.__life = L;
   const bot = stBot(L, p, api);
   const layer = host.querySelector(".tz-st-layer"), cv = host.querySelector(".tz-st-c"), hit = host.querySelector(".tz-st-hit");
+  const saysEl = host.querySelector(".tz-st-says");
   const box = host.querySelector(".tz-th-box"), veil = host.querySelector(".tz-th-veil");
   const bubbles = Array.from(host.querySelectorAll(".tz-th-b"));
   const s = { host, n, p, th, mode, L };
@@ -232,7 +276,8 @@ function mountStage(host, cfg, reduced) {
   const was = L.mode;
   L.mode = mode;
   const size = Number(p.size) || 30;
-  const H0 = Math.max(Number(p.height) || 0, stMinHeight(p, th));
+  const peeks = stPeeks(p);
+  const H0 = peeks ? stPeekHeight(p, th) : Math.max(Number(p.height) || 0, stMinHeight(p, th));
   const W = () => host.clientWidth || layer.clientWidth || 0;
 
   // ---- him
@@ -240,6 +285,34 @@ function mountStage(host, cfg, reduced) {
   fit(host.clientHeight || H0);
   if (p.roam && !L.roam && typeof api.Roam === "function" && btLooks()) L.roam = new api.Roam(bot, btLooks(), p.roam, W() || 300, stSeed(L.life) ^ 7);
   if (L.roam) L.roam.w = W() || L.roam.w;
+  // Peeking: his own ground is under the stage, past where resize would put a floor, and Peek owns it from here.
+  if (peeks && bot.placed && typeof api.Peek === "function") {
+    const ledge = (host.clientHeight || H0) - ST_FLOOR;
+    const spec = { hidden: ledge + stPeekHide(size), ledge, crownH: Math.max(1, Math.round(ledge - bot.crown().y)), every: PEEK.every, stay: PEEK.stay };
+    if (!L.peek) { L.peek = new api.Peek(bot, spec, stSeed(L.life) ^ 0x51a3); bot.floor = spec.hidden; }
+    else L.peek.spec = spec;
+  } else L.peek = null;
+  // The mark he carries at rest, drawn on his canvas with the rest of him.
+  if (stMarks(th) && typeof api.Mark === "function") {
+    const spec = { dots: Math.max(1, Math.min(3, Number(th.restMark.dots) || 1)), urgent: th.restMark.urgent !== false, r: stMarkSize(th) / 2 - 7 };
+    const fresh = !L.mark || L.mark.spec.dots !== spec.dots || L.mark.spec.urgent !== spec.urgent;
+    if (!L.mark) L.mark = new api.Mark(spec, stSeed(L.life) ^ 0x4d17);
+    else { L.mark.spec = spec; if (fresh) L.mark.knock(); }
+    // Something waiting on them: he comes up and stays up. Hiding is for having nothing to say.
+    if (L.peek) L.peek.hold = spec.urgent;
+    // The mark announces itself in a few words, then falls silent again.
+    const words = stSays(th);
+    if (saysEl && words && (fresh || L.saidWhat !== words)) {
+      L.saidWhat = words;
+      saysEl.textContent = words;
+      saysEl.style.opacity = "1";
+      L.sayUntil = performance.now() + ST_SAY.hold;
+    } else if (saysEl && !words) { saysEl.textContent = ""; L.sayUntil = 0; }
+  } else {
+    L.mark = null;
+    if (saysEl) { saysEl.textContent = ""; L.sayUntil = 0; }
+    if (L.peek) L.peek.hold = false;
+  }
   // What he is at: thinking, listening, standing by his open thought, or his own life (a breath first after it closes). Thinking
   // comes first: a voice chat listens for all of its turns (sending included, so the box keeps its words), and he thinks while a
   // turn's words go.
@@ -252,6 +325,12 @@ function mountStage(host, cfg, reduced) {
   const act = thinking ? "think" : listening ? "listen" : opened || L.standUntil > performance.now() ? "stand" : "play";
   // The roam lets go first (pausing gives up a walk of its own), so the walks asked below are his.
   if (L.roam) L.roam.pause(reduced || act !== "play" || out);
+  // A thought open, a question being answered, an ear on them: he comes over the ledge for it and stays up while it lasts.
+  if (L.peek) {
+    const busy = reduced || act !== "play" || out;
+    if (busy) L.peek.visit();
+    L.peek.paused = busy && L.peek.state === "up";
+  }
   if (!reduced && bot.placed && bot.moment !== act) bot.setAct(act);
   // Out at a side while outWhen holds; back in when it stops (gone already at the first draw: put there at once).
   // No side named: the nearer edge, as the prototype walks him off (across a wide window the far one is a long stroll), and back
@@ -465,7 +544,7 @@ function mountStage(host, cfg, reduced) {
     const rect = br.width > 0 ? { x: br.left - lr.left, y: br.top - lr.top, w: br.width, h: br.height } : L.rect;
     if (!rect || hidden) { bubbles.forEach((b) => { b.style.opacity = "0"; }); return; }
     const level = listening ? (typeof voiceLevel === "function" ? voiceLevel() : 0) : -1;
-    const bs = api.thoughtTrail(bot.crown(), rect, t, level, 1);
+    const bs = api.thoughtTrail(bot.crown(), rect, t, level, stTrailK(th));
     bs.forEach((b, i) => {
       const el = bubbles[i];
       if (!el) return;
@@ -497,6 +576,15 @@ function mountStage(host, cfg, reduced) {
     }
     bot.step(dt);
     if (L.roam) L.roam.step(dt);
+    if (L.peek) L.peek.step(dt);
+    if (L.mark && L.rect) L.mark.step(dt, L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h / 2);
+    if (saysEl && L.mark && L.sayUntil) {
+      const w = saysEl.offsetWidth, gut = K.num("desktop.stage.gutter", 16), Wn = W();
+      const r = L.mark.spec.r + 10, right = L.mark.x + r, left = L.mark.x - r - w;
+      saysEl.style.left = (right + w <= Wn - gut || left < gut ? Math.min(right, Wn - gut - w) : left) + "px";
+      saysEl.style.top = (L.mark.y - 9) + "px";
+      if (performance.now() > L.sayUntil) { saysEl.style.opacity = "0"; L.sayUntil = 0; }
+    }
     if (listening && L.rect) {
       bot.lookAt(L.rect.x + L.rect.w / 2, L.rect.y + L.rect.h);
       bot.setLevel(typeof voiceLevel === "function" ? voiceLevel() : 0);
@@ -510,7 +598,9 @@ function mountStage(host, cfg, reduced) {
     trail();
     if (fixed || lifted) place(false);
   };
-  const paint = () => { const w = W(), h = host.clientHeight || H0; if (w > 0) btPaint(cv, bot, w, h); };
+  // Him, and over him the mark, both on the one canvas.
+  const drawable = { draw: (g) => { bot.draw(g); if (L.mark) L.mark.draw(g, ST_INK, ST_PAPER); } };
+  const paint = () => { const w = W(), h = host.clientHeight || H0; if (w > 0) btPaint(cv, L.mark ? drawable : bot, w, h); };
   bot.settle(reduced);
   placeHit();
   paint();

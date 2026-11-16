@@ -1,8 +1,8 @@
 // GENERATED: do not edit. The living bot tiles' physics and drawing, shared with the phone and the server.
 // Source: TAILZU-FRONTEND/app/src/botTiles/{scene,core}.ts; regenerate with `node src/botTiles/genDesktop.mjs` there.
 // scene.ts sha256 bf9ddb40045f8c5b9259c29e1c83f2a6f097a3f25328a3b42c9a7923654454ca
-// core.ts sha256 f2e6ddc9b9ba92f047188dbb9d53993405a1373570cc1aaf79624a029d1d1614
-// body sha256 98674e213143812b2dd58c1a265fa4227433e1a0576c5fbedab795069586b365
+// core.ts sha256 ce1be68ed056c432bc4d1496fd6e3f8887861eacd2a1e60ef76344b6208ac9d7
+// body sha256 f46dd87df5b819cdc318d0272e9d6e822cecf47e46282b15cadf717e82598c50
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module && module.exports) module.exports = api;
@@ -9887,6 +9887,215 @@
               this.wait = this.pick(this.spec.pause);
       }
   }
+  class Peek {
+      constructor(bot, spec, seed) {
+          this.paused = false;
+          /** While it holds he does not hide: up he goes, and up he stays (something is waiting on them, and he shows it). */
+          this.hold = false;
+          this.state = "behind";
+          this.left = 0;
+          /** Seconds since he left the ground: his feet drag on it for a frame or two, which is not a jump that failed. */
+          this.since = 0;
+          this.bot = bot;
+          this.spec = spec;
+          this.rand = rng((seed >>> 0) ^ 0x2fa71d);
+          this.wait = this.pick(spec.every);
+      }
+      pick(r) {
+          const a = Number(r?.[0]) || 0, b = Number(r?.[1]) || a;
+          return a + this.rand() * (b - a);
+      }
+      /** Where his feet are now: his crown, plus his height. */
+      feet() {
+          return this.bot.crown().y + this.spec.crownH;
+      }
+      /** Up: enough speed to clear the lip with a little to spare, and a lean, so he lands somewhere else along the bar. */
+      rise() {
+          const b = this.bot, climb = Math.max(1, this.spec.hidden - this.spec.ledge);
+          b.jump((this.rand() - 0.5) * b.S * 1.6, -Math.sqrt(2 * b.g * (climb + b.S * 0.55)));
+          this.state = "rising";
+          this.since = 0;
+      }
+      /** Off the ledge: the low ground is his again, so this hop drops him behind the bar. */
+      drop() {
+          const b = this.bot;
+          b.floor = this.spec.hidden;
+          b.jump((this.rand() - 0.5) * b.S * 1.1, -b.S * 0.9);
+          this.state = "falling";
+      }
+      /** Up now, whatever he was doing (something landed and he wants to be seen); already up, he stays a while longer. */
+      visit() {
+          if (this.state === "behind" && this.bot.grounded)
+              this.rise();
+          else if (this.state === "up")
+              this.left = Math.max(this.left, this.pick(this.spec.stay));
+      }
+      step(dt) {
+          const b = this.bot, s = this.spec;
+          if (this.paused)
+              return;
+          if (this.state === "behind") {
+              if (b.grounded && b.floor !== s.hidden)
+                  b.floor = s.hidden;
+              this.wait -= dt;
+              // Something waiting on them brings him up at once, and keeps him there: hiding is for having nothing to say.
+              if ((this.hold || this.wait <= 0) && b.grounded)
+                  this.rise();
+              return;
+          }
+          if (this.state === "rising") {
+              this.since += dt;
+              if (this.feet() <= s.ledge) {
+                  b.floor = s.ledge;
+                  this.state = "up";
+                  this.left = this.pick(s.stay);
+                  return;
+              }
+              // Down again without clearing the lip: he tries the next one. (His feet drag for a frame or two as he goes, which is
+              // why nothing is read from `grounded` until he has had a moment in the air.)
+              if (b.grounded && this.since > 0.25) {
+                  this.state = "behind";
+                  this.wait = this.pick(s.every);
+              }
+              return;
+          }
+          if (this.state === "up") {
+              this.left -= dt;
+              if (this.left <= 0 && b.grounded && !this.hold)
+                  this.drop();
+              return;
+          }
+          if (b.grounded) {
+              this.state = "behind";
+              this.wait = this.pick(s.every);
+          }
+      }
+  }
+  /** n: points round the edge. k/c: each one's spring back and its damping. wave: how fast a knock runs round. */
+  const MARK = {
+      n: 24, k: 70, c: 4.2, wave: 90, push: 0.055, cap: 7,
+      follow: 120, drag: 9,
+      edge: 1.45, inner: 3.3, quiet: 2.2,
+      pingEvery: 2.9, pingSpeed: 30, pingMax: 26, pingDots: 18, kick: 55,
+  };
+  class Mark {
+      constructor(spec, seed = 1) {
+          /** Where it rides, and how fast: a weight on a spring, so it is always a little behind him. */
+          this.x = NaN;
+          this.y = NaN;
+          this.vx = 0;
+          this.vy = 0;
+          /** The rings on their way out, each a radius. */
+          this.rings = [];
+          this.since = 0;
+          this.xy = new Float32Array(MARK.pingDots * 2);
+          this.spec = spec;
+          this.rr = new Float64Array(MARK.n);
+          this.rv = new Float64Array(MARK.n);
+          this.rand = rng((seed >>> 0) ^ 0x7a31c5);
+          this.since = this.rand() * MARK.pingEvery;
+      }
+      /** Something landed: the whole edge is knocked at once, and it bobs. */
+      knock() {
+          for (let i = 0; i < MARK.n; i++)
+              this.rv[i] = this.rv[i] - 55 * Math.cos((i / MARK.n) * Math.PI * 2 - Math.PI / 2);
+          this.vy -= 110;
+      }
+      /** A ring leaves it, and it takes the kick back. */
+      ping() {
+          this.rings.push(this.spec.r * 0.4);
+          this.vy += MARK.kick;
+      }
+      step(dt, x, y) {
+          if (this.x !== this.x) {
+              this.x = x;
+              this.y = y;
+          }
+          // where it rides: a weight on a spring, so it lags him and settles after he stops
+          this.vx += (-MARK.follow * (this.x - x) - MARK.drag * this.vx) * dt;
+          this.vy += (-MARK.follow * (this.y - y) - MARK.drag * this.vy) * dt;
+          this.x += this.vx * dt;
+          this.y += this.vy * dt;
+          // the edge answers that travel, and the knock runs round it
+          const sp = Math.hypot(this.vx, this.vy), ang = Math.atan2(this.vy, this.vx), n = MARK.n;
+          for (let i = 0; i < n; i++) {
+              const a = (i / n) * Math.PI * 2;
+              const push = Math.cos(a - ang) * sp * MARK.push;
+              const wave = (this.rr[(i - 1 + n) % n] + this.rr[(i + 1) % n] - 2 * this.rr[i]) * MARK.wave;
+              this.rv[i] = this.rv[i] + (-MARK.k * this.rr[i] - MARK.c * this.rv[i] + wave - push * 9) * dt;
+              this.rr[i] = clamp(this.rr[i] + this.rv[i] * dt, -MARK.cap, MARK.cap);
+          }
+          // the rings on their way out, and the next one
+          for (let i = 0; i < this.rings.length; i++)
+              this.rings[i] = this.rings[i] + MARK.pingSpeed * dt;
+          while (this.rings.length && this.rings[0] > MARK.pingMax)
+              this.rings.shift();
+          if (this.spec.urgent) {
+              this.since += dt;
+              if (this.since >= MARK.pingEvery) {
+                  this.since = 0;
+                  this.ping();
+              }
+          }
+          else
+              this.rings.length = 0;
+      }
+      /** Where it stands now, for the trail to meet it and a finger to find it. */
+      rect() {
+          const r = this.spec.r + MARK.cap;
+          return { x: this.x - r, y: this.y - r, w: r * 2, h: r * 2 };
+      }
+      /** A point on the edge as it is now. */
+      at(i) {
+          const a = (i / MARK.n) * Math.PI * 2, rr = this.spec.r + this.rr[i % MARK.n];
+          return [this.x + Math.cos(a) * rr, this.y + Math.sin(a) * rr * 0.94];
+      }
+      draw(ctx, ink, paper) {
+          if (this.spec.dots <= 0 || this.x !== this.x)
+              return;
+          const n = MARK.n;
+          // what is inside it is white, so the page does not read through: the wavy edge, filled
+          ctx.fillStyle = paper;
+          ctx.beginPath();
+          const first = this.at(0), last = this.at(n - 1);
+          ctx.moveTo((last[0] + first[0]) / 2, (last[1] + first[1]) / 2);
+          for (let i = 0; i < n; i++) {
+              const c = this.at(i), p = this.at(i + 1);
+              ctx.quadraticCurveTo(c[0], c[1], (c[0] + p[0]) / 2, (c[1] + p[1]) / 2);
+          }
+          ctx.closePath();
+          ctx.fill();
+          // the edge itself: ink dots, which is the whole of the drawing language
+          ctx.fillStyle = ink;
+          for (let i = 0; i < n; i++) {
+              const p = this.at(i);
+              ctx.beginPath();
+              ctx.arc(p[0], p[1], MARK.edge, 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // what it holds: one dot for each, side by side
+          const k = Math.min(3, this.spec.dots), r = this.spec.urgent ? MARK.inner : MARK.quiet;
+          for (let i = 0; i < k; i++) {
+              ctx.beginPath();
+              ctx.arc(this.x + (i - (k - 1) / 2) * (r * 2.6), this.y, r, 0, Math.PI * 2);
+              ctx.fill();
+          }
+          // the rings on their way out: dots again, thinning as they spread
+          for (const rad of this.rings) {
+              const a = clamp(1 - rad / MARK.pingMax, 0, 1);
+              if (a <= 0.02)
+                  continue;
+              ctx.globalAlpha = a * 0.5;
+              for (let i = 0; i < MARK.pingDots; i++) {
+                  const t = (i / MARK.pingDots) * Math.PI * 2;
+                  ctx.beginPath();
+                  ctx.arc(this.x + Math.cos(t) * rad, this.y + Math.sin(t) * rad * 0.94, 0.9 + a * 0.6, 0, Math.PI * 2);
+                  ctx.fill();
+              }
+          }
+          ctx.globalAlpha = 1;
+      }
+  }
   /**
    * His thought's trail: three bubbles from just over his antennae up to the box, growing toward it (sizes, diameters at
    * scale 1), each outlined in ink (strokes). anchorPad: how near the box's corners the trail may meet it. lift: px over
@@ -10200,5 +10409,5 @@
       }
       return out;
   }
-  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
+  return { SCENE_LIMITS, SCENE_BASE, NBASE, B_T, B_X, Val, SceneEl, SceneRig, RIG_GROUPS, Scene, compileScene, SceneRun, renderStill, CARRY, TAP, STEP, MAX_FRAME, PALETTE, INK, kindOf, rng, LOOKS_FORMAT, MOMENT_VARS, MOMENT_FUNCS, XAPI, checkExpression, compileWith, Part, ANCHORS, Wear, Avatar, BLIP, TRACK_FIELDS, TRACK_ENUMS, MOMENT_LIMITS, Moment, Looks, compileLooks, compileAvatar, Fabric, resetScreenScenes, BotTile, BotTilesWorld, gridWorld, Roam, Peek, MARK, Mark, TRAIL, trailRoom, thoughtTrail, FOLLOW, followStep, LiveMark, writeOnTimes };
 });
