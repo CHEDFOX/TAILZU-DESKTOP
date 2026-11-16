@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 16 Nov 2026, 13:55 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 16 Nov 2026, 14:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
@@ -27,16 +27,28 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
-**NOT merged, and why.** `claude/kind-ptolemy-9f3jlg` (25 commits, the cinema bot that makes FILMS shot by shot) was
-started and backed out. Two things need a person:
-1. **`src/cinema/` now belongs to the 3D half.** Both branches write `src/cinema/types.ts` and `docs/cinema.md` and
-   both define `CINEMA`, and they are different subsystems — films vs Blender scenes. They are complements (the 3D
-   half's own doc says it is to be fitted to the cinema bot later), but one of them has to move, and inventing a
-   namespace for somebody else's module is not a merge's call.
-2. **The two branches disagree about what a chat turn IS.** main prunes to the newest 200 per person per bot; that
-   branch keeps every turn for good and hangs them off sessions (`bot_sessions`). Reconciling them changes retention
-   for every bot, so it is a decision, not a conflict resolution.
-   Its three migrations also collide (0089/0090/0091 are all taken); 0101/0102/0103 are free.
+**THE CINEMA, TUNED AS FAR AS A MERGE CAN TAKE IT.** `src/cinema/` held the Blender half; the film bot wanted the same
+paths. The 3D is a PART of the cinema bot — its own doc says so — so it took the sub-name: **`src/cinema/scene/` and
+`docs/cinema-3d.md`**, and `src/cinema/` is free for the bot itself. One `CINEMA` switch for both halves; the 3D's keys
+only say HOW it renders. Green, pushed, and it unblocks the film bot's rebase.
+
+The film bot (`claude/kind-ptolemy-9f3jlg`, 25 commits) was then merged in full and backed out again. Everything
+mechanical worked: 13 conflicts resolved, migrations renumbered 0089/0090/0091 -> 0101/0102/0103, the quota port
+adapted to the `Quota` shape it grew since, **12,413 tests passing**. It stops on ONE thing, and it is the author's:
+
+> **Its seven prompts do not go through `roles.ts`.** Every cinema model call funnels through one door (`index.ts`
+> thinkAs) that writes `messages: [{ role: "system", content: o.system }, ...]` from inline constants — READ_SYSTEM,
+> DIRECTOR_SYSTEM, REVISE_SYSTEM, PROPOSE_SYSTEM and four more. `principles-sweep` fails three ways on it: a system
+> prompt written out, a model call that names no role, messages not built with `compose()`.
+>
+> The fix is to give each of the seven (`cinema.direct`, `cinema.revise`, `cinema.propose`, `cinema.picture.read`,
+> `cinema.picture.check`, `cinema.check.still`, `cinema.check.take`) a role in `roles.ts` with a budget, an eval tier,
+> a `prompt-sizes` entry and `evals/<role>.jsonl` with at least two fixtures, and have `thinkAs` compose from the role
+> instead of taking a `system` string. **The 3D half already does exactly this** (`cinema_scene`, `cinema_eye`), so the
+> pattern is in the same folder.
+>
+> A merge did not do it because moving those words into `compose()` changes what the models are told, and what they are
+> told is what the films look like. That is a tuning decision, not a conflict resolution.
 
 **Branches deliberately left alone**: `serene-lovelace-y9fcnj`, `keen-cori-wg8dpw`, `code-agent-core`,
 `repo-analysis-verdict-6lpyaw`, `repos-deploy-analysis-w3uaxp`, `dreamy-franklin-rFLIX`. Each is 79 to 241 commits
