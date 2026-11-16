@@ -9,6 +9,44 @@ look. The apps are renderers: build server data with the existing blocks and cat
 
 ## Landed today (on main, every switch off by default)
 
+### 16 Nov: A SCREEN NOBODY BUILT, DRAWN BY A MODEL (`docs/screen-draw.md`, switch `SCREEN_DRAW`, off)
+
+The first place in the app where a MODEL composes a screen rather than a person writing it. An id with no
+builder in `BOTS_SCREENS` is answered "This part is on its way" today; with the switch on it is drawn instead —
+one cheap call picks from the **20 blocks a bot already draws under its words** (`src/show`) and the kit draws
+them, so **the model never writes a style and cannot break the app's design rules**. That is the arrangement
+`sdui2/design.ts` was written for, now used: the model proposes, code decides.
+
+Why blocks and not nodes: a model that writes nodes has to get contrast, borders and touch sizes right on every
+screen, and `checkDesign` is then a gate it can fail. Picking blocks it cannot fail, because `showNodes` writes
+the nodes. `checkDesign(drawn: true)` still runs over the finished tree, but as an **assertion over our own
+renderer** — an error there is a bug in the kit, not a bad drawing — so there is no redraw and no second call.
+
+What it may not draw: nothing to tap, type or send (`choice`, `suggest`, `form` are dropped at any depth — their
+Send needs a chat turn and a screen has none), and no address or picture (the checker's existing "an address this
+turn read" rule meets a turn that read nothing, so its `Seen` is empty and every link and image goes).
+
+**A built screen never goes near it.** Every id in `BOTS_SCREENS` is answered by its own builder exactly as
+before, and the test holds that: Home with a model door present asks no model. It needs `deps.drawn`, so every
+caller not given one — the tests, the render check, `emptyDeps()` — behaves as it did.
+
+Holds: `tulmi/src/drawn/draw.ts` (new), the `screen_draw` role in `principles/roles.ts` with
+`evals/screen_draw.jsonl`, the `SCREEN_DRAW*` lines of `config.ts`, `deps.drawn` on `BotsDeps`
+(`experience/bots/live.ts`), the `!def` branch of `buildBotsScreen` (`experience/bots/index.ts`),
+`tests/screen-draw.test.ts` (18 cases), `docs/screen-draw.md`. No migration.
+
+**Not done, and worth knowing before this is pointed anywhere people visit:** nothing caches it (a screen is
+drawn per request), and it is told nothing but the id and its params — there is no `load` for a screen nobody
+built, so it draws from the id alone and is told to invent no numbers and no names. Vocabulary 1 by
+construction; once `SDUI_V2` is on it could draw to the blocks a client declares (`hasBlock`). The fixtures are
+written but no eval has been run against a real model.
+
+**On raising the context** (asked for in the same breath as this): `CONTEXT_MAX_CHARS` defaults to 2,000 and the
+config already validates up to **8,000**, so four times the person's context block is an env var away with no
+code and no deploy — deliberately NOT changed here, because it raises the input cost of every decide call and
+every run's first step for everyone, which is the owner's call and not a build's. Above 8,000 is a zod `.max()`
+change: setting the env var higher fails validation rather than clamping.
+
 ### 16 Nov, late: four sessions' branches merged into main
 
 One session walked every branch in the four repos and merged what was ready. **Every migration below was renumbered
