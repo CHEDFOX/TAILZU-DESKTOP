@@ -1,6 +1,6 @@
 # Being built right now (read before you start)
 
-Updated 15 Nov 2026, 22:19 UTC. One session is building the items below. Do not edit the files they hold until the item is
+Updated 16 Nov 2026, 12:55 UTC. One session is building the items below. Do not edit the files they hold until the item is
 
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
 
@@ -208,11 +208,28 @@ look. The apps are renderers: build server data with the existing blocks and cat
 - **16 Nov, the cloud browser, read-only half (`docs/sites.md`, `CLOUD_BROWSER` — off), on main.** A browser per
   person, signed in once, read when there is a reason: "where is my order" for a site with no API. Built:
   `src/sites/` (gate, store, service), `engine.visit()` in `src/web/browser/engine.ts`, the `site_read` role,
-  migration **0098**, `tests/sites.test.ts`. **Not built: the routes, the screens, the clock, and signing in** —
-  nothing in the app can reach it yet, which is why it is safe to have on main.
+  migration **0098**, `tests/sites.test.ts`. The routes, the screens, the clock and signing in are all built now
+  (see 16 Nov above); the whole feature is still behind `CLOUD_BROWSER`, off, which is why it is safe on main.
+  **Not built: a run against a real site.** Every test uses a fake browser.
   Two things worth knowing before touching it. `CLOUD_BROWSER_SITES` is **empty means NONE**, inverted from every
   other list in the config on purpose. And the browser keeps nothing between visits: a fresh context filled from
   the saved session each time, so there is no live login anywhere and a crash costs a visit, not a sign-in.
+
+- **16 Nov, the cloud browser can now be SIGNED IN, and the whole panel is server side (`docs/sites.md`).** On main,
+  behind `CLOUD_BROWSER`, still off. The panel is a **page this server writes** (`src/sites/panelHost.ts`) shown in the
+  `LiveView` node the apps already have — NOT a component of their own, which it nearly was. The reason is worth keeping:
+  a component ships in a store build, and a store build is weeks. As a page, the frame clock, the tap arithmetic and the
+  keyboard all ship when this server deploys, **and a phone that has never heard of sites can draw one today, with no app
+  update at all.** Screen `bots.site.signin`; its own load is what opens the browser, so a build with no LiveView is sent
+  no panel and opens none either.
+  The page is given a **ticket**: one panel, nothing else, dead when the panel is, written into the HTML and nowhere else.
+  A LiveView cannot see the app's token (SecureStore, behind the Keystore) and must not be handed one. The four ticket
+  routes live under `/sites/panel/t/:ticket`, answer `Access-Control-Allow-Origin: *` and take no cookie — safe precisely
+  because the ticket is the whole of the authority, and needed because Android gives an HTML-with-base-URL page an origin
+  that is sometimes opaque. The screen is `keep: false`, so the ticket never reaches AsyncStorage.
+  Nothing typed is kept: the box is emptied *before* each call goes out, so a password is in the page for one keystroke.
+  Driven in real Chromium against a fake API: a tap at the frame's centre arrives within one pixel of the page's centre,
+  a drag scrolls, Backspace on an empty box sends the key, the quiet clock holds at 700 ms and the asks stop when it ends.
 
 - **15 Nov, the sign-in card (`docs/sign-in.md`), backend only, on main.** The planner can now describe a sign-in page's
   real boxes instead of only saying "sign in, then press Continue": `FIELD <id> <kind> | <label>` and `ALSO <id> | <label>`
