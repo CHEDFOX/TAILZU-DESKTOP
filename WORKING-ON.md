@@ -54,8 +54,19 @@ adapted to the `Quota` shape it grew since, **12,413 tests passing**. It stops o
 `repo-analysis-verdict-6lpyaw`, `repos-deploy-analysis-w3uaxp`, `dreamy-franklin-rFLIX`. Each is 79 to 241 commits
 behind a base from July to early November; merging one would undo months, not add to it.
 
-**MIGRATIONS PENDING ON THE LIVE DATABASE: 0097, 0098, 0099, 0100.** `LIVE_MIGRATION` says 0096, so four are waiting,
-two of them from before today. Run `tulmi/supabase/migrate-pending.sh` and set LIVE_MIGRATION to 0100.
+**MIGRATIONS 0097, 0098, 0099, 0100 ARE ON THE LIVE DATABASE.** They went in by themselves, which is the whole point
+of the arrangement: a deploy builds the new image before it touches the running server, and the image cannot be built
+unless the migrations end well (`tulmi/supabase/migrate-pending.sh`, the `migrate` stage of the Dockerfile). The push of
+`101ca707` built it at 14:00 on 16 November and the build said so — `migrations: running 0097 0098 0099 0100`, four
+PASSes, `migrations: done` — and then the new container came up and the deploy's twelve live checks passed. So nobody
+ran anything by hand, and nobody could have: the database address lives in `tulmi/.env` on the server and is given to
+the build as a secret, so a laptop or a CI box skips this step entirely.
+
+`LIVE_MIGRATION` is now `0100`, the last one known to be on the database. It had stayed at `0096`, which was not
+dangerous — all four are guarded (`if not exists` throughout, and 0100's one policy is dropped if it exists first), so
+re-running them changes nothing — but it meant every deploy did four pointless round trips and the build layer never
+settled. **To put a migration live: write it, push it to main.** There is no hand step; the only hand step is moving
+LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
 
 - Native looks: the server draws the widgets, the Live Activity, the Android "Bots at work" notice and the keyboard's key
   faces (`docs/native-looks.md`). Every card shows its own bot.
@@ -252,7 +263,11 @@ two of them from before today. Run `tulmi/supabase/migrate-pending.sh` and set L
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
   0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief,
-  0098 a browser that belongs to the person. Next free: **0099**. Take the next free number and check `git log origin/main -- tulmi/supabase/migrations` first:
+  0098 a browser that belongs to the person, 0099 discover, 0100 Xode's standing job. **All of these are live.**
+  Next free: **0104** — not 0101, because the unmerged `claude/kind-ptolemy-9f3jlg` already carries 0101, 0102 and 0103
+  (renumbered from 0089/0090/0091 when it was prepared), and taking one of those would make two different migrations
+  with one number: whichever lost the race would never run. Take the next free number and check both
+  `git log origin/main -- tulmi/supabase/migrations` and the open branches first:
   sessions have collided three times now, and the third one nearly shipped.
 
   **The third collision, and what it teaches.** A call's note and brief was written as a second `0096` while
