@@ -27,6 +27,63 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
+## WHAT IS OFF, AND WHICH KIND OF OFF IT IS (16 Nov)
+
+Fifty-three switches are off and twenty-six are on, which sounds alarming and mostly is not: most of the off ones are
+finished work waiting to be launched. But "off" hides three different things, and only two of them are fixed by a switch.
+
+**AT THE ROOT: `BOTS` IS OFF.** Every bot-shaped thing is behind it — the server reads `bots && cinemaOn()`, and the same
+for the rest — so the cinema, Lingo, the mail bot, the meeting bot and the Oracle are invisible no matter what their own
+switch says. Nothing below matters until this one is on.
+
+### 1. Waiting on a setting, not on code. Nothing to build.
+
+A few features have no switch at all: THE KEY IS THE SWITCH, so they are simply absent until it is set, with nothing
+anywhere saying why. The meeting bot is the live example — `meetOn()` is `Boolean(RECALL_API_KEY)` and the key has not
+been added, so the bot is not listed and never has been.
+
+| Feature | What it needs | How it is gated |
+| --- | --- | --- |
+| The meeting bot | `RECALL_API_KEY`, `RECALL_WEBHOOK_SECRET` | the key IS the switch — **not added yet** |
+| Calls (video and audio) | `SFU_APP_ID` **and** `SFU_APP_SECRET` | without both there are no calls anywhere |
+| The mail bot | `MAIL_WORKER_URL` **and** `MAIL_WORKER_SECRET` | the pair is the switch |
+| Phone calls out | `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`, `PLIVO_FROM_NUMBER` | plus `CHANNEL_PHONE_CALLS` |
+| Media ingest | `MEDIA_WORKER_URL`, `MEDIA_WORKER_SECRET` | plus `MEDIA_INGEST` |
+| Artifacts | `ARTIFACT_VIEWER_URL`, `ARTIFACT_APP_ORIGIN` | plus `ARTIFACTS` |
+| Xode on GitHub | `GITHUB_APP_ID`, `_SLUG`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`, `_WEBHOOK_SECRET` | plus `CODE_GITHUB` |
+| Connectors | `CONNECTOR_TOKEN_KEY`, `CONNECTOR_OAUTH_CLIENTS` | plus `CONNECTORS` |
+| Places, in Discover and the Oracle | `GOOGLE_PLACES_API_KEY` | falls back to no suggestions |
+| Films, pictures and 3D creations | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | without them the bytes are in memory and a restart forgets them |
+
+Known set, because the deploy's own live checks prove it: the Oracle's worker and its model keys, the payments webhook,
+and `OPENROUTER_API_KEY`, which the config requires outright — the server does not start without it.
+
+### 2. Off AND INCOMPLETE. A switch alone will not do it.
+
+These are the ones worth knowing about, because turning them on gives you a feature that draws and does nothing.
+
+* **Lingo — a course cannot get any words.** Everything downstream is built and tested: the scheduler, marking on the
+  server, the seven exercise kinds, the sets, the grader's gestures, the 85-language picker, 165 tests. But words arrive
+  only through `POST /v1/lingo/words`, and **nothing calls it** — not the app, not a screen, and not the bot, which
+  `builtin.ts` says outright has no tools. Switch it on today and you can start a Spanish course with nothing in it. The
+  bot's own description is the answer ("teaches you a language by talking with you"): one tool on the bot, server side.
+  *(The sentence bank is NOT this problem. An empty bank is handled on purpose — the `blank` exercise is skipped and the
+  ladder closes over the gap. Seeding it adds the best exercise kind, a word used in a real sentence, but is optional.)*
+* **Discover — dark by construction.** The engine, the catalogue, the store and its tests are on main, but `ports.discover`
+  is declared and nothing supplies it, so the tools never attach to a bot. Wiring it up is what is left.
+* **The cloud browser — never run against a real site.** Every test uses a fake browser. `CLOUD_BROWSER_SITES` is also
+  inverted from every other list in the config: **empty means NONE**.
+* **The sign-in card is not drawn anywhere.** The server sends it; the desktop app has to draw it. Until then every
+  `FIELD` line ends in a correct plain handover, so nothing is broken — it is just never shown.
+* **The cinema's 3D** is connected as of today, but the deploy that carries Blender has to land before it can render.
+
+### 3. Off on purpose. Nothing is wrong.
+
+Eighteen `PERM_*` switches are phone permissions, held until the stores approve each declaration — background location is
+the one that blocks a `production` Android upload. `DEV_SKIP_AUTH` must stay off. The rest (`PLAN_SHARE`, `SPACES_ENABLED`,
+`HOME_UPDATES`, `WIDGET_DIGEST`, `NATIVE_LOOKS`, `KEYBOARD_SKINS`, `USAGE_*`, `FRONT_DOOR`, `CODE_SCHEDULES`, `BOT_SHOW`,
+`BOTS_SCENES`, `NOTIFY_REPLY`, `DEMO_ENABLED`, `AUTH_GOOGLE_WEB` and the others) are finished features waiting to launch.
+
 **THE CINEMA IS IN, BOTH HALVES, AND THE 3D IS CONNECTED.** The film half merged (migrations 0101 and 0103, and bot
 sessions as 0102); its seven prompts are roles in `roles.ts` with fixtures and known-good answers, so the sweep holds the
 whole bot. The 3D half, which was wired to nothing, now has three doors under the cinema bot's own path
