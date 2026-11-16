@@ -27,6 +27,15 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
+**THE CINEMA IS IN, BOTH HALVES, AND THE 3D IS CONNECTED.** The film half merged (migrations 0101 and 0103, and bot
+sessions as 0102); its seven prompts are roles in `roles.ts` with fixtures and known-good answers, so the sweep holds the
+whole bot. The 3D half, which was wired to nothing, now has three doors under the cinema bot's own path
+(`GET`/`POST /v1/cinema/scenes`, `GET /v1/cinema/scenes/:id`), a creation row a person comes back to (migration 0104,
+`src/cinema/scene/service.ts` and `store.ts`), and Blender in the image behind `WITH_BLENDER=1`, which
+`docker-compose.yml` sets for a deploy and CI leaves off. **`CINEMA` is still off**: nothing is reachable until it is
+switched on, and this box has no graphics card, so a still is seconds to minutes and a moving scene wants their own
+computer or a rented card (`docs/cinema-3d.md`). What follows is how it got here.
+
 **THE CINEMA, TUNED AS FAR AS A MERGE CAN TAKE IT.** `src/cinema/` held the Blender half; the film bot wanted the same
 paths. The 3D is a PART of the cinema bot — its own doc says so — so it took the sub-name: **`src/cinema/scene/` and
 `docs/cinema-3d.md`**, and `src/cinema/` is free for the bot itself. One `CINEMA` switch for both halves; the 3D's keys
@@ -263,10 +272,10 @@ LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
 
 - Migrations: 0087 lingo, 0088 native looks, 0089 lingo sentences, 0090 bot health days, 0091 rooms, 0092 lingo left,
   0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief,
-  0098 a browser that belongs to the person, 0099 discover, 0100 Xode's standing job. **All of these are live.**
-  Next free: **0104** — not 0101, because the unmerged `claude/kind-ptolemy-9f3jlg` already carries 0101, 0102 and 0103
-  (renumbered from 0089/0090/0091 when it was prepared), and taking one of those would make two different migrations
-  with one number: whichever lost the race would never run. Take the next free number and check both
+  0098 a browser that belongs to the person, 0099 discover, 0100 Xode's standing job. **These are live.**
+  Then, merged but NOT yet on the live database: 0101 the cinema's films, 0102 bot sessions, 0103 the cinema's places,
+  0104 the cinema's 3D creations. They go in by themselves on the next deploy, and LIVE_MIGRATION moves to 0104 after.
+  Next free: **0105**. Take the next free number and check both
   `git log origin/main -- tulmi/supabase/migrations` and the open branches first:
   sessions have collided three times now, and the third one nearly shipped.
 
