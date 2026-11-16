@@ -35,17 +35,69 @@ Holds: `tulmi/src/drawn/draw.ts` (new), the `screen_draw` role in `principles/ro
 (`experience/bots/live.ts`), the `!def` branch of `buildBotsScreen` (`experience/bots/index.ts`),
 `tests/screen-draw.test.ts` (18 cases), `docs/screen-draw.md`. No migration.
 
-**Not done, and worth knowing before this is pointed anywhere people visit:** nothing caches it (a screen is
-drawn per request), and it is told nothing but the id and its params — there is no `load` for a screen nobody
+**It is drawn once** (`SCREEN_DRAW_CACHE_MIN`, 60 minutes). What is kept is the BLOCKS, not the built screen, so one
+entry serves a phone and the window both; the key is a hash of the exact message the model was given, which is the
+proof rather than a shortcut — two requests share an answer only where the model would have been asked the very same
+thing, and if that message ever grows to carry the person's own facts the key grows with it. A "nothing to draw" is
+kept for two minutes; a call that FAILED is kept nowhere, so a model down for a moment cannot blank a screen for an
+hour; everyone asking at once gets one call (`guard/coalesce.ts`); and a kept drawing is not held to the money check
+because no call is made for it.
+
+**Not done, and worth knowing before this is pointed anywhere people visit:** it is told nothing but the id and its params — there is no `load` for a screen nobody
 built, so it draws from the id alone and is told to invent no numbers and no names. Vocabulary 1 by
 construction; once `SDUI_V2` is on it could draw to the blocks a client declares (`hasBlock`). The fixtures are
 written but no eval has been run against a real model.
 
-**On raising the context** (asked for in the same breath as this): `CONTEXT_MAX_CHARS` defaults to 2,000 and the
-config already validates up to **8,000**, so four times the person's context block is an env var away with no
-code and no deploy — deliberately NOT changed here, because it raises the input cost of every decide call and
-every run's first step for everyone, which is the owner's call and not a build's. Above 8,000 is a zod `.max()`
-change: setting the env var higher fails validation rather than clamping.
+### 16 Nov: ASK'S LADDER SHARES THE BRAIN'S CIRCUIT BREAKERS (no switch; `docs/code-brain.md`)
+
+There are three doors to a model here — `code/brain/gateway.ts` (Xode and the bots), `pipeline/writing/model.ts` (the
+writer) and `agent/llm.ts` (Ask, the screen bot). Only the first had circuit breakers, so Ask tried a dead model and paid
+the whole of `AGENT_TIMEOUT_MS` on **every step**. It now asks the same breakers first, under the **same keys**
+(`guard/breaker.ts modelBreakerKeys`), so a model whose breaker is open is skipped with no call, and the two doors learn
+from each other: a model the bots have just found dead costs an Ask step nothing, and the other way round.
+
+The key convention moved into `guard/breaker.ts`, the leaf, and the gateway delegates to it, so there is ONE definition.
+It could not be imported from `tiers.ts` (`familyOf`), because tiers.ts imports the planner and the planner imports the
+breakers. An answer is a success; an empty answer, a timeout and a failure are the model's; a caller that stopped says
+nothing and gives its probe back — the gateway's own rules. No `CallRecord` is written for a skip, because no call was
+made (the ledger's outcome column is unchanged), so a skip is one line of the log, as it is in the gateway.
+Two cases in `tests/agent-route.test.ts`: eight failing steps shut the model AND its whole provider, and a ladder nobody
+has failed is untouched.
+
+**A doc that was wrong is fixed too.** `docs/code-brain.md`'s known limits said "calls are not streamed", and the gateway
+has streamed all along (`onText`, `drain()`, `firstTextMs`, `onReset`, and a stopped stream charged for what it used).
+The real gap is narrower and now written down: the gateway voids what was shown and climbs, which is right for a job
+nobody watches and wrong for a caller whose lines are ACTED on as they arrive — `onReset` can un-say words, it cannot
+un-press a button. That one per-call policy is what a full move of `agent/llm.ts` onto the gateway needs first, and it is
+the next step of this work, not a thing that was skipped.
+
+### 16 Nov: RAISING THE CONTEXT ACTUALLY RAISES IT NOW (`docs/context.md` 2a; no switch, default unchanged)
+
+**A correction worth reading.** It was said here that four times the person's context block was one env var away.
+It was not. `CONTEXT_MAX_CHARS` is a CAP, and the section limits (eight facts about them, eight people, four pieces
+of open work, three recent results) are applied BEFORE the cap is measured, while the cap only ever CUTS. So raising
+it bought nothing: the sections never produced more than about 2,000 characters, and a bigger budget was a bigger
+empty room.
+
+The section limits lift with the configured budget now (`context/build.ts forBudget`), to four times at the config's
+own ceiling of 8,000. **At 2,000 every number is exactly what it was**, so nothing changes until somebody raises it;
+`CONTEXT_MAX_CHARS=8000` then gathers four times as much and costs accordingly. Held by `tests/context.test.ts`:
+eight people at the default, twelve with it raised, and the trim order untouched.
+
+The lift reads the CONFIGURED budget and never a caller's own `max` — the configured budget says how much is
+GATHERED, a caller's `max` only CUTS. The first version tied it to the caller's number, which made a smaller `max`
+produce a SHORTER text and so nothing to trim: "just over the cap" stopped being over it, and the trim order's own
+test caught it. Worth keeping in mind for anything else that scales with a budget.
+
+How many asks are KEPT does not scale (`keep.ts TURNS_KEPT`, 6): that is storage, one row per person, so more of
+those is a decision about what is written down rather than what a model is shown. Above 8,000 is still a zod
+`.max()` change; the env var higher than that fails validation rather than clamping.
+
+**One more correction, from reading `agent/llm.ts`:** the gateway's `growing` prompt cache would NOT help Ask. It
+needs messages that only grow at their end, and the planner sends a system block plus ONE user message that is
+rebuilt every step (the run's history is inside it). Its cacheable part is the stable block, which it already marks
+for Anthropic. So Ask's caching is already as good as that mechanism can make it, and the win there is the
+breakers above, not caching.
 
 ### 16 Nov, late: four sessions' branches merged into main
 
