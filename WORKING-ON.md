@@ -9,6 +9,54 @@ look. The apps are renderers: build server data with the existing blocks and cat
 
 ## Landed today (on main, every switch off by default)
 
+### 17 Nov: THE ONE OPEN BLOCK — a conversation can show a thing nobody wrote a block for (`docs/show.md` 1a)
+
+The answer to "a catalogue is never finished". Somebody makes a bot nobody planned for, it needs a component nobody wrote,
+and the answer cannot be "wait for a release". So `show` has a **`part`**: the model names what a thing IS (`role`, any
+words) and **never how it looks**, and `src/show/style.ts` resolves every role — invented ones included — onto a look this
+app already draws and has already tested. **Open at the name, closed at the look**, so nothing can come out off-style,
+because there is no style for it to come out in except ours.
+
+Three kinds cover it: `text` (seven looks), `box` (a plain stack, a row, a card, or a card with a tone) and `control` (a
+button: copy to the clipboard, or send words as if typed). A **copiable snippet**, which no named block can express, is
+three parts composed — and it needed nothing added to either app, because `copyToClipboard` is an action every build
+already honours and five of the app's own screens use it. The window gets `copyText` through the same per-client pattern
+`keysDesk.ts` already uses.
+
+A role resolves in three steps: the table of everything we thought of and its synonyms; the HINTS, which read the shape of
+an invented name (`api_snippet` has `snip` in it, so it is code); then the family's plain look. Deliberately not clever —
+no string distance, no model call, no learning — because a guess that fails is a thing drawn wrong with nobody told, and a
+rule a person can read off the page beats one that is right more often. What a control was GIVEN beats what it was called:
+one named `copy` holding only words to send can only send; one holding neither is not a control and is dropped.
+
+Held by `tests/show-parts.test.ts` (15 cases). The one that matters: a tree of entirely invented roles
+(`deployment_severity`, `incident_headline`, `root_cause_detail`, `failing_command`, `duplicate`) draws with `lintTree`
+clean and the app's own design rules passing.
+
+**A size table was re-anchored, deliberately, and it should be seen rather than slipped past.** `bot_show`'s contract had
+~24 characters of headroom (2,638 measured against a 10%-over-2,420 ceiling), so the open block did not fit. Its
+`prompt-sizes.ts` "before" is now its real pre-`part` size, 2,638, not the 2,420 of its first version — the same treatment
+the cinema's roles were given when they grew by the block they now carry, and it keeps the 10% rule meaning something
+going forward instead of resting on a stale anchor. Measured now: 2,898, ceiling 2,902. It is still tight on purpose.
+
+**XODE'S CHAT DRAWS NOW TOO.** The drawing step ran in one place, `bots/run.ts`, which Xode does not use — its chat is
+its own loop — so the bot most likely to need a copiable command could only write words. It is asked for in
+`code/chat/index.ts` after `converse` and before the thread is kept, and rides on the turn as `s`
+(`code/chat/threads.ts ChatTurn`). Two things differ there, both on purpose:
+
+- **Its `Seen` is empty.** What a Xode turn reads are file paths, not addresses, so the checker's existing "an address
+  this turn read" rule drops every link and picture — a drawing here cannot build an address out of nothing.
+- **The chat draws it `live: false`** (`screens/codeWork/job.ts`), so a control that SENDS words is left out while a copy
+  is drawn on every turn. This chat's Send is not the bots chat's: a `say` would post into the wrong conversation.
+
+Held by `tests/bots-codework.test.ts`: a turn carrying a copiable snippet comes out with the right client's copy action
+and only that one (`copyText` in the window, `copyToClipboard` on the phone), the copy carries the command and not the
+label, and `lintTree` is clean. Its fixture is a `CODEWORK_CHAT_API` of its own rather than the shared one, because
+several tests read the shared one for the EMPTY chat's words — the first attempt changed the shared fixture and broke
+two of them.
+
+**What is left of the reach:** the bot builder draws nothing, so creating a bot still gets no components.
+
 ### 16 Nov: A SCREEN NOBODY BUILT, DRAWN BY A MODEL (`docs/screen-draw.md`, switch `SCREEN_DRAW`, off)
 
 The first place in the app where a MODEL composes a screen rather than a person writing it. An id with no
