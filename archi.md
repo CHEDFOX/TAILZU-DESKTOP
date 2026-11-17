@@ -307,6 +307,7 @@ holds checks of the repository as a whole.
 | Window creation and hardening | `src/main/windows.js`; each `loadFile` in `main.js` and `ask.js` |
 | Dictation hotkey | `main.js` "Dictation toggle", "Hold-to-talk", "The one key"; `src/dictation/oneKey.js`, `tapDetector.js`; `native/tzkey.swift` |
 | Recording | `src/dictation/recorder/` |
+| The wake word ("hey X0") | `src/dictation/wake/wake.js` (the DECISION, tested on its own), wired in `main.js` "hey X0" (`wakeHeard`, `wakeSpeech`, the `wake:*` IPC). Knobs `desktop.wake.*`, **off**. **Nothing listens yet**: a local listener must call `wakeHeard(score)`, which is native work per platform — `wake.js` LISTENER says what it must do and must not |
 | Where the words go | `src/dictation/router.js` (decide), `routing.js` (do; the brain); `main.js` "routing" (`decide`, `needGrant`) |
 | "Add this" (the screen to Plan Ease) | `src/dictation/addThis.js`; `router.js` `pointsAtScreen` (lists `desktop.router.pointsAt`, `notThings`) and the "add this" tasks; `routing.js` `seenFor`, `addedThis` (the pill's Undo); `main.js` `addThis` |
 | The server's notifications (Plan Ease's reminders and notes) | `src/main/notices.js`; `main.js` "The server's notifications on this computer" (`setupNotices`, `noticesCan`); `src/app/live.js` LiveClient (`onReady`, `send`) |

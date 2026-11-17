@@ -1,5 +1,56 @@
 # Being built right now (read before you start)
 
+## 17 Nov: "HEY X0" ON THE COMPUTER — the decision is built and wired; nothing listens yet
+
+The wake word was written down here as "native work in both apps, nobody is building it". On the **computer** that is
+only half true: the window has no store review and updates itself from our own site, so nothing there waits on Apple or
+Google. What it needs is a local listener, and what it needs FIRST is the decision, which is where the mistakes and the
+privacy live. That part is built, tested and wired.
+
+`TAILZU-DESKTOP/src/dictation/wake/wake.js` — the policy alone: no microphone, no model, no Electron, so it can be read
+and argued with. It is handed what a listener thought it heard and what else is going on, and answers whether to start.
+
+- **A word is not enough.** Below `minHeard` nothing happened; at or above `sureHeard` it fires; in between it waits
+  `confirmMs` for SPEECH to follow, because a person who says the name goes on to ask for something and a passing
+  mention on a television usually does not land in that gap.
+- **A brake, because the television wins otherwise.** More than `restAfter` hits inside `watchMs` and it stops listening
+  for `restMs` and says why. Without it a programme that says the name every minute holds the microphone open all
+  evening and drains the battery doing it. Hits too quiet to count never feed the brake, or noise alone would rest it.
+- **Refusals, not settings:** never while a dictation, Ask or a call has the microphone (one microphone, and a wake word
+  that interrupted a dictation would write its own name into what was being said); never in an app that is off limits
+  (money, health, a password field, our own window); never on a locked or sleeping machine; and never at all unless the
+  person turned it on — being allowed the microphone once is not permission to listen all day, so it is its own switch,
+  **off**.
+- **A word waiting for speech is dropped** the moment the microphone goes to something else, and cannot be confirmed
+  late.
+- **Nothing is kept**: counters and a clock, never audio and never a transcript.
+
+**What it starts is a dictation** — the same thing the key starts — because the one key's brain is what decides whether
+what follows is a question about the screen or words for the box in front (`docs/ask-decide.md`). A wake word is the key
+without the key, not a third way in.
+
+Wired in `main.js` ("hey X0"): `wakeHeard(score)`, `wakeSpeech()` and `wake:*` IPC for a listener to call, with the
+machine's state read at the moment of a hit rather than tracked, so nothing can go stale. The app in front is checked
+only once a word is otherwise good enough to act on, because reading it costs a call.
+15 cases in `src/dictation/wake/wake.test.js`; the desktop suite is 1,559 of 1,560.
+
+**What is left, and it is the part that cannot be written here:** the listener. On-device keyword spotting with the
+microphone open and nothing written down — macOS can do it (`SFSpeechRecognizer` with `requiresOnDeviceRecognition`, a
+helper beside `audiotap.swift` and `tzkey.swift`), Windows has `Windows.Media.SpeechRecognition`. `wake.js`'s `LISTENER`
+says what it must do and must not. It could not be built or tested in a Linux container with no microphone, which is why
+it is an interface and not a guess.
+
+**Also found, not fixed:** the desktop's one failing test is real drift, not the side-by-side kind —
+`botLooks.js` is behind the backend's `shared/bots/looks.json` (the cinema and Lingo moments). The fix is
+`node src/botTiles/genStarter.mjs` in `TAILZU-FRONTEND/app`, which writes both copies. Left alone deliberately: it
+touches `app/**`, and a push of that to main publishes an over-the-air update, so it is the owner's to time.
+
+**On "the screen bot should do everything":** the driver is not the limit. `axDriver`/`uiaDriver` already expose every
+ability the planner's verbs use (snapshot, press, click, setValue, focus, scroll, key, open, caret, page, look) — and
+`click` is there and not even offered as a verb. The limit is the **planner's prompt budget: 15 characters**
+(4,889 of 4,904). So "everything" cannot be more verbs at ~60 characters each; it has to be an OPEN vocabulary, the
+`part` move applied to the guide's marks, which costs a handful. Not built yet.
+
 ## 17 Nov: SDUI_V2 IS NOT WAITING ON A STORE BUILD — THE PHONES ALREADY HAVE THE BLOCKS
 
 `docs/renderer.md` section 3 said phones would get the vocabulary-2 blocks "with the next over-the-air update of the new
