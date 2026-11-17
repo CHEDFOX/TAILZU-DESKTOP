@@ -1,5 +1,36 @@
 # Being built right now (read before you start)
 
+## 17 Nov: ONE KEY, ALREADY IN A MEETING — the bot goes in (`docs/meet.md` 4a)
+
+`POST /v1/meet/now { url? }`. Auto-join is the plan made in advance (meetings 11 to 45 minutes away); this is the case a
+person actually asks for — they are IN a meeting, they say "take notes", and the bot has to go now. `/join` wants a link
+pasted into a box, which is no use to somebody who pressed a key mid-meeting.
+
+Three ways, cheapest first: a `url` the caller already has (the window can SEE the screen, so a link read off the meeting
+in front of them beats anything a calendar knows); else the calendar's meeting running NOW (`nowMeeting`, started within
+90 minutes and not more than 10 from starting, nearest start winning when two overlap — at 10:31 they mean the one they
+just joined, not the one they are late leaving); else **it asks**: `409 { code: "meet_which", ask: "link" }` is the key's
+cue to put up a card and call again with the link.
+
+**The asking matters more than the calendar**, which is the correction that shaped this: most people have the link on
+the clipboard already, because they clicked Copy link to get in. So the card can offer that with one button and need no
+typing — which it must, because the guide's window is deliberately never focused and cannot take a keystroke.
+
+**It never guesses which meeting.** A bot sent into the wrong call does not fail quietly: it sits there and takes notes
+of it. No calendar, nothing running, a meeting with no link, a calendar needing a fresh sign-in — all the same ask, none
+of them the person's error. The service's own refusals come straight back: "no minutes left" is not "which meeting".
+
+Our own calls need none of it: the bot takes its seat with the first person in (`rooms/sitIn.ts`), hears each person
+separately through the SFU so who said what is never guessed, and writes the note and the brief. `/now` is for meetings
+somebody else hosts.
+
+Holds: `meet/calendar.ts` (`nowMeeting`, `NOW_LATE_MS`, `NOW_EARLY_MS`), the `/now` route and the `events` dep in
+`routes/bots/meet.ts`, the calendar wired in `server.ts`, 6 cases in `tests/meet-routes.test.ts`. No migration, no switch
+of its own: it rides `MEET`.
+
+**Not built: the card.** The server answers `ask: "link"`; the window has to draw it and offer the clipboard. Desktop
+work, and a desktop build.
+
 ## 17 Nov: THE SCREEN BOT'S MARKS ARE OPEN NOW, AND IT BOUGHT BACK PROMPT BUDGET
 
 The guide could mark the screen with nine things and nothing else: a name nobody listed was DROPPED, so the explanation
