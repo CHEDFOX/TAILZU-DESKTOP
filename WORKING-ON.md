@@ -1,5 +1,28 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE SIGN-IN CARD'S WAYS IN ARE DRAWN IN THE WINDOW (`docs/sign-in.md`)
+
+The server has been able to describe a sign-in page's real boxes and ways in since 15 Nov (`FIELD` / `ALSO` before a
+`HANDOVER`, nothing written per site, every id checked against the screen list). Nothing drew them, so every one of those
+lines ended in a plain handover. **Half of it draws now: the ways in.**
+
+Each `ALSO` is a button on the handover card, and pressing it presses that control on the page
+(`TAILZU-DESKTOP/src/agent/run/agent.js` `handover`, `waysOf`). Pressing one does **not** finish the handover — starting
+a way in is the beginning of their part, not the end — so the card comes back and waits, and only Continue or Stop ends
+it. A press that fails is logged and the card still comes back, because the page is theirs to finish either way. At most
+four, no repeat, nothing without both an id and a label: the window keeps its own cap rather than trusting the server's.
+
+Why this half first: rule S3 exists because people rarely remember WHICH way they signed up with, and a page's own
+buttons are often below the fold or behind "more options". And it needed no decision about anything.
+Three cases in `src/agent/run/agent.test.js`; the desktop suite is 1,562 of 1,563.
+
+**The BOXES are still not drawn, and that is a decision, not an omission.** The guide's window is deliberately never
+focused — the app being worked on keeps the keyboard, and a dictation's paste must still land in it — so it cannot take a
+keystroke, let alone a password. Three ways out, none of them picked: make the window focusable for that one moment and
+hand focus back; a separate window that may take the keyboard; or the cloud browser's panel in a `LiveView`, which both
+clients already have and which never holds the secret itself (each character goes to the real page, and the box is
+emptied before the call goes out). Until one is chosen, every `FIELD` line still ends in a correct plain handover.
+
 ## 17 Nov: ONE KEY, ALREADY IN A MEETING — the bot goes in (`docs/meet.md` 4a)
 
 `POST /v1/meet/now { url? }`. Auto-join is the plan made in advance (meetings 11 to 45 minutes away); this is the case a

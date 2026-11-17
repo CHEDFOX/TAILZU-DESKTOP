@@ -109,6 +109,8 @@ const TERMINAL = new Set(["action", "ask", "done", "error", "look", "approve", "
 const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", "open"]);
 /** Actions that mean nothing without an element. */
 const NEEDS_ID = new Set(["press", "set", "focus"]);
+/** Ways in a handover card may draw (the server caps them at four; this is the window not trusting that). */
+const WAYS_MAX = 4;
 const SCROLL_DIRS = new Set(["up", "down", "left", "right"]);
 
 // ---- the run ----------------------------------------------------------------
@@ -661,6 +663,25 @@ function createAgent(deps) {
    * stopped, for Continue (desktop.agent.handoverMs, 10 minutes by default),
    * then reads the screen afresh and goes on. Stop, or no answer, ends it.
    */
+  /**
+   * A handover card's ways in, as the card may draw them: an element id of this screen and a label, at most WAYS_MAX.
+   * The server has already checked each id against the screen list and dropped the rest (docs/sign-in.md), so this only
+   * guards the shape — a card from an older or stranger server must not be able to put a button with no id on it.
+   */
+  function waysOf(card) {
+    const list = card && typeof card === "object" && Array.isArray(card.also) ? card.also : [];
+    const out = [];
+    for (const w of list) {
+      if (!w || typeof w !== "object") continue;
+      const id = typeof w.id === "string" ? w.id.trim() : "";
+      const label = typeof w.label === "string" ? squash(w.label).trim() : "";
+      if (!id || !label || out.some((p) => p.id === id)) continue;
+      out.push({ id, label: clip(label, 40) });
+      if (out.length >= WAYS_MAX) break;
+    }
+    return out;
+  }
+
   async function handover(run, ev) {
     const text = clip(squash(ev.text), 240) || TEXT.handover;
     const showCard = guide && guide.approve;
@@ -669,17 +690,48 @@ function createAgent(deps) {
     clearTimeout(run.deadlineTimer);
     run.deadline = Infinity;
     tell(run, "say", text, sayOpts(""));
-    const card = {
-      title: TEXT.yourTurn, app: appLabel(run), label: "", preview: text, note: TEXT.handoverNote,
-      buttons: [{ id: "approve", label: TEXT.handoverGo }, { id: "deny", label: TEXT.handoverStop }],
-    };
-    const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (v === "approve" ? "go" : ""), (e) => {
-      log(`agent ${run.tag}: guide.approve failed: ${errText(e)}`);
-      return "";
-    });
-    const answer = await race(run, within(asked, num("desktop.agent.handoverMs", 10 * 60000), ""));
-    if (!alive(run) || answer === ABORTED) return null;
-    if (answer !== "go") { log(`agent ${run.tag}: handover not continued`); finish(run, "done", TEXT.handoverStopped); return null; }
+    /**
+     * THE WAYS IN THE PAGE ITSELF OFFERS (docs/sign-in.md, the planner's ALSO lines): "Continue with Google",
+     * "Use email instead". Each is a real control on THIS screen, checked by the server against the screen list before it
+     * ever reaches us, so its button simply PRESSES it.
+     *
+     * Why they are worth drawing at all: rule S3 exists because people rarely remember WHICH way they signed up with, and
+     * the page's own buttons may be below the fold or behind a "more options". The card puts the page's real choices in
+     * front of them.
+     *
+     * Pressing one does NOT finish the handover: starting a way in is the beginning of their part, not the end of it. So the
+     * card comes back and waits, and only Continue or Stop ends this. A press that fails is logged and the card still comes
+     * back, because the page is theirs to finish either way.
+     *
+     * The BOXES of the card (`fields`) are not drawn here. This window is deliberately never focused — the app being worked
+     * on keeps the keyboard, and a paste must still land in it (`ask.js`, "THE PILL'S RECIPE") — so it cannot take a
+     * keystroke, let alone a password. Those need a surface that can, and that is a decision, not an omission.
+     */
+    const ways = waysOf(ev.card);
+    let answer = "";
+    for (;;) {
+      const card = {
+        title: TEXT.yourTurn, app: appLabel(run), label: "", preview: text, note: TEXT.handoverNote,
+        buttons: [
+          ...ways.map((w) => ({ id: `way:${w.id}`, label: w.label })),
+          { id: "approve", label: TEXT.handoverGo }, { id: "deny", label: TEXT.handoverStop },
+        ],
+      };
+      const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (typeof v === "string" ? v : ""), (e) => {
+        log(`agent ${run.tag}: guide.approve failed: ${errText(e)}`);
+        return "";
+      });
+      answer = await race(run, within(asked, num("desktop.agent.handoverMs", 10 * 60000), ""));
+      if (!alive(run) || answer === ABORTED) return null;
+      if (!answer.startsWith("way:")) break;
+      const id = answer.slice(4);
+      const pressed = await race(run, drive("press", id));
+      if (!alive(run) || pressed === ABORTED) return null;
+      const ok = !!(pressed && pressed.ok);
+      log(`agent ${run.tag}: handover way in ${id} ${ok ? "pressed" : `failed (${(pressed && pressed.error) || "no answer"})`}`);
+      pushHistory(run, { did: "HANDOVER", result: ok ? "ok" : "failed", note: `started a way in (${id})` });
+    }
+    if (answer !== "approve") { log(`agent ${run.tag}: handover not continued`); finish(run, "done", TEXT.handoverStopped); return null; }
     log(`agent ${run.tag}: handover continued`);
     // Their part may have changed everything: the screen is read again before the next step.
     const after = await race(run, takeSnapshot());
