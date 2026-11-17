@@ -1,5 +1,28 @@
 # Being built right now (read before you start)
 
+## 17 Nov: SDUI_V2 IS NOT WAITING ON A STORE BUILD — THE PHONES ALREADY HAVE THE BLOCKS
+
+`docs/renderer.md` section 3 said phones would get the vocabulary-2 blocks "with the next over-the-air update of the new
+store build", which reads as a store build being the gate. **It is not, and it never was.** Checked today:
+
+- `bfe4404` ("The phone renderer draws screen vocabulary 2") touched **31 files, every one under `app/src`** — no native
+  file, no `app.config.ts`, no `native-inputs.lock`. So the runtime label never moved from `tailzu-2026-11-x0-blip`.
+- `eas-release.yml`'s `update` job runs `if: … (github.event_name == 'push' || inputs.update)` and only skips the send
+  when the push touched a native file. Runs **131 to 139** were all pushes to main and all succeeded, including
+  `cba544d` on 14 Nov 21:59, which was JavaScript only. Run 140's own message says it plainly for the other case:
+  "Native, so it reaches phones in the next store build, not over the air."
+
+So **every phone on that runtime has the blocks**, and the phone side of `SDUI_V2` is already done.
+
+**The window is the one that still needs something, and it is not a store either.** It updates itself in place from our
+own site (`TAILZU-DESKTOP/src/main/updater.js`: download, SHA-512 against what the publish recorded, replace, restart).
+Its version has not moved since `af74cd7` ("The window draws screen vocabulary 2") landed — still 0.4.7 — so a build
+carrying the blocks has to be **published** for installs to pick them up.
+
+**What is actually left before `SDUI_V2` can go on:** publish a desktop build, then stage with `SDUI_V2_USERS`, then the
+switch. Nothing is waiting on Apple or Google. Worth knowing because the stale line had this looking weeks away when the
+phone half was finished on 14 November.
+
 Updated 16 Nov 2026, 14:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
