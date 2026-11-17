@@ -1,5 +1,39 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE SCREEN BOT'S MARKS ARE OPEN NOW, AND IT BOUGHT BACK PROMPT BUDGET
+
+The guide could mark the screen with nine things and nothing else: a name nobody listed was DROPPED, so the explanation
+pointed at nothing while the words carried on as if it were there, and nobody was told. A model explaining something
+reaches for "outline", "emphasise", "callout", "frame", "trace" all the time.
+
+Now an unlisted name is read for its SHAPE and drawn as a mark this app already has (`agent/lines.ts markOf`):
+`OUTLINE` and `FRAME` are a box, `EMPHASISE` a highlight, `ENCIRCLE` a circle, `CAPTION` a label, `ORDER` a number,
+`STRIKE` an underline, and a name it cannot read at all becomes the plainest mark there is — never nothing.
+**Open at the name, closed at the mark**, the same rule as a drawing's roles (`src/show/style.ts`). The window and the
+phone already draw all nine, so an invented name needs nothing shipped.
+
+**This is not the leniency the file's own header refuses.** "A mark that fails is dropped, never guessed at" is about
+its TARGET: an id must be one really on this screen, a picture spot only on a step that has one. That stays exactly as
+strict, and the tests still hold it. What degrades is how the mark LOOKS, which is ours to choose and never theirs.
+`clear` and `arrow` are never guessed at: one wipes what is on the screen, the other needs two ends, and a wrong guess
+at either is worse than a box round the thing.
+
+**AND IT PAID FOR ITSELF.** Eight lines of contract, one per kind, became one open line plus a short second. The
+planner's stable block went from **4,889 to 4,846 against its 4,904 budget — 15 characters of headroom became 58.** So
+the thing this file has been warning about ("the next line anyone adds will fail that test") is less tight than it was,
+and it got less tight by becoming more capable, which is the opposite of what more verbs would have done.
+
+The picture path gets it for nothing: `parseDraw` is shared, so a mark invented while reading a chart resolves the same
+way. Held by `tests/agent-draw.test.ts` (32 cases), including that a prototype name (`constructor`, `toString`) is still
+not a kind and lands on the fallback, and that `__proto__` is not even a name.
+
+**What this does NOT do, and it is the honest half of "show things on the screen":** the guide's CARD is still closed.
+It draws a state, words, the steps and a confirm. It cannot show a table, a copiable command, a comparison or a chart —
+the things `src/show` draws in a chat, including the open `part`. The card is its own renderer in `guide/card.js` (DOM
+and canvas), not the SDUI kit, so `showNodes` cannot be pointed at it. The way in is a short verb on the planner (which
+there is now budget for) that asks for a showing, with the existing `bot_show` role turning the answer into blocks and
+`guide/card.js` learning to draw them. That is the next piece, and it is a desktop build, not a server deploy.
+
 ## 17 Nov: "HEY X0" ON THE COMPUTER — the decision is built and wired; nothing listens yet
 
 The wake word was written down here as "native work in both apps, nobody is building it". On the **computer** that is
