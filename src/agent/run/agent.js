@@ -111,6 +111,8 @@ const ACTION_KINDS = new Set(["press", "set", "type", "key", "scroll", "focus", 
 const NEEDS_ID = new Set(["press", "set", "focus"]);
 /** Ways in a handover card may draw (the server caps them at four; this is the window not trusting that). */
 const WAYS_MAX = 4;
+/** Boxes a handover card may draw (the server caps them at six; this is the window not trusting that). */
+const FIELDS_MAX = 6;
 const SCROLL_DIRS = new Set(["up", "down", "left", "right"]);
 
 // ---- the run ----------------------------------------------------------------
@@ -682,6 +684,50 @@ function createAgent(deps) {
     return out;
   }
 
+  /** A handover card's boxes, as the card may draw them. The server checked each id against the screen list already. */
+  function fieldsOf(card) {
+    const list = card && typeof card === "object" && Array.isArray(card.fields) ? card.fields : [];
+    const out = [];
+    for (const f of list) {
+      if (!f || typeof f !== "object") continue;
+      const id = typeof f.id === "string" ? f.id.trim() : "";
+      const label = typeof f.label === "string" ? squash(f.label).trim() : "";
+      if (!id || !label || out.some((p) => p.id === id)) continue;
+      out.push({ id, kind: typeof f.kind === "string" ? f.kind : "text", label: clip(label, 48) });
+      if (out.length >= FIELDS_MAX) break;
+    }
+    return out;
+  }
+
+  /**
+   * WHAT THEY TYPED, INTO THE PAGE, AND GONE.
+   *
+   * The values are theirs: a password, a code, an address they use on that site. They go into the page's own fields by
+   * the ids the card named — which the server checked against the screen list — and are not logged, not put in the run's
+   * history, and not kept here. The log says WHICH box was filled and never what went in it.
+   *
+   * The app they were in gets the keyboard back first (`open`), because this window had to take it to be typed into and
+   * a field cannot be set in an app that is behind. A box that will not take its value is said in the log and the rest
+   * still go: half a form filled is better than none, and they can finish it themselves.
+   */
+  async function fill(run, fields, values) {
+    const got = values && typeof values === "object" ? values : {};
+    if (!fields.length) return true;
+    // The app they were in, by its own name (run.app), not the card's label, which may carry a page title too.
+    const app = clip(squash(run.app || run.firstApp || ""), 60);
+    const back = app ? await race(run, drive("open", app)) : null;
+    if (back === ABORTED) return ABORTED;
+    for (const f of fields) {
+      const v = typeof got[f.id] === "string" ? got[f.id] : "";
+      if (!v) continue;
+      const r = await race(run, drive("setValue", f.id, v));
+      if (r === ABORTED) return ABORTED;
+      log(`agent ${run.tag}: handover filled ${f.id} ${r && r.ok ? "ok" : `failed (${(r && r.error) || "no answer"})`}`);
+    }
+    pushHistory(run, { did: "HANDOVER", result: "ok", note: `filled ${fields.length} box${fields.length === 1 ? "" : "es"} they typed` });
+    return true;
+  }
+
   async function handover(run, ev) {
     const text = clip(squash(ev.text), 240) || TEXT.handover;
     const showCard = guide && guide.approve;
@@ -708,22 +754,42 @@ function createAgent(deps) {
      * keystroke, let alone a password. Those need a surface that can, and that is a decision, not an omission.
      */
     const ways = waysOf(ev.card);
+    const fields = fieldsOf(ev.card);
+    // X0 Bot's own browser, the way the phone signs a site in: a real page in our own browser, signed in once and kept
+    // (docs/sites.md). Offered only where this computer can open it, and only on a sign-in — never for a payment.
+    const canBrowser = typeof d.openPanel === "function" && (ev.why === "login" || ev.why === "code");
     let answer = "";
     for (;;) {
       const card = {
         title: TEXT.yourTurn, app: appLabel(run), label: "", preview: text, note: TEXT.handoverNote,
+        ...(fields.length ? { fields } : {}),
         buttons: [
           ...ways.map((w) => ({ id: `way:${w.id}`, label: w.label })),
+          ...(canBrowser ? [{ id: "browser", label: TEXT.handoverBrowser }] : []),
           { id: "approve", label: TEXT.handoverGo }, { id: "deny", label: TEXT.handoverStop },
         ],
       };
-      const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (typeof v === "string" ? v : ""), (e) => {
+      // A string is a button's id; an object is Continue carrying what was typed into the card's boxes.
+      const asked = Promise.resolve().then(() => showCard.call(guide, card)).then((v) => (typeof v === "string" || (v && typeof v === "object") ? v : ""), (e) => {
         log(`agent ${run.tag}: guide.approve failed: ${errText(e)}`);
         return "";
       });
       answer = await race(run, within(asked, num("desktop.agent.handoverMs", 10 * 60000), ""));
       if (!alive(run) || answer === ABORTED) return null;
-      if (!answer.startsWith("way:")) break;
+      // Continue, with whatever was typed into the card's boxes.
+      if (answer && typeof answer === "object") {
+        const put = await fill(run, fields, answer.values);
+        if (put === ABORTED || !alive(run)) return null;
+        answer = "approve";
+        break;
+      }
+      if (answer === "browser") {
+        // Their part moves to our own browser. The card stays up: they come back and press Continue when they are in.
+        try { d.openPanel(); } catch (e) { log(`agent ${run.tag}: openPanel failed: ${errText(e)}`); }
+        pushHistory(run, { did: "HANDOVER", result: "ok", note: "sent them to X0 Bot's browser" });
+        continue;
+      }
+      if (typeof answer !== "string" || !answer.startsWith("way:")) break;
       const id = answer.slice(4);
       const pressed = await race(run, drive("press", id));
       if (!alive(run) || pressed === ABORTED) return null;

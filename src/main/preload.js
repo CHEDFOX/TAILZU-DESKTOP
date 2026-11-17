@@ -158,7 +158,12 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   confirm: (yes) => ipcRenderer.send("guide:confirm",
     yes === "edit" || yes === "deny" ? yes
       : typeof yes === "string" && /^[a-z][a-z0-9:_-]{0,15}$/.test(yes) ? yes
-        : !!yes),
+        // A sign-in card answers with what was typed into it: { id, values }. The values are the person's own words for
+        // the page's boxes and are passed straight through — never logged here, and never kept after the main process
+        // has set them into the page.
+        : yes && typeof yes === "object" && typeof yes.id === "string" && yes.values && typeof yes.values === "object"
+          ? { id: yes.id, values: yes.values }
+          : !!yes),
   // The picture card's answer: "once", "always" (for this app) or "no".
   permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),

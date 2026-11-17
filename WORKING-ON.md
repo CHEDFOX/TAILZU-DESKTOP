@@ -1,5 +1,34 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE SIGN-IN CARD IS WHOLE — boxes, ways in, and a way out to our own browser
+
+**The boxes.** The card draws the page's real fields, named in the person's own language. A secret and a code are hidden
+as typed (rule S5), `autocomplete="off"` so the browser is never asked to treat our card as the site's page, and nothing
+is remembered: the values live in the inputs, cross once on Continue, and go with the card.
+
+**The one moment the window takes the keyboard.** It is never focusable otherwise, and that flag is load-bearing — the
+app being worked on keeps the keyboard, and a dictation's paste must land in it. So `ask.js` turns it on while a card
+with boxes is up and off again in a **`finally`**, where a thrown or cancelled card cannot leave the window able to
+steal the next keystroke.
+
+**Then the app first, the boxes after.** On Continue the agent gives the keyboard back to the app they were in before
+setting anything, because a field cannot be set in an app that is behind. Each box is set by the id the CARD named, so a
+value for an id it did not name is ignored. **What they typed is not logged and never enters the run's history** — the
+log says which box was filled, never what went in it, and a test holds that a password and an address appear nowhere in
+what is sent.
+
+**And a way out of all of it:** a sign-in handover offers **"Sign in in X0 Bot's browser"**, which opens the Sites list —
+the same flow the phone uses. They sign in on a real page in our own browser, which keeps the session; the card stays up
+and they press Continue when they are in. It opens the LIST, not a panel at a guessed address, because the window knows
+the site in front only by its display name ("Swiggy") and never its domain — `https://Swiggy/` is not a page.
+
+Three more cases in `agent.test.js` (the fill order and that nothing typed is sent; the browser button offered on a
+sign-in and keeping the card up; a card's boxes carried with their kinds). **1,565 of 1,566.**
+
+**Still no test for the card's own drawing**, and that is the standing risk here: `src/agent/guide/` has none and
+`node --test` has no DOM. **`guide.html?demo=signIn`** now draws the whole thing still — two boxes, three ways in, the
+browser button, Continue and Stop — and that is the only way to see it.
+
 ## 17 Nov: THE WAYS IN WERE BROKEN THREE WAYS, AND THE GUIDE'S RENDERER HAS NO TESTS
 
 Reported here as done. It was not. Three separate faults, each in a layer the tests do not reach, found by reading the

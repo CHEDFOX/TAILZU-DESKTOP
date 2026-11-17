@@ -264,10 +264,15 @@ function runDemo(scene) {
           title: "Your turn", app: "Chrome: Swiggy", label: "",
           preview: "Swiggy wants you to sign in. Do it, then press Continue.",
           note: "I don't type passwords, codes or card details. I'll carry on when you press Continue.",
+          fields: [
+            { id: "e14", kind: "phone", label: "Phone number" },
+            { id: "e21", kind: "code", label: "The code they texted you" },
+          ],
           buttons: [
             { id: "way:e30", label: "Continue with Google" },
             { id: "way:e31", label: "Continue with Apple" },
             { id: "way:e32", label: "Use email instead" },
+            { id: "browser", label: "Sign in in X0 Bot's browser" },
             { id: "approve", label: "Continue" }, { id: "deny", label: "Stop" },
           ],
         },

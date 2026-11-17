@@ -137,7 +137,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
-    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page,
+    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page, openPanel: o.openPanel,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -3362,7 +3362,7 @@ test("handover: the page's own ways in are buttons that press them, and the card
   assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", "Downloaded."]);
 });
 
-test("handover: a card with no ways in is the two buttons it always was, and the boxes are never drawn", async () => {
+test("handover: a card with no ways in keeps its two buttons, and carries its boxes with their kinds", async () => {
   const LOGIN = snap([{ id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] }]);
   const only = { fields: [{ id: "e7", kind: "secret", label: "Password" }] };
   const cards = [];
@@ -3370,9 +3370,55 @@ test("handover: a card with no ways in is the two buttons it always was, and the
   r.guide.approve = async (c) => { cards.push(c); return "deny"; };
   r.agent.begin({ app: "Bank" });
   await r.agent.heard(AUDIO);
-  assert.deepStrictEqual(cards[0].buttons.map((b) => b.id), ["approve", "deny"]);
-  // This window is never focused, so it cannot take a keystroke: a card here draws no box to type a password into.
-  assert.strictEqual(JSON.stringify(cards[0]).includes("Password"), false);
+  assert.deepStrictEqual(cards[0].buttons.map((b) => b.id), ["approve", "deny"], "no ways in and no browser offered without openPanel");
+  // The box goes with the card now, kind and all, so the renderer can hide a secret as it is typed (rule S5).
+  assert.deepStrictEqual(cards[0].fields, [{ id: "e7", kind: "secret", label: "Password" }]);
+});
+
+/**
+ * WHAT THEY TYPED, INTO THE PAGE, AND GONE. The card hands back { id: "approve", values }; the app they were in gets the
+ * keyboard back first, then each box is set by the id the card named. Nothing typed reaches the log or the history.
+ */
+test("handover: Continue with typed boxes gives the app back the keyboard, then fills them", async () => {
+  const LOGIN = snap([
+    { id: "e7", role: "field", label: "Email", frame: [300, 200, 200, 30] },
+    { id: "e8", role: "field", label: "Password", frame: [300, 240, 200, 30] },
+  ]);
+  const IN = snap([EXPORT, HEADING]);
+  const card = { fields: [{ id: "e7", kind: "email", label: "Email" }, { id: "e8", kind: "secret", label: "Password" }] };
+  const scripts = [
+    [heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in.", card }],
+    [heardDo("sign me in"), press("e1")],
+    [{ t: "done", text: "In." }],
+  ];
+  const r = rig({ snaps: [LOGIN, IN], scripts });
+  r.guide.approve = async () => ({ id: "approve", values: { e7: "aanya@example.in", e8: "hunter2", e9: "not a box on this card" } });
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [
+    ["open", "Bank"],
+    ["setValue", "e7", "aanya@example.in"],
+    ["setValue", "e8", "hunter2"],
+    ["press", "e1"],
+  ], "the app first, then each box the CARD named, and nothing else");
+  // Neither what they typed nor its length is anywhere in what the run remembers or sends.
+  const sent = JSON.stringify(r.post.reqs());
+  assert.strictEqual(sent.includes("hunter2"), false);
+  assert.strictEqual(sent.includes("aanya@example.in"), false);
+});
+
+test("handover: X0 Bot's own browser is offered on a sign-in, and keeps the card up", async () => {
+  const LOGIN = snap([{ id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] }]);
+  const card = { fields: [{ id: "e7", kind: "secret", label: "Password" }] };
+  const opened = [];
+  const cards = [];
+  const r = rig({ snaps: [LOGIN], scripts: [[heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in.", card }]], openPanel: () => { opened.push(1); } });
+  r.guide.approve = async (c) => { cards.push(c); return cards.length === 1 ? "browser" : "deny"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.ok(cards[0].buttons.some((b) => b.id === "browser"), "offered on a login");
+  assert.strictEqual(opened.length, 1);
+  assert.strictEqual(cards.length, 2, "the card comes back: they sign in there and press Continue here");
 });
 
 test("handover: a way in with nothing usable on it is not drawn, and the same id is not drawn twice", async () => {

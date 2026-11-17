@@ -3158,6 +3158,15 @@ function setupAsk() {
   if (ask) return;
   ask = createAsk({
     BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt },
+    /**
+     * THEIR PART, MOVED TO X0 BOT'S OWN BROWSER — the way the phone signs a site in (docs/sites.md). A sign-in handover
+     * offers it, and this opens the app at that panel: a real page in our browser, signed in once and kept, so what is
+     * typed goes to the site itself and never through us. The site is read off the window in front; without one the
+     * It opens the SITES LIST, not a panel at a guessed address: the window knows the site in front only by its display
+     * name ("Swiggy"), never its domain, and `https://Swiggy/` is not a page. The list's own Sign in button carries the
+     * real address, so the person picks the site there and lands in our browser at the right place.
+     */
+    openPanel: () => { openAppWindow({ screenId: "bots.sites", params: {} }); },
     // The guide's window is raised under the pill, not over it (raiseGuide).
     webPrefs, hardenWindow, raisePill: raiseGuide, setBoundsExactly,
     // The question's card grows out of the pill, and the pill follows its

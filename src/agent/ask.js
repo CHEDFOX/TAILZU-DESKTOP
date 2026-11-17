@@ -434,6 +434,18 @@ function createAsk(ctx) {
   /** The ids the card on screen may answer with, besides its main button and the two named ones (approve/deny/edit). */
   let cardButtons = new Set();
 
+  /**
+   * THE ONE MOMENT THIS WINDOW MAY TAKE THE KEYBOARD: a card with boxes to type into. Off again the moment it is
+   * answered. `setFocusable` is the whole of it on Windows and Linux; on a Mac a panel also has to be told it may become
+   * the key window, which `setFocusable` does. Giving focus BACK to the app they were in is the caller's (agent.js uses
+   * the driver's `open`), because only it knows which app that was.
+   */
+  function keyboard(on) {
+    if (!win || win.isDestroyed()) return;
+    try { win.setFocusable(!!on); } catch { /* a platform that cannot: the boxes simply will not take a key */ }
+    if (on) { try { win.focus(); } catch { /* not focusable here */ } }
+  }
+
   function holdCard(message, pick, silent) {
     if (confirmWait) confirmWait(false);
     phaseTo("showing");
@@ -544,12 +556,27 @@ function createAsk(ctx) {
       const text = (v, n) => String(v == null ? "" : v).slice(0, n);
       // Six, not three: a sign-in card draws the page's own ways in (up to four) beside Continue and Stop.
       const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 6).map((b) => ({ id: text(b && b.id, 16), label: text(b && b.label, 40) }));
+      /**
+       * THE BOXES OF A SIGN-IN CARD, and the one moment this window may take the keyboard.
+       *
+       * It is never focusable otherwise, and that is load-bearing: the app being worked on keeps the keyboard, and a
+       * dictation's paste must land in it (the pill's recipe, above). A card with boxes is the one thing that cannot work
+       * that way, so the window is made focusable while it is up and put back the moment it is answered — in a `finally`,
+       * so a thrown or cancelled card cannot leave the window able to steal the next keystroke.
+       *
+       * Nothing typed is kept here: the values pass through to the caller, which sets them into the page and drops them.
+       */
+      const fields = (Array.isArray(c.fields) ? c.fields : []).slice(0, 6)
+        .map((f) => ({ id: text(f && f.id, 16), kind: text(f && f.kind, 8), label: text(f && f.label, 48) }))
+        .filter((f) => f.id && f.label);
       // Which ids this card may answer with, for the guard in `guide:confirm`. Replaced per card, never added to.
       cardButtons = new Set(buttons.map((b) => b.id).filter((id) => id && id !== "approve" && id !== "deny" && id !== "edit"));
-      return holdCard({
+      if (fields.length) keyboard(true);
+      const done = holdCard({
         type: "confirm", text: "", risk: "confirm",
-        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons },
-      }, (v) => (v === true ? "approve" : typeof v === "string" && v ? v : ""), "");
+        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons, ...(fields.length ? { fields } : {}) },
+      }, (v) => (v === true ? "approve" : v && typeof v === "object" && v.id ? v : typeof v === "string" && v ? v : ""), "");
+      return fields.length ? done.finally(() => keyboard(false)) : done;
     },
     hide() { hide(); },
     // A button on the finished card for what stopped the answer: only
@@ -991,6 +1018,8 @@ function createAsk(ctx) {
     // "This computer": the person's own files, done here by localfiles.js and
     // only inside the usual folders, Downloads, Desktop and Documents (main.js hands it in).
     device: ctx.device,
+    // Their part moved to X0 Bot's own browser, on a sign-in handover (main.js openPanel).
+    ...(typeof ctx.openPanel === "function" ? { openPanel: ctx.openPanel } : {}),
     // The whole page in front for step 0 (src/context/pageRead.js, handed in by main.js).
     ...(typeof ctx.page === "function" ? { page: ctx.page } : {}),
     // The server's confirm card's buttons: a task's yes or no, with the
@@ -1303,6 +1332,8 @@ function createAsk(ctx) {
   ipcMain.on("guide:confirm", (e, yes) => {
     if (!fromGuide(e) || !confirmWait) return;
     if (yes === "edit" || yes === "deny") { confirmWait(yes); return; }
+    // A sign-in card's answer carries what was typed: { id, values }. Only the main button may carry them.
+    if (yes && typeof yes === "object" && yes.id === "approve") { confirmWait({ id: "approve", values: yes.values }); return; }
     if (typeof yes === "string" && yes) { if (cardButtons.has(yes)) confirmWait(yes); return; }
     confirmWait(!!yes);
   });

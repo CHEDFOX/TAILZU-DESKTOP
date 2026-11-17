@@ -176,6 +176,7 @@ const handlers = {
       $("edit").hidden = !by("edit");
       $("no").textContent = String((by("deny") || {}).label || "");
       setWays(Array.isArray(c.buttons) ? c.buttons : []);
+      setFields(Array.isArray(c.fields) ? c.fields : []);
       setState("confirm", String(c.title || ""));
       fit();
       return;
@@ -183,6 +184,7 @@ const handlers = {
     $("note").hidden = true;
     $("edit").hidden = true;
     setWays([]);
+    setFields([]);
     const [what, quote] = splitConfirm(m.text);
     $("what").textContent = what;
     $("quote").textContent = quote;
@@ -220,6 +222,48 @@ bridge.onGuide((m) => { if (m && handlers[m.type]) { try { handlers[m.type](m); 
  * Each sends its own id back, which the main process matches against the buttons it sent (ask.js `cardButtons`), so a
  * press answers as itself and not as the main button.
  */
+/**
+ * THE BOXES OF A SIGN-IN CARD (docs/sign-in.md's FIELD lines): the page's real fields, named in the person's own
+ * language, filled here and set into the page by the main process.
+ *
+ * A secret and a one-time code are `type="password"` — hidden as typed, as rule S5 says — and nothing is remembered: the
+ * values live in the inputs until Continue is pressed, go across once, and the inputs are dropped with the card. No
+ * autofill or password manager is asked for (`autocomplete="off"`), because this is not the site's own page and should
+ * never look to the browser like it is.
+ */
+function setFields(fields) {
+  const box = $("fields");
+  box.textContent = "";
+  const own = fields.filter((f) => f && typeof f.id === "string" && f.id && f.label).slice(0, 6);
+  box.hidden = !own.length;
+  for (const f of own) {
+    const row = document.createElement("label");
+    row.className = "f";
+    const name = document.createElement("span");
+    name.textContent = String(f.label);
+    const input = document.createElement("input");
+    input.type = f.kind === "secret" || f.kind === "code" ? "password" : f.kind === "email" ? "email" : f.kind === "phone" ? "tel" : "text";
+    if (f.kind === "code") { input.inputMode = "numeric"; }
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.dataset.id = String(f.id);
+    input.maxLength = 200;
+    row.append(name, input);
+    box.appendChild(row);
+  }
+  if (own.length) requestAnimationFrame(() => { const first = box.querySelector("input"); if (first) first.focus(); });
+}
+
+/** What was typed, by the page's element id. Read once, on Continue; nothing is held between cards. */
+function fieldValues() {
+  const out = {};
+  for (const el of $("fields").querySelectorAll("input")) {
+    const id = el.dataset.id;
+    if (id && el.value) out[id] = el.value;
+  }
+  return out;
+}
+
 function setWays(buttons) {
   const row = $("ways");
   row.textContent = "";
@@ -245,7 +289,14 @@ const press = (id, fn) => $(id).addEventListener("pointerdown", (e) => {
   e.preventDefault();
   fn();
 });
-press("yes", () => { if (S.state !== "confirm") return; bridge.confirm(true); setState("doing"); fit(); });
+press("yes", () => {
+  if (S.state !== "confirm") return;
+  // A card with boxes answers with what was typed into them; any other answers as it always did.
+  const box = $("fields");
+  bridge.confirm(box.hidden ? true : { id: "approve", values: fieldValues() });
+  setState("doing");
+  fit();
+});
 // On the server's card Not now and Edit are answers of their own (the agent
 // calls the route each names); on any other it is a plain no.
 press("no", () => { if (S.state !== "confirm") return; bridge.confirm(S.server ? "deny" : false); setState("doing"); fit(); });
