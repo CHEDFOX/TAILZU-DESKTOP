@@ -426,6 +426,146 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
+**A SWITCH PER BOT: `BOTS_OFF`** (17 Nov). The slugs not to list, comma separated. Until now the control was uneven —
+Xode, Keylessbord, Plan Ease, Travel and Talk were listed the moment `BOTS` was on with no switch at all, Lingo and
+the cinema had their own, and the Oracle, the mail bot and the meeting bot were gated by whether their service was
+set up. This reaches all of them.
+
+* **A deny list, not an allow list**, unlike `CONNECTORS_ENABLED_IDS`, and for a reason: every connector ships
+  disabled, but five bots ship listed. An allow list would mean that naming one bot to switch it on silently
+  switched off the ones already there — turning the cinema on and losing Xode.
+* **The last word, not the only one.** A bot must be available before this can hide it; naming one that is not does
+  nothing. Those switches say "this is set up", this says "and I want it listed".
+* **Hiding a bot does NOT free its name.** `isBuiltinSlug` is deliberately not filtered, so nobody can take "travel"
+  while the Travel bot is off and collide with it the day it comes back. There is a test for exactly that.
+* Read in `defs()`, the one place every listing goes through, so a built-in added later is covered without anybody
+  remembering to.
+
+**HOME IS ONE BOT A ROW ON THE PHONE** (17 Nov). `tiles(ctx, 1, 104, 16, …)` — two columns of 132 gave the phone FOUR
+slots, three bots and "Make a bot", so with five built-ins alone most bots were chips under a "More bots" label. One
+column is full-width rows and everything fits.
+
+**Only the width changed.** It is the same living tile at a different shape: the same Blip playing on it in the bot's
+colour, the same tap (the tile presses in, the cloth is drawn under the finger, that bot perks up and every other bot
+turns its head to it), the same moments and the same engine. `columns` was always a parameter of `BotTiles`, and the
+app already honoured it — `const cols = Math.max(1, Number(props?.columns) || 2)` — so this is server side alone, no
+app change. (The first answer given here was that it needed one: that was from looking only at `strip`, which is one
+full-width row and singular. `columns: 1` was the whole of it.)
+
+* **104, not 132**: a wide row needs less height to give its bot somewhere to play, and seven rows of 132 is three
+  screens of scrolling.
+* **`HOME_TILES = 8`** is the cap, and it is not a layout number — each row is a LIVING bot the app keeps for its
+  lifetime, so it is how many animate at once. Past it they are chips, which `moreBots` already did and which now
+  draws nothing, because nothing is left over.
+* **`emptyHome` changed with it.** Its own comment says it shows the bots "as Home shows them once they've started",
+  so leaving it at two columns would have changed the grid's shape under someone as they gained a bot.
+* **The window keeps its four across** (`homeDesk`, `tiles(ctx, 4, 150, 18, …)`), untouched.
+* Talk had no card line and was showing its purpose cut mid-word ("Just talk to it: questions, ideas, writ…"). It
+  reads **"Answers your questions"** now, in the style of the others (`shell/parts.ts` idleLine).
+
+**THE CHAT IS A TAB NOW, AND YOU IS NOT.** Tabs are **bots, talk, activity** (17 Nov). None of it needed an app
+release: the tab bar is server data and the app maps whatever tabs it is given — `TabBar.tsx` hardcodes no ids — and a
+tab's icon travels as `{viewBox, layers}` for the app to draw, so a new tab with a new glyph is entirely this side.
+
+* **Talk is second, not first.** Bots is what this app IS and what it opens on, and a tab is one tap wherever it sits.
+* **Its page is the usual chat as a TAB ROOT** (`bots.talk`, `screens/bots.ts` `chatPage(…, { root: true })`): no back
+  button, the bot's head instead of the phone's back row, and the slug is FIXED in the screen because a tab root is
+  fetched with no params. Warmed at launch like the other roots.
+* **The balloons fill on the tab you are on**; the thread does not. Nothing in that glyph reads `live`, unlike the
+  other three — a conversation has no count to show and no ring to fill, and a dot invented to match would be lying.
+* **You left the tab bar for Home's header**, where it already was: `homeHead` has carried a person button labelled
+  "Profile and settings" all along, it just did `toTab("you")`. It pushes the page now. It was also **phone-only**,
+  because the window reached You through its sidebar tab — with the tab gone that was the only way in on desktop, so
+  the button is on both. Spaces' own "You" link pushes too. The page is unchanged and still warmed; it gained a back
+  bar, as every pushed page has. The You tab's living ring went with the tab.
+
+**A FIFTH BUILT-IN: THE BOT YOU JUST TALK TO** (slug `talk`, name **provisional**). Every other built-in is for a job —
+code, a trip, a calendar, a film — so a person who just wanted to ask something had nowhere to go. This is the plainest
+bot here: no service, no store, no tick, no migration. It is the chat loop (`botsBots/chat.ts`) and the role `bot_run`,
+with `web` and `files` on, so it can look things up and read what they attach.
+
+THE NAMES ARE NOT SETTLED. All the bots get named together later; `talk` is a working slug and "Talk" a working name.
+Until `BOTS` is on there is no chat history keyed to the slug, so renaming costs nothing. After that it does.
+
+Three things found while adding it, each a trap somebody else would have hit:
+
+* **`tailzu` is NOT free, and is not a bot.** It is X0 itself: `palette.ts` gives that slug the app's own ink and mark,
+  and `live.ts` reads it back as **"X0"** on an approval that came from no bot. It was the obvious name to take and
+  taking it would have put a bot's face on the app's own voice. `chat` is no better — a live route segment under the
+  bots area. Both are in `RESERVED_SLUGS` now, with `lingo` (a built-in that was never listed there) and the other
+  route segments a slug would be matched before: `listing`, `rules`, `session`, `sessions`, `share`, `store`, `trip`.
+* **A built-in wearing a shipped-only colour could not pass its own schema.** `parseBotInput` refuses `ash` and
+  `slate` on purpose — that refusal is what stops somebody's own bot coming out the colour of one of ours — but
+  `bots-validate` puts every built-in through that same schema. Lingo has worn ash since it landed and only escapes
+  because `builtinBots()` leaves it out while `LINGO` is off: **switching Lingo on would have failed that test.**
+  The colour is held to its own rule now (PALETTE or SHIPPED_ONLY), and the schema check keeps the rest.
+* **Order is not cosmetic.** Home's grid draws three bots and "Make a bot", and the Bots tab glyph draws four. A fifth
+  built-in placed first silently pushed Plan off the grid and Travel off the glyph, so `talk` goes LAST.
+
+It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is never offered in the picker, and three
+balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
+mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
+
+## WHAT IS OFF, AND WHICH KIND OF OFF IT IS (16 Nov)
+
+Fifty-three switches are off and twenty-six are on, which sounds alarming and mostly is not: most of the off ones are
+finished work waiting to be launched. But "off" hides three different things, and only two of them are fixed by a switch.
+
+**AT THE ROOT: `BOTS` IS OFF.** Every bot-shaped thing is behind it — the server reads `bots && cinemaOn()`, and the same
+for the rest — so the cinema, Lingo, the mail bot, the meeting bot and the Oracle are invisible no matter what their own
+switch says. Nothing below matters until this one is on.
+
+### 1. Waiting on a setting, not on code. Nothing to build.
+
+A few features have no switch at all: THE KEY IS THE SWITCH, so they are simply absent until it is set, with nothing
+anywhere saying why. The meeting bot is the live example — `meetOn()` is `Boolean(RECALL_API_KEY)` and the key has not
+been added, so the bot is not listed and never has been.
+
+| Feature | What it needs | How it is gated |
+| --- | --- | --- |
+| The meeting bot | `RECALL_API_KEY`, `RECALL_WEBHOOK_SECRET` | the key IS the switch — **not added yet** |
+| Calls (video and audio) | `SFU_APP_ID` **and** `SFU_APP_SECRET` | without both there are no calls anywhere |
+| The mail bot | `MAIL_WORKER_URL` **and** `MAIL_WORKER_SECRET` | the pair is the switch |
+| Phone calls out | `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`, `PLIVO_FROM_NUMBER` | plus `CHANNEL_PHONE_CALLS` |
+| Media ingest | `MEDIA_WORKER_URL`, `MEDIA_WORKER_SECRET` | plus `MEDIA_INGEST` |
+| Artifacts | `ARTIFACT_VIEWER_URL`, `ARTIFACT_APP_ORIGIN` | plus `ARTIFACTS` |
+| Xode on GitHub | `GITHUB_APP_ID`, `_SLUG`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_PRIVATE_KEY`, `_WEBHOOK_SECRET` | plus `CODE_GITHUB` |
+| Connectors | `CONNECTOR_TOKEN_KEY`, `CONNECTOR_OAUTH_CLIENTS` | plus `CONNECTORS` |
+| Places, in Discover and the Oracle | `GOOGLE_PLACES_API_KEY` | falls back to no suggestions |
+| Films, pictures and 3D creations | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | without them the bytes are in memory and a restart forgets them |
+
+Known set, because the deploy's own live checks prove it: the Oracle's worker and its model keys, the payments webhook,
+and `OPENROUTER_API_KEY`, which the config requires outright — the server does not start without it.
+
+### 2. Off AND INCOMPLETE. A switch alone will not do it.
+
+These are the ones worth knowing about, because turning them on gives you a feature that draws and does nothing.
+
+* ~~**Lingo — a course cannot get any words.**~~ **CLOSED, 17 Nov**, by another session: `src/lingo/tool.ts` gives the
+  bot `lingo_note_words`, which files the words a person reached for into the course they are on — the fix this entry
+  called for. The sentence bank is still optional and still not seeded, which is a different thing: an empty bank is
+  handled on purpose (the `blank` exercise is skipped and the ladder closes over it). Everything downstream is built and tested: the scheduler, marking on the
+  server, the seven exercise kinds, the sets, the grader's gestures, the 85-language picker, 165 tests. But words arrive
+  only through `POST /v1/lingo/words`, and **nothing calls it** — not the app, not a screen, and not the bot, which
+  `builtin.ts` says outright has no tools. Switch it on today and you can start a Spanish course with nothing in it. The
+  bot's own description is the answer ("teaches you a language by talking with you"): one tool on the bot, server side.
+  *(The sentence bank is NOT this problem. An empty bank is handled on purpose — the `blank` exercise is skipped and the
+  ladder closes over the gap. Seeding it adds the best exercise kind, a word used in a real sentence, but is optional.)*
+* **Discover — dark by construction.** The engine, the catalogue, the store and its tests are on main, but `ports.discover`
+  is declared and nothing supplies it, so the tools never attach to a bot. Wiring it up is what is left.
+* **The cloud browser — never run against a real site.** Every test uses a fake browser. `CLOUD_BROWSER_SITES` is also
+  inverted from every other list in the config: **empty means NONE**.
+* **The sign-in card is not drawn anywhere.** The server sends it; the desktop app has to draw it. Until then every
+  `FIELD` line ends in a correct plain handover, so nothing is broken — it is just never shown.
+* **The cinema's 3D** is connected as of today, but the deploy that carries Blender has to land before it can render.
+
+### 3. Off on purpose. Nothing is wrong.
+
+Eighteen `PERM_*` switches are phone permissions, held until the stores approve each declaration — background location is
+the one that blocks a `production` Android upload. `DEV_SKIP_AUTH` must stay off. The rest (`PLAN_SHARE`, `SPACES_ENABLED`,
+`HOME_UPDATES`, `WIDGET_DIGEST`, `NATIVE_LOOKS`, `KEYBOARD_SKINS`, `USAGE_*`, `FRONT_DOOR`, `CODE_SCHEDULES`, `BOT_SHOW`,
+`BOTS_SCENES`, `NOTIFY_REPLY`, `DEMO_ENABLED`, `AUTH_GOOGLE_WEB` and the others) are finished features waiting to launch.
+
 **THE CINEMA IS IN, BOTH HALVES, AND THE 3D IS CONNECTED.** The film half merged (migrations 0101 and 0103, and bot
 sessions as 0102); its seven prompts are roles in `roles.ts` with fixtures and known-good answers, so the sweep holds the
 whole bot. The 3D half, which was wired to nothing, now has three doors under the cinema bot's own path
@@ -553,7 +693,18 @@ LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
   them instead of a heading — Lingo alive across the top of the page, muttering while a word is due anywhere, humming once nothing
   is. Holds `shared/bots/looks.json` and, generated from it, `TAILZU-FRONTEND/app/src/botTiles/starter.ts` and
   `TAILZU-DESKTOP/botLooks.js` (`node src/botTiles/genStarter.mjs` in TAILZU-FRONTEND/app writes both).
-  Next: sentences from the bank into sessions, and the call that rings the phone to practise speaking.
+  **The words gap is closed.** There was nowhere to ask Lingo anything — its tile opens the territory, not the shared
+  bot page, and no screen of its own carried a chat bar — so the bot whose whole point is conversation could not be
+  spoken to. The territory has one now, and `lingo_note_words` (`src/lingo/tool.ts`, Lingo's and no other bot's) is the
+  one thing that chat can do besides talk: a word they reached for goes into the course, with how they met it, and a
+  word already there keeps its whole history.
+  The exercises are a grid now rather than a line — a word, an utterance, a turn of conversation, each asked both ways
+  — so `reply` and `speak` are new and `talk` is real: marked on whether the word came out inside something of their
+  own, not on saying it back. And a dry course draws short sentences from the shared bank first (`seed`), which
+  `unseen` already ranks behind anything they reached for themselves.
+  Next: the call that rings the phone to practise speaking; answer speed into the scheduler (it needs the time
+  measured, which is an app change or another column); and a word earning its place by being reached for twice rather
+  than once.
   **A colour question that was open here is now answered and done** (`6222f21`): `bots/builtin.ts` and `experience/bots/palette.ts`
   each carried their own copy of the four shipped bots' colours and had disagreed for as long as both existed — builtin.ts said Xode
   was pine while palette.ts drew it moss. palette.ts keeps the icons and reads the colour from builtin.ts now, and builtin.ts was set
@@ -673,8 +824,9 @@ LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
   0093 trust signals, 0094 phone things, 0095 the meeting's brief, 0096 plan share, 0097 a call's note and brief,
   0098 a browser that belongs to the person, 0099 discover, 0100 Xode's standing job. **These are live.**
   Then, merged but NOT yet on the live database: 0101 the cinema's films, 0102 bot sessions, 0103 the cinema's places,
-  0104 the cinema's 3D creations. They go in by themselves on the next deploy, and LIVE_MIGRATION moves to 0104 after.
-  Next free: **0105**. Take the next free number and check both
+  0104 the cinema's 3D creations, 0105 what a learner wants a language FOR (another session's). They go in by
+  themselves on the next deploy, and LIVE_MIGRATION moves to 0105 after.
+  Next free: **0106**. Take the next free number and check both
   `git log origin/main -- tulmi/supabase/migrations` and the open branches first:
   sessions have collided three times now, and the third one nearly shipped.
 
