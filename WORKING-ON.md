@@ -105,8 +105,10 @@ and `OPENROUTER_API_KEY`, which the config requires outright — the server does
 
 These are the ones worth knowing about, because turning them on gives you a feature that draws and does nothing.
 
-* **Lingo — a course cannot get any words.** (Still true after another session's 16 Nov work, which added what a
-  learner wants the language FOR and fixed the language picker — migration 0105 — but did not touch this.) Everything downstream is built and tested: the scheduler, marking on the
+* ~~**Lingo — a course cannot get any words.**~~ **CLOSED, 17 Nov**, by another session: `src/lingo/tool.ts` gives the
+  bot `lingo_note_words`, which files the words a person reached for into the course they are on — the fix this entry
+  called for. The sentence bank is still optional and still not seeded, which is a different thing: an empty bank is
+  handled on purpose (the `blank` exercise is skipped and the ladder closes over it). Everything downstream is built and tested: the scheduler, marking on the
   server, the seven exercise kinds, the sets, the grader's gestures, the 85-language picker, 165 tests. But words arrive
   only through `POST /v1/lingo/words`, and **nothing calls it** — not the app, not a screen, and not the bot, which
   `builtin.ts` says outright has no tools. Switch it on today and you can start a Spanish course with nothing in it. The
@@ -255,7 +257,18 @@ LIVE_MIGRATION afterwards, and the deploy log is where you read what happened.
   them instead of a heading — Lingo alive across the top of the page, muttering while a word is due anywhere, humming once nothing
   is. Holds `shared/bots/looks.json` and, generated from it, `TAILZU-FRONTEND/app/src/botTiles/starter.ts` and
   `TAILZU-DESKTOP/botLooks.js` (`node src/botTiles/genStarter.mjs` in TAILZU-FRONTEND/app writes both).
-  Next: sentences from the bank into sessions, and the call that rings the phone to practise speaking.
+  **The words gap is closed.** There was nowhere to ask Lingo anything — its tile opens the territory, not the shared
+  bot page, and no screen of its own carried a chat bar — so the bot whose whole point is conversation could not be
+  spoken to. The territory has one now, and `lingo_note_words` (`src/lingo/tool.ts`, Lingo's and no other bot's) is the
+  one thing that chat can do besides talk: a word they reached for goes into the course, with how they met it, and a
+  word already there keeps its whole history.
+  The exercises are a grid now rather than a line — a word, an utterance, a turn of conversation, each asked both ways
+  — so `reply` and `speak` are new and `talk` is real: marked on whether the word came out inside something of their
+  own, not on saying it back. And a dry course draws short sentences from the shared bank first (`seed`), which
+  `unseen` already ranks behind anything they reached for themselves.
+  Next: the call that rings the phone to practise speaking; answer speed into the scheduler (it needs the time
+  measured, which is an app change or another column); and a word earning its place by being reached for twice rather
+  than once.
   **A colour question that was open here is now answered and done** (`6222f21`): `bots/builtin.ts` and `experience/bots/palette.ts`
   each carried their own copy of the four shipped bots' colours and had disagreed for as long as both existed — builtin.ts said Xode
   was pine while palette.ts drew it moss. palette.ts keeps the icons and reads the colour from builtin.ts now, and builtin.ts was set
