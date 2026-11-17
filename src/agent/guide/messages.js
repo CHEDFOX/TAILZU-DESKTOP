@@ -175,12 +175,14 @@ const handlers = {
       $("edit").textContent = String((by("edit") || {}).label || "");
       $("edit").hidden = !by("edit");
       $("no").textContent = String((by("deny") || {}).label || "");
+      setWays(Array.isArray(c.buttons) ? c.buttons : []);
       setState("confirm", String(c.title || ""));
       fit();
       return;
     }
     $("note").hidden = true;
     $("edit").hidden = true;
+    setWays([]);
     const [what, quote] = splitConfirm(m.text);
     $("what").textContent = what;
     $("quote").textContent = quote;
@@ -207,6 +209,37 @@ bridge.onGuide((m) => { if (m && handlers[m.type]) { try { handlers[m.type](m); 
 // changes height under the pointer, and a release that lands after the
 // window has gone back to letting clicks through never reached it, so the
 // click was lost. One answer per question: a second press does nothing.
+/**
+ * THE PAGE'S OWN WAYS IN, as buttons of their own (agent.js's ALSO lines on a sign-in handover).
+ *
+ * The card's three answers are fixed in the markup, looked up by the ids `approve`, `edit` and `deny`. Anything else the
+ * card carries is a way the PAGE offers — "Continue with Google", "Use email instead" — and there may be up to four, so
+ * they are built here per card rather than being mapped onto buttons that do not exist. Without this they were simply
+ * never drawn.
+ *
+ * Each sends its own id back, which the main process matches against the buttons it sent (ask.js `cardButtons`), so a
+ * press answers as itself and not as the main button.
+ */
+function setWays(buttons) {
+  const row = $("ways");
+  row.textContent = "";
+  const own = buttons.filter((b) => b && typeof b.id === "string" && b.id && b.id !== "approve" && b.id !== "edit" && b.id !== "deny" && b.label).slice(0, 4);
+  row.hidden = !own.length;
+  for (const b of own) {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.textContent = String(b.label);
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || S.state !== "confirm") return;
+      e.preventDefault();
+      bridge.confirm(String(b.id));
+      // The card stays up: starting a way in is the beginning of their part, not the end, and the main process sends the
+      // card again. `doing` would hide the answers they still have to give.
+    });
+    row.appendChild(el);
+  }
+}
+
 const press = (id, fn) => $(id).addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
   e.preventDefault();

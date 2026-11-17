@@ -1,5 +1,32 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE WAYS IN WERE BROKEN THREE WAYS, AND THE GUIDE'S RENDERER HAS NO TESTS
+
+Reported here as done. It was not. Three separate faults, each in a layer the tests do not reach, found by reading the
+path end to end:
+
+1. **The buttons were never drawn.** `guide/messages.js` looked up a card's buttons by the ids `approve`, `edit` and
+   `deny` only, mapping them onto the three `<button>`s in `guide.html`. Nothing created more, so a `way:e9` button did
+   not exist on the screen.
+2. **Its id could not get back.** `preload.js` and `guide:confirm` each did `yes === "edit" || yes === "deny" ? yes :
+   !!yes`, so an id arrived as `true` — which `approve`'s own `pick` reads as the MAIN button. Pressing "Continue with
+   Google" would have ENDED the handover.
+3. **The cap was three.** `approve()` sliced the buttons to three, so even drawn and answerable, the fourth way in was
+   dropped.
+
+Fixed: `messages.js` builds a row of the page's own ways per card (`setWays`, up to four, wrapping); the id is let
+through both halves and **matched against the buttons the card was actually sent** (`ask.js cardButtons`), so a renderer
+cannot invent an answer and an unknown id is no answer rather than the main button; the cap is six.
+
+**THE REAL FINDING: `src/agent/guide/` has no tests at all.** Not one file. Everything above it stubs the guide
+(`agent.test.js` replaces `guide.approve` wholesale), so three faults in a row survived a 1,564-test suite. There is no
+DOM in `node --test` either, so a test would mean a new dependency in a shipping Electron app — not something to add in
+passing.
+
+What there is instead is the project's own answer, now pointed at this: **`guide.html?demo=signIn`** draws the sign-in
+card still, ways in and all. Anything changed in that renderer should be looked at through a demo scene, because
+nothing else will catch it.
+
 ## 17 Nov: A BUG IN THE WAYS IN, FOUND BY READING THE PATH RATHER THAN THE TEST
 
 Worth writing down, because the test passed and the app could not have worked.
