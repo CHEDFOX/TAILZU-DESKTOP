@@ -431,6 +431,21 @@ function createAsk(ctx) {
   /** A card with a question on it, and the wait for its answer: `pick` turns
    *  what the guide (or Alt twice) answered into what the agent is given,
    *  `silent` is what no answer is. */
+  /** The ids the card on screen may answer with, besides its main button and the two named ones (approve/deny/edit). */
+  let cardButtons = new Set();
+
+  /**
+   * THE ONE MOMENT THIS WINDOW MAY TAKE THE KEYBOARD: a card with boxes to type into. Off again the moment it is
+   * answered. `setFocusable` is the whole of it on Windows and Linux; on a Mac a panel also has to be told it may become
+   * the key window, which `setFocusable` does. Giving focus BACK to the app they were in is the caller's (agent.js uses
+   * the driver's `open`), because only it knows which app that was.
+   */
+  function keyboard(on) {
+    if (!win || win.isDestroyed()) return;
+    try { win.setFocusable(!!on); } catch { /* a platform that cannot: the boxes simply will not take a key */ }
+    if (on) { try { win.focus(); } catch { /* not focusable here */ } }
+  }
+
   function holdCard(message, pick, silent) {
     if (confirmWait) confirmWait(false);
     phaseTo("showing");
@@ -539,11 +554,29 @@ function createAsk(ctx) {
     approve(card) {
       const c = card && typeof card === "object" ? card : {};
       const text = (v, n) => String(v == null ? "" : v).slice(0, n);
-      const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 3).map((b) => ({ id: text(b && b.id, 12), label: text(b && b.label, 40) }));
-      return holdCard({
+      // Six, not three: a sign-in card draws the page's own ways in (up to four) beside Continue and Stop.
+      const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 6).map((b) => ({ id: text(b && b.id, 16), label: text(b && b.label, 40) }));
+      /**
+       * THE BOXES OF A SIGN-IN CARD, and the one moment this window may take the keyboard.
+       *
+       * It is never focusable otherwise, and that is load-bearing: the app being worked on keeps the keyboard, and a
+       * dictation's paste must land in it (the pill's recipe, above). A card with boxes is the one thing that cannot work
+       * that way, so the window is made focusable while it is up and put back the moment it is answered — in a `finally`,
+       * so a thrown or cancelled card cannot leave the window able to steal the next keystroke.
+       *
+       * Nothing typed is kept here: the values pass through to the caller, which sets them into the page and drops them.
+       */
+      const fields = (Array.isArray(c.fields) ? c.fields : []).slice(0, 6)
+        .map((f) => ({ id: text(f && f.id, 16), kind: text(f && f.kind, 8), label: text(f && f.label, 48) }))
+        .filter((f) => f.id && f.label);
+      // Which ids this card may answer with, for the guard in `guide:confirm`. Replaced per card, never added to.
+      cardButtons = new Set(buttons.map((b) => b.id).filter((id) => id && id !== "approve" && id !== "deny" && id !== "edit"));
+      if (fields.length) keyboard(true);
+      const done = holdCard({
         type: "confirm", text: "", risk: "confirm",
-        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons },
-      }, (v) => (v === true ? "approve" : v === "edit" || v === "deny" ? v : ""), "");
+        card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons, ...(fields.length ? { fields } : {}) },
+      }, (v) => (v === true ? "approve" : v && typeof v === "object" && v.id ? v : typeof v === "string" && v ? v : ""), "");
+      return fields.length ? done.finally(() => keyboard(false)) : done;
     },
     hide() { hide(); },
     // A button on the finished card for what stopped the answer: only
@@ -985,6 +1018,8 @@ function createAsk(ctx) {
     // "This computer": the person's own files, done here by localfiles.js and
     // only inside the usual folders, Downloads, Desktop and Documents (main.js hands it in).
     device: ctx.device,
+    // Their part moved to X0 Bot's own browser, on a sign-in handover (main.js openPanel).
+    ...(typeof ctx.openPanel === "function" ? { openPanel: ctx.openPanel } : {}),
     // The whole page in front for step 0 (src/context/pageRead.js, handed in by main.js).
     ...(typeof ctx.page === "function" ? { page: ctx.page } : {}),
     // The server's confirm card's buttons: a task's yes or no, with the
@@ -1290,7 +1325,18 @@ function createAsk(ctx) {
   });
   // A yes or a no; on the server's card also "edit" and "deny" (Not now),
   // which are answers of their own. Anything else is read as a no.
-  ipcMain.on("guide:confirm", (e, yes) => { if (fromGuide(e) && confirmWait) confirmWait(yes === "edit" || yes === "deny" ? yes : !!yes); });
+  // The card's answer. `true` is its main button; "edit" and "deny" are the two named ones; anything else must be the ID OF A
+  // BUTTON THIS CARD WAS GIVEN (agent.js's ways in) and is matched against them, so a renderer cannot invent an answer. An id
+  // that is not one of them is no answer at all and the card keeps waiting, rather than being read as the main button — which
+  // is what happened while this coerced every string to `true`.
+  ipcMain.on("guide:confirm", (e, yes) => {
+    if (!fromGuide(e) || !confirmWait) return;
+    if (yes === "edit" || yes === "deny") { confirmWait(yes); return; }
+    // A sign-in card's answer carries what was typed: { id, values }. Only the main button may carry them.
+    if (yes && typeof yes === "object" && yes.id === "approve") { confirmWait({ id: "approve", values: yes.values }); return; }
+    if (typeof yes === "string" && yes) { if (cardButtons.has(yes)) confirmWait(yes); return; }
+    confirmWait(!!yes);
+  });
   ipcMain.on("guide:permit", (e, choice) => { if (fromGuide(e) && permitWait) permitWait(String(choice || "")); });
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
   // The card's button (guide offer): only the one it was given, once. The

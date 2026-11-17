@@ -249,6 +249,35 @@ function runDemo(scene) {
         },
       });
     },
+    /**
+     * The sign-in card with the page's OWN ways in (docs/sign-in.md's ALSO lines). There is no test for this renderer, so
+     * this scene is how it is checked: `guide.html?demo=signIn` draws it still, and the ways must appear as buttons of
+     * their own above Continue and Stop. They were silently not drawn at all until 17 Nov, because the card only ever
+     * looked up approve, edit and deny.
+     */
+    signIn: () => {
+      send({ type: "show", state: "doing", app: "Chrome: Swiggy" });
+      send({ type: "heard", text: "order my usual from Swiggy" });
+      send({
+        type: "confirm", text: "", risk: "confirm",
+        card: {
+          title: "Your turn", app: "Chrome: Swiggy", label: "",
+          preview: "Swiggy wants you to sign in. Do it, then press Continue.",
+          note: "I don't type passwords, codes or card details. I'll carry on when you press Continue.",
+          fields: [
+            { id: "e14", kind: "phone", label: "Phone number" },
+            { id: "e21", kind: "code", label: "The code they texted you" },
+          ],
+          buttons: [
+            { id: "way:e30", label: "Continue with Google" },
+            { id: "way:e31", label: "Continue with Apple" },
+            { id: "way:e32", label: "Use email instead" },
+            { id: "browser", label: "Sign in in X0 Bot's browser" },
+            { id: "approve", label: "Continue" }, { id: "deny", label: "Stop" },
+          ],
+        },
+      });
+    },
     brainJobDone: () => {
       send({ type: "show", state: "doing", app: "Chrome: Gmail" });
       send({ type: "heard", text: "go to Gmail and unsubscribe from all the promo emails" });

@@ -21,6 +21,8 @@ function textsFrom(txt) {
     handover: txt("desktop.agent.text.handover", "Your turn: finish this part, then press Continue."),
     handoverNote: txt("desktop.agent.text.handoverNote", "I don't type passwords, codes or card details. I'll carry on when you press Continue."),
     handoverGo: txt("desktop.agent.text.handoverGo", "Continue"),
+    // Their part moves to X0 Bot's own browser, the way the phone signs a site in (docs/sites.md).
+    handoverBrowser: txt("desktop.agent.text.handoverBrowser", "Sign in in X0 Bot's browser"),
     handoverStop: txt("desktop.agent.text.handoverStop", "Stop"),
     handoverStopped: txt("desktop.agent.text.handoverStopped", "Okay, I stopped there."),
     stuck: txt("desktop.agent.text.stuck", "That didn't change anything, so I stopped."),

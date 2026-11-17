@@ -137,7 +137,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
-    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page,
+    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page, openPanel: o.openPanel,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -3325,6 +3325,119 @@ test("handover: the person's turn on a card, then the job goes on with the scree
   await stop.agent.heard(AUDIO);
   assert.strictEqual(stop.post.reqs().length, 1);
   assert.deepStrictEqual(stop.guide.of("state").at(-1), ["state", "done", TEXT.handoverStopped]);
+});
+
+/**
+ * THE WAYS IN THE PAGE OFFERS, on the handover card (docs/sign-in.md's ALSO lines). Each is a real control on this screen,
+ * so its button presses it — and pressing one does NOT finish the handover, because starting a way in is the beginning of
+ * their part, not the end. Only Continue or Stop ends it.
+ */
+test("handover: the page's own ways in are buttons that press them, and the card comes back", async () => {
+  const LOGIN = snap([
+    { id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] },
+    { id: "e8", role: "button", label: "Sign in", frame: [300, 250, 80, 30] },
+    { id: "e9", role: "button", label: "Continue with Google", frame: [300, 300, 200, 30] },
+    { id: "e10", role: "button", label: "Use email instead", frame: [300, 340, 200, 30] },
+  ]);
+  const IN = snap([EXPORT, HEADING]);
+  const card = { fields: [{ id: "e7", kind: "secret", label: "Password" }], also: [{ id: "e9", label: "Continue with Google" }, { id: "e10", label: "Use email instead" }] };
+  const scripts = [
+    [heardDo("download my statement"), { t: "handover", why: "login", text: "Sign in and press Continue.", card }],
+    [heardDo("download my statement"), press("e1")],
+    [{ t: "done", text: "Downloaded." }],
+  ];
+  const cards = [];
+  const r = rig({ snaps: [LOGIN, IN], scripts });
+  // Google first, then Continue: the card is shown twice, and the press happened in between.
+  r.guide.approve = async (c) => { cards.push(c); return cards.length === 1 ? "way:e9" : "approve"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.strictEqual(cards.length, 2, "pressing a way in brings the card back rather than ending the handover");
+  assert.deepStrictEqual(cards[0].buttons.map((b) => [b.id, b.label]),
+    [["way:e9", "Continue with Google"], ["way:e10", "Use email instead"], ["approve", "Continue"], ["deny", "Stop"]]);
+  assert.deepStrictEqual(cards[1].buttons.map((b) => b.id), ["way:e9", "way:e10", "approve", "deny"]);
+  assert.deepStrictEqual(r.driver.acts(), [["press", "e9"], ["press", "e1"]], "the way in was pressed on the page; nothing was typed for them");
+  const hist = r.post.reqs()[1].history.map((h) => [h.did, h.result || "", h.note || ""]);
+  assert.ok(hist.some(([did, res, note]) => did === "HANDOVER" && res === "ok" && /started a way in \(e9\)/.test(note)), "the run remembers which way in was started");
+  assert.deepStrictEqual(r.guide.of("state").at(-1), ["state", "done", "Downloaded."]);
+});
+
+test("handover: a card with no ways in keeps its two buttons, and carries its boxes with their kinds", async () => {
+  const LOGIN = snap([{ id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] }]);
+  const only = { fields: [{ id: "e7", kind: "secret", label: "Password" }] };
+  const cards = [];
+  const r = rig({ snaps: [LOGIN], scripts: [[heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in and press Continue.", card: only }]] });
+  r.guide.approve = async (c) => { cards.push(c); return "deny"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(cards[0].buttons.map((b) => b.id), ["approve", "deny"], "no ways in and no browser offered without openPanel");
+  // The box goes with the card now, kind and all, so the renderer can hide a secret as it is typed (rule S5).
+  assert.deepStrictEqual(cards[0].fields, [{ id: "e7", kind: "secret", label: "Password" }]);
+});
+
+/**
+ * WHAT THEY TYPED, INTO THE PAGE, AND GONE. The card hands back { id: "approve", values }; the app they were in gets the
+ * keyboard back first, then each box is set by the id the card named. Nothing typed reaches the log or the history.
+ */
+test("handover: Continue with typed boxes gives the app back the keyboard, then fills them", async () => {
+  const LOGIN = snap([
+    { id: "e7", role: "field", label: "Email", frame: [300, 200, 200, 30] },
+    { id: "e8", role: "field", label: "Password", frame: [300, 240, 200, 30] },
+  ]);
+  const IN = snap([EXPORT, HEADING]);
+  const card = { fields: [{ id: "e7", kind: "email", label: "Email" }, { id: "e8", kind: "secret", label: "Password" }] };
+  const scripts = [
+    [heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in.", card }],
+    [heardDo("sign me in"), press("e1")],
+    [{ t: "done", text: "In." }],
+  ];
+  const r = rig({ snaps: [LOGIN, IN], scripts });
+  r.guide.approve = async () => ({ id: "approve", values: { e7: "aanya@example.in", e8: "hunter2", e9: "not a box on this card" } });
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(r.driver.acts(), [
+    ["open", "Bank"],
+    ["setValue", "e7", "aanya@example.in"],
+    ["setValue", "e8", "hunter2"],
+    ["press", "e1"],
+  ], "the app first, then each box the CARD named, and nothing else");
+  // Neither what they typed nor its length is anywhere in what the run remembers or sends.
+  const sent = JSON.stringify(r.post.reqs());
+  assert.strictEqual(sent.includes("hunter2"), false);
+  assert.strictEqual(sent.includes("aanya@example.in"), false);
+});
+
+test("handover: X0 Bot's own browser is offered on a sign-in, and keeps the card up", async () => {
+  const LOGIN = snap([{ id: "e7", role: "field", label: "Password", frame: [300, 200, 200, 30] }]);
+  const card = { fields: [{ id: "e7", kind: "secret", label: "Password" }] };
+  const opened = [];
+  const cards = [];
+  const r = rig({ snaps: [LOGIN], scripts: [[heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in.", card }]], openPanel: () => { opened.push(1); } });
+  r.guide.approve = async (c) => { cards.push(c); return cards.length === 1 ? "browser" : "deny"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  assert.ok(cards[0].buttons.some((b) => b.id === "browser"), "offered on a login");
+  assert.strictEqual(opened.length, 1);
+  assert.strictEqual(cards.length, 2, "the card comes back: they sign in there and press Continue here");
+});
+
+test("handover: a way in with nothing usable on it is not drawn, and the same id is not drawn twice", async () => {
+  const LOGIN = snap([{ id: "e9", role: "button", label: "Continue with Google", frame: [300, 300, 200, 30] }]);
+  const messy = { fields: [], also: [
+    { id: "e9", label: "Continue with Google" },
+    { id: "e9", label: "Google again" },
+    { id: "", label: "No id" },
+    { id: "e11", label: "" },
+    null,
+    { id: "e12", label: "A fifth" }, { id: "e13", label: "A sixth" }, { id: "e14", label: "A seventh" }, { id: "e15", label: "An eighth" },
+  ] };
+  const cards = [];
+  const r = rig({ snaps: [LOGIN], scripts: [[heardDo("sign me in"), { t: "handover", why: "login", text: "Sign in.", card: messy }]] });
+  r.guide.approve = async (c) => { cards.push(c); return "deny"; };
+  r.agent.begin({ app: "Bank" });
+  await r.agent.heard(AUDIO);
+  const ways = cards[0].buttons.filter((b) => b.id.startsWith("way:")).map((b) => b.id);
+  assert.deepStrictEqual(ways, ["way:e9", "way:e12", "way:e13", "way:e14"], "four at most, no repeat, nothing without an id and a label");
 });
 
 // ---- asked for already (the one key's brain said task or send) -------------------------------

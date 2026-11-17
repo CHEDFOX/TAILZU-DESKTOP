@@ -1,5 +1,266 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE SIGN-IN CARD HAS A SWITCH NOW, SO IT CAN BE UNDONE FROM HERE
+
+`SIGN_IN_CARD`, **off**, staged by `SIGN_IN_CARD_USERS`. It was shipped without one, and that was the thing wrong with
+publishing it: **everything the card draws lives in the window's own page** (`guide.html`), which only a new build can
+change. A card that came out wrong would have needed a release to undo.
+
+Off, three things happen: the planner is not told the card's rules (so they are not paid for either), any `FIELD` or
+`ALSO` it writes anyway is dropped and counted in `cardDropped`, and the handover carries no card — the plain one, the
+page itself, which always works. **Both gates, not one**: the two verbs are in the contract whatever the prompt says, so
+a model that writes them anyway is stopped at the reader and not only by the note.
+
+It took a `userId` down to the prompt (`StepContext.userId` → `agentUserMessage`) so the stage can be per account, which
+is how every other new thing here is turned on. Two cases in `tests/agent-signin.test.ts` hold the default: off, a
+handover carries no card and the rules are not in the prompt.
+
+**So the card is now safe to publish**: ship the build with it off, turn it on for one account, look at it, then widen.
+The words were already knobs (`desktop.agent.text.*`); this makes the whole feature one too.
+
+12,466 pass. The two failures are both pre-existing and were checked by stashing: `launch-motion`'s side-by-side case,
+and `code-routes`' hook timing out as it boots the real server, which fails the same way with this work removed.
+
+## 17 Nov: THE SIGN-IN CARD IS WHOLE — boxes, ways in, and a way out to our own browser
+
+**The boxes.** The card draws the page's real fields, named in the person's own language. A secret and a code are hidden
+as typed (rule S5), `autocomplete="off"` so the browser is never asked to treat our card as the site's page, and nothing
+is remembered: the values live in the inputs, cross once on Continue, and go with the card.
+
+**The one moment the window takes the keyboard.** It is never focusable otherwise, and that flag is load-bearing — the
+app being worked on keeps the keyboard, and a dictation's paste must land in it. So `ask.js` turns it on while a card
+with boxes is up and off again in a **`finally`**, where a thrown or cancelled card cannot leave the window able to
+steal the next keystroke.
+
+**Then the app first, the boxes after.** On Continue the agent gives the keyboard back to the app they were in before
+setting anything, because a field cannot be set in an app that is behind. Each box is set by the id the CARD named, so a
+value for an id it did not name is ignored. **What they typed is not logged and never enters the run's history** — the
+log says which box was filled, never what went in it, and a test holds that a password and an address appear nowhere in
+what is sent.
+
+**And a way out of all of it:** a sign-in handover offers **"Sign in in X0 Bot's browser"**, which opens the Sites list —
+the same flow the phone uses. They sign in on a real page in our own browser, which keeps the session; the card stays up
+and they press Continue when they are in. It opens the LIST, not a panel at a guessed address, because the window knows
+the site in front only by its display name ("Swiggy") and never its domain — `https://Swiggy/` is not a page.
+
+Three more cases in `agent.test.js` (the fill order and that nothing typed is sent; the browser button offered on a
+sign-in and keeping the card up; a card's boxes carried with their kinds). **1,565 of 1,566.**
+
+**Still no test for the card's own drawing**, and that is the standing risk here: `src/agent/guide/` has none and
+`node --test` has no DOM. **`guide.html?demo=signIn`** now draws the whole thing still — two boxes, three ways in, the
+browser button, Continue and Stop — and that is the only way to see it.
+
+## 17 Nov: THE WAYS IN WERE BROKEN THREE WAYS, AND THE GUIDE'S RENDERER HAS NO TESTS
+
+Reported here as done. It was not. Three separate faults, each in a layer the tests do not reach, found by reading the
+path end to end:
+
+1. **The buttons were never drawn.** `guide/messages.js` looked up a card's buttons by the ids `approve`, `edit` and
+   `deny` only, mapping them onto the three `<button>`s in `guide.html`. Nothing created more, so a `way:e9` button did
+   not exist on the screen.
+2. **Its id could not get back.** `preload.js` and `guide:confirm` each did `yes === "edit" || yes === "deny" ? yes :
+   !!yes`, so an id arrived as `true` — which `approve`'s own `pick` reads as the MAIN button. Pressing "Continue with
+   Google" would have ENDED the handover.
+3. **The cap was three.** `approve()` sliced the buttons to three, so even drawn and answerable, the fourth way in was
+   dropped.
+
+Fixed: `messages.js` builds a row of the page's own ways per card (`setWays`, up to four, wrapping); the id is let
+through both halves and **matched against the buttons the card was actually sent** (`ask.js cardButtons`), so a renderer
+cannot invent an answer and an unknown id is no answer rather than the main button; the cap is six.
+
+**THE REAL FINDING: `src/agent/guide/` has no tests at all.** Not one file. Everything above it stubs the guide
+(`agent.test.js` replaces `guide.approve` wholesale), so three faults in a row survived a 1,564-test suite. There is no
+DOM in `node --test` either, so a test would mean a new dependency in a shipping Electron app — not something to add in
+passing.
+
+What there is instead is the project's own answer, now pointed at this: **`guide.html?demo=signIn`** draws the sign-in
+card still, ways in and all. Anything changed in that renderer should be looked at through a demo scene, because
+nothing else will catch it.
+
+## 17 Nov: A BUG IN THE WAYS IN, FOUND BY READING THE PATH RATHER THAN THE TEST
+
+Worth writing down, because the test passed and the app could not have worked.
+
+The ways-in buttons send a button id (`way:e9`). Both halves of the card's answer path **coerced every string to a
+boolean**: `preload.js`'s `confirm` and `guide:confirm` in `ask.js` each did `yes === "edit" || yes === "deny" ? yes :
+!!yes`. So `"way:e9"` arrived as `true`, which `approve`'s own `pick` reads as the MAIN button — pressing "Continue with
+Google" would have ended the handover instead of starting the way in. The tests in `agent.test.js` passed because they
+stub `guide.approve` and never cross that hop.
+
+Fixed in both, and with a guard rather than just a wider filter: `approve()` now remembers the ids of the buttons it sent
+(`cardButtons`), and `guide:confirm` accepts an id **only if it is one of them**. So a renderer cannot invent an answer,
+and an id that is not on the card is no answer at all rather than being read as the main button. The card's button cap
+went 3 → 6, because a sign-in card draws up to four ways in beside Continue and Stop.
+
+`src/agent/ask.test.js` holds the dangerous direction with the real path (`h.ipc.emit("guide:confirm", …)`): an invented
+id does not act and above all does not read as Approve, and the real answer still works. 1,563 of 1,564.
+
+**The lesson, since this is the second time this session:** a stub that stands in for the thing being changed will pass
+whatever you do to the thing. The ways-in work needed a test that crossed the IPC, and the open `part` work needed one
+that went through the real checker — which it has.
+
+## 17 Nov: THE SIGN-IN CARD'S WAYS IN ARE DRAWN IN THE WINDOW (`docs/sign-in.md`)
+
+The server has been able to describe a sign-in page's real boxes and ways in since 15 Nov (`FIELD` / `ALSO` before a
+`HANDOVER`, nothing written per site, every id checked against the screen list). Nothing drew them, so every one of those
+lines ended in a plain handover. **Half of it draws now: the ways in.**
+
+Each `ALSO` is a button on the handover card, and pressing it presses that control on the page
+(`TAILZU-DESKTOP/src/agent/run/agent.js` `handover`, `waysOf`). Pressing one does **not** finish the handover — starting
+a way in is the beginning of their part, not the end — so the card comes back and waits, and only Continue or Stop ends
+it. A press that fails is logged and the card still comes back, because the page is theirs to finish either way. At most
+four, no repeat, nothing without both an id and a label: the window keeps its own cap rather than trusting the server's.
+
+Why this half first: rule S3 exists because people rarely remember WHICH way they signed up with, and a page's own
+buttons are often below the fold or behind "more options". And it needed no decision about anything.
+Three cases in `src/agent/run/agent.test.js`; the desktop suite is 1,562 of 1,563.
+
+**The BOXES are still not drawn, and that is a decision, not an omission.** The guide's window is deliberately never
+focused — the app being worked on keeps the keyboard, and a dictation's paste must still land in it — so it cannot take a
+keystroke, let alone a password. Three ways out, none of them picked: make the window focusable for that one moment and
+hand focus back; a separate window that may take the keyboard; or the cloud browser's panel in a `LiveView`, which both
+clients already have and which never holds the secret itself (each character goes to the real page, and the box is
+emptied before the call goes out). Until one is chosen, every `FIELD` line still ends in a correct plain handover.
+
+## 17 Nov: ONE KEY, ALREADY IN A MEETING — the bot goes in (`docs/meet.md` 4a)
+
+`POST /v1/meet/now { url? }`. Auto-join is the plan made in advance (meetings 11 to 45 minutes away); this is the case a
+person actually asks for — they are IN a meeting, they say "take notes", and the bot has to go now. `/join` wants a link
+pasted into a box, which is no use to somebody who pressed a key mid-meeting.
+
+Three ways, cheapest first: a `url` the caller already has (the window can SEE the screen, so a link read off the meeting
+in front of them beats anything a calendar knows); else the calendar's meeting running NOW (`nowMeeting`, started within
+90 minutes and not more than 10 from starting, nearest start winning when two overlap — at 10:31 they mean the one they
+just joined, not the one they are late leaving); else **it asks**: `409 { code: "meet_which", ask: "link" }` is the key's
+cue to put up a card and call again with the link.
+
+**The asking matters more than the calendar**, which is the correction that shaped this: most people have the link on
+the clipboard already, because they clicked Copy link to get in. So the card can offer that with one button and need no
+typing — which it must, because the guide's window is deliberately never focused and cannot take a keystroke.
+
+**It never guesses which meeting.** A bot sent into the wrong call does not fail quietly: it sits there and takes notes
+of it. No calendar, nothing running, a meeting with no link, a calendar needing a fresh sign-in — all the same ask, none
+of them the person's error. The service's own refusals come straight back: "no minutes left" is not "which meeting".
+
+Our own calls need none of it: the bot takes its seat with the first person in (`rooms/sitIn.ts`), hears each person
+separately through the SFU so who said what is never guessed, and writes the note and the brief. `/now` is for meetings
+somebody else hosts.
+
+Holds: `meet/calendar.ts` (`nowMeeting`, `NOW_LATE_MS`, `NOW_EARLY_MS`), the `/now` route and the `events` dep in
+`routes/bots/meet.ts`, the calendar wired in `server.ts`, 6 cases in `tests/meet-routes.test.ts`. No migration, no switch
+of its own: it rides `MEET`.
+
+**Not built: the card.** The server answers `ask: "link"`; the window has to draw it and offer the clipboard. Desktop
+work, and a desktop build.
+
+## 17 Nov: THE SCREEN BOT'S MARKS ARE OPEN NOW, AND IT BOUGHT BACK PROMPT BUDGET
+
+The guide could mark the screen with nine things and nothing else: a name nobody listed was DROPPED, so the explanation
+pointed at nothing while the words carried on as if it were there, and nobody was told. A model explaining something
+reaches for "outline", "emphasise", "callout", "frame", "trace" all the time.
+
+Now an unlisted name is read for its SHAPE and drawn as a mark this app already has (`agent/lines.ts markOf`):
+`OUTLINE` and `FRAME` are a box, `EMPHASISE` a highlight, `ENCIRCLE` a circle, `CAPTION` a label, `ORDER` a number,
+`STRIKE` an underline, and a name it cannot read at all becomes the plainest mark there is — never nothing.
+**Open at the name, closed at the mark**, the same rule as a drawing's roles (`src/show/style.ts`). The window and the
+phone already draw all nine, so an invented name needs nothing shipped.
+
+**This is not the leniency the file's own header refuses.** "A mark that fails is dropped, never guessed at" is about
+its TARGET: an id must be one really on this screen, a picture spot only on a step that has one. That stays exactly as
+strict, and the tests still hold it. What degrades is how the mark LOOKS, which is ours to choose and never theirs.
+`clear` and `arrow` are never guessed at: one wipes what is on the screen, the other needs two ends, and a wrong guess
+at either is worse than a box round the thing.
+
+**AND IT PAID FOR ITSELF.** Eight lines of contract, one per kind, became one open line plus a short second. The
+planner's stable block went from **4,889 to 4,846 against its 4,904 budget — 15 characters of headroom became 58.** So
+the thing this file has been warning about ("the next line anyone adds will fail that test") is less tight than it was,
+and it got less tight by becoming more capable, which is the opposite of what more verbs would have done.
+
+The picture path gets it for nothing: `parseDraw` is shared, so a mark invented while reading a chart resolves the same
+way. Held by `tests/agent-draw.test.ts` (32 cases), including that a prototype name (`constructor`, `toString`) is still
+not a kind and lands on the fallback, and that `__proto__` is not even a name.
+
+**What this does NOT do, and it is the honest half of "show things on the screen":** the guide's CARD is still closed.
+It draws a state, words, the steps and a confirm. It cannot show a table, a copiable command, a comparison or a chart —
+the things `src/show` draws in a chat, including the open `part`. The card is its own renderer in `guide/card.js` (DOM
+and canvas), not the SDUI kit, so `showNodes` cannot be pointed at it. The way in is a short verb on the planner (which
+there is now budget for) that asks for a showing, with the existing `bot_show` role turning the answer into blocks and
+`guide/card.js` learning to draw them. That is the next piece, and it is a desktop build, not a server deploy.
+
+## 17 Nov: "HEY X0" ON THE COMPUTER — the decision is built and wired; nothing listens yet
+
+The wake word was written down here as "native work in both apps, nobody is building it". On the **computer** that is
+only half true: the window has no store review and updates itself from our own site, so nothing there waits on Apple or
+Google. What it needs is a local listener, and what it needs FIRST is the decision, which is where the mistakes and the
+privacy live. That part is built, tested and wired.
+
+`TAILZU-DESKTOP/src/dictation/wake/wake.js` — the policy alone: no microphone, no model, no Electron, so it can be read
+and argued with. It is handed what a listener thought it heard and what else is going on, and answers whether to start.
+
+- **A word is not enough.** Below `minHeard` nothing happened; at or above `sureHeard` it fires; in between it waits
+  `confirmMs` for SPEECH to follow, because a person who says the name goes on to ask for something and a passing
+  mention on a television usually does not land in that gap.
+- **A brake, because the television wins otherwise.** More than `restAfter` hits inside `watchMs` and it stops listening
+  for `restMs` and says why. Without it a programme that says the name every minute holds the microphone open all
+  evening and drains the battery doing it. Hits too quiet to count never feed the brake, or noise alone would rest it.
+- **Refusals, not settings:** never while a dictation, Ask or a call has the microphone (one microphone, and a wake word
+  that interrupted a dictation would write its own name into what was being said); never in an app that is off limits
+  (money, health, a password field, our own window); never on a locked or sleeping machine; and never at all unless the
+  person turned it on — being allowed the microphone once is not permission to listen all day, so it is its own switch,
+  **off**.
+- **A word waiting for speech is dropped** the moment the microphone goes to something else, and cannot be confirmed
+  late.
+- **Nothing is kept**: counters and a clock, never audio and never a transcript.
+
+**What it starts is a dictation** — the same thing the key starts — because the one key's brain is what decides whether
+what follows is a question about the screen or words for the box in front (`docs/ask-decide.md`). A wake word is the key
+without the key, not a third way in.
+
+Wired in `main.js` ("hey X0"): `wakeHeard(score)`, `wakeSpeech()` and `wake:*` IPC for a listener to call, with the
+machine's state read at the moment of a hit rather than tracked, so nothing can go stale. The app in front is checked
+only once a word is otherwise good enough to act on, because reading it costs a call.
+15 cases in `src/dictation/wake/wake.test.js`; the desktop suite is 1,559 of 1,560.
+
+**What is left, and it is the part that cannot be written here:** the listener. On-device keyword spotting with the
+microphone open and nothing written down — macOS can do it (`SFSpeechRecognizer` with `requiresOnDeviceRecognition`, a
+helper beside `audiotap.swift` and `tzkey.swift`), Windows has `Windows.Media.SpeechRecognition`. `wake.js`'s `LISTENER`
+says what it must do and must not. It could not be built or tested in a Linux container with no microphone, which is why
+it is an interface and not a guess.
+
+**Also found, not fixed:** the desktop's one failing test is real drift, not the side-by-side kind —
+`botLooks.js` is behind the backend's `shared/bots/looks.json` (the cinema and Lingo moments). The fix is
+`node src/botTiles/genStarter.mjs` in `TAILZU-FRONTEND/app`, which writes both copies. Left alone deliberately: it
+touches `app/**`, and a push of that to main publishes an over-the-air update, so it is the owner's to time.
+
+**On "the screen bot should do everything":** the driver is not the limit. `axDriver`/`uiaDriver` already expose every
+ability the planner's verbs use (snapshot, press, click, setValue, focus, scroll, key, open, caret, page, look) — and
+`click` is there and not even offered as a verb. The limit is the **planner's prompt budget: 15 characters**
+(4,889 of 4,904). So "everything" cannot be more verbs at ~60 characters each; it has to be an OPEN vocabulary, the
+`part` move applied to the guide's marks, which costs a handful. Not built yet.
+
+## 17 Nov: SDUI_V2 IS NOT WAITING ON A STORE BUILD — THE PHONES ALREADY HAVE THE BLOCKS
+
+`docs/renderer.md` section 3 said phones would get the vocabulary-2 blocks "with the next over-the-air update of the new
+store build", which reads as a store build being the gate. **It is not, and it never was.** Checked today:
+
+- `bfe4404` ("The phone renderer draws screen vocabulary 2") touched **31 files, every one under `app/src`** — no native
+  file, no `app.config.ts`, no `native-inputs.lock`. So the runtime label never moved from `tailzu-2026-11-x0-blip`.
+- `eas-release.yml`'s `update` job runs `if: … (github.event_name == 'push' || inputs.update)` and only skips the send
+  when the push touched a native file. Runs **131 to 139** were all pushes to main and all succeeded, including
+  `cba544d` on 14 Nov 21:59, which was JavaScript only. Run 140's own message says it plainly for the other case:
+  "Native, so it reaches phones in the next store build, not over the air."
+
+So **every phone on that runtime has the blocks**, and the phone side of `SDUI_V2` is already done.
+
+**The window is the one that still needs something, and it is not a store either.** It updates itself in place from our
+own site (`TAILZU-DESKTOP/src/main/updater.js`: download, SHA-512 against what the publish recorded, replace, restart).
+Its version has not moved since `af74cd7` ("The window draws screen vocabulary 2") landed — still 0.4.7 — so a build
+carrying the blocks has to be **published** for installs to pick them up.
+
+**What is actually left before `SDUI_V2` can go on:** publish a desktop build, then stage with `SDUI_V2_USERS`, then the
+switch. Nothing is waiting on Apple or Google. Worth knowing because the stale line had this looking weeks away when the
+phone half was finished on 14 November.
+
 Updated 16 Nov 2026, 14:40 UTC. One session is building the items below. Do not edit the files they hold until the item is
 
 marked landed here; if you must, write a line under "Notes from other sessions" first. Remove an item when it lands.
@@ -8,6 +269,144 @@ marked landed here; if you must, write a line under "Notes from other sessions" 
 look. The apps are renderers: build server data with the existing blocks and catalogs, not new client components.
 
 ## Landed today (on main, every switch off by default)
+
+### 17 Nov: THE ONE OPEN BLOCK — a conversation can show a thing nobody wrote a block for (`docs/show.md` 1a)
+
+The answer to "a catalogue is never finished". Somebody makes a bot nobody planned for, it needs a component nobody wrote,
+and the answer cannot be "wait for a release". So `show` has a **`part`**: the model names what a thing IS (`role`, any
+words) and **never how it looks**, and `src/show/style.ts` resolves every role — invented ones included — onto a look this
+app already draws and has already tested. **Open at the name, closed at the look**, so nothing can come out off-style,
+because there is no style for it to come out in except ours.
+
+Three kinds cover it: `text` (seven looks), `box` (a plain stack, a row, a card, or a card with a tone) and `control` (a
+button: copy to the clipboard, or send words as if typed). A **copiable snippet**, which no named block can express, is
+three parts composed — and it needed nothing added to either app, because `copyToClipboard` is an action every build
+already honours and five of the app's own screens use it. The window gets `copyText` through the same per-client pattern
+`keysDesk.ts` already uses.
+
+A role resolves in three steps: the table of everything we thought of and its synonyms; the HINTS, which read the shape of
+an invented name (`api_snippet` has `snip` in it, so it is code); then the family's plain look. Deliberately not clever —
+no string distance, no model call, no learning — because a guess that fails is a thing drawn wrong with nobody told, and a
+rule a person can read off the page beats one that is right more often. What a control was GIVEN beats what it was called:
+one named `copy` holding only words to send can only send; one holding neither is not a control and is dropped.
+
+Held by `tests/show-parts.test.ts` (15 cases). The one that matters: a tree of entirely invented roles
+(`deployment_severity`, `incident_headline`, `root_cause_detail`, `failing_command`, `duplicate`) draws with `lintTree`
+clean and the app's own design rules passing.
+
+**A size table was re-anchored, deliberately, and it should be seen rather than slipped past.** `bot_show`'s contract had
+~24 characters of headroom (2,638 measured against a 10%-over-2,420 ceiling), so the open block did not fit. Its
+`prompt-sizes.ts` "before" is now its real pre-`part` size, 2,638, not the 2,420 of its first version — the same treatment
+the cinema's roles were given when they grew by the block they now carry, and it keeps the 10% rule meaning something
+going forward instead of resting on a stale anchor. Measured now: 2,898, ceiling 2,902. It is still tight on purpose.
+
+**XODE'S CHAT DRAWS NOW TOO.** The drawing step ran in one place, `bots/run.ts`, which Xode does not use — its chat is
+its own loop — so the bot most likely to need a copiable command could only write words. It is asked for in
+`code/chat/index.ts` after `converse` and before the thread is kept, and rides on the turn as `s`
+(`code/chat/threads.ts ChatTurn`). Two things differ there, both on purpose:
+
+- **Its `Seen` is empty.** What a Xode turn reads are file paths, not addresses, so the checker's existing "an address
+  this turn read" rule drops every link and picture — a drawing here cannot build an address out of nothing.
+- **The chat draws it `live: false`** (`screens/codeWork/job.ts`), so a control that SENDS words is left out while a copy
+  is drawn on every turn. This chat's Send is not the bots chat's: a `say` would post into the wrong conversation.
+
+Held by `tests/bots-codework.test.ts`: a turn carrying a copiable snippet comes out with the right client's copy action
+and only that one (`copyText` in the window, `copyToClipboard` on the phone), the copy carries the command and not the
+label, and `lintTree` is clean. Its fixture is a `CODEWORK_CHAT_API` of its own rather than the shared one, because
+several tests read the shared one for the EMPTY chat's words — the first attempt changed the shared fixture and broke
+two of them.
+
+**What is left of the reach:** the bot builder draws nothing, so creating a bot still gets no components.
+
+### 16 Nov: A SCREEN NOBODY BUILT, DRAWN BY A MODEL (`docs/screen-draw.md`, switch `SCREEN_DRAW`, off)
+
+The first place in the app where a MODEL composes a screen rather than a person writing it. An id with no
+builder in `BOTS_SCREENS` is answered "This part is on its way" today; with the switch on it is drawn instead —
+one cheap call picks from the **20 blocks a bot already draws under its words** (`src/show`) and the kit draws
+them, so **the model never writes a style and cannot break the app's design rules**. That is the arrangement
+`sdui2/design.ts` was written for, now used: the model proposes, code decides.
+
+Why blocks and not nodes: a model that writes nodes has to get contrast, borders and touch sizes right on every
+screen, and `checkDesign` is then a gate it can fail. Picking blocks it cannot fail, because `showNodes` writes
+the nodes. `checkDesign(drawn: true)` still runs over the finished tree, but as an **assertion over our own
+renderer** — an error there is a bug in the kit, not a bad drawing — so there is no redraw and no second call.
+
+What it may not draw: nothing to tap, type or send (`choice`, `suggest`, `form` are dropped at any depth — their
+Send needs a chat turn and a screen has none), and no address or picture (the checker's existing "an address this
+turn read" rule meets a turn that read nothing, so its `Seen` is empty and every link and image goes).
+
+**A built screen never goes near it.** Every id in `BOTS_SCREENS` is answered by its own builder exactly as
+before, and the test holds that: Home with a model door present asks no model. It needs `deps.drawn`, so every
+caller not given one — the tests, the render check, `emptyDeps()` — behaves as it did.
+
+Holds: `tulmi/src/drawn/draw.ts` (new), the `screen_draw` role in `principles/roles.ts` with
+`evals/screen_draw.jsonl`, the `SCREEN_DRAW*` lines of `config.ts`, `deps.drawn` on `BotsDeps`
+(`experience/bots/live.ts`), the `!def` branch of `buildBotsScreen` (`experience/bots/index.ts`),
+`tests/screen-draw.test.ts` (18 cases), `docs/screen-draw.md`. No migration.
+
+**It is drawn once** (`SCREEN_DRAW_CACHE_MIN`, 60 minutes). What is kept is the BLOCKS, not the built screen, so one
+entry serves a phone and the window both; the key is a hash of the exact message the model was given, which is the
+proof rather than a shortcut — two requests share an answer only where the model would have been asked the very same
+thing, and if that message ever grows to carry the person's own facts the key grows with it. A "nothing to draw" is
+kept for two minutes; a call that FAILED is kept nowhere, so a model down for a moment cannot blank a screen for an
+hour; everyone asking at once gets one call (`guard/coalesce.ts`); and a kept drawing is not held to the money check
+because no call is made for it.
+
+**Not done, and worth knowing before this is pointed anywhere people visit:** it is told nothing but the id and its params — there is no `load` for a screen nobody
+built, so it draws from the id alone and is told to invent no numbers and no names. Vocabulary 1 by
+construction; once `SDUI_V2` is on it could draw to the blocks a client declares (`hasBlock`). The fixtures are
+written but no eval has been run against a real model.
+
+### 16 Nov: ASK'S LADDER SHARES THE BRAIN'S CIRCUIT BREAKERS (no switch; `docs/code-brain.md`)
+
+There are three doors to a model here — `code/brain/gateway.ts` (Xode and the bots), `pipeline/writing/model.ts` (the
+writer) and `agent/llm.ts` (Ask, the screen bot). Only the first had circuit breakers, so Ask tried a dead model and paid
+the whole of `AGENT_TIMEOUT_MS` on **every step**. It now asks the same breakers first, under the **same keys**
+(`guard/breaker.ts modelBreakerKeys`), so a model whose breaker is open is skipped with no call, and the two doors learn
+from each other: a model the bots have just found dead costs an Ask step nothing, and the other way round.
+
+The key convention moved into `guard/breaker.ts`, the leaf, and the gateway delegates to it, so there is ONE definition.
+It could not be imported from `tiers.ts` (`familyOf`), because tiers.ts imports the planner and the planner imports the
+breakers. An answer is a success; an empty answer, a timeout and a failure are the model's; a caller that stopped says
+nothing and gives its probe back — the gateway's own rules. No `CallRecord` is written for a skip, because no call was
+made (the ledger's outcome column is unchanged), so a skip is one line of the log, as it is in the gateway.
+Two cases in `tests/agent-route.test.ts`: eight failing steps shut the model AND its whole provider, and a ladder nobody
+has failed is untouched.
+
+**A doc that was wrong is fixed too.** `docs/code-brain.md`'s known limits said "calls are not streamed", and the gateway
+has streamed all along (`onText`, `drain()`, `firstTextMs`, `onReset`, and a stopped stream charged for what it used).
+The real gap is narrower and now written down: the gateway voids what was shown and climbs, which is right for a job
+nobody watches and wrong for a caller whose lines are ACTED on as they arrive — `onReset` can un-say words, it cannot
+un-press a button. That one per-call policy is what a full move of `agent/llm.ts` onto the gateway needs first, and it is
+the next step of this work, not a thing that was skipped.
+
+### 16 Nov: RAISING THE CONTEXT ACTUALLY RAISES IT NOW (`docs/context.md` 2a; no switch, default unchanged)
+
+**A correction worth reading.** It was said here that four times the person's context block was one env var away.
+It was not. `CONTEXT_MAX_CHARS` is a CAP, and the section limits (eight facts about them, eight people, four pieces
+of open work, three recent results) are applied BEFORE the cap is measured, while the cap only ever CUTS. So raising
+it bought nothing: the sections never produced more than about 2,000 characters, and a bigger budget was a bigger
+empty room.
+
+The section limits lift with the configured budget now (`context/build.ts forBudget`), to four times at the config's
+own ceiling of 8,000. **At 2,000 every number is exactly what it was**, so nothing changes until somebody raises it;
+`CONTEXT_MAX_CHARS=8000` then gathers four times as much and costs accordingly. Held by `tests/context.test.ts`:
+eight people at the default, twelve with it raised, and the trim order untouched.
+
+The lift reads the CONFIGURED budget and never a caller's own `max` — the configured budget says how much is
+GATHERED, a caller's `max` only CUTS. The first version tied it to the caller's number, which made a smaller `max`
+produce a SHORTER text and so nothing to trim: "just over the cap" stopped being over it, and the trim order's own
+test caught it. Worth keeping in mind for anything else that scales with a budget.
+
+How many asks are KEPT does not scale (`keep.ts TURNS_KEPT`, 6): that is storage, one row per person, so more of
+those is a decision about what is written down rather than what a model is shown. Above 8,000 is still a zod
+`.max()` change; the env var higher than that fails validation rather than clamping.
+
+**One more correction, from reading `agent/llm.ts`:** the gateway's `growing` prompt cache would NOT help Ask. It
+needs messages that only grow at their end, and the planner sends a system block plus ONE user message that is
+rebuilt every step (the run's history is inside it). Its cacheable part is the stable block, which it already marks
+for Anthropic. So Ask's caching is already as good as that mechanism can make it, and the win there is the
+breakers above, not caching.
 
 ### 16 Nov, late: four sessions' branches merged into main
 
