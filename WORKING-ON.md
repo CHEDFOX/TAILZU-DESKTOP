@@ -1,5 +1,26 @@
 # Being built right now (read before you start)
 
+## 17 Nov: THE SIGN-IN CARD HAS A SWITCH NOW, SO IT CAN BE UNDONE FROM HERE
+
+`SIGN_IN_CARD`, **off**, staged by `SIGN_IN_CARD_USERS`. It was shipped without one, and that was the thing wrong with
+publishing it: **everything the card draws lives in the window's own page** (`guide.html`), which only a new build can
+change. A card that came out wrong would have needed a release to undo.
+
+Off, three things happen: the planner is not told the card's rules (so they are not paid for either), any `FIELD` or
+`ALSO` it writes anyway is dropped and counted in `cardDropped`, and the handover carries no card — the plain one, the
+page itself, which always works. **Both gates, not one**: the two verbs are in the contract whatever the prompt says, so
+a model that writes them anyway is stopped at the reader and not only by the note.
+
+It took a `userId` down to the prompt (`StepContext.userId` → `agentUserMessage`) so the stage can be per account, which
+is how every other new thing here is turned on. Two cases in `tests/agent-signin.test.ts` hold the default: off, a
+handover carries no card and the rules are not in the prompt.
+
+**So the card is now safe to publish**: ship the build with it off, turn it on for one account, look at it, then widen.
+The words were already knobs (`desktop.agent.text.*`); this makes the whole feature one too.
+
+12,466 pass. The two failures are both pre-existing and were checked by stashing: `launch-motion`'s side-by-side case,
+and `code-routes`' hook timing out as it boots the real server, which fails the same way with this work removed.
+
 ## 17 Nov: THE SIGN-IN CARD IS WHOLE — boxes, ways in, and a way out to our own browser
 
 **The boxes.** The card draws the page's real fields, named in the person's own language. A secret and a code are hidden
