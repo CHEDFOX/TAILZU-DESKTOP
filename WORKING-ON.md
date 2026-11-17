@@ -1,5 +1,27 @@
 # Being built right now (read before you start)
 
+## 17 Nov: A BUG IN THE WAYS IN, FOUND BY READING THE PATH RATHER THAN THE TEST
+
+Worth writing down, because the test passed and the app could not have worked.
+
+The ways-in buttons send a button id (`way:e9`). Both halves of the card's answer path **coerced every string to a
+boolean**: `preload.js`'s `confirm` and `guide:confirm` in `ask.js` each did `yes === "edit" || yes === "deny" ? yes :
+!!yes`. So `"way:e9"` arrived as `true`, which `approve`'s own `pick` reads as the MAIN button — pressing "Continue with
+Google" would have ended the handover instead of starting the way in. The tests in `agent.test.js` passed because they
+stub `guide.approve` and never cross that hop.
+
+Fixed in both, and with a guard rather than just a wider filter: `approve()` now remembers the ids of the buttons it sent
+(`cardButtons`), and `guide:confirm` accepts an id **only if it is one of them**. So a renderer cannot invent an answer,
+and an id that is not on the card is no answer at all rather than being read as the main button. The card's button cap
+went 3 → 6, because a sign-in card draws up to four ways in beside Continue and Stop.
+
+`src/agent/ask.test.js` holds the dangerous direction with the real path (`h.ipc.emit("guide:confirm", …)`): an invented
+id does not act and above all does not read as Approve, and the real answer still works. 1,563 of 1,564.
+
+**The lesson, since this is the second time this session:** a stub that stands in for the thing being changed will pass
+whatever you do to the thing. The ways-in work needed a test that crossed the IPC, and the open `part` work needed one
+that went through the real checker — which it has.
+
 ## 17 Nov: THE SIGN-IN CARD'S WAYS IN ARE DRAWN IN THE WINDOW (`docs/sign-in.md`)
 
 The server has been able to describe a sign-in page's real boxes and ways in since 15 Nov (`FIELD` / `ALSO` before a

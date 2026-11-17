@@ -152,7 +152,13 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   // Over the card (take clicks) or not (let them through to the app).
   mouse: (inside) => ipcRenderer.send("guide:mouse", !!inside),
   // true or false; on the server's card also "edit" and "deny" (its Not now).
-  confirm: (yes) => ipcRenderer.send("guide:confirm", yes === "edit" || yes === "deny" ? yes : !!yes),
+  // true is the card's main answer; "edit" and "deny" are its two named ones; anything else is a BUTTON ID the card was
+  // given (agent.js's ways in). An id is let through as a short plain word so the main process can match it against the
+  // buttons it sent — without this it was coerced to `true`, and pressing "Continue with Google" read as "Continue".
+  confirm: (yes) => ipcRenderer.send("guide:confirm",
+    yes === "edit" || yes === "deny" ? yes
+      : typeof yes === "string" && /^[a-z][a-z0-9:_-]{0,15}$/.test(yes) ? yes
+        : !!yes),
   // The picture card's answer: "once", "always" (for this app) or "no".
   permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),

@@ -2927,6 +2927,31 @@ test("Alt twice the moment the card comes up is the stop gesture, not Approve", 
   assert.ok(!h.ask.active());
 });
 
+/**
+ * A card answers with `true`, "edit" or "deny" — or with the ID OF A BUTTON IT WAS GIVEN (agent.js's ways in on a sign-in
+ * handover). Anything else is no answer at all and the card keeps waiting.
+ *
+ * This guard is the whole of a bug: `guide:confirm` used to coerce every string to `!!yes`, so a way-in id came through as
+ * `true` and pressing "Continue with Google" read as "Continue" — it ended the handover instead of starting the way in.
+ * Both halves of the path flattened it, the preload and the main handler, so a stubbed guide in agent.test.js passed while
+ * the real app could not have worked.
+ */
+test("a card answers only with its own buttons: an id it was not given is no answer", async () => {
+  const h = harness({ steps: APPROVE });
+  await askAndWaitForCard(h);
+  // This card's buttons are approve/edit/deny, so nothing else may answer it.
+  for (const invented of ["way:e9", "approve-please", "x", "constructor"]) {
+    h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, invented);
+  }
+  await sleep(30);
+  assert.deepStrictEqual(h.taskCalls, [], "an invented id did not act, and above all did not read as Approve");
+  assert.ok(h.ask.active(), "the card is still waiting for a real answer");
+  // And the real one still works.
+  h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, true);
+  await until(() => h.taskCalls.length > 0);
+  assert.strictEqual(h.taskCalls[0].path, "/v1/tasks/t1/approve");
+});
+
 test("the guide's Approve, Not now and Edit are each answers of their own", async () => {
   for (const [answer, path] of [[true, "/v1/tasks/t1/approve"], ["deny", "/v1/tasks/t1/deny"], ["edit", "/v1/tasks/t1/deny"]]) {
     const h = harness({ steps: APPROVE });

@@ -431,6 +431,9 @@ function createAsk(ctx) {
   /** A card with a question on it, and the wait for its answer: `pick` turns
    *  what the guide (or Alt twice) answered into what the agent is given,
    *  `silent` is what no answer is. */
+  /** The ids the card on screen may answer with, besides its main button and the two named ones (approve/deny/edit). */
+  let cardButtons = new Set();
+
   function holdCard(message, pick, silent) {
     if (confirmWait) confirmWait(false);
     phaseTo("showing");
@@ -539,11 +542,14 @@ function createAsk(ctx) {
     approve(card) {
       const c = card && typeof card === "object" ? card : {};
       const text = (v, n) => String(v == null ? "" : v).slice(0, n);
-      const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 3).map((b) => ({ id: text(b && b.id, 12), label: text(b && b.label, 40) }));
+      // Six, not three: a sign-in card draws the page's own ways in (up to four) beside Continue and Stop.
+      const buttons = (Array.isArray(c.buttons) ? c.buttons : []).slice(0, 6).map((b) => ({ id: text(b && b.id, 16), label: text(b && b.label, 40) }));
+      // Which ids this card may answer with, for the guard in `guide:confirm`. Replaced per card, never added to.
+      cardButtons = new Set(buttons.map((b) => b.id).filter((id) => id && id !== "approve" && id !== "deny" && id !== "edit"));
       return holdCard({
         type: "confirm", text: "", risk: "confirm",
         card: { title: text(c.title, 80), app: text(c.app, 60), label: text(c.label, 60), preview: text(c.preview, 1400), note: text(c.note, 240), buttons },
-      }, (v) => (v === true ? "approve" : v === "edit" || v === "deny" ? v : ""), "");
+      }, (v) => (v === true ? "approve" : typeof v === "string" && v ? v : ""), "");
     },
     hide() { hide(); },
     // A button on the finished card for what stopped the answer: only
@@ -1290,7 +1296,16 @@ function createAsk(ctx) {
   });
   // A yes or a no; on the server's card also "edit" and "deny" (Not now),
   // which are answers of their own. Anything else is read as a no.
-  ipcMain.on("guide:confirm", (e, yes) => { if (fromGuide(e) && confirmWait) confirmWait(yes === "edit" || yes === "deny" ? yes : !!yes); });
+  // The card's answer. `true` is its main button; "edit" and "deny" are the two named ones; anything else must be the ID OF A
+  // BUTTON THIS CARD WAS GIVEN (agent.js's ways in) and is matched against them, so a renderer cannot invent an answer. An id
+  // that is not one of them is no answer at all and the card keeps waiting, rather than being read as the main button — which
+  // is what happened while this coerced every string to `true`.
+  ipcMain.on("guide:confirm", (e, yes) => {
+    if (!fromGuide(e) || !confirmWait) return;
+    if (yes === "edit" || yes === "deny") { confirmWait(yes); return; }
+    if (typeof yes === "string" && yes) { if (cardButtons.has(yes)) confirmWait(yes); return; }
+    confirmWait(!!yes);
+  });
   ipcMain.on("guide:permit", (e, choice) => { if (fromGuide(e) && permitWait) permitWait(String(choice || "")); });
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
   // The card's button (guide offer): only the one it was given, once. The
