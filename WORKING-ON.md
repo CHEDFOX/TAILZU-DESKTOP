@@ -107,6 +107,26 @@ It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is nev
 balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
 mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
 
+## AN OTA CARRIES RENDERER WORK. A STORE BUILD IS FOR NATIVE CODE ONLY (17 Nov)
+
+**Correcting something this file got wrong twice**, because it was costing real decisions. "The apps would have to learn
+to draw it, so it needs a store build" was the reason given on 16 Nov for taking the bot's peek and the dotted mark out,
+and the reason nearly given today for not letting the Home bot peek around the screen. **It is wrong.**
+
+`eas-release.yml` publishes an OTA on any push to main touching `app/**`, and an OTA carries **all of the JavaScript**,
+new SDUI components and renderer behaviour included. `BotStage.tsx` imports React, react-native primitives and
+safe-area-context — nothing native; Skia is already in the binary. So a new way of drawing a bot ships the same day.
+
+THE REAL LINE:
+
+* **Store build** — native code only: a new native module, a permission, the app icon, anything in the Android or iOS
+  project. Those cannot go over the air at any price.
+* **OTA** — everything else, including a new component and a new capability, as long as the runtime version still
+  matches (`tailzu-2026-11-x0-blip`, fixed). The capability handshake then does its job: the updated build declares the
+  new component, and a phone still on an older runtime simply never gets sent it.
+
+What this changes: a thing that "needs an app change" is not thereby weeks away. It is one OTA away unless it is native.
+
 ## WHAT IS OFF, AND WHICH KIND OF OFF IT IS (16 Nov)
 
 Fifty-three switches are off and twenty-six are on, which sounds alarming and mostly is not: most of the off ones are
