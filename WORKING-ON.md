@@ -27,6 +27,28 @@ what is numbered above `LIVE_MIGRATION` — a colliding number does not fail, it
 - **The site's phone screen** (`claude/loving-goldberg-wvp95p`, TAILZU-WEB) and **the Blip structure sheet**
   (`claude/jolly-brown-p8nhu2`, brand assets only).
 
+**HOME IS ONE BOT A ROW ON THE PHONE** (17 Nov). `tiles(ctx, 1, 104, 16, …)` — two columns of 132 gave the phone FOUR
+slots, three bots and "Make a bot", so with five built-ins alone most bots were chips under a "More bots" label. One
+column is full-width rows and everything fits.
+
+**Only the width changed.** It is the same living tile at a different shape: the same Blip playing on it in the bot's
+colour, the same tap (the tile presses in, the cloth is drawn under the finger, that bot perks up and every other bot
+turns its head to it), the same moments and the same engine. `columns` was always a parameter of `BotTiles`, and the
+app already honoured it — `const cols = Math.max(1, Number(props?.columns) || 2)` — so this is server side alone, no
+app change. (The first answer given here was that it needed one: that was from looking only at `strip`, which is one
+full-width row and singular. `columns: 1` was the whole of it.)
+
+* **104, not 132**: a wide row needs less height to give its bot somewhere to play, and seven rows of 132 is three
+  screens of scrolling.
+* **`HOME_TILES = 8`** is the cap, and it is not a layout number — each row is a LIVING bot the app keeps for its
+  lifetime, so it is how many animate at once. Past it they are chips, which `moreBots` already did and which now
+  draws nothing, because nothing is left over.
+* **`emptyHome` changed with it.** Its own comment says it shows the bots "as Home shows them once they've started",
+  so leaving it at two columns would have changed the grid's shape under someone as they gained a bot.
+* **The window keeps its four across** (`homeDesk`, `tiles(ctx, 4, 150, 18, …)`), untouched.
+* Talk had no card line and was showing its purpose cut mid-word ("Just talk to it: questions, ideas, writ…"). It
+  reads **"Answers your questions"** now, in the style of the others (`shell/parts.ts` idleLine).
+
 **THE CHAT IS A TAB NOW, AND YOU IS NOT.** Tabs are **bots, talk, activity** (17 Nov). None of it needed an app
 release: the tab bar is server data and the app maps whatever tabs it is given — `TabBar.tsx` hardcodes no ids — and a
 tab's icon travels as `{viewBox, layers}` for the app to draw, so a new tab with a new glyph is entirely this side.
