@@ -268,11 +268,7 @@ function botCardNode(n, p, kids) {
     "transition:transform .42s cubic-bezier(.3,1.35,.5,1),opacity .26s ease-out;" +
     (entered ? "" : "opacity:0;transform:scale(.94) translateY(10px)") + '">' +
     '<div style="position:relative;height:' + stageH + 'px"><canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
-    (n.on && n.on.onDismiss
-      ? '<button type="button" class="tz-bc-back" aria-label="Back" style="position:absolute;left:6px;top:6px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;' +
-        'border:0;padding:0;background:transparent;cursor:pointer;border-radius:20px">' +
-        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0a0a0a" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>'
-      : "") + "</div>" +
+"</div>" +
     '<div class="tz-bc-w" style="transition:opacity .26s ease-out,transform .26s ease-out;' + (fresh ? "opacity:0;transform:translateY(6px)" : "") + '">' + kids + "</div></div>";
   if (!api) return overlay ? "" : card;
   if (!overlay) return card;
@@ -476,14 +472,13 @@ function mountBotTiles(root) {
       if (reduced) card.style.transition = "opacity .26s ease-out";
       requestAnimationFrame(() => { card.style.opacity = "1"; card.style.transform = "none"; if (veil) veil.style.opacity = "1"; });
     }
-    // The way out, when the card carries one: the Back in its corner, Escape, and a drag to the right over the card or the blur.
+    // The way out, when the card carries one: Escape and a drag to the right over the card or the blur. The visible Back is a
+    // step of the card, drawn by the server, so a card has one the day the server sends it.
     const leaveRef = cfg.n && cfg.n.on && cfg.n.on.onDismiss;
     if (leaveRef && !life.leaveWired) {
       life.leaveWired = true;
       let left = false;
       const leave = () => { if (left) return; left = true; void run(leaveRef); };
-      const backBtn = card.querySelector(".tz-bc-back");
-      if (backBtn) backBtn.addEventListener("click", leave);
       const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); leave(); } };
       document.addEventListener("keydown", onKey);
       const host = veil || card;
