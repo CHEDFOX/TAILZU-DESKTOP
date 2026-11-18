@@ -506,6 +506,41 @@ It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is nev
 balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
 mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
 
+## EVERY OTA HAS BEEN iOS ONLY. ANDROID HAS HAD NONE OF IT (18 Nov)
+
+**Why "I don't see the changes in the app" was true, and not a caching story.** From the release log, verbatim:
+
+```
+##[warning] REVENUECAT_ANDROID_KEY is empty in the EAS production environment as read from here,
+            so android is left out. On expo.dev → Environment variables, give it "sensitive"
+            visibility, not "secret".
+PLATFORMS: ios
+Environment variables ... loaded from the "production" environment on EAS:
+  META_APP_ID, META_CLIENT_TOKEN, REVENUECAT_IOS_KEY
+Platform    ios
+```
+
+`eas-keys.mjs --any ios android` keeps only the platforms whose payment key it can READ. A variable stored as
+**"secret"** on expo.dev is readable by Expo's own builders and by nothing else — `eas env:exec` gets an empty string
+— so Android was dropped from `--platform`, and the export built an iOS bundle alone. **Every update went to iOS
+only.** The gate itself is right: an Android bundle published without that key is an Android app that cannot take a
+payment. What was wrong is that it said so with a `::warning::` in a run that stayed green.
+
+**AND IT HID ITSELF TWICE OVER.** A phone with no update does not declare the new components, and the capability
+handshake then withholds exactly the new work from it — correctly. So the peeker was not sent AND the bot at the foot
+of Home stayed, which reads as "the server did not change" rather than "this phone is three OTAs behind". Server work
+and app work looked equally dead from the outside.
+
+**THE FIX IS NOT IN THIS REPOSITORY.** On expo.dev → the project → Environment variables → the `production`
+environment, `REVENUECAT_ANDROID_KEY` has to be **Sensitive**, not Secret. Then run the release workflow by hand: a
+push only publishes when `app/**` changes, and the Android bundle has never been built, so nothing will republish on
+its own.
+
+What was changed here: the release fails the run now when a platform is left out (`Every platform got the update`),
+after publishing to whichever platform CAN take it — iOS is never held back for Android's key. A gap is red instead
+of quiet. `SENTRY_DSN` and `POSTHOG_API_KEY` read empty from the runner too, so these releases report no crashes and
+no analytics; same cause, same fix, worth doing at the same time.
+
 ## A PENDING MIGRATION CAN BE SKIPPED A SECOND WAY: THE BUILD CACHES IT (18 Nov)
 
 **`LIVE_MIGRATION` says 0100 and seven files sit above it (0101–0107).** Both deploys today show the migrate stage as
