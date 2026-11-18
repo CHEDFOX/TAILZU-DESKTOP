@@ -2673,6 +2673,8 @@ function setupCard(o = {}) {
     screenDenied: () => denied,
     openAccessibility: () => did.push(["open", "accessibility"]),
     openScreenRecording: () => did.push(["open", "screen recording"]),
+    promptScreenRecording: () => did.push(["prompt", "screen recording"]),
+    openMediaSettings: (what) => { did.push(["open", what]); return o.mediaPage !== false; },
     relaunch: () => did.push(["relaunch"]),
     send: (s) => pushed.push(s),
   });
@@ -2732,11 +2734,16 @@ test("setup: only the app window may ask or act", () => {
 });
 
 test("setup: each button does its one thing, and the window is told the state after it", () => {
-  const c = setupCard();
+  const c = setupCard({ trusted: false });
+  // The first press on each of the Mac's two is the system's own dialog; the
+  // press after it is the page (the test below holds that in full).
+  c.act({ kind: "openAccessibility" });
   c.act({ kind: "openAccessibility" });
   c.act({ kind: "openScreenRecording" });
-  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "accessibility"], ["open", "screen recording"]]);
-  assert.strictEqual(c.pushed.length, 2);
+  c.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open" || d[0] === "prompt"),
+    [["open", "accessibility"], ["prompt", "screen recording"], ["open", "screen recording"]]);
+  assert.strictEqual(c.pushed.length, 4);
   // Look at the screen when it's needed: on, and off again. Saved each time.
   c.act({ kind: "picturesAll", on: true });
   assert.strictEqual(c.localState.askPicturesAlwaysAll, true);
@@ -2753,6 +2760,32 @@ test("setup: each button does its one thing, and the window is told the state af
   for (const p of [{ kind: "openSystemAudio" }, { kind: "openExternal", url: "https://x.test" }, { kind: "__proto__" }, "relaunch", null, 7, {}]) c.act(p);
   assert.strictEqual(c.pushed.length, before, "nothing done, nothing said");
   assert.ok(!c.did.some((d) => d[0] === "relaunch"));
+});
+
+test("setup: the microphone and camera pages open where the system keeps such a switch, and nowhere else", () => {
+  // A Mac asks for these two itself, the first time; once it has been told no
+  // it never asks again, and this page is the only way back. Windows never
+  // asks at all. Both have a page; Linux has neither.
+  for (const platform of ["darwin", "win32"]) {
+    const c = setupCard({ platform });
+    c.act({ kind: "openMicrophone" });
+    c.act({ kind: "openCamera" });
+    assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "microphone"], ["open", "camera"]], platform);
+    assert.strictEqual(c.pushed.length, 2, platform);
+  }
+  const none = setupCard({ platform: "linux" });
+  none.act({ kind: "openMicrophone" });
+  none.act({ kind: "openCamera" });
+  assert.deepStrictEqual(none.did, []);
+  assert.deepStrictEqual(none.pushed, []);
+  // A page this build cannot open is not reported as done.
+  const old = setupCard({ platform: "win32", mediaPage: false });
+  old.act({ kind: "openMicrophone" });
+  assert.deepStrictEqual(old.pushed, []);
+  // And only the app window may ask for one.
+  const c = setupCard();
+  c.act({ kind: "openMicrophone" }, c.OTHER);
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), []);
 });
 
 test("setup: the Mac's pages are opened only on a Mac", () => {
@@ -2892,6 +2925,31 @@ test("Alt twice the moment the card comes up is the stop gesture, not Approve", 
   await sleep(30);
   assert.deepStrictEqual(h.taskCalls, []);
   assert.ok(!h.ask.active());
+});
+
+/**
+ * A card answers with `true`, "edit" or "deny" — or with the ID OF A BUTTON IT WAS GIVEN (agent.js's ways in on a sign-in
+ * handover). Anything else is no answer at all and the card keeps waiting.
+ *
+ * This guard is the whole of a bug: `guide:confirm` used to coerce every string to `!!yes`, so a way-in id came through as
+ * `true` and pressing "Continue with Google" read as "Continue" — it ended the handover instead of starting the way in.
+ * Both halves of the path flattened it, the preload and the main handler, so a stubbed guide in agent.test.js passed while
+ * the real app could not have worked.
+ */
+test("a card answers only with its own buttons: an id it was not given is no answer", async () => {
+  const h = harness({ steps: APPROVE });
+  await askAndWaitForCard(h);
+  // This card's buttons are approve/edit/deny, so nothing else may answer it.
+  for (const invented of ["way:e9", "approve-please", "x", "constructor"]) {
+    h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, invented);
+  }
+  await sleep(30);
+  assert.deepStrictEqual(h.taskCalls, [], "an invented id did not act, and above all did not read as Approve");
+  assert.ok(h.ask.active(), "the card is still waiting for a real answer");
+  // And the real one still works.
+  h.ipc.emit("guide:confirm", { sender: h.windows[0].webContents }, true);
+  await until(() => h.taskCalls.length > 0);
+  assert.strictEqual(h.taskCalls[0].path, "/v1/tasks/t1/approve");
 });
 
 test("the guide's Approve, Not now and Edit are each answers of their own", async () => {
@@ -3036,24 +3094,36 @@ test("askHeard: nothing while a dictation has the microphone, signed out, for no
   q.ask.cancel("test over");
 });
 
-test("setup: Open Settings for Accessibility asks macOS first, once, so Tailzu is in the list on a fresh Mac", () => {
+test("setup: the Mac's two ask the system in the app first, and open the page only on the press after", () => {
+  // macOS has a dialog of its own for each of these and shows it the first
+  // time an app asks, over whatever is in front. So the first press is that
+  // dialog and nothing else — no page, no leaving the app — and because macOS
+  // never shows it again, the press after it opens the page where the switch
+  // is. (The asking is also what puts Tailzu in that page's list at all.)
   const c = setupCard({ trusted: false });
   c.act({ kind: "openAccessibility" });
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "trusted?" && d[1] === true).length, 1, "the system asked");
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [], "and nowhere sent");
   c.act({ kind: "openAccessibility" });
-  const asked = c.did.filter((d) => d[0] === "trusted?" && d[1] === true);
-  assert.strictEqual(asked.length, 1, "once a launch");
-  const first = c.did.findIndex((d) => d[0] === "trusted?" && d[1] === true);
-  assert.ok(first < c.did.findIndex((d) => d[0] === "open"), "asked before the page opens");
-  assert.strictEqual(c.did.filter((d) => d[0] === "open").length, 2, "the page opens each time");
-  // Already allowed: never the prompt.
-  const on = setupCard({ trusted: true });
-  on.act({ kind: "openAccessibility" });
-  assert.ok(!on.did.some((d) => d[0] === "trusted?" && d[1] === true));
-  // Screen Recording's button does not ask for Accessibility; nor does anything off a Mac.
+  assert.deepStrictEqual(c.did.filter((d) => d[0] === "open"), [["open", "accessibility"]], "the page, on the press after");
+  assert.strictEqual(c.did.filter((d) => d[0] === "trusted?" && d[1] === true).length, 1, "asked once a launch");
+  // The screen is asked for the same way: its own dialog, then the page.
   const sr = setupCard({ trusted: false });
   sr.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(sr.did.filter((d) => d[0] === "prompt" || d[0] === "open"), [["prompt", "screen recording"]]);
+  sr.act({ kind: "openScreenRecording" });
+  assert.deepStrictEqual(sr.did.filter((d) => d[0] === "prompt" || d[0] === "open"), [["prompt", "screen recording"], ["open", "screen recording"]]);
+  // It does not ask for Accessibility on the way.
   assert.ok(!sr.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  // Already allowed: nothing is asked and nowhere is opened.
+  const on = setupCard({ trusted: true });
+  on.act({ kind: "openAccessibility" });
+  on.act({ kind: "openAccessibility" });
+  assert.ok(!on.did.some((d) => d[0] === "trusted?" && d[1] === true));
+  assert.deepStrictEqual(on.did.filter((d) => d[0] === "open"), []);
+  // Nothing of this off a Mac.
   const win = setupCard({ trusted: false, platform: "win32" });
+  win.act({ kind: "openAccessibility" });
   win.act({ kind: "openAccessibility" });
   assert.deepStrictEqual(win.did, []);
 });

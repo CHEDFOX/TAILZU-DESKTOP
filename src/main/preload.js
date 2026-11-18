@@ -116,6 +116,10 @@ contextBridge.exposeInMainWorld("tailzuApp", {
   axStatus: () => ipcRenderer.invoke("app:axStatus"),
   askSetup: () => ipcRenderer.invoke("app:askSetup"),
   onAskSetup: (cb) => ipcRenderer.on("ask-setup", (_e, s) => cb(s)),
+  // Something the person asked for could not be done for want of one
+  // permission ("ax", "see", "mic", "cam"): the window puts its card up, if it
+  // is on screen to be read (sdui/permCard.js).
+  onPermNeeded: (cb) => ipcRenderer.on("perm-needed", (_e, kind) => cb(String(kind || ""))),
   askSetupAction: (kind, on) => ipcRenderer.send("app:askSetupAction", { kind: String(kind || ""), on: typeof on === "boolean" ? on : null }),
   // A note was organised (its id): the Notes pages can redraw.
   onNotes: (cb) => ipcRenderer.on("app:notes", (_e, id) => cb(id)),
@@ -148,7 +152,18 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   // Over the card (take clicks) or not (let them through to the app).
   mouse: (inside) => ipcRenderer.send("guide:mouse", !!inside),
   // true or false; on the server's card also "edit" and "deny" (its Not now).
-  confirm: (yes) => ipcRenderer.send("guide:confirm", yes === "edit" || yes === "deny" ? yes : !!yes),
+  // true is the card's main answer; "edit" and "deny" are its two named ones; anything else is a BUTTON ID the card was
+  // given (agent.js's ways in). An id is let through as a short plain word so the main process can match it against the
+  // buttons it sent — without this it was coerced to `true`, and pressing "Continue with Google" read as "Continue".
+  confirm: (yes) => ipcRenderer.send("guide:confirm",
+    yes === "edit" || yes === "deny" ? yes
+      : typeof yes === "string" && /^[a-z][a-z0-9:_-]{0,15}$/.test(yes) ? yes
+        // A sign-in card answers with what was typed into it: { id, values }. The values are the person's own words for
+        // the page's boxes and are passed straight through — never logged here, and never kept after the main process
+        // has set them into the page.
+        : yes && typeof yes === "object" && typeof yes.id === "string" && yes.values && typeof yes.values === "object"
+          ? { id: yes.id, values: yes.values }
+          : !!yes),
   // The picture card's answer: "once", "always" (for this app) or "no".
   permit: (choice) => ipcRenderer.send("guide:permit", String(choice || "")),
   spoken: () => ipcRenderer.send("guide:spoken"),

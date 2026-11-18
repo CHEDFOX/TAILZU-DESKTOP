@@ -2982,8 +2982,26 @@ function pasteIntoFocusedApp(done) {
   }
 }
 
+/**
+ * ONE PERMISSION IS MISSED, AND THE WINDOW IS THERE TO SAY SO: its card goes
+ * up over the app (sdui/permCard.js), the page behind it blurred, with the
+ * one thing that is missing and the furthest this system lets us go towards
+ * granting it. True when the window took it.
+ *
+ * Only while the window is actually on screen. A card drawn behind a hidden
+ * window is not an ask, so the caller keeps whatever it did before — a
+ * notification, usually — for that case.
+ */
+function permNeeded(kind) {
+  if (!appWin || appWin.isDestroyed() || !appWin.isVisible() || appWin.isMinimized()) return false;
+  if (appWin.webContents.isLoading()) return false;
+  try { appWin.webContents.send("perm-needed", String(kind)); return true; } catch { return false; }
+}
+
 let warnedAccessibility = false;
 function notifyAccessibility() {
+  // The window is up: its card says it, with the button that opens the page.
+  if (permNeeded("ax")) return;
   if (warnedAccessibility) return;
   warnedAccessibility = true;
   new Notification({
@@ -3067,12 +3085,19 @@ function deviceKinds() {
 // look was refused for want of it (run/text.js TEXT.needScreen). A fixed
 // address: the card's button opens this and nothing else.
 const SCREEN_RECORDING_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+/**
+ * ASK macOS FOR THE SCREEN, which is the system's own dialog and the whole of
+ * the ask the first time: "X0 Bot would like to record this computer's
+ * screen", over whatever app is in front. It is asking for the window list
+ * that does it — the helper never asks (tzax.swift) — and the same asking is
+ * what puts Tailzu in the settings page's list, so there is a switch there to
+ * turn on afterwards.
+ */
+function promptScreenRecording() {
+  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* nothing else to try */ }
+}
 function openScreenRecordingSettings() {
-  // macOS lists in that page only the apps that have asked to record the
-  // screen, and the helper never asks (tzax.swift): asking for the window
-  // list once puts Tailzu there (the first time with the system's own
-  // prompt), so there is a switch to turn on.
-  try { desktopCapturer.getSources({ types: ["window"], thumbnailSize: { width: 0, height: 0 } }).catch(() => {}); } catch { /* the page still opens */ }
+  promptScreenRecording();
   shell.openExternal(SCREEN_RECORDING_SETTINGS).catch(() => {});
 }
 
@@ -3081,6 +3106,21 @@ function openScreenRecordingSettings() {
 // its buttons. Each button opens one fixed page, the same way the note's and
 // the guide's do, and the window can open nothing else with them.
 const ACCESSIBILITY_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+// The microphone and camera pages, for the two systems that keep such a
+// switch. A Mac shows its own prompt the first time, and never again once it
+// has been told no; Windows has no prompt for an app to show at all. So when
+// opening one of these is the only way left, the window asks for it by name
+// and the address is fixed here, as every other settings page is.
+const MEDIA_SETTINGS = {
+  darwin: { microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone", camera: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera" },
+  win32: { microphone: "ms-settings:privacy-microphone", camera: "ms-settings:privacy-webcam" },
+};
+function openMediaSettings(what) {
+  const page = (MEDIA_SETTINGS[process.platform] || {})[what];
+  if (!page) return false;
+  shell.openExternal(page).catch(() => {});
+  return true;
+}
 const askSetup = createAskSetup({
   ipcMain, fromApp, platform: process.platform, systemPreferences,
   knobs: { str },
@@ -3092,6 +3132,9 @@ const askSetup = createAskSetup({
   // The guide's own path: macOS is asked for the window list once, so
   // Tailzu is in the page's list to be switched on, and the page opens.
   openScreenRecording: openScreenRecordingSettings,
+  // The first press is the system's own dialog, with nowhere to go.
+  promptScreenRecording,
+  openMediaSettings,
   // Through quit, not exit: a note being taken is finished on the server
   // (before-quit), and the helpers are stopped (will-quit), as on any quit.
   relaunch: () => { app.relaunch(); app.quit(); },
@@ -3115,6 +3158,15 @@ function setupAsk() {
   if (ask) return;
   ask = createAsk({
     BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt },
+    /**
+     * THEIR PART, MOVED TO X0 BOT'S OWN BROWSER — the way the phone signs a site in (docs/sites.md). A sign-in handover
+     * offers it, and this opens the app at that panel: a real page in our browser, signed in once and kept, so what is
+     * typed goes to the site itself and never through us. The site is read off the window in front; without one the
+     * It opens the SITES LIST, not a panel at a guessed address: the window knows the site in front only by its display
+     * name ("Swiggy"), never its domain, and `https://Swiggy/` is not a page. The list's own Sign in button carries the
+     * real address, so the person picks the site there and lands in our browser at the right place.
+     */
+    openPanel: () => { openAppWindow({ screenId: "bots.sites", params: {} }); },
     // The guide's window is raised under the pill, not over it (raiseGuide).
     webPrefs, hardenWindow, raisePill: raiseGuide, setBoundsExactly,
     // The question's card grows out of the pill, and the pill follows its
@@ -3172,8 +3224,10 @@ function setupAsk() {
     // setup card; back to the default at sign-out, like the list.
     picturesAlwaysAll: picturesForAll,
     // A look's word on Screen Recording changed: the setup card is told, so
-    // it can offer the restart a granted permission still needs.
-    lookPermission: () => askSetup.push(),
+    // it can offer the restart a granted permission still needs — and when the
+    // look was refused for want of it, the window's own card asks for it where
+    // the person just missed it.
+    lookPermission: (denied) => { askSetup.push(); if (denied === true) permNeeded("see"); },
     // The pill's Blip is the one that peeks over the text box: where he starts from, and the pill told he is away.
     pillBlip: pillBlipAt,
     page: (o) => pageRead.readPage(pageRead.pageDeps({ driver, dictating: () => recording }), o),
@@ -3820,17 +3874,27 @@ app.whenReady().then(() => {
 
   // The microphone, auto-granted, to the two pages that record — the hidden
   // recorder and the app window (its Train tab has a mic of its own) — and
-  // nothing else to anyone: not the camera, not to the pill or the captions,
-  // and never to remote content loaded by mistake.
+  // the camera to the app window alone, where a call is (docs/rooms.md).
+  // Nothing to anyone else: not to the pill or the captions, and never to
+  // remote content loaded by mistake.
+  //
+  // THE CAMERA USED TO BE REFUSED HERE, to everyone, which was right while
+  // nothing in the app had one. A call does now, and this said no before the
+  // computer was ever asked — so the camera button in a call could not have
+  // worked on any system, however the person answered. Only the app window
+  // may ask, and only for a camera: a window asking to record the screen
+  // comes through a different permission, which is still nobody's.
   session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {
     const types = (details && details.mediaTypes) || [];
     const audioOnly = types.length > 0 && types.every((m) => m === "audio");
     const fromNotesWin = !!notesWin && !notesWin.isDestroyed() && notesWin.webContents === wc;
+    const fromApp = !!appWin && !appWin.isDestroyed() && appWin.webContents === wc;
+    const records = fromApp || (!!recorderWin && !recorderWin.isDestroyed() && recorderWin.webContents === wc) || fromNotesWin;
     // The note-taker's capture of the computer's sound on Windows asks for the
     // screen's video too; it drops it at once. Only that window, only then.
     const notesDesktop = fromNotesWin && process.platform === "win32" && notes && notes.system === "desktop";
-    done(permission === "media" && types.length > 0 && (audioOnly || notesDesktop) &&
-      ([recorderWin, appWin].some((w) => !!w && !w.isDestroyed() && w.webContents === wc) || fromNotesWin));
+    done(permission === "media" && types.length > 0 &&
+      ((audioOnly && records) || notesDesktop || (fromApp && types.every((m) => m === "audio" || m === "video"))));
   });
 
   // One launch, counted once — here, where only the copy that holds the lock
@@ -3914,6 +3978,81 @@ app.whenReady().then(() => {
     } catch { /* autostart is a convenience; the app is not */ }
   }
 });
+
+// ===================================================================== "hey X0"
+
+/**
+ * THE WAKE WORD'S DECISION, WIRED TO WHAT THIS COMPUTER IS DOING.
+ *
+ * The policy is `src/dictation/wake/wake.js` and is tested on its own. This is the part that knows the machine: it
+ * gathers what else holds the microphone at the moment a word is heard, and starts the same thing the key starts — a
+ * dictation — because the one key's brain is what decides whether what follows is a question about the screen or words
+ * for the box in front (docs/ask-decide.md). A wake word is the key without the key, not a third way in.
+ *
+ * NOTHING LISTENS YET. A local listener has to call `wakeHeard(score)`; writing one is native work on each platform
+ * (wake.js's LISTENER says what it must do, and must not). Until then this is reached, holds a switch that is off, and
+ * fires for nobody — which is why it is wired now rather than later: the decision is cheap to get wrong quietly, and it
+ * is this half, not the listening, that decides whether a microphone is open in an app it should not be.
+ */
+const { makeWake } = require("../dictation/wake/wake.js");
+
+const wake = makeWake({
+  settings: {
+    minHeard: num("desktop.wake.minHeard", 0.45), sureHeard: num("desktop.wake.sureHeard", 0.85),
+    confirmMs: num("desktop.wake.confirmMs", 1600), cooldownMs: num("desktop.wake.cooldownMs", 2500),
+    restAfter: num("desktop.wake.restAfter", 4), watchMs: num("desktop.wake.watchMs", 60000),
+    restMs: num("desktop.wake.restMs", 600000),
+  },
+});
+
+/** Whether the machine is locked or asleep, the way the notices already ask. Unknown counts as locked: the safe way round. */
+function machineLocked() {
+  try { return powerMonitor.getSystemIdleState(60) === "locked"; } catch { return true; }
+}
+
+/** What else has the microphone, now. Read at the moment of a hit rather than tracked, so nothing can go stale. */
+function wakeNow() {
+  wake.context({
+    // Off by default, and its own switch: being allowed the microphone once is not permission to listen all day.
+    on: bool("desktop.wake.on", false),
+    recording,
+    askUp: !!ask && (ask.active() || ask.shown()),
+    callUp: !!talk && typeof talk.active === "function" ? !!talk.active() : false,
+    locked: machineLocked(),
+  });
+  return wake;
+}
+
+/**
+ * A listener thought it heard the word. `score` is how sure it was, 0 to 1.
+ * The app in front is checked only once the word is otherwise good enough to act on, because reading it costs a call.
+ */
+async function wakeHeard(score) {
+  if (wakeNow().heard(score) !== "fire") return false;
+  // An app that is off limits (money, health, a private window while the server has them off): nothing is started there.
+  try {
+    const info = await frontApp.frontInfo();
+    if (info && frontApp.offLimits(info)) { wake.context({ offLimits: true }); return false; }
+  } catch { /* unknown: the dictation's own guards still apply */ }
+  wake.context({ offLimits: false });
+  if (recording) return false;
+  toggleDictation();
+  return true;
+}
+
+/** Speech followed a middling hit. Confirms it, and nothing else: speech alone can never start anything. */
+async function wakeSpeech() {
+  if (wakeNow().speech() !== "fire") return false;
+  if (recording) return false;
+  toggleDictation();
+  return true;
+}
+
+// A listener, when there is one, talks to these. Named so that a helper process can reach them over the same bridge
+// everything else uses; the renderer never sees them, because the renderer is not what hears.
+ipcMain.handle("wake:heard", (_e, score) => wakeHeard(typeof score === "number" ? score : 0));
+ipcMain.handle("wake:speech", () => wakeSpeech());
+ipcMain.handle("wake:state", () => wakeNow().state());
 
 app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in the tray
 app.on("will-quit", () => {

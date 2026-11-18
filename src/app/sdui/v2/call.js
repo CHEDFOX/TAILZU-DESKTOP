@@ -232,7 +232,11 @@ async function v2CallOpen(c, op) {
   let got;
   try {
     got = await navigator.mediaDevices.getUserMedia(op === "mic" ? { audio: true } : { video: true });
-  } catch {
+  } catch (err) {
+    // Refused by the computer, not missing: the card asks for that one thing,
+    // over the call, with the furthest this system goes towards granting it
+    // (sdui/permCard.js). Any other failure is the call's own to report.
+    if (err && err.name === "NotAllowedError" && typeof permNeed === "function") permNeed(op === "mic" ? "mic" : "cam");
     return false;
   }
   const track = (op === "mic" ? got.getAudioTracks() : got.getVideoTracks())[0];

@@ -1054,6 +1054,33 @@ test("the window declares DeskSeeState only with a main process that reads Scree
   assert.strictEqual(p.run("STATE.seeGranted"), undefined);
 });
 
+test("a row's button says Allow until the system has had its turn, then what the server calls it after", () => {
+  // The first press on one of the Mac's two is the system's own dialog, over
+  // this window (src/agent/askSetup.js); only the press after it opens the
+  // page, so only then does the button say so.
+  const BOTH_OFF = { platform: "mac", read: "off", see: "off", pictures: "on" };
+  const p = page({ askSetup: true });
+  p.set(BOTH_OFF);
+  const props = { ...PROPS, place: "settings", allow: "Allow", allowAgain: "Open Settings", rows: [{ key: "see", title: "Answering about your screen" }] };
+  p.ctx.__n = { type: "DeskAskSetup", props };
+  assert.match(p.run("node(__n)"), />Allow</);
+  assert.doesNotMatch(p.run("node(__n)"), />Open Settings</);
+  p.ctx.__a = { kind: "ask.openScreenRecording" };
+  p.run("run(__a)");
+  assert.deepStrictEqual(p.calls, [{ kind: "openScreenRecording", on: undefined }]);
+  assert.match(p.run("node(__n)"), />Open Settings</);
+  // The other row is untouched: each one is pressed on its own.
+  p.ctx.__n = { type: "DeskAskSetup", props: { ...props, rows: [{ key: "read", title: "Typing for you" }] } };
+  assert.match(p.run("node(__n)"), />Allow</);
+  // Without a second label the button keeps the one it has.
+  const q = page({ askSetup: true });
+  q.set(BOTH_OFF);
+  q.ctx.__a = { kind: "ask.openAccessibility" };
+  q.run("run(__a)");
+  q.ctx.__n = { type: "DeskAskSetup", props: { ...PROPS, place: "settings", allow: "Allow", rows: [{ key: "read", title: "Typing for you" }] } };
+  assert.match(q.run("node(__n)"), />Allow</);
+});
+
 test("the notes keys: the notes chord as keycaps; with the one key there is none, so it says to say it with that key", () => {
   const p = page();
   const keys = () => p.run('keysNode({ source: "notes" }, "")');

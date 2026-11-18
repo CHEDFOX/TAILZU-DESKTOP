@@ -51,7 +51,7 @@
     guide.html               the window main.js opens
     guide.html?demo          a scripted run over a mock app, for review
     guide.html?demo=<scene>  one scene held still (listening, thinking, point,
-                             steps, confirm, approval, always, done, error), for screenshots;
+                             steps, confirm, approval, always, done, error, signIn), for screenshots;
                              and the hard cases: tall (a confirm with everything
                              at its longest), top (a target at the window's top
                              edge), menubar (a Mac's File menu), long (a URL and
@@ -207,6 +207,16 @@
   #ask blockquote:empty { display:none; }
   #card[data-risk="always"] #ask blockquote { border-left-color:var(--err); }
   #ask .row { display:flex; align-items:center; gap:4px; margin-top:15px; }
+  /* The page's own ways in, above the card's answers: they wrap, because four of them do not fit on one line. */
+  #ways { flex-wrap:wrap; gap:6px; margin-top:12px; }
+  /* The boxes of a sign-in card: the page's real fields, named in their own language. */
+  #fields { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+  #fields .f { display:flex; flex-direction:column; gap:3px; }
+  #fields .f span { font-size:11px; opacity:.7; }
+  #fields input { font:inherit; font-size:13px; padding:7px 9px; border:1px solid currentColor; border-radius:7px;
+    background:transparent; color:inherit; outline:none; }
+  #fields input:focus { box-shadow:0 0 0 2px currentColor inset; }
+  #ways button { font-weight:500; }
   #ask button { font:600 13.5px/1 var(--sans); border:0; border-radius:999px; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
   #ask button:active { transform:scale(.97); }
   #yes { background:var(--pale); color:var(--ink); padding:10px 18px; }
@@ -426,6 +436,10 @@
       <div class="what" id="what"></div>
       <blockquote id="quote"></blockquote>
       <p id="note" hidden></p>
+      <!-- `ways` holds the page's OWN ways in, built per card from its buttons (messages.js setWays): a sign-in page's
+           "Continue with Google" and the rest. The three below are the card's fixed answers and are never rebuilt. -->
+      <div id="fields" hidden></div>
+      <div class="row" id="ways" hidden></div>
       <div class="row"><button id="yes">Do it</button><button id="edit" hidden></button><button id="no">Not now</button><kbd id="askHint">or tap Alt twice</kbd></div>
     </div>
     <div id="permit">
