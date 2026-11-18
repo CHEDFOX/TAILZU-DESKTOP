@@ -506,6 +506,43 @@ It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is nev
 balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
 mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
 
+## THE PEEKER IS HOME'S ASK NOW. THE BOTTOM BOT IS GONE (18 Nov)
+
+**The decision:** there is no reason to keep a bot walking the foot of Home once the peeker can be called and talked
+to. It was a second way to do the one thing he does. So where a build declares `BotPeek`, Home has no `BotStage` at
+all — and typing is the ask bar, which is what Home had before that bot and still works.
+
+How the one moment is put together, all of it from pieces that already existed:
+
+* **The ear** — `homePeekEar()`, the same always-listening turn the updates bot uses (`voiceLive` on `onAppear`,
+  guarded by `{ falsy: typing }` and `{ falsy: voice }`). It opens when Home comes forward and stays open with
+  nothing to press; the keyboard shuts it, `HOME_LISTEN=false` shuts it everywhere. It hangs off **his** node, not
+  the page, so a build that cannot draw him is never sent an open microphone it has nothing to show for.
+* **The veil** — `BotPeekProps.veil`. The app's own `<Blur/>` (`sdui/components/blur.tsx`), the very component a
+  thought's veil draws: expo-blur on the phone, `backdrop-filter` on the web. Nothing native, so this is an OTA.
+* **The panel** — the node's CHILDREN, built by the server. `askExchange()` in `homeThought.ts` is now the one place
+  the exchange is described (the words as he hears them, what was said, Thinking, the answer with who answered, Open),
+  and **the thought and the panel draw the same nodes**. Two copies of an answer's layout drift apart the first time
+  one of them is touched.
+* **Who answers is not his to decide.** The words go to `POST /v1/shell/ask` with `bot: "any"` — the door the ask bar
+  and the thought always used, which reads the ask and routes it. One road, with him as the way onto it.
+
+**What a build gets, and why it differs.** A phone declaring `BotPeek` gets the peeker, the veil, the panel, the open
+ear, no bottom bot, and the ask bar for typing. A phone that does not, and **the window**, keep the walking bot
+exactly as it is — because that one can answer and until today he could not. The window has its own Blip in its own
+frame, and no notch.
+
+**The one case where something stays at the foot:** `HOME_UPDATES`. That bot is not an ask, it is what is happening,
+and it already has an open ear on the same `voice` path. So the peeker is sent `asks: false` — he keeps the gesture
+and the leaning-in, and that bot keeps the words and the answer. **Two things listening is a bug.**
+
+The bottom edge is one of his spots now that nothing walks there; it stops where the tab bar ends, not where the
+glass does. 32 server tests on the peek alone, every build case among them.
+
+**Still to come:** he is called by voice and by the ask bar's mic key, and `FRONT_DOOR` (`front/decide.ts`) is still
+off — the cheap-road router that would pick the shape of an answer before a model is asked. Turning it on is a
+separate decision.
+
 ## HOME'S PEEKER IS BUILT, SERVER AND APP (18 Nov)
 
 A small Blip rises from behind an edge of Home, looks out, and ducks back — the window's own gesture
