@@ -506,6 +506,83 @@ It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is nev
 balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
 mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
 
+## A PENDING MIGRATION CAN BE SKIPPED A SECOND WAY: THE BUILD CACHES IT (18 Nov)
+
+**`LIVE_MIGRATION` says 0100 and seven files sit above it (0101–0107).** Both deploys today show the migrate stage as
+`CACHED` and the script never ran:
+
+```
+#17 [migrate 2/5] COPY tulmi/supabase/migrations/ /migrations/   CACHED
+#18 [migrate 3/5] COPY tulmi/supabase/LIVE_MIGRATION             CACHED
+#19 [migrate 5/5] RUN ... sh /migrate-pending.sh                 CACHED
+```
+
+That is the script's own intent — "a deploy without a new migration does not run them again" — but it means pending
+migrations run **only** on a build where one of those three files actually changed. A commit that touches no file under
+`supabase/` cannot run them, however far behind `LIVE_MIGRATION` is. So this file already warned that a duplicate
+number is never run and does not fail; **this is the second silent skip, and it needs no duplicate at all.**
+
+The likely story is that each of 0101–0107 ran on the deploy right after it landed (adding a file does invalidate that
+COPY layer) and only the bookkeeping was never bumped. **That is a guess, not a reading**: the logs cannot say, and
+nothing here can reach the database.
+
+**Nothing is broken by it today** — everything those tables serve is off (`CINEMA`, `LINGO`), and the peeker and the
+insert card need no new table. It is latent: whoever turns one of those on finds out then.
+
+**To settle it, in this order.** Leave `LIVE_MIGRATION` at 0100, change a comment in `migrate-pending.sh` to break the
+cache, deploy: the script runs 0101→0107 in order, each whole or not at all, and they are written to be safe to run
+again, so it is safe whether or not they already have. A failure stops the build and the server keeps serving. THEN
+bump to 0107. **Do not bump it on its own** — if they have not run, that skips them for good, which is the worst of
+the three outcomes.
+
+## THE ASK BAR HAS AN INSERT KEY, AND A CARD THAT GROWS (18 Nov)
+
+A round `+` in its own circle to the left of the type box, with a gap — not another thing crowded inside the box,
+because inserting a file is not part of typing. It blurs the page and pops a card (a `BotCard` overlay, a real modal)
+with the ways in: a photo, the camera, a file, a screenshot, the clipboard.
+
+* **It grows with what you choose.** Every pick ADDS (`uploadAdd`), up to the eight the ask door takes, and the chosen
+  files appear above the ways in as a wrapping strip of pictures. The card sets no height, so it is taller every time
+  one is added: nothing animates a number.
+* **A way in no longer shuts it.** The picker is a native sheet and goes above the modal, so the card is still there
+  when it closes, holding the new file. Only Paste shuts it — there is nothing to come back to.
+* **The pictures are the copies still on the phone.** Nothing serves an uploaded file's bytes back (`/v1/files`
+  answers with the file's facts and no address), so the uploader leaves each one in state as an `{ url }` spec and the
+  card binds an Image's `source` to it. A file with no picture leaves it empty, the Image draws nothing, and the clip
+  behind it shows. Lint knew only literal urls and takes a bound source now — the same promise either way.
+* **Nothing new was needed on the way out.** The ask already carried `attachments` and the door already routed on them
+  (a bot with the `files` skill is worth 3 more when a file is there). This was only the key that was missing.
+
+The bar moved out of the kit into `ask.ts`: it needs the media parts, and `media.ts` imports the kit, so the kit cannot
+import it back. The camera glyph is path data like every other, so no build had to learn it.
+
+**A cross per picture is missing on purpose.** No action in the vocabulary takes ONE item out of a list
+(`appendState` adds, `clearState` empties, nothing removes an index), so Clear takes them all off. A cross per picture
+needs a new action kind, which is a change to the contract both clients read.
+
+**Two keys in one object literal.** The ask bar's state was added as a second `state:` in the spread at the end of the
+window's Home opts, and being later in the same literal it REPLACED the first — taking with it every reading the
+arrival card and the About-you card stand on, so both drew nothing. Four tests caught it. A key already in the opts is
+merged into it, never added again.
+
+## COMING BACK LANDS WHERE THEY WERE, NOT PART OF THE WAY THERE (18 Nov)
+
+The scroll restore was a one-shot latch on the FIRST content-size event — and a page does not reach its full height in
+one pass: tiles measure, pictures land, `Rise` nodes settle. The first height is shorter than the last, so the offset
+was clamped to a fraction of where they were and, the latch being set, never corrected. The page landed PART of the
+way down, which reads as nearly remembering: the worst of both answers.
+
+It keeps asking as the page grows now and stops owing the offset only once the page is tall enough to hold it
+(`scrollMemory.ts` `landing`), or after a moment, so a page whose content has changed since is not chased for the life
+of the screen. **The viewport is measured on every page too** — it used to be read only on a page that opens at its
+end, so everywhere else the clamp was computed against a height of 0, which makes every page look scrollable to its
+last pixel and lets through an offset that snaps back. And **their finger wins**: taking hold of the page cancels what
+it owes.
+
+**Still not restored at all: a screen whose body holds a `List`.** That branch hands its scroll to the List and
+returns before any of this runs. Nothing in the bots app uses it today (it needs the vocabulary-2 `list` block), so it
+was left rather than built untested — worth knowing before anything starts using `List`.
+
 ## THE PEEKER IS HOME'S ASK NOW. THE BOTTOM BOT IS GONE (18 Nov)
 
 **The decision:** there is no reason to keep a bot walking the foot of Home once the peeker can be called and talked
