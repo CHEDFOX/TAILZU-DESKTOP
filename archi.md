@@ -160,7 +160,9 @@ src/
       homeHead.js       WriteOn, LiveMark, HeadBar
       stage.js          Spaces: BotStage (a bot with a thought: its trail, its box, the veil), BotCrowd, Vanish
       personBot.js      PersonBot: a person as their own tiny bot (never initials), one loop for all of them
-      mention.js        MentionField: "@" for a person, "/" for a bot's thing; its own DOM, kept across paints
+      mention.js        MentionField: "@" for a person, "/" for a bot — then that bot's THING to share, or (pick "bot",
+                        capability MentionCommands) the bot itself, which is how Talk names where a message goes
+                        (TAILZU-BACKEND/docs/talk-door.md); its own DOM, kept across paints
       listen.js         voiceLive / voiceStop and LiveWords (the window's half of windowVoice.js); talkTo; Escape
       chat.js           ChatThread       voice.js     the in-page mic and the spoken session
       charts.js         word meter, pie, bars
@@ -314,6 +316,7 @@ holds checks of the repository as a whole.
 | Talk mode | `src/dictation/talk.js`; `oneKey.js` createHoldTap (two taps, the key in talk mode); `main.js` "Talk mode" (`pageFor`, the voice through the pill); `pill/bots.js`, `pill/voice.js` |
 | The bot on X0's screen listening | `src/dictation/windowVoice.js`; `main.js` "The window's own voice" (`winVoiceOn`, `app:voice`, `app:talkTo`) and the one key's branches; `sdui/listen.js`, `sdui/stage.js` |
 | Spaces' blocks (a bot with a thought, the crowd, @ and /) | `sdui/stage.js`, `sdui/mention.js`, `sdui/listen.js`; CSS `.tz-st-*`, `.tz-th-*`, `.tz-cr-*`, `.tz-vn-*`, `.tz-mf-*`, `.tz-lw*` in `app.html` |
+| Text that MEANS an "@" and is not a catalog key (`\@Mom`, an email address, Talk's "@" mark): without the escape a string starting with "@" is looked up in the bootstrap's copy | `sdui/theme.js` `label`; the server writes the backslash (`experience/bots/kit.ts atText`), and the phone reads it in `Renderer.tsx` and `fill.ts` |
 | People as their own tiny bots, and a space's messages' face | `sdui/personBot.js` (PersonBot; the "@" list's rows through `personBotEl`, `sdui/mention.js` mfFace); CSS `.tz-pb*` and the "Tailzu Bricolage" faces in `app.html`; the Bricolage Grotesque files in `assets/fonts/` |
 | Paste | `main.js` "Paste into the focused app"; `src/dictation/pasteJoin.js` |
 | The pill / captions | `src/dictation/pill/`, `src/dictation/overlay/` |

@@ -69,6 +69,10 @@ function role(name, extra) {
 }
 
 function label(v) {
+  // "\@" is the CHARACTER, not a key: the escape the phone has in Renderer.tsx and fill.ts, kept the same here. Without
+  // it a screen could never show a literal "@" — Talk's two marks, an email address, a username — and the phone blanks
+  // such a string outright. The server's kit writes the backslash (experience/bots/kit.ts atText).
+  if (typeof v === "string" && v.startsWith("\\@")) return v.slice(1);
   if (typeof v === "string" && v[0] === "@") {
     const k = v.slice(1);
     return (BOOT && BOOT.labels && BOOT.labels[k]) || k;

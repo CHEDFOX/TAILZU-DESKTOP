@@ -178,3 +178,73 @@ test("a live reload while it holds words, a chip and the focus keeps all three: 
   assert.strictEqual(input().value, "pick up the dahi");
   assert.strictEqual(p.run("STATE.draft.toId"), "u-mom");
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// pick "bot": "/" NAMES THE BOT THE MESSAGE GOES TO (Talk's bar, docs/talk-door.md), and nothing is fetched. The default
+// — "/" then a bot opens that bot's things to share — is the case above and is unchanged.
+
+test("pick \"bot\": a bot from \"/\" becomes the chip, nothing is fetched, and the draft names it with no thing", () => {
+  const { p, input, list, draft, fetched } = page({ props: { pick: "bot", placeholder: "Say what you need…" } });
+  input().type("/");
+  assert.ok(list() && list().classList.contains("on"));
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Plan Ease", "Notes"]);
+  input().type("pl");
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Plan Ease"], "filtered by what follows");
+  list().querySelector(".tz-mf-bot").click();
+  assert.strictEqual(list(), null, "closed at once: there is nothing more to pick");
+  assert.deepStrictEqual(fetched, [], "NO things call: Talk's \"/\" ends at the bot");
+  assert.strictEqual(input().value, "", "the \"/pl\" is taken out of the words");
+  assert.deepStrictEqual(p.view.querySelectorAll(".tz-mf-chip").map((c) => c.textContent), ["Plan Ease×"], "the bot's name alone");
+  input().type("what's on tomorrow");
+  assert.deepStrictEqual(draft(), { text: "what's on tomorrow", toId: "", toName: "", bot: "plan", botName: "Plan Ease", thingId: "", thingTitle: "" });
+});
+
+test("pick \"bot\": the bot's chip comes off with its ×, and the person's chip lives beside it", () => {
+  const { p, input, draft, list } = page({ props: { pick: "bot" } });
+  input().type("/pl");
+  list().querySelector(".tz-mf-bot").click();
+  input().type("@mo");
+  list().querySelector(".tz-mf-person").click();
+  input().type("ask about the advance");
+  const d = draft();
+  assert.deepStrictEqual([d.bot, d.toId, d.thingId], ["plan", "u-mom", ""], "a bot and a person, and no thing");
+  // The bot's × takes only the bot off.
+  const chips = p.view.querySelectorAll(".tz-mf-chip");
+  chips[chips.length - 1].querySelector(".tz-mf-x").click();
+  assert.strictEqual(draft().bot, "");
+  assert.strictEqual(draft().toId, "u-mom", "the person stays");
+});
+
+test("a command from \"/\" types \"/name \" into the words, under the bots, and keeps nothing on the side", () => {
+  const { p, input, list, draft } = page({ props: { pick: "bot", commands: [{ name: "new", line: "Start a new thread" }] } });
+  input().type("/");
+  const cmds = list().querySelectorAll(".tz-mf-tool");
+  assert.ok(cmds.length >= 1, "the command is a row under the bots");
+  assert.match(cmds[0].textContent, /\/new/);
+  cmds[0].click();
+  assert.strictEqual(list(), null);
+  assert.strictEqual(input().value, "/new ", "what is sent is exactly what could have been typed");
+  assert.strictEqual(draft().bot, "", "a command is not a bot");
+  assert.strictEqual(p.document.activeElement, input(), "the caret is back in the box");
+});
+
+test("a screen can show a literal \"@\": \"\\\\@\" is the character and is never looked up as a key", () => {
+  const { p } = page();
+  // Without this every server string starting with "@" was read as a catalog key, and a miss BLANKED it — so Talk's
+  // own "@" mark, an email address and "@Mom" all drew as nothing (sdui/theme.js label; the phone does the same).
+  assert.strictEqual(p.run("label('\\\\@')"), "@");
+  assert.strictEqual(p.run("label('\\\\@Mom')"), "@Mom");
+  assert.strictEqual(p.run("label('@nope')"), "nope", "the lookup itself is untouched");
+});
+
+test("the draft written from OUTSIDE the field shows up in it (the insert card's Paste)", () => {
+  const { p, input, draft } = page({ props: { pick: "bot" } });
+  input().type("half a thought");
+  // Something that is not the field puts words in the box — the clipboard, through the insert card (ask.ts).
+  p.run("STATE.draft = { text: 'pasted from the clipboard', toId: '', toName: '', bot: '', botName: '', thingId: '', thingTitle: '' }; repaint(__sc)");
+  assert.strictEqual(input().value, "pasted from the clipboard", "the field adopted it");
+  assert.strictEqual(draft().text, "pasted from the clipboard");
+  // And the field's OWN words are still its own: typing after it is not adopted back over.
+  input().type(" and more");
+  assert.strictEqual(draft().text, "pasted from the clipboard and more");
+});

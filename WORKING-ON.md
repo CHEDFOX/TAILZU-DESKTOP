@@ -1,5 +1,30 @@
 # Being built right now (read before you start)
 
+## 20 Nov: TALK IS THE APP NOW — what this window had to learn for it
+
+The server side is TAILZU-BACKEND/docs/talk-door.md: the app opens on `bots.talk`, one thread every bot answers in,
+"/" naming a bot and "@" naming a person. Almost all of it is server data. Two things were NOT, and both are here, in `sdui/mention.js` and `sdui/theme.js`:
+
+**1. `MentionField` learned `pick: "bot"` and `commands`** (capability **`MentionCommands`**, declared in `sdui/core.js`).
+Today "/" then a bot opens that bot's THINGS to share, which is what a space's composer is for. Talk's "/" means the
+opposite — it names the bot the message GOES TO — so the bot itself becomes the chip and **nothing is fetched**. One
+field and one gesture, because it is the same act; what differs is only what the pick means where it is used. A draft
+says the bot either way, and `thingId` is what tells the two apart, so the wire shape did not change. `commands` are
+rows under the bots for names the screen keeps for itself ("/new"); picking one types `/name ` into the words, so what
+is sent is exactly what could have been typed and nothing is held on the side.
+
+A build that does not declare the capability is sent **the plain message box**, which sends through the same door.
+Plain language is the whole way in there; the marks are faster, never the only way.
+
+**2. A literal "@" drew as NOTHING, and that is now fixed.** A prop (or an action's text) beginning with "@" is read as
+a key into the bootstrap's copy, and a key we do not have BLANKS it — so `@Mom`, an email address and Talk's own "@"
+mark all came out empty, silently. A leading `\@` is now the character itself and is never looked up, exactly as `$`
+is escaped in an action's text. The server writes the backslash (`experience/bots/kit.ts atText`). The phone has the same escape in
+`Renderer.tsx` and `fill.ts`.
+
+Tests: `src/app/mention.test.js` (the bot chip with no things call, the chips' ×, a command typed in, the escape).
+1,570 pass.
+
 ## 20 Nov: EVERY ACCOUNT HAS A USERNAME NOW, AND THE ABOUT YOU CARD ASKS FOR IT INSTEAD OF A NAME
 
 The first step towards adding people one at a time. Today the only way two people are connected is a space they share

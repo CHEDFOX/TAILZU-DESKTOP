@@ -1,6 +1,15 @@
 // MentionField (shared/types/sdui.ts 3i): a message field where "@" picks a person (a chip) and "/" picks one of the person's
-// bots, then one of its things (a chip), or one of the screen's tools. Inside a space it is his thought's box. Each person in the
-// "@" list is shown by their own tiny bot (the row's `bot`, personBot.js; 3j), never a letter.
+// bots, then one of its things (a chip), or one of the screen's commands or tools. Inside a space it is his thought's box; in Talk
+// it is the bar. Each person in the "@" list is shown by their own tiny bot (the row's `bot`, personBot.js; 3j), never a letter.
+//
+// WHAT "/" THEN A BOT DOES is the screen's `pick` (capability MentionCommands; the phone's mentionCore.ts does the same):
+//   "thing" (the default, and what this window has always done) that bot's things open and one becomes the chip — sharing a thing
+//           FROM a bot, which is what a space's composer is for.
+//   "bot"   the bot itself becomes the chip and nothing is fetched — naming the bot a message GOES TO (Talk, docs/talk-door.md).
+// A thing names its own bot, so one chip reads both ways: `bot` with a `thingId` is a thing, `bot` without one is the bot.
+//
+// `commands` are rows under the bots: names the screen keeps for itself ("/new"). Picking one types "/name " into the words, so
+// what is sent is exactly what could have been typed and nothing is held on the side.
 //
 // IT OWNS ITS OWN DOM AND IS NEVER REPAINTED. A paint replaces #view's markup, and a feed repaints whenever someone else writes
 // (a live reload), so a field drawn from state each time would lose its words, its chips, an open list and the caret. Instead its
@@ -43,6 +52,12 @@ function mentionPeople(people, query) {
 function mentionBots(bots, query) {
   const q = String(query || "").trim().toLowerCase();
   return (Array.isArray(bots) ? bots : []).filter((b) => b && (!q || String(b.name || "").toLowerCase().includes(q) || String(b.slug || "").toLowerCase().startsWith(q)));
+}
+
+/** The commands whose name starts with `query` (all of them for none): the phone's mentionCore filterCommands. */
+function mentionCommands(commands, query) {
+  const q = String(query || "").trim().toLowerCase();
+  return (Array.isArray(commands) ? commands : []).filter((c) => c && c.name && (!q || String(c.name).toLowerCase().startsWith(q)));
 }
 
 /** The text with [start, end) taken out, and the caret where it was. */
@@ -126,7 +141,9 @@ function mentionCarry() {
   }
 }
 
-const mfHas = (L) => !!(L.d.text || L.d.toId || L.d.thingId);
+// A bot chip with no thing on it counts too (pick "bot"): the draft has to be written for it, or "/plan" then Enter would send
+// with no bot named.
+const mfHas = (L) => !!(L.d.text || L.d.toId || L.d.thingId || L.d.bot);
 
 /** After a paint: each slot gets its field (made once), with the newest props; focus and caret back where they were. */
 function mountMentions(root) {
@@ -142,9 +159,22 @@ function mountMentions(root) {
     L.input.setAttribute("aria-label", label(p.placeholder || ""));
     if (Number(p.maxLength) > 0) L.input.setAttribute("maxlength", String(Math.floor(Number(p.maxLength))));
     L.send.setAttribute("aria-label", K.txt("desktop.mention.send", "Send"));
-    // draftPath cleared (sent, or put away): the field empties, chips too. Never filled from state otherwise.
+    // THE DRAFT CHANGED FROM OUTSIDE THE FIELD: adopt it. Cleared (sent, or put away) the field empties, chips too;
+    // WRITTEN INTO — the insert card's Paste puts the clipboard in the box — the words appear, which before this they
+    // did not: the field owned its own words and only ever read the draft when that draft went empty.
+    // `mentionCarry` writes the field's own words back on a repaint, so what is in state is the field's unless
+    // something else put it there.
     const st = stateAt(p.draftPath);
-    if ((!st || (!st.text && !st.toId && !st.thingId)) && mfHas(L)) { L.d = Object.assign({}, EMPTY_MENTION); L.input.value = ""; mfClose(L); }
+    const empty = !st || (!st.text && !st.toId && !st.thingId && !st.bot);
+    if (empty && mfHas(L)) { L.d = Object.assign({}, EMPTY_MENTION); L.input.value = ""; mfClose(L); }
+    else if (!empty && String(st.text || "") !== String(L.d.text || "")) {
+      L.d = Object.assign({}, EMPTY_MENTION, st);
+      L.input.value = String(st.text || "");
+      // The caret goes to the END of what arrived: you paste in order to carry on typing after it, and leaving the
+      // caret where it was would drop the next word into the middle of the pasted line.
+      L.focus = { start: L.input.value.length, end: L.input.value.length };
+      mfClose(L);
+    }
     slot.replaceWith ? slot.replaceWith(L.el) : slot.parentElement.replaceChild(L.el, slot);
     mfChips(L);
     const appeared = !MF_SHOWN.has(L.life);
@@ -211,7 +241,7 @@ function mfKey(L, e) {
   }
 }
 
-/** The chips before the words: the person, the thing; each with its ×. */
+/** The chips before the words: the person, then the thing or (pick "bot") the bot; each with its ×. */
 function mfChips(L) {
   L.chips.textContent = "";
   const chip = (text, drop) => {
@@ -231,6 +261,8 @@ function mfChips(L) {
   };
   if (L.d.toId) chip("@" + L.d.toName, () => Object.assign(L.d, { toId: "", toName: "" }));
   if (L.d.thingId) chip(L.d.thingTitle + " · " + L.d.botName, () => Object.assign(L.d, { bot: "", botName: "", thingId: "", thingTitle: "" }));
+  // The bot a message goes to: its name alone, so the chip reads as "to Plan Ease" and not as a thing of its.
+  else if (L.d.bot) chip(L.d.botName || L.d.bot, () => Object.assign(L.d, { bot: "", botName: "" }));
   L.el.classList.toggle("has", mfHas(L));
 }
 
@@ -335,6 +367,17 @@ function mfDrawList(L) {
       r.appendChild(mk("span", "tz-mf-name", b.name));
       list.appendChild(r);
     });
+    const cmds = mentionCommands(p.commands, m.query);
+    if (cmds.length) list.appendChild(mk("div", "tz-mf-div"));
+    cmds.forEach((c) => {
+      const r = row("tz-mf-tool", () => mfPickCommand(L, c));
+      // The same two-line shape a thing's row has (name over its line): tz-mf-tx is the column, tz-mf-sub the line.
+      const tx = mk("span", "tz-mf-tx");
+      tx.appendChild(mk("span", "tz-mf-name", "/" + String(c.name)));
+      if (c.line) tx.appendChild(mk("span", "tz-mf-sub", label(c.line)));
+      r.appendChild(tx);
+      list.appendChild(r);
+    });
     const tools = Array.isArray(p.tools) ? p.tools : [];
     if (tools.length) list.appendChild(mk("div", "tz-mf-div"));
     tools.forEach((t) => {
@@ -388,10 +431,22 @@ function mfPickPerson(L, person) {
   L.input.focus();
 }
 
-/** A bot picked: its things, from the person's own (thingsPath, through the window's signed-in fetch). */
+/**
+ * A bot picked. With pick "bot" the bot IS the chip and nothing is fetched (Talk: "/" names where the message goes); otherwise its
+ * things open, from the person's own (thingsPath, through the window's signed-in fetch).
+ */
 async function mfPickBot(L, bot) {
   const m = L.menu;
   if (!m) return;
+  if (L.cfg && L.cfg.pick === "bot") {
+    mfDropMark(L);
+    Object.assign(L.d, { bot: String(bot.slug || ""), botName: String(bot.name || ""), thingId: "", thingTitle: "" });
+    mfClose(L);
+    mfChips(L);
+    mfWrite(L);
+    L.input.focus();
+    return;
+  }
   const kept = L.things.get(bot.slug);
   mfOpen(L, { kind: "things", start: m.start, bot, items: kept || null });
   L.input.focus();
@@ -411,6 +466,25 @@ function mfPickThing(L, bot, item) {
   Object.assign(L.d, { bot: String(bot.slug || ""), botName: String(bot.name || ""), thingId: item.id, thingTitle: item.title });
   mfClose(L);
   mfChips(L);
+  mfWrite(L);
+  L.input.focus();
+}
+
+/** A command picked: its "/wo" becomes "/name " in the words, and the list closes. Nothing is kept on the side. */
+function mfPickCommand(L, c) {
+  const m = L.menu;
+  const name = "/" + String(c.name) + " ";
+  const s = String(L.input.value || "");
+  if (m && typeof m.start === "number") {
+    const caret = L.input.selectionStart == null ? s.length : L.input.selectionStart;
+    L.input.value = s.slice(0, m.start) + name + s.slice(caret);
+    const at = m.start + name.length;
+    L.input.setSelectionRange(at, at);
+  } else {
+    L.input.value = s + (s && !/\s$/.test(s) ? " " : "") + name;
+  }
+  L.d.text = L.input.value.trim();
+  mfClose(L);
   mfWrite(L);
   L.input.focus();
 }
