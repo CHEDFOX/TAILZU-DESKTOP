@@ -1,5 +1,32 @@
 # Being built right now (read before you start)
 
+## 20 Nov: PLAN EASE — THE WEEK STRIP IS SWIPED ON A PHONE (and `ScrollX`, a new ability)
+
+The strip was seven cells sharing the width and two arrows, and it could not be anything else from here: the kit's
+only scroller, `Scroll`, is VERTICAL in both clients, and `List`, which does take `horizontal` on the phone, is a
+vocabulary-2 block node that **no client declares** — it would have drawn nothing at all.
+
+So the phone's `Scroll` takes `horizontal` now. The direction has to reach the CONTENT: a ScrollView lays its
+children out in `contentContainerStyle`, so a `flexDirection` left on the box does nothing and the row comes out as
+a column — which is why this is its own ability (`ScrollX`) and not merely a style. A build that does not say it
+keeps exactly today's strip.
+
+**The data had to widen with it.** Seven days fill the width exactly, so there was nothing to swipe along:
+`stripOf` takes a number of weeks, `GET .../plan/day` reads `weeks`, and the screen asks for five — but only where
+`canScrollX`. They run FORWARD from the week shown, because a scroller can only be opened at its start and days
+before it would open the week off screen. The left arrow stays for the week before; **the right one goes**, since
+forward is the swipe now, and its 26 px is what lets the next day show its edge — the only thing on a strip that
+says there is more of it.
+
+**The window keeps its arrows**, which suit a pointer better than a drag, and `nodes.js` is untouched.
+
+Phone: `app/src/sdui/components/Scroll.tsx`, `registry.ts`. Backend: the capability in `shared/types/sdui.ts`,
+`canScrollX`/`scrollRow` in the kit, `planThread.ts`, `planEase.ts`, the route, `planHome.ts`. A case in
+`plan-thread.test.ts` holds the wider strip. 12,695 pass here; the phone's 1,178 pass, its 6 failures pre-existing
+(they want `node_modules`), both checked by stashing.
+
+**It reaches people as they update.** Until a build carries `ScrollX`, the strip is the week and the two arrows.
+
 ## 20 Nov: XODE — OPENING IT IS THE LIST, WITH ONE PROJECT OR EIGHT
 
 `loadHome` dropped somebody with exactly one project straight into that project. So a project's own page doubled
