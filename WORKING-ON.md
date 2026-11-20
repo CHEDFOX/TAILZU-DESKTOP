@@ -1,5 +1,39 @@
 # Being built right now (read before you start)
 
+## 20 Nov: LINGO — A SET ENDS NOW, AND THE NEXT UNIT IS WRITTEN WHILE THEY ARE CONGRATULATED
+
+**Nothing ever called `POST /v1/lingo/set`.** The set screen drew `exercises[0]`, and Next was a `refresh` — it
+refetched the session and drew ITS first exercise. So the counter read "1 of 12" for ever, the meter never moved,
+no set ever ended, and everything hanging off the end of one was finished, tested, server-side work that nothing
+asked for: the four bands, the scaled gesture, the shape of the next set, and `bots.lingo.done`, which nothing
+opened either. Finishing a unit passed in silence, which is the thing `07e9a9c` set out to fix.
+
+**The set is walked now.** The whole set is in the tree and `state.i` says which one they are on, so moving on is
+not a trip to the server; the server is asked once, at the end. What comes back decides all three of: whether the
+bot celebrates (and it does NOT for a bad set — `set.ts gestureFor`), whether a unit was finished, and the shape
+of the next set, which the next session is now asked for **by name**, so the difficulty follows the person instead
+of every set being the first of a sitting.
+
+**The answers are the server's, not the app's.** The first wiring had the app hand its list back at the end, and
+`tests/lingo-screens.test.ts` said no: "sends what the person DID and never whether it was right". It was right to
+— that would have been the one message in Lingo that says "I was right", and the route accepted verdicts from the
+body. So each answer is written against the course as it is marked (`setAnswers`, **migration 0109**) and the end
+of a set reads what is known and empties it. The app sends which course and nothing else. `lingo-walkthrough` now
+sends no answers at all and asserts the server counted the same set she did, over three weeks of use.
+
+**And the next unit is written under the celebration.** Finishing one starts `unitFor(after(unit))` before the
+reply, started and never waited for. `bots.lingo.done` asks `GET /v1/lingo/next` — is there anything left to wait
+for — and while there is, Continue is not drawn and the unit's own moment LOOPS. It listens on `lingo:<tag>`, the
+build publishes whichever way it went, and Continue arrives with the unit. Stop for now is always there. Those
+seconds used to be spent at the start of the next session, in front of a screen with nothing on it.
+
+128 lingo tests, 12,692 in all. The two failures are the pre-existing pair: `launch-motion`'s side-by-side case and
+`web-browser`'s `/proc` scan, both checked by stashing.
+
+**Still open:** `againAfter` (the server's word on how soon a missed word should come back inside the same sitting)
+is answered and still not used — the set is walked in the order it was planned. And `gesture.act`/`scale` only
+reach the screens as confetti or nothing; the buddy act a set earns is not played yet.
+
 ## 20 Nov: XODE — A SECOND PROJECT COULD NOT BE ADDED UNTIL THERE WAS A SECOND PROJECT
 
 `code.ts` `loadHome` picks the home by how many projects there are: none is `meet`, **exactly one is that project's
