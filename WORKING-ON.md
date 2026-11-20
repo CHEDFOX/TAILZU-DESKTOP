@@ -11,18 +11,30 @@ project again — every exit is about the project you are already in, and the br
 The one surviving route was "Start the next job" in the Work area, which opens `bots.code.start` with no step and
 falls through to `meet`; nothing about it says it adds a project.
 
-The row is now `addProjectRow()` in `code/parts.ts`, drawn by the overview AND by a project's own page, phone and
-window, so the two cannot drift apart. It opens the same picker the first project came through — which was already
-built for this: a repo already added shows a done mark and "added" instead of a tick, and opens that project rather
-than adding it twice (`pickProjects.ts`). Only the route to it was missing.
+`addProjectRow()` in `code/parts.ts` is now on the overview AND on a project's own page, phone and window, so the
+two cannot drift apart. **Two actions, not one**, which is the second half of this: the row used to read "Add a
+project · or start one from scratch" and open the picker — a list of the repos already on their GitHub, with no way
+to start anything. Somebody with no repo to bring was told there was a way and then not given one. The window's own
+header has had them as two buttons all along, and now every copy does:
+
+* **Add a project** → the picker, which was already built to be come back to: a repo already added shows a done mark
+  and "added" instead of a tick, and opens that project rather than adding it twice (`pickProjects.ts`).
+* **Or start one from scratch** → `bots.code.new`: they name a repo, X0 Bot MAKES it on their GitHub
+  (`POST /v1/code/repos/new` → a blink on GitHub to check it is them → made and added), and the plan is written in
+  it. Nothing has to exist first. That screen was unreachable too for a one-project person, and it is the answer for
+  anybody who wants to plan something new rather than bring a repo.
 
 A case in `bots-code.test.ts` holds both pages' row and the step it opens. 2,699 pass; `code-routes`' hook timing
 out as it boots the real server is the pre-existing one named in the 17 Nov entry.
 
 **Still open:** reached this way the picker keeps its first-run words ("Which projects should I work on?", "Pick one
-to start"), which read oddly to somebody who already has one. And moving BETWEEN projects still means going Back to
-an overview that a one-project person has never seen — a switcher where the project's name is would put adding and
-moving in the same place.
+to start"), which read oddly to somebody who already has one. Moving BETWEEN projects still means going Back to an
+overview that a one-project person has never seen — a switcher where the project's name is would put adding and
+moving in the same place. And a plan still cannot exist before its repo: `code_intake.project_id` is the primary key
+AND a foreign key to `code_projects`, every row of which needs a real repo (`installation_id`, `repo_id`,
+`full_name`, `default_branch`, all NOT NULL), so "Plan it" refuses until a home is named. Making a repo from that
+screen is the way through, which is why it had to be reachable; planning first and attaching after would mean a
+draft intake of its own, with the home asked for at **Start building** — the first moment GitHub is touched.
 
 ## 20 Nov: LINGO — PICKING A LANGUAGE NOW GIVES YOU A LESSON
 
