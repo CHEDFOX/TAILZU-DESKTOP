@@ -1,5 +1,54 @@
 # Being built right now (read before you start)
 
+## 20 Nov: EVERY ACCOUNT HAS A USERNAME NOW, AND THE ABOUT YOU CARD ASKS FOR IT INSTEAD OF A NAME
+
+The first step towards adding people one at a time. Today the only way two people are connected is a space they share
+(`threads.ts` `contacts`/`looksKnown`/`messageable` all just walk `spaces.mine`), and the only ways to reach a person at all
+are an email invite and a space's code. A username is the identity both of those were standing in for.
+
+**It is given, not asked for.** Migration 0110 extends 0003's `handle_new_user()` trigger, so the name is there the moment the
+account row is — no account is ever without one, and adding by username has no "they haven't picked one yet" case to design
+around. The name is a word pair and a number (`jolly-heron-646`), never a running number: one in order would say how many
+accounts there are and let anyone walk them. The migration backfills everyone who signed in before it.
+
+**`usernames` is the ledger and the only place uniqueness is decided**: `held`, `reserved` (ours) and `freed`. A name given up
+is **never handed to anyone else** — a connection survives a change because it stores a user id, but a name typed into a message
+a year ago does not. Asking never says which of the three a name is, only that it is taken, so the ledger cannot be mapped.
+Checking is braked at 60 an hour the way codes are, because asking repeatedly is how a list of everyone would be made.
+
+**The card has no "Not now" any more, and still cannot lock the app.** That promise was load-bearing in `aboutCard.ts` (App
+Review 5.1.1(v): an app may not require personal information to work), and the thing that keeps it true now is that **Save is
+always tappable**: the username is already filled and already valid, and the gender is still optional. A Save greyed out until a
+gender is picked would be a gate on personal information with no way past, and that is the version that gets rejected. There are
+no longer two ways out, but there is always one.
+
+**It keeps its own dueness flag** (`botsUsernameDone`), not `botsAboutSkipped`. Everyone who ever tapped "Not now" on the old
+name-and-gender card has that one set, and keying this card on it would mean those people never saw their username at all.
+
+The card no longer asks for a real name, so the Apple special case is gone with it (there is nothing to leave out when the name
+is ours to give). What someone is **called** is still to come: that is per-viewer, the way a phone's contacts are, and it needs
+`person_names` and a resolve at read time — `sender_name` has to stay as it is, because `viewOf` reads it back off the messages
+of a deleted account.
+
+Verified against a real Postgres 16, not just read: the migration runs clean twice, the trigger gives a new account a name, the
+backfill reaches one made before it, a freed name is refused to everyone, and a reserved one is refused. That run caught a real
+bug — `'x0'` and `'me'` are two characters and **violate the table's own CHECK**, so the reserved-words insert would have failed
+the whole migration.
+
+12,670 pass. The two failures are both unrelated and were checked by stashing: `launch-motion`'s side-by-side case (which
+fails stashed too, as it has been), and `web-browser`'s "Chrome is not even started for it", which counts the machine's Chrome
+processes and so races the reaping of the ones the cases before it killed — stashed, it failed two runs in three.
+
+docs/social.md now holds the whole design this is the first step of: the username, the name you give someone
+(`person_names`, per reader), adding by username, a group whose admin has **no** automatic access to anyone's things, what "@"
+means (a mention inside a group, to that person alone anywhere else), one Share action routing between the two share
+mechanisms that already exist, and the three decisions the feed must not get wrong. It says which parts are built and which
+are planned, and the order to build them in. **Read it before starting any of them**, especially the two rules that must not
+be broken: a username is never given twice, and `to_id`'s visibility rule keeps being applied forever however "@" behaves.
+
+docs/username.md. Still to come: `person_names` (the name you give someone, resolved per reader), adding by username, and `@`
+taking either a username or the name you gave them.
+
 ## 20 Nov: A CONDITION'S PATH IS BARE — the blank set screen, and the lint that now says so
 
 Lingo's set screen drew NOTHING. Not an empty state: a blank page with a header and the ask bar.
@@ -39,7 +88,6 @@ business being expensive: the worst case was about 320 paise against a 400 cap �
 silence the moment it tipped over — and is now roughly 90.
 
 12,695 pass; the standing two fail as always.
-
 ## 20 Nov: PLAN EASE — THE WEEK STRIP IS SWIPED ON A PHONE (and `ScrollX`, a new ability)
 
 The strip was seven cells sharing the width and two arrows, and it could not be anything else from here: the kit's
