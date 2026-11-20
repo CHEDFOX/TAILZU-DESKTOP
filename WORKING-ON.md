@@ -1,5 +1,29 @@
 # Being built right now (read before you start)
 
+## 20 Nov: XODE — A SECOND PROJECT COULD NOT BE ADDED UNTIL THERE WAS A SECOND PROJECT
+
+`code.ts` `loadHome` picks the home by how many projects there are: none is `meet`, **exactly one is that project's
+own page**, two or more is the overview. The overview is the only ordinary screen that carried "Add a project · or
+start one from scratch" — so the screen that lets you add a second project only appeared once you had two.
+
+A project's page has no way out to it either: rules, book, attach, a job, a review, PR care, start a task, read this
+project again — every exit is about the project you are already in, and the branch chip is a label, not a button.
+The one surviving route was "Start the next job" in the Work area, which opens `bots.code.start` with no step and
+falls through to `meet`; nothing about it says it adds a project.
+
+The row is now `addProjectRow()` in `code/parts.ts`, drawn by the overview AND by a project's own page, phone and
+window, so the two cannot drift apart. It opens the same picker the first project came through — which was already
+built for this: a repo already added shows a done mark and "added" instead of a tick, and opens that project rather
+than adding it twice (`pickProjects.ts`). Only the route to it was missing.
+
+A case in `bots-code.test.ts` holds both pages' row and the step it opens. 2,699 pass; `code-routes`' hook timing
+out as it boots the real server is the pre-existing one named in the 17 Nov entry.
+
+**Still open:** reached this way the picker keeps its first-run words ("Which projects should I work on?", "Pick one
+to start"), which read oddly to somebody who already has one. And moving BETWEEN projects still means going Back to
+an overview that a one-project person has never seen — a switcher where the project's name is would put adding and
+moving in the same place.
+
 ## 20 Nov: LINGO — PICKING A LANGUAGE NOW GIVES YOU A LESSON
 
 **The fault.** Pick a language and you got nothing to learn, for ever. Not a thin course — nothing. The path (24
