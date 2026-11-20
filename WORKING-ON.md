@@ -1,5 +1,22 @@
 # Being built right now (read before you start)
 
+## 20 Nov: A PHOTO ON THE ASK IS SHOWN ON THE ASK, not only inside the card it was picked in
+
+Pick a photo and it uploads, goes on the list and IS sent with the message — but close the card and the composer
+looks exactly as it did before you picked anything. Nothing outside the card said a file was on the ask.
+
+Two reasons, and both read as deliberate in the code. `askBar`'s comment: *"what is already on the ask is drawn in
+the card, which is where it was chosen"* — but the card is a modal you must close to type. And the chip above the
+bar could not have shown it anyway: `uploadChip` draws `up` (on its way) and `sent` (one file), while `uploadAdd`
+**clears `sent`** the moment the file joins the list, on the reasoning that one file's chip only muddles a list.
+So after a successful pick there was nothing left for the bar to draw.
+
+The bar now carries the same strip the card does, at 40px: a picture per file, bound to the copy still on the
+phone, and the same "Clear". Taking ONE item off is still not in the vocabulary — `appendState` adds,
+`clearState` empties, nothing removes an index — so Clear takes them all, as in the card.
+
+Rendered to check, not just asserted: two files on the ask, card shut, both above the composer.
+
 ## 20 Nov: XODE PICKS THE PROJECT FROM THE WORDS — the front door can do work now, not only answer
 
 `handlers.ts` had one line standing between Xode and everything it can do:
