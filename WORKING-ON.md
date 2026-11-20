@@ -1,5 +1,23 @@
 # Being built right now (read before you start)
 
+## 20 Nov: XODE — OPENING IT IS THE LIST, WITH ONE PROJECT OR EIGHT
+
+`loadHome` dropped somebody with exactly one project straight into that project. So a project's own page doubled
+as the bot's front door, and opening Xode met you with ONE project's branch chip, book and rules — things that
+belong to a project, on the screen where several could be listed. It is also the whole reason the second project
+could not be added: the list, the only place carrying the two ways on, needed two projects to appear.
+
+A page is one thing or the other now. The list is the home whichever number they have; a project's page is
+reached by naming the project and by nothing else, and keeps its own things. Back follows: the list leaves the
+bot (the phone's; the window leaves by its nav and draws no back bar on a bot's home), a project goes up to the
+list, a job to its project.
+
+**This supersedes the add row on a project's page** from the entry below — the list is one tap up and always
+there, so the row has gone from the project page and stays on the list. The cost is one tap for somebody with a
+single project, which is the price of the front door saying what it is.
+
+Two cases in `bots-code.test.ts` hold the shape and the three backs.
+
 ## 20 Nov: XODE — BACK IS A PLACE NOW, AND THREE FIRST TASKS THAT WERE ONE
 
 **Back retraced the whole visit.** Every screen in Xode called `backButton()` with nothing said about where, which
