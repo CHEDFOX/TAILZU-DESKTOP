@@ -1,5 +1,30 @@
 # Being built right now (read before you start)
 
+## 20 Nov: XODE — BACK IS A PLACE NOW, AND THREE FIRST TASKS THAT WERE ONE
+
+**Back retraced the whole visit.** Every screen in Xode called `backButton()` with nothing said about where, which
+is `navigateBack` — pop one off the stack. So Back walked somebody out the way they came in: project, job,
+project, task, overview, project, as long as their visit had been, when what they wanted was out of the bot.
+
+Two places are all Back ever means in here, and `code/parts.ts` names them: `outOfCode()` (the bots home) and
+`toProject(id)`. With one project its page IS Xode (`loadHome`), so Back leaves the bot; with several it is the
+overview, one step up — `loadHome` now says which with `many`. A job, a PR and the rules go up to their project,
+whichever of the four ways in they came by, phone and window both. The trail is a tree, and the way out is never
+more than two taps from anywhere.
+
+**And three first tasks that were one.** A project with nothing tested has a long `untestedHot`, and `firstTasks`
+pushed one row per file: "Add tests to components", "Add tests to App.tsx", "Add tests to index.tsx" — the whole
+card, the same sentence three times, crowding out every other kind of start. One of them now, the busiest, and
+the rest of the card goes to the other kinds (the failing tests, the first tests, the README).
+
+Two cases in `bots-code.test.ts` hold both. 12,694 pass; the two failures are the standing pair.
+
+**Not done, and it needs the apps:** the Plan Ease week strip (`planHome.ts`) is arrows and seven fixed cells, and
+smooth sideways scrolling cannot be served from here — `Scroll` is VERTICAL ONLY in both clients (the phone's
+`components/Scroll.tsx` is a plain vertical ScrollView; the window's `nodes.js` hard-codes `overflow-y`). It wants
+a `horizontal` prop in both, behind a capability of its own, because a build without it would lay the strip out
+as a column. Then the strip becomes a scroller server-side and the arrows can stay for the window.
+
 ## 20 Nov: LINGO — A SET ENDS NOW, AND THE NEXT UNIT IS WRITTEN WHILE THEY ARE CONGRATULATED
 
 **Nothing ever called `POST /v1/lingo/set`.** The set screen drew `exercises[0]`, and Next was a `refresh` — it
