@@ -1,5 +1,24 @@
 # Being built right now (read before you start)
 
+## 20 Nov: LINGO HAD NO LESSONS BECAUSE THE DATABASE WAS THREE MIGRATIONS BEHIND
+
+Not the code. **0105, 0106 and 0107 had never run against the live database** — today's deploy log shows all three
+pending and passing. 0107 is the one that adds `lingo_items.unit` and creates `lingo_lessons`, so every unit ever
+written was filed by an insert naming a column that did not exist, inside a `.catch(() => 0)`. It failed, silently,
+every time, while the screen said there was nothing to learn. Nobody could have seen it from the app.
+
+**The catch says so now.** A unit that cannot be filed ends that course, so it is logged with the pair and the unit
+and nothing of anybody's words. The same for a unit that could not be MADE: `unitFor` returned a bare null whether
+the model was down, refused for budget, or came back too thin, and all three draw the same empty screen.
+
+**And the cheap tier writes it now, not the strong one.** A unit is eight to fourteen pairs of a word and what it
+means; deepseek-v4.1-flash or gemini-2.5-flash does that as well as sonnet and far faster, which is what matters
+when somebody is watching the first-lesson screen or a celebration holding back its Continue. It also had no
+business being expensive: the worst case was about 320 paise against a 400 cap — four fifths of the budget, with
+silence the moment it tipped over — and is now roughly 90.
+
+12,695 pass; the standing two fail as always.
+
 ## 20 Nov: PLAN EASE — THE WEEK STRIP IS SWIPED ON A PHONE (and `ScrollX`, a new ability)
 
 The strip was seven cells sharing the width and two arrows, and it could not be anything else from here: the kit's
