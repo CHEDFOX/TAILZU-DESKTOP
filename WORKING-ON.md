@@ -1,5 +1,47 @@
 # Being built right now (read before you start)
 
+## 20 Nov: LINGO — PICKING A LANGUAGE NOW GIVES YOU A LESSON
+
+**The fault.** Pick a language and you got nothing to learn, for ever. Not a thin course — nothing. The path (24
+units, `course.ts`) and the thing that writes a unit for a pair of languages (`lessons.ts`, 17 Nov) were both built,
+tested and on main. They were simply never reached: `walk()` is the only thing that walks the path, `walk()` only
+runs inside `POST /v1/lingo/session`, and the territory card would not open the set screen while a course had no
+words in it — it offered **"Start by talking"** instead. So the one screen that builds the first unit was the one
+screen the card refused to open. No words, so no lesson; no lesson, so no words.
+
+That card rule was right when it was written, before the path existed and an empty course really did have nothing to
+ask. `c252e11` added the path and touched 16 files; `lingoPage.ts` was not one of them. `tests/lingo-screens.test.ts`
+pinned the old behaviour, and `lingo-walkthrough` missed it by calling `POST /session` directly instead of going
+through a screen — so nothing was red.
+
+**What it does now.** `PUT /v1/lingo/course` starts the first unit for a NEW course and does not wait for it, and the
+answer to "what's it for?" navigates straight into the first exercise rather than back to a card with another button
+on it. Three things that had to be true together:
+
+- **One build in the air per pair and unit** (`makingUnit`, `unitFor`). The course that starts it and the lesson
+  screen a second behind it are the same person, and each starting their own would pay twice for one unit. The claim
+  is made in the **same tick** as the call — an `await` before it is a gap in which the next caller sees nothing
+  running and starts a second build. `unitFor` is deliberately not `async` for that reason, and it hands back the
+  tracked promise so the claim is let go of before anybody has their answer.
+- **A session never blocks on a model call.** `walk()` asks whether the unit is being made and says so instead of
+  waiting: `{ exercises: [], building: true }`.
+- **A third empty on the set screen**, and the only one that ends by itself: **"Getting your first lesson ready"**.
+  "Nothing due" would say they were finished and "Nothing to learn yet" would send them off to chat for no reason —
+  both wrong for the ten seconds that matter most, which are somebody's first ten.
+
+A failed or thin unit is still kept nowhere (`ENOUGH`), and a pair whose first attempt failed stops looking busy, so
+the next person gets a fresh attempt rather than a screen that waits for ever. Changing a level or the minutes a day
+on a course somebody is already on spends no call.
+
+`lingo-routes.test.ts` now passes `lessons: null` in its shared server, so the suite stops reaching for a real model
+(those 401s were pre-existing noise from the session route). Four new cases: the first lesson over the real routes
+mid-build and after, no second call per setting change, one build for two simultaneous arrivals, and a failed attempt
+tried again. **12,677 pass.** The one failure is `launch-motion`'s side-by-side case, pre-existing and checked by
+stashing. `docs/lingo.md` has a section on the path at last (9c) — it had none, since `c252e11` did not write one.
+
+**Still true and not this:** the sentence bank is unseeded, which now matters less than it did — the first day is the
+path's, not the spine's. Lingo is still behind `LINGO`, off.
+
 ## 17 Nov: THE SIGN-IN CARD HAS A SWITCH NOW, SO IT CAN BE UNDONE FROM HERE
 
 `SIGN_IN_CARD`, **off**, staged by `SIGN_IN_CARD_USERS`. It was shipped without one, and that was the thing wrong with
