@@ -28,6 +28,14 @@ on it. Three things that had to be true together:
 - **A third empty on the set screen**, and the only one that ends by itself: **"Getting your first lesson ready"**.
   "Nothing due" would say they were finished and "Nothing to learn yet" would send them off to chat for no reason —
   both wrong for the ten seconds that matter most, which are somebody's first ten.
+- **That screen has no button and nothing to read.** There is nothing to decide, a button meaning "ask again" makes
+  somebody who is already waiting do the waiting's work, and the explanation of our model call is ours to carry.
+  Lingo mutters over it (`l.mutter`) and it **ends by itself**: the page listens on `lingo:<tag>` (a new topic in
+  `src/live/topics.ts`), the server publishes when the unit settles, and the open screen reloads into the first
+  exercise where he stands. Published **whichever way it went** — a screen with nothing to press must never wait on
+  a message that is not coming, so a unit that could not be written reloads into a fresh attempt and then the honest
+  empty. Named while it waits and at no other moment: a live event mid-set would pull the question out from under
+  somebody. No new client primitive was needed; `liveTopics` has been in both renderers all along.
 
 A failed or thin unit is still kept nowhere (`ENOUGH`), and a pair whose first attempt failed stops looking busy, so
 the next person gets a fresh attempt rather than a screen that waits for ever. Changing a level or the minutes a day
