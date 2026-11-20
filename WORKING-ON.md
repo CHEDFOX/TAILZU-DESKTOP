@@ -506,6 +506,31 @@ It wears `slate` (#4A535C), a cool graphite added to `SHIPPED_ONLY` so it is nev
 balloons on one thread (`glyphs.ts` `balloons`) rather than the sparkle every AI product uses — which is also X0's own
 mark and had to stay that way. 12,435 tests pass. `BOTS` is off, so none of it is reachable yet.
 
+## A RELEASE THAT SENT NOTHING IS RED NOW, NOT GREEN (20 Nov)
+
+Three things in one day decided not to do their work, said so in small print, and finished green:
+
+1. the migrate stage, `CACHED`, so pending migrations never ran;
+2. the payment-key gate, dropping Android from every update for two months;
+3. **"Native files untouched"**, which set `send=false` and `exit 0` — every later step skipped, tick green, nothing
+   on anybody's phone.
+
+The third one caught the commit that removed the billing keys, because `app/app.config.ts` is on its list. The list
+is right to hold that file (it can carry permissions, plugins, the icon) and the check is the ONLY thing standing
+between JavaScript written for new native code and a binary without it — `runtimeVersion` is a fixed string, so
+nothing else stops it. What was wrong was finishing green: a commit that is on main and on no phone is a thing
+somebody has to act on.
+
+It fails the run now, and the summary says which files tripped it and what to do — a store build for a real native
+change, or the workflow run by hand (where the check does not apply) when an update really can carry it. Checked by
+extracting the step and running it against a throwaway git repository: a JavaScript-only commit still gives
+`send=true` and exit 0; a commit touching `app.config.ts` exits 1 with the error and the file named in the summary.
+
+**Not done, and worth knowing:** it still judges by WHICH file changed, not by what changed inside it. Removing two
+strings from `extra` is blocked exactly as a new permission would be. Narrowing it means diffing
+`expo config --type public` before and after and blocking only when something native really moved. That is a better
+check and a riskier one — it is the only guard there is — so it was left alone rather than made clever.
+
 ## REVENUECAT NO LONGER TOUCHES A RELEASE (20 Nov)
 
 The coupling is cut at the root rather than loosened. **The billing keys are out of the manifest.** `app.config.ts`
