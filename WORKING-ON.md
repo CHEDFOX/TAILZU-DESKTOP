@@ -1,5 +1,26 @@
 # Being built right now (read before you start)
 
+## 20 Nov: A CONDITION'S PATH IS BARE — the blank set screen, and the lint that now says so
+
+Lingo's set screen drew NOTHING. Not an empty state: a blank page with a header and the ask bar.
+
+Both clients prefix a condition's path themselves — `resolveValue(`$state.${cond.eq[0]}`, ctx)` — so a path that
+arrives already carrying `$state.` is looked up as **`$state.$state.i`**, comes back undefined, and the node
+hides. The set screen puts every exercise behind `eq: ["i", <n>]`, so with the prefix on, every one of them was
+hidden and the body was empty. Nothing throws, nothing logs, and the code reads perfectly.
+
+It was already doing damage before today: the three verdict lines in `markRow` ("right", and the two that word
+the grader's reason) have carried `eq: ["$state.mark.mark.verdict", …]` since they were written, so **nobody has
+ever seen the verdict line after answering**. Four conditions in that file, all wrong the same way; every other
+screen in the kit writes them bare.
+
+**`lint.ts` now refuses a condition path that starts with `$state.`**, so no screen can be written this way again
+— and since the kit's own check runs over every screen in the tests, it is caught before a build, not after a
+deploy. My own test had pinned the broken shape, which is how it passed CI: it now asserts the bare path and that
+the prefixed form appears nowhere.
+
+12,695 pass. No other screen tripped the new rule.
+
 ## 20 Nov: LINGO HAD NO LESSONS BECAUSE THE DATABASE WAS THREE MIGRATIONS BEHIND
 
 Not the code. **0105, 0106 and 0107 had never run against the live database** — today's deploy log shows all three
