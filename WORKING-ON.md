@@ -1,5 +1,43 @@
 # Being built right now (read before you start)
 
+## 20 Nov: XODE PICKS THE PROJECT FROM THE WORDS — the front door can do work now, not only answer
+
+`handlers.ts` had one line standing between Xode and everything it can do:
+
+    if (!c.ctx.projectId) throw new FrontError("no_project", "Pick a project first.", 400);
+
+Every road that DOES something — `code_task`, the `code_job` road, `createWorkBranch`, `createJob`,
+`agent.enqueue` — was already written and working. It refused only because nobody had named a repo, and the box
+on Xode's own home therefore branched: `startTask` inside a project, `codeAsk` outside it. Inside, it shipped a
+branch; outside, it answered a question about the thing you asked it to do. That is the ceremony of
+read-one-then-ask, and it was never a missing engine, only a missing router.
+
+**The router is told what they have.** `FrontCtx.projects` is the plural of a pattern that was already there
+(`projectName`, `projectAbout` — the brain's `welcome`, one line): id, name and a line each, for up to twelve,
+read only when the message came from NO project and cached for the same ten minutes. `decide` lists them and
+answers with `projects`: the names it means, the main one first. They are matched back to ids **exactly and
+case-blind**, so a name the model invented picks nothing rather than something near it — near enough is the
+wrong repo, and the wrong repo is a branch in it.
+
+**One id leads; the rest span.** `front.ask` puts the lead in `ctx.projectId` — never over one the person was
+already standing in — and the others go to the job as `projects`, which is the split engine that has existed
+since the teams landed and that nothing but a direct API call could reach: each repo gets its own branch, plan
+and pull request, linked, with the lead waiting.
+
+**And the box follows the work.** Asking from the home navigated to the answer page whatever came back; it now
+goes to the job when a job started (`shell.job`).
+
+Saying nothing is still a real answer: a question about none of them in particular ("what changed this week?")
+is answered across all of them as before, and `clarify` — already in the decision and already drawn — asks which
+when two would fit. The role's contract names the new field and still fits its size budget; the guidance itself
+rides on the message, where it is only sent to somebody who has projects to pick from.
+
+Five cases in `front-decide.test.ts`. 12,713 pass; the standing two fail as always.
+
+**Still to do:** one conversation instead of one per project. The thread id is literally `threadFor(user,
+projectId)`, so a project-less thread is a schema change, not a screen change — worth doing now the routing is
+proved, not before.
+
 ## 20 Nov: EVERY ACCOUNT HAS A USERNAME NOW, AND THE ABOUT YOU CARD ASKS FOR IT INSTEAD OF A NAME
 
 The first step towards adding people one at a time. Today the only way two people are connected is a space they share
