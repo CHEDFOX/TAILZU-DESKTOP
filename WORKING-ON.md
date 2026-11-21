@@ -1,5 +1,50 @@
 # Being built right now (read before you start)
 
+## 21 Nov: LINGO'S STREAK FORGIVES ONE DAY — and what the motivation research actually supports
+
+The streak was unforgiving: `streakAfter` reset the run to 1 on the first missed day, and **no test covered it**.
+That punishes exactly the person it is meant to keep, and what they lose is not the number but the reason to come
+back: Silverman and Barasch (Journal of Consumer Research, 2023, seven studies) found a broken run cuts later
+engagement most in people who blame themselves for breaking it. Every app that keeps streaks kind does it with a
+freeze of some sort.
+
+**One missed day is forgiven; two are not.** No thing to buy, spend or remember. The count stays DAYS THEY TURNED
+UP — a missed day is never counted — so the number keeps meaning what it says, and a streak that forgave
+everything would count nothing. Five cases now hold it.
+
+### What the research says, and what this codebase already gets right
+
+Worth writing down, because the obvious moves here are the wrong ones:
+
+* **No points, no XP, no gems — keep it that way.** Expected tangible rewards made contingent on performance
+  reliably UNDERMINE intrinsic motivation (the overjustification literature). Mogavi et al. (2022) found learners
+  fixating on streaks and XP in ways that distracted from the learning itself. Lingo has never had a score, and
+  that is a decision, not an omission.
+* **The scaled celebration is already right.** `gestureFor` gives a bad set nothing, and its own comment says why:
+  confetti for everything makes the celebration worthless and tells somebody who just failed six things that they
+  did well. That is honest competence feedback, which is the need the research finds best supported in apps
+  (autonomy ~0.31, competence ~0.29 in one mobile-app study; both modest and correlational).
+* **Gamification's effect is real but small.** Meta-analyses put motivation gains around g = .36 to .54, with one
+  outlier at 1.06; the only language-specific one (South Korea, 11 cases) found g = .52. Small, not magic.
+* **Relatedness is the weakest of the three needs in apps** — and Lingo already owns the asset nobody else has
+  here: a bot with a face, its own idlings and a moment per unit. That is the lever with the most room.
+
+### Next, in order of what the evidence supports
+
+1. **A floor that counts.** The daily goal is `goalMin` minutes; one reported test found 40% more people kept a
+   seven-day run when the day's requirement was ONE lesson rather than the full goal. One set should count.
+2. **Show the can-do list where it is seen.** `canDo()` — "the things they could not do a month ago and can do
+   today", the strongest competence signal in the product — reaches exactly ONE screen, the unit-finished one that
+   nothing opened until yesterday. It belongs on the territory card too.
+3. **Lean on the bot for relatedness.** It already knows why they are learning (`whyNote`), how long they think
+   before answering, and which kinds they find hard (`portrait.ts`). None of that is ever said back to them.
+4. **Never guilt them.** No "you made Lingo sad". The design writing is unanimous and the evidence for guilt
+   notifications is anecdotal at best; the downside is churn by people who already feel bad.
+
+**A constraint worth remembering:** a unit's content is cached per PAIR and shared by everybody learning it, so
+lessons cannot be personalised by `why` without giving up that cache. Personalisation belongs in what is said
+around the lesson, not in the lesson's words.
+
 ## 21 Nov: LINGO TEACHES NOTHING BEFORE IT ASKS — a new word now stands among the ones they know
 
 `shapeFor` sends a brand-new item straight to `choose`, and `distractors` drew the wrong answers from the WHOLE
