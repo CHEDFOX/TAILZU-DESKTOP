@@ -1,5 +1,27 @@
 # Being built right now (read before you start)
 
+## 21 Nov: A SET ENDS ON WORDS THAT NAME WHAT HAPPENED — the only reward in here
+
+`setEnd` had **no callers**: it was written for an end-of-set moment that never existed, because until two days
+ago a set never ended. A finished set rolled straight into the next one, so a sitting had no end at all — and
+the end is most of what a sitting is remembered by, which `order.ts` already knows and spends five rules on.
+
+A set now stops on its own words. They are the only reward in Lingo: no points, no gems, no score, because a
+reward made contingent on the thing weakens the wanting to do it. So the words have to earn their place, and
+what earns it is NAMING WHAT HAPPENED:
+
+1. a word that crossed into **learned** — "gracias is yours now, said out loud and held" — the biggest thing that
+   can happen in a sitting, and the one that was never said out loud to anybody;
+2. else what was **said out loud**, which is the part that makes a word stick;
+3. else the band's line, which says what the NEXT set does rather than how this one went.
+
+**Never about the person.** Person praise is the one kind the evidence is clear about: it leaves somebody
+helpless at the first failure, worse than saying nothing, and the next bad set breaks the promise it makes. A
+test holds the praise strings against "natural", "clever", "smart" and the rest. A struggling set is still told
+only what happens next, and gets no brightness it can see is untrue (`gestureFor` already gave it no confetti).
+
+Rendered both ends to check: a flying set naming two words, a struggling one naming none.
+
 ## 21 Nov: LINGO'S STREAK FORGIVES ONE DAY — and what the motivation research actually supports
 
 The streak was unforgiving: `streakAfter` reset the run to 1 on the first missed day, and **no test covered it**.
