@@ -1,5 +1,37 @@
 # Being built right now (read before you start)
 
+## 21 Nov: LINGO TEACHES NOTHING BEFORE IT ASKS — a new word now stands among the ones they know
+
+`shapeFor` sends a brand-new item straight to `choose`, and `distractors` drew the wrong answers from the WHOLE
+course, met or not. So the first lesson is eight unknown words offered against each other: nothing on the screen
+is known, nothing is identifiable, every question is a coin toss. It reads as an app that assumes you already
+speak the language because that is literally what the code does — it has testing moments and no teaching moment.
+
+**Done: a new word stands among met ones** (`session.ts` `beside`). Met first, same kind first, unmet behind to
+fill. A new word among three known ones is identifiable by elimination, which is how immersion teaches without
+translating, and it is the thing that makes each new word need less telling than the last.
+
+**What the research actually says**, because the obvious answer is wrong. Pictures are NOT a clean win: a PLOS
+ONE study of Chinese vocabulary found translations better on recognition; an ESL study with Swahili found
+translations recalled better with no significant picture effect, and learners OVERCONFIDENT after picture
+learning; a Cambridge study found the image advantage vanished when tested with an L1 word. Pictures win for
+CONCRETE words (dual coding: abstract words cannot be imaged), which is why Rosetta Stone's no-translation
+immersion is fine for apples and falls apart past them. Receptive-before-productive is well supported and the
+ladder already does it.
+
+**Still open, in order:**
+
+1. **A meet step.** The first encounter has nothing to eliminate against, so the word wants showing — written,
+   its meaning, and said in the language's voice — before it is asked for. One tap, no images, no model call;
+   `voice` is already on the learner row. Gate it on there being nothing met to stand beside, and it fades by
+   itself as the course fills.
+2. **Hearing from the start.** `listen` is on the ladder but only reachable at `reps <= 1` AFTER review state, so
+   a beginner never hears anything. Hearing a word is part of meeting it.
+3. **Two options before four**, in the easy direction (meaning -> word) at the very start.
+4. **Images last, for concrete nouns only** — and the architecture is the good part: an image is
+   LANGUAGE-INDEPENDENT, so one bank keyed by concept serves all 85 pairs, which is the opposite of the sentence
+   bank's per-pair problem. Needs a licence gate like the sentence bank has.
+
 ## 20 Nov: A PHOTO ON THE ASK IS SHOWN ON THE ASK, not only inside the card it was picked in
 
 Pick a photo and it uploads, goes on the list and IS sent with the message — but close the card and the composer
