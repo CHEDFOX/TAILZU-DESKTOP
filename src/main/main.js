@@ -267,6 +267,9 @@ function adoptBoot(boot) {
   reloadConfigFromKnobs();
   refreshTray();
   broadcastKnobs();
+  // Whether he rests at the edge is the server's (bots.app, desktop.rest.*), and its answer usually lands after the
+  // pill is up: looked at again, or a launch whose first word came from the server never rests.
+  updateRest();
   void blipSync().check(boot.flags && boot.flags["desktop.blip"]);
   // The server may have turned its notices on or off for this computer (desktop.notices.enabled).
   if (notices) { try { notices.sync(); } catch { /* their own */ } }
@@ -3908,6 +3911,9 @@ app.whenReady().then(() => {
   frontApp.warmUp();
   setupAsk();
   if (pillOn()) createPillWindow();
+  // The clock to the edge starts now. It was only ever started by a change of the pill's state, and the pill is born
+  // at rest without one, so with no dictation he strolled the bottom of the screen for the whole run, never resting.
+  updateRest();
   // The pill follows the screens, and is raised again after sleep and on
   // unlock (see replaceFloating).
   screen.on("display-added", replaceFloating);

@@ -8,6 +8,9 @@ const apart = () => splitT > 0.02;
 function inside(x, y, pad = 4) {
   // Hidden (Blip over a text box, or no rest pill), it takes nothing: the app under it keeps its clicks.
   if (P.show < 0.5) return false;
+  // Blip himself, head and all, wherever he stands (bots.js blipBox): not only the pill's box under his feet.
+  if (typeof blipBox !== "undefined" && blipBox && !apart()
+    && x >= blipBox.x - pad && x <= blipBox.x + blipBox.w + pad && y >= blipBox.y - pad && y <= blipBox.y + blipBox.h + pad) return true;
   // Apart, only the two halves take the pointer: the thread and the screen
   // between them stay the app's, clicks and all.
   if (apart()) return !!SP.podAt(podsNow(), x, y, pad);
