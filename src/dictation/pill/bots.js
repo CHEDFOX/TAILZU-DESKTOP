@@ -120,6 +120,7 @@ let pillAnchor = 0;               // the pill's place: Blip's offset from the wi
 let workAnchor = null;            // where the pill stays while a task runs
 let leaveUntil = 0, leaveMs = 0;  // walking off to the screen's edge, until then
 let pillCX = 0;                   // the pill's middle this frame (pointer.js hit-tests it)
+let blipBox = null;               // where Blip was drawn this frame, head and all (pointer.js hit-tests it too), or null
 let spotSent = null, spotAt = 0;  // what main was last told of where he is (the hop to a text box starts there)
 const ROAM_ON = () => !!roam && BLIP() && !REDUCED() && K.bool("desktop.pill.roam", true);
 const WORKING = () => S.name === "routed" && (S.data.kind === "work" || S.data.kind === "look");
@@ -231,6 +232,7 @@ function talkSign(x, feet, h, now) {
 /** One frame of the Bots look. Returns true while something still moves. */
 function drawBots(t, now, dt, x0, y0, cy) {
   let moving = false;
+  blipBox = null;
   const st = S.name, r = P.h / 2;
   ctx.save();
   if (st === "error" && t < 0.42) ctx.translate(Math.sin(t * 60) * 3 * (1 - t / 0.42), 0);
@@ -346,6 +348,9 @@ function drawBots(t, now, dt, x0, y0, cy) {
     const hearing = st === "listening" || (st === "talk" && S.data.phase === "listen");
     const level = hearing && now - bandsAt < 250 ? Math.min(1, Math.max(...bands) * 1.3) : 0;
     if (st === "talk") talkSign(bx, y0 + P.h - 2, bh, now);
+    // HE IS WHAT PEOPLE POINT AT. The pill's box at rest is 40 x 30 at his feet and he stands 46 tall over it, so his
+    // face and head — where anybody hovers or clicks — took nothing, and he read as not answering at all.
+    blipBox = { x: bx - bh * 0.4, y: y0 + P.h - 2 - bh - 4, w: bh * 0.8, h: bh + 6 };
     ctx.globalAlpha = P.show;
     // Walking left, he is drawn the other way round: he faces where he goes.
     const back = roamNow.walking && roamNow.dir < 0;
