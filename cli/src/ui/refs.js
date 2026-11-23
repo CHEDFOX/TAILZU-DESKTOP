@@ -9,9 +9,4 @@ function highlightRefs(line, paint) {
   return String(line).replace(REF, (_, before, ref) => before + paint.bold(paint.cyan(ref)));
 }
 
-/** The file:line references in a text. */
-function refsIn(text) {
-  return [...String(text).matchAll(REF)].map((m) => m[2]);
-}
-
-module.exports = { highlightRefs, refsIn };
+module.exports = { highlightRefs };

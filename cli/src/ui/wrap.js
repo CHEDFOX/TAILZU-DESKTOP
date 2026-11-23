@@ -34,11 +34,4 @@ function hangOf(line) {
   return m ? m[1].length : (/^\s+/.exec(line) || [""])[0].length;
 }
 
-/** A block of text (several lines) wrapped line by line. */
-function wrapText(text, width) {
-  const out = [];
-  for (const line of String(text).split("\n")) out.push(...wrapLine(line, width, Math.min(hangOf(line), 12)));
-  return out;
-}
-
-module.exports = { wrapLine, wrapText, hangOf };
+module.exports = { wrapLine, hangOf };

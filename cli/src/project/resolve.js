@@ -18,11 +18,6 @@ const NOT_A_REPO = "This isn't a git repository: run xode inside your project's 
 const NOT_GITHUB = "This repository's remote isn't on GitHub: Xode works with GitHub repositories.";
 const NO_REMOTE = "This repository has no remote: Xode works with GitHub repositories, so push it to GitHub first.";
 
-/** The folder xode works from: the repository's top folder (status and stop use it too). Null outside a repository. */
-async function repoTop(cwd) {
-  return topOf(cwd);
-}
-
 /**
  * Resolves { id, name, defaultBranch, top, remote: { name, url } | null, repo: { owner, repo, fullName } | null }.
  * `repo` is the folder's GitHub repository when it is this project's, so its work can be brought back (null otherwise).
@@ -63,4 +58,4 @@ async function resolveProject(cwd, { flag, env = process.env, client, input, out
   };
 }
 
-module.exports = { resolveProject, repoTop, NOT_A_REPO, NOT_GITHUB };
+module.exports = { resolveProject, NOT_A_REPO, NOT_GITHUB };
