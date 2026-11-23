@@ -188,6 +188,16 @@ contextBridge.exposeInMainWorld("tailzuNotes", {
   done: (p) => ipcRenderer.send("notes:done", p),
 });
 
+// Ask's hidden window for a clip of the window in front (agent/watch/watch.html). The main process answers these for that
+// window only (clipper.js), and takes its answer only for the clip it asked for.
+contextBridge.exposeInMainWorld("tailzuWatch", {
+  onRecord: (cb) => ipcRenderer.on("watch:record", (_e, cfg) => cb(cfg)),
+  onStop: (cb) => ipcRenderer.on("watch:stop", (_e, p) => cb(p)),
+  // macOS: the computer's sound, as 16 kHz 16-bit PCM from the helper.
+  onPcm: (cb) => ipcRenderer.on("watch:pcm", (_e, bytes) => cb(bytes)),
+  done: (p) => ipcRenderer.send("watch:done", p),
+});
+
 // Tailzu Code on this computer (runner/runner.html): its switch, its projects and what it ran. The main process answers these for that
 // window only, and checks each one.
 contextBridge.exposeInMainWorld("tailzuRunner", {
