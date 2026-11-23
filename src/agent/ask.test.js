@@ -3553,3 +3553,39 @@ test("the speaker button turns the voice off mid-answer: what is being said stop
   h.ipc.emit("guide:voice", fromCard(h));
   assert.ok(h.sent.filter((m) => m.type === "voiceOff").at(-1).off === false, "pressed again, answers are said aloud again");
 });
+
+// ---- the server's flow instructions (agent.js takeFlow) ---------------------------------------------------------
+
+const withFlow = (f) => TWO_ANSWERS.map((s) => [s[0], Object.assign({ t: "flow", v: 1 }, f), ...s.slice(1)]);
+
+test("flow afterAnswer close: the conversation ends with this answer, the card goes doneMs after, no microphone", async () => {
+  const h = harness({ steps: withFlow({ afterAnswer: "close" }) });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.types().includes("hide"));
+  assert.strictEqual(h.starts(), 1);
+  assert.strictEqual(h.ask.conversation(), false);
+});
+
+test("flow idleMs: the server's wait for the next question, held under the ceiling here", async () => {
+  const h = harness({ steps: withFlow({ afterAnswer: "listen", idleMs: 150 }), knobs: { "desktop.agent.threadIdleMs": 600000 } });
+  await firstAnswer(h);
+  await until(() => !h.ask.conversation(), 1000);
+  goneAway(h);
+  const capped = harness({ steps: withFlow({ idleMs: 9e9 }), knobs: { "desktop.agent.threadIdleMaxMs": 150 } });
+  await firstAnswer(capped);
+  await until(() => !capped.ask.conversation(), 1000);
+});
+
+test("flow askReplyMic: key makes an ASK in a conversation wait for the key; open opens it with the knob and the conversation off", async () => {
+  const h = harness({ steps: [[{ t: "heard", text: "tell them", mode: "do" }, { t: "flow", v: 1, askReplyMic: "key" }, { t: "ask", text: "Which channel?" }]] });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.sent.some((m) => m.type === "badge" && /to answer/.test(m.text || "")));
+  await sleep(60);
+  assert.strictEqual(h.starts(), 1, "not opened by itself");
+  const open = harness({ knobs: { "desktop.agent.askOpensMic": false, "desktop.agent.thread": false }, steps: [[{ t: "heard", text: "tell them", mode: "do" }, { t: "flow", v: 1, askReplyMic: "open" }, { t: "ask", text: "Which channel?" }]] });
+  await open.ask.tap();
+  open.clip();
+  await until(() => open.starts() === 2);
+});

@@ -116,7 +116,10 @@ function createAsk(ctx) {
    */
   let convo = null;
   const threadOn = () => bool("desktop.agent.thread", true);
-  const threadIdleMs = () => Math.max(100, num("desktop.agent.threadIdleMs", 120000));
+  // The server's idle time for this conversation (flow idleMs) over the knob, never past the ceiling here: an open
+  // microphone is this computer's to limit.
+  const threadIdleMs = () => Math.min(Math.max(100, num("desktop.agent.threadIdleMaxMs", 600000)),
+    Math.max(100, convo && convo.idleMs ? convo.idleMs : num("desktop.agent.threadIdleMs", 120000)));
   // Counts the questions begun and thrown away, so a tap still waiting to
   // learn which app is in front can tell it has been overtaken.
   let asking = 0;
@@ -1138,8 +1141,11 @@ function createAsk(ctx) {
     // ends at its first pause. Nobody answers within replyWaitMs: null, and the run ends quietly.
     // In a conversation it IS the microphone at once (askOpensMic): opening it after each answer is what was asked
     // for there, and an ASK that waited for a key would be the one turn of it that did not listen.
-    listen: () => new Promise((resolve) => {
-      if (askOpensMic()) {
+    // The server may say which (flow askReplyMic, o.mic); a muted conversation's microphone stays shut whatever it says.
+    listen: (o) => new Promise((resolve) => {
+      const mic = o && (o.mic === "open" || o.mic === "key") ? o.mic : "";
+      const open = convo && convo.muted ? false : mic ? mic === "open" : askOpensMic();
+      if (open) {
         onAudio = reply = resolve;
         afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
         return;
@@ -1510,7 +1516,11 @@ function createAsk(ctx) {
   function convoEnded(end) {
     const c = convo;
     if (!c) return false;
-    if (!threadOn() || !shown || (end && end.refused) || offered) { dropConvo(); return false; }
+    // The server's word on what comes after this answer (flow afterAnswer): "close" ends the conversation here, as
+    // if it were off. It cannot start one: with the switch off there is no conversation to keep.
+    const flow = end && end.flow;
+    if (!threadOn() || !shown || (end && end.refused) || offered || (flow && flow.afterAnswer === "close")) { dropConvo(); return false; }
+    if (flow && flow.idleMs) c.idleMs = flow.idleMs;
     c.kept = true;
     if (end && end.how === "done") c.answered = true;
     const tok = ++c.tok;
