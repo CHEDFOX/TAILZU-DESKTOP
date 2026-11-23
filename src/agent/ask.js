@@ -901,6 +901,28 @@ function createAsk(ctx) {
     }
   }
 
+  // ---- the clip ------------------------------------------------------------------
+  /**
+   * A few seconds of the look's window, recorded now, for a question about
+   * something moving in it (run/video.js, agent.js allowedClip, which has
+   * already had the person's say-so as it has for a picture). Main records it
+   * (agent/watch/clipper.js): the window found by its title, which goes no
+   * further than this computer, and the computer's own sound where it can
+   * be heard, never the microphone. What comes back is checked again in the
+   * run before anything goes.
+   */
+  async function clip(look, o) {
+    const w = look && look.window;
+    const title = w && typeof w.title === "string" ? w.title : "";
+    if (!title.trim()) return null;
+    try {
+      return await ctx.recordClip(Object.assign({}, o, { title, frame: Array.isArray(w.frame) ? w.frame.slice() : null }));
+    } catch (e) {
+      console.warn("[ask] the clip could not be recorded:", (e && e.message) || e);
+      return null;
+    }
+  }
+
   // ---- the microphone ------------------------------------------------------------
   /** Opens the microphone for a question (`question`), streamed when
    *  desktop.agent.liveStream is on, or for an ASK's reply, which is only
@@ -1119,6 +1141,8 @@ function createAsk(ctx) {
     knob: (name, fallback) => {
       // The card's "Listening" on an ASK (agent.js ask) says what listen() above does.
       if (name === "desktop.agent.askOpensMic") return askOpensMic();
+      // A list (desktop.agent.videoApps): the server's, when the knobs can read one.
+      if (Array.isArray(fallback)) return typeof K.list === "function" ? K.list(name, fallback) : fallback;
       if (typeof fallback === "boolean") return bool(name, fallback);
       if (typeof fallback === "number") return num(name, fallback);
       return str(name, fallback);
@@ -1142,6 +1166,8 @@ function createAsk(ctx) {
     crop,
     // A run is over: in a conversation the card stays for the next question (convoEnded).
     onEnd: (end) => convoEnded(end),
+    // And the clip, for something moving: only where main can record one.
+    ...(typeof ctx.recordClip === "function" ? { clip } : {}),
   });
 
   /** Where the pointer is, in the driver's units (UI Automation's are

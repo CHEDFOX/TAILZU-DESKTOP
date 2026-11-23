@@ -39,6 +39,9 @@ function textsFrom(txt) {
     needScreen: txt("desktop.agent.text.needScreen", "I'd have to see the picture to answer that, and this Mac hasn't let X0 Bot see the screen. Turn on X0 Bot in System Settings, Privacy & Security, Screen Recording."),
     looking: txt("desktop.agent.text.looking", "Looking"),
     pictureSent: txt("desktop.agent.text.pictureSent", "1 picture sent"),
+    // While a few seconds of a playing video are recorded (agent.js recordClip), and once they went.
+    watching: txt("desktop.agent.text.watching", "Watching…"),
+    clipSent: txt("desktop.agent.text.clipSent", "1 clip sent"),
     // The server's refusals, by status, when it gave no words of its own (makePost).
     status400: txt("desktop.agent.text.status400", "Ask couldn't read that request."),
     status413: txt("desktop.agent.text.status413", "There's too much on this screen to read."),

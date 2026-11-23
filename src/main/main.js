@@ -42,6 +42,7 @@ const { createAsk, voiceOf } = require("../agent/ask.js");
 const { pillAskMove, capsuleRect } = require("../agent/pillAsk.js");
 const { createPeekWatch } = require("../agent/peek.js");
 const { createAskSetup } = require("../agent/askSetup.js");
+const { createClipper } = require("../agent/watch/clipper.js");
 const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
@@ -3160,10 +3161,24 @@ function recorderStart(sid) {
   return { baseUrl: cfg.baseUrl, token: tokenNow(), language: cfg.language, session: sid, strings: SHELL.notify, knobs: knobsPayload() };
 }
 
+// A few seconds of the window in front, for a question about a video playing in it (agent/watch/clipper.js): a hidden window
+// of its own records it, with the computer's sound where it can be heard, never the microphone. Made with Ask, once.
+let clipper = null;
+
 function setupAsk() {
   if (ask) return;
+  clipper = clipper || createClipper({
+    BrowserWindow, ipcMain, desktopCapturer, webPrefs, hardenWindow, spawn,
+    tapPath: () => (fs.existsSync(audiotapPath()) ? audiotapPath() : null),
+    // A note being taken has the computer's sound (its own helper): the clip is frames only then.
+    notesBusy: () => !!notes,
+    knob: (name, fallback) => (typeof fallback === "number" ? num(name, fallback) : typeof fallback === "boolean" ? bool(name, fallback) : str(name, fallback)),
+    log: (line) => console.log("[ask]", line),
+  });
   ask = createAsk({
-    BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt },
+    BrowserWindow, screen, ipcMain, knobs: { num, bool, str, txt, list },
+    // Something moving: a clip of the window in front (clipper above).
+    recordClip: (o) => clipper.record(o),
     /**
      * THEIR PART, MOVED TO X0 BOT'S OWN BROWSER — the way the phone signs a site in (docs/sites.md). A sign-in handover
      * offers it, and this opens the app at that panel: a real page in our browser, signed in once and kept, so what is
@@ -3898,11 +3913,17 @@ app.whenReady().then(() => {
     const fromNotesWin = !!notesWin && !notesWin.isDestroyed() && notesWin.webContents === wc;
     const fromApp = !!appWin && !appWin.isDestroyed() && appWin.webContents === wc;
     const records = fromApp || (!!recorderWin && !recorderWin.isDestroyed() && recorderWin.webContents === wc) || fromNotesWin;
+    // Ask's clip window may capture the window in front, and the computer's
+    // sound with it, while a clip it was asked for is being recorded, and
+    // never otherwise (agent/watch/clipper.js). Electron names no media
+    // types for a desktop capture (a real run of Electron 31 asked with
+    // mediaTypes []), so this one is not held to there being some.
+    const clipping = !!clipper && clipper.owns(wc) && clipper.recording() && types.every((m) => m === "audio" || m === "video");
     // The note-taker's capture of the computer's sound on Windows asks for the
     // screen's video too; it drops it at once. Only that window, only then.
     const notesDesktop = fromNotesWin && process.platform === "win32" && notes && notes.system === "desktop";
-    done(permission === "media" && types.length > 0 &&
-      ((audioOnly && records) || notesDesktop || (fromApp && types.every((m) => m === "audio" || m === "video"))));
+    done(permission === "media" && (clipping || (types.length > 0 &&
+      ((audioOnly && records) || notesDesktop || (fromApp && types.every((m) => m === "audio" || m === "video"))))));
   });
 
   // One launch, counted once — here, where only the copy that holds the lock

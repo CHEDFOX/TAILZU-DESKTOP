@@ -96,6 +96,13 @@ function pictureFile(mime) {
   return { name: "picture.jpg", type: "image/jpeg" };
 }
 
+/** The clip's file name and type: the two the server takes, by the
+ *  recorder's own type ("video/webm;codecs=vp8,opus" is a WebM file). A WebM
+ *  unless it says MP4. */
+function clipFile(mime) {
+  return /mp4/.test(str(mime).toLowerCase()) ? { name: "clip.mp4", type: "video/mp4" } : { name: "clip.webm", type: "video/webm" };
+}
+
 const STATUS_TEXT = Object.defineProperties({}, {
   400: { enumerable: true, get: () => TEXT.status400 },
   401: { enumerable: true, get: () => TEXT.signIn },
@@ -113,6 +120,8 @@ const STATUS_TEXT = Object.defineProperties({}, {
  *   image   the picture path's one picture, as an `image` part after them
  *           (picture.jpg, .png or .webp by its type): multipart too, with or
  *           without audio. A JSON body never carries a picture.
+ *   video   the clip path's one clip, as a `video` part (clip.webm or
+ *           clip.mp4), in place of the picture: never both.
  *   401     the token is spent whatever its expiry said; renewed once
  *           (token(true)) and the step sent again.
  *   errors  a refusal before streaming (400/401/413/429…) arrives as JSON;
@@ -129,15 +138,17 @@ function makePost(opts) {
   async function tokenFor(renew) {
     try { return str(typeof o.token === "function" ? await o.token(renew) : o.token) || null; } catch { return null; }
   }
-  return async function* post(request, audio, signal, image) {
+  return async function* post(request, audio, signal, image, video) {
     const base = str(typeof o.baseUrl === "function" ? o.baseUrl() : o.baseUrl).replace(/\/+$/, "");
     const withAudio = !!(audio && audio.data);
-    const withImage = !!(image && hasBytes(image.data));
+    const withVideo = !!(video && hasBytes(video.data));
+    // One or the other: the server refuses a step with both.
+    const withImage = !withVideo && !!(image && hasBytes(image.data));
     const send = async (tok) => {
       const headers = { Accept: "application/x-ndjson" };
       if (tok) headers.Authorization = "Bearer " + tok;
       let body;
-      if (withAudio || withImage) {
+      if (withAudio || withImage || withVideo) {
         body = new FormData();
         body.append("request", JSON.stringify(request));
         if (withAudio) {
@@ -152,6 +163,11 @@ function makePost(opts) {
           const given = typeof Blob !== "undefined" && image.data instanceof Blob ? image.data : null;
           const file = pictureFile(image.mime || (given && given.type));
           body.append("image", new Blob([image.data], { type: file.type }), file.name);
+        }
+        if (withVideo) {
+          const given = typeof Blob !== "undefined" && video.data instanceof Blob ? video.data : null;
+          const file = clipFile(video.mime || (given && given.type));
+          body.append("video", new Blob([video.data], { type: file.type }), file.name);
         }
       } else {
         headers["Content-Type"] = "application/json";

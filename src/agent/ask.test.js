@@ -121,6 +121,8 @@ function harness(opts = {}) {
       });
     },
     nativeImage: opts.nativeImage,
+    // main.js's clipper, when a test plays one: a clip of the window in front.
+    recordClip: opts.recordClip,
     picturesAlways: () => allowed.slice(),
     allowPicturesAlways: (a) => allowed.push(a),
     // The setup card's yes for every app (main.js localState.askPicturesAlwaysAll),
@@ -1368,6 +1370,43 @@ test("picture: Allow once sends one crop of the equation with the words, and the
   const says = h.sent.filter((m) => m.type === "say");
   assert.deepStrictEqual(says.map((m) => [m.text, !!m.append]), [["It's the area under x² from 0 to 1.", false], ["That's a third.", true]]);
   assert.deepStrictEqual(h.allowed, [], "Allow once is not remembered");
+});
+
+test("clip: something moving is recorded by main, by the look's title, and goes as one video part with the words", async () => {
+  const asked = [];
+  const clipBytes = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 7, 7, 7]);
+  const steps = [[{ t: "heard", text: "what's happening in this video?", mode: "show" }, { t: "say", text: "A dog catches a frisbee." }, { t: "done" }]];
+  const g = harness({
+    snap: PIC_SNAP, look: PIC_LOOK, steps, alwaysAll: true,
+    knobs: { "desktop.agent.finalTextMs": 1000, "desktop.agent.doneMs": 5000 },
+    recordClip: async (o) => { asked.push(o); return { mime: "video/webm", data: clipBytes, sound: true, seconds: 6 }; },
+  });
+  await g.ask.tap();
+  const sid = g.lastSession();
+  await sleep(20);
+  await g.ask.tap();
+  g.ask.audioIn({ session: sid, mime: "audio/webm", data: new Uint8Array([1, 2, 3]).buffer, text: "what's happening in this video?" });
+  g.ask.textIn({ session: sid, text: "what's happening in this video?", final: true });
+  await until(() => g.requests.length === 1 && g.sent.some((m) => m.type === "state" && m.state === "done"));
+  assert.strictEqual(asked.length, 1);
+  assert.strictEqual(asked[0].title, PIC_LOOK.window.title, "the window found by its title, in main");
+  assert.deepStrictEqual(asked[0].frame, PIC_LOOK.window.frame);
+  assert.deepStrictEqual([asked[0].seconds, asked[0].maxSide, asked[0].fps, asked[0].maxBytes, asked[0].sound], [6, 960, 4, 8000000, true]);
+  const r = g.requests[0];
+  assert.deepStrictEqual(Object.keys(r.parts).sort(), ["request", "video"]);
+  assert.strictEqual(r.parts.video.name, "clip.webm");
+  assert.strictEqual(r.parts.video.type, "video/webm");
+  assert.deepStrictEqual(r.parts.video.bytes, clipBytes);
+  assert.deepStrictEqual(r.req.video, { seconds: 6, sound: true });
+  assertNothingOfTheWindow(r);
+  assert.ok(g.sent.some((m) => m.type === "badge" && m.text === "Watching…"));
+  assert.ok(g.sent.some((m) => m.type === "point" && m.tentative && m.caption === "Watching…"));
+  assert.ok(g.sent.some((m) => m.type === "badge" && m.text === "1 clip sent"));
+});
+
+test("clip: without main's recorder there is no clip path", () => {
+  assert.strictEqual(harness().deps().clip, undefined);
+  assert.strictEqual(typeof harness({ recordClip: async () => null }).deps().clip, "function");
 });
 
 test("picture: with no image to send alone, the card says the whole window, ringed on screen before it asks", async () => {

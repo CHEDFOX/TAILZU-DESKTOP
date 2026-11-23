@@ -117,6 +117,7 @@ src/
       agent.js          createAgent: the loop (read the screen, ask /v1/agent, point, say, act); long jobs, handover
       screen.js         the elements sent (coarse regions, no URL queries)
       picture.js        OCR lines as elements; the crop a picture question sends
+      video.js          whether a question is about something moving (a clip, not a picture)
       marks.js          what an answer draws, mapped to screen positions
       changes.js        what an action changed; where focus went
       risk.js           the device's own risk rating (it only ever raises the server's)
@@ -131,6 +132,10 @@ src/
     peek.js             Blip over the text box while dictating: the caret watch
     askSetup.js         the one-time setup card's main-process side
     pillAsk.js          what a question may do with the pill; the capsule's rectangle
+    watch/              a few seconds of the window in front, for a question about a video playing in it
+      clipper.js        main process: finds the window by its title, picks how the computer's sound is heard
+      watch.html        the hidden window that records it
+      watchRecorder.js  desktop capture + the computer's sound (never the microphone) into a WebM
     driver/             the screen's buttons and fields, per OS
       driver.js         picks the driver for this platform
       axDriver.js       macOS: talks to native/tzax.swift (accessibility, look, caret)

@@ -219,6 +219,18 @@ window rather than recording into a history no account owns.
     Always to and asks again for any of them. Signing out puts pictures back
     to the default (on) for whoever signs in next. `desktop.agent.pictures:
     never` turns pictures off, whatever is kept here.
+  - **Clips**: "what's happening in this video?", or "what's this?" while
+    VLC, QuickTime, YouTube, Netflix… is in front (`src/agent/run/video.js`;
+    the players are `desktop.agent.videoApps`). Instead of one picture, the
+    window is recorded for `desktop.agent.videoSeconds` (6) at most
+    `desktop.agent.videoMaxSide` (960) pixels and `desktop.agent.videoFps`
+    (4) frames a second, with the computer's own sound where it can be heard
+    (Windows loopback, macOS audiotap unless a note is being taken, Linux's
+    output monitor) and never the microphone (`src/agent/watch/`). The card
+    says "Watching…" while it records. The same say-so as a picture, never
+    from a sensitive app or a private window; over
+    `desktop.agent.videoMaxBytes` (8 MB) the still picture goes instead.
+    `desktop.agent.video: false` turns clips off.
   - **Out of the pill**: the card grows out of the pill on a thread, stays
     tied to it while it is up, and folds back into it at the end.
   - **Drawing**: while it explains, it circles, underlines, numbers and

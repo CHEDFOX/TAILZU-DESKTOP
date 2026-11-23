@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- Ask's hidden window for a clip of the window in front (clipper.js).
+         This app's own scripts only, and no connections at all: what it
+         records goes back to the main process, which sends it. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; media-src blob: mediastream:" />
+    <title>X0 Bot watch</title>
+  </head>
+  <body>
+    <script src="watchRecorder.js"></script>
+  </body>
+</html>
