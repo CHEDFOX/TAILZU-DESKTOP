@@ -82,7 +82,8 @@ function harness(opts = {}) {
   }
   // The stream's final text is not waited for unless a test says so: most
   // of them hand over a clip and nothing else.
-  const knobs = Object.assign({ "desktop.agent.serverVoice": false, "desktop.agent.settleMs": 0, "desktop.agent.doneMs": 50, "desktop.agent.finalTextMs": 0, "desktop.agent.askOpensMic": true }, opts.knobs);
+  // trustCommands off: these tests are of the yes card, which a command now skips for ordinary steps (agent.test.js "said as a command").
+  const knobs = Object.assign({ "desktop.agent.serverVoice": false, "desktop.agent.settleMs": 0, "desktop.agent.doneMs": 50, "desktop.agent.finalTextMs": 0, "desktop.agent.askOpensMic": true, "desktop.agent.trustCommands": false }, opts.knobs);
   for (const k of opts.unset || []) delete knobs[k];
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
   const actions = [];
