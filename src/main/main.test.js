@@ -474,3 +474,11 @@ test("main: the window may open a web page or a mail draft, and nothing else (Pl
     assert.deepStrictEqual(m.opened.slice(before), ["https://wa.me/?text=Hi", "mailto:rahul@example.com?body=Hi%20Rahul"]);
   } finally { m.close(); }
 });
+
+test("a copy that cannot replace itself (the Store's among them) still gets today's update notice", async () => {
+  const m = mainProcess({ flags: { "desktop.update": { latest: "9.0.0", min: "", url: "https://x0bot.com/downloads/Tailzu-Setup.exe", sha512: "a".repeat(128) } } });
+  try {
+    await m.ready();
+    assert.ok(m.notifications.some((n) => /9\.0\.0 is available/.test(n.opts.body)));
+  } finally { m.close(); }
+});

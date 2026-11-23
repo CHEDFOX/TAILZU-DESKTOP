@@ -256,6 +256,10 @@ function createAgent(deps) {
   /** Whether a private window is read and acted in like any other (the
    *  server's switch; frontApp.privateWindowsOk reads the same one). */
   const privateOk = () => bool("desktop.agent.privateWindows", true);
+  /** THE SERVER'S FLOW INSTRUCTIONS (the `flow` event, v1): obeyed when it sends them, unless this is off. */
+  const flowOn = () => bool("desktop.agent.serverFlow", true);
+  /** This server has sent a flow event (and not since stopped): step 0 then leaves the clip-or-picture choice to it. */
+  let speaksFlow = false;
   /** History the server takes, oldest first. Older turns fall off the front. */
   const historyMax = () => Math.max(1, Math.round(num("desktop.agent.historyMax", 16)));
   /** Words the person reads (desktop.*, through `d.txt`, the knobs' reader); the English here without it. */
@@ -385,7 +389,7 @@ function createAgent(deps) {
   function keptBy(run, how) {
     if (typeof d.onEnd !== "function") return false;
     try {
-      return d.onEnd({ how, stop: run.stop || "", refused: run.stop === "blocked" || run.stop === "private" }) === true;
+      return d.onEnd({ how, stop: run.stop || "", refused: run.stop === "blocked" || run.stop === "private", ...(run.flow ? { flow: Object.assign({}, run.flow) } : {}) }) === true;
     } catch (e) {
       log(`agent: onEnd threw: ${errText(e)}`);
       return false;
@@ -626,6 +630,11 @@ function createAgent(deps) {
     }
     const lang = language();
     if (lang) req.language = lang;
+    // Flow instructions asked for, with what could be shown if the server asks to look (mediaCan).
+    if (flowOn()) {
+      const can = input.image || input.video || input.noMedia ? [] : mediaCan(run);
+      req.flow = can.length ? { v: 1, can } : { v: 1 };
+    }
     // "This computer": the person's own files, offered to the planner only when this copy can do them.
     if (canDevice()) req.capabilities = ["DeviceFiles"];
     if (run.history.length) req.history = run.history.slice(-historyMax()).map((h) => Object.assign({}, h));
@@ -918,11 +927,12 @@ function createAgent(deps) {
         // answering "do"). So the person's own words must read as a command too (saysDo), and those words are the ones this
         // computer has (typed, or its live caption: run.goal). The server's transcript of the recording counts only when step 0
         // carried no page text, since then nothing but the person's voice went with it.
-        if (ev.mode === "do" && run.step === 0 && bool("desktop.agent.trustCommands", true)) {
+        if (ev.mode === "do" && run.step === 0 && !run.flowTrust && bool("desktop.agent.trustCommands", true)) {
           const own = run.goal || run.said || (run.pageSent ? "" : text);
           if (saysDo(own)) run.trusted = true;
           else if (own || run.pageSent) log(`agent ${run.tag}: "do" not trusted: ${own ? "their words are not a command" : "only the server's words, with a page"}`);
         }
+        run.stepHeard = true;
         if (run.fresh && text) run.said = text;
         if (run.step === 0 && text && !run.goal) run.goal = clip(text, 1000);
         if (text && text !== run.lastHeard) { run.lastHeard = text; tell(run, "heard", text); }
@@ -967,8 +977,46 @@ function createAgent(deps) {
       case "open":
         openLink(run, ev);
         break;
+      case "flow":
+        takeFlow(run, ev);
+        break;
       default: break;   // a newer server's event this build does not know
     }
+  }
+
+  /**
+   * THE SERVER'S FLOW INSTRUCTIONS (v1). Only known fields of a known version, each checked: an unknown version is
+   * ignored whole, and the step runs as it would with none. None of it lowers a floor: trusted only moves classifyRisk's
+   * policy rules (floorRisk still asks), media is still the person's say-so and never a private window's clip, the
+   * microphone's own rules (mute, the conversation switch, threadIdleMaxMs) are ask.js's.
+   */
+  function takeFlow(run, ev) {
+    if (!flowOn() || ev.v !== 1) return;
+    speaksFlow = true;
+    run.stepFlow = true;
+    const f = {};
+    if (ev.afterAnswer === "listen" || ev.afterAnswer === "close") f.afterAnswer = ev.afterAnswer;
+    if (typeof ev.idleMs === "number" && Number.isFinite(ev.idleMs) && ev.idleMs > 0) f.idleMs = Math.round(ev.idleMs);
+    if (ev.askReplyMic === "open" || ev.askReplyMic === "key") f.askReplyMic = ev.askReplyMic;
+    if (ev.media === "clip" || ev.media === "picture" || ev.media === "none") f.media = ev.media;
+    if (f.media === "clip" && typeof ev.clipSeconds === "number" && Number.isFinite(ev.clipSeconds)) f.clipSeconds = Math.min(30, Math.max(1, ev.clipSeconds));
+    run.flow = f;
+    // Their words are their yes, said at the first step; a later step may only take that back.
+    if (typeof ev.trusted === "boolean") {
+      if (run.step === 0 && !run.flowTrust) run.trusted = ev.trusted;
+      else if (!ev.trusted) run.trusted = false;
+      run.flowTrust = true;
+    }
+  }
+
+  /** What this step could show if the server asks to look: a picture (pictures of the app may go, there is one from
+   *  Alt twice, the screen is still that one) and a clip (the same, a recorder, and never a private window). */
+  function mediaCan(run) {
+    if (run.acted || run.pictureSent || run.permit === "no" || run.mediaAsked) return [];
+    const can = [];
+    if (canPicture && run.look && run.look.image) can.push("picture");
+    if (canClip && bool("desktop.agent.video", true) && run.look && isFrame(run.look.window && run.look.window.frame) && !inPrivate(run)) can.push("clip");
+    return can.length && !picturesNever(run) ? can : [];
   }
 
   /** The server's `open` (a hand-off, such as an email written in Gmail): the link, or its fallback, handed to main to open. At most once a run. */
@@ -1449,10 +1497,12 @@ function createAgent(deps) {
     if (question) tell(run, "say", question, sayOpts(""));
     // Listening only when the microphone opens at once (desktop.agent.askOpensMic); otherwise the question stays
     // up, waiting for the key, and the card does not pretend to listen.
-    tell(run, "state", bool("desktop.agent.askOpensMic", false) ? "listening" : "showing");
+    // The server's word on it (flow askReplyMic) over the knob; ask.js still keeps a muted microphone shut.
+    const mic = run.flow && run.flow.askReplyMic;
+    tell(run, "state", (mic ? mic === "open" : bool("desktop.agent.askOpensMic", false)) ? "listening" : "showing");
     let audio = null;
     try {
-      if (typeof d.listen === "function") audio = await race(run, Promise.resolve().then(() => d.listen()));
+      if (typeof d.listen === "function") audio = await race(run, Promise.resolve().then(() => d.listen(mic ? { mic } : undefined)));
     } catch (e) {
       log(`agent ${run.tag}: listen failed: ${errText(e)}`);
     }
@@ -1470,6 +1520,9 @@ function createAgent(deps) {
     clearMarks(run);
     if (run.step > 0) tell(run, "state", "thinking");
     run.says = 0;
+    run.stepFlow = false;
+    run.stepHeard = false;
+    if (run.flow) delete run.flow.media;
     const audio = input.audio || null;
     const image = input.image || null;
     const video = input.video || null;
@@ -1524,6 +1577,8 @@ function createAgent(deps) {
       close(it);
     }
 
+    // A server that heard and sent no flow does not speak it (an older one, or it was turned off): back to deciding here.
+    if (run.stepHeard && !run.stepFlow) speaksFlow = false;
     // The answer is in. A tentative ring it did not replace was a guess
     // (preview's, or the picture's "Looking"), and goes now.
     dropTentative(run);
@@ -1534,7 +1589,7 @@ function createAgent(deps) {
     }
     switch (terminal.t) {
       case "look":
-        return lookAgain(run, input);
+        return run.flow && (run.flow.media === "clip" || run.flow.media === "picture") && !run.mediaAsked ? mediaLook(run, run.flow) : lookAgain(run, input);
       case "done": {
         if (run.plan) { run.planDone = run.plan.length; if (run.job) run.job.done = run.plan.map((_, i) => i); showPlan(run); }
         // DONE's words are the card's whole text, in place of what it said;
@@ -1700,6 +1755,27 @@ function createAgent(deps) {
     return Object.assign(withPicture(run, pic, again), { sameStep: true });
   }
 
+  /**
+   * The server asked to look (flow media) before answering: the clip or the picture it named, by the same rules and
+   * the same say-so as the device's own choice at step 0 (a clip that could not go falls back to the still), and the
+   * same step goes again with it. Nothing could go (the person said no, the window went private): the same step goes
+   * again with the words alone, offering nothing, and is answered from them. Once a run.
+   */
+  async function mediaLook(run, flow) {
+    run.mediaAsked = true;
+    const words = { utterance: run.said || run.goal };
+    const got = flow.media === "clip" ? await allowedClip(run) : null;
+    if (!alive(run)) return null;
+    if (got && got.video) return Object.assign(withClip(run, got, words), { sameStep: true });
+    if (flow.media === "picture" || (got && got.none)) {
+      const pic = run.look && run.look.image ? await allowedPicture(run) : null;
+      if (!alive(run)) return null;
+      if (pic) return Object.assign(withPicture(run, pic, words), { sameStep: true });
+    }
+    log(`agent ${run.tag}: the server asked to look, and nothing could go; asking from the words`);
+    return Object.assign(words, { noMedia: true, sameStep: true });
+  }
+
   // ---- the clip path ----------------------------------------------------------------
 
   /** A private window, by what the run was told at Alt twice or either read's
@@ -1748,7 +1824,7 @@ function createAgent(deps) {
   async function recordClip(run) {
     const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
     const o = {
-      seconds: clamp(num("desktop.agent.videoSeconds", 6), 1, 30),
+      seconds: clamp(run.flow && run.flow.clipSeconds ? run.flow.clipSeconds : num("desktop.agent.videoSeconds", 6), 1, 30),
       maxSide: Math.round(clamp(num("desktop.agent.videoMaxSide", 960), 160, 3840)),
       fps: clamp(num("desktop.agent.videoFps", 4), 1, 30),
       maxBytes: Math.max(100000, num("desktop.agent.videoMaxBytes", 8000000)),
@@ -1833,7 +1909,9 @@ function createAgent(deps) {
     // not sent (nothing recorded, or more than may go): the still picture
     // instead, without asking twice, since the question is still about what
     // is seen. Not allowed at all: the picture's own rules, below.
-    if (text && final && run.look && clipWanted(run, text)) {
+    // The server decides what it needs to see once it has said it speaks flow: the words go, and it asks to look.
+    const local = !(flowOn() && speaksFlow);
+    if (local && text && final && run.look && clipWanted(run, text)) {
       const got = await allowedClip(run);
       if (!alive(run)) return null;
       if (got && got.video) {
@@ -1851,7 +1929,7 @@ function createAgent(deps) {
     }
     // Only a question with words: a recording nobody has transcribed yet
     // cannot say whether it is about a picture, and no picture goes on a guess.
-    if (text && final && run.look && run.look.image && resolver.isVisualQuestion(text, names())) {
+    if (local && text && final && run.look && run.look.image && resolver.isVisualQuestion(text, names())) {
       const pic = await allowedPicture(run);
       if (!alive(run)) return null;
       if (pic) {
@@ -1995,6 +2073,8 @@ function createAgent(deps) {
       acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0, says: 0,
       // Asked for in so many words (the one key's brain: a task or a message, no money, nothing deleted).
       trusted: o.trusted === true,
+      // The server's flow instructions (takeFlow): the latest step's, and whether its trusted has been said.
+      flow: null, flowTrust: false, stepFlow: false, stepHeard: false, mediaAsked: false,
     };
     current = run;
     callGuide("show", ["listening", { app: run.app }]);

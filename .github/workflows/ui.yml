@@ -1,0 +1,77 @@
+name: ui
+
+# The overlay pages (pill, Ask's card, resting Blip) as a UI bundle (scripts/ui-bundle.js), published to the server
+# the way installers are: over the DOWNLOADS_SSH_KEY pinned to deploy/receive-download.sh (TAILZU-BACKEND), which
+# writes downloads/ui/<v>.json and downloads/ui/latest.json. The bootstrap then names it (desktop.ui) and every
+# desktop new enough for it loads it (src/main/uiBundle.js). Set the repository variable UI_PUBLISH_ON_PUSH to
+# "false" to publish only from a manual run; the server's knob desktop.ui.enabled turns bundles off on desktops.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/dictation/pill/**"
+      - "src/dictation/rest/**"
+      - "src/agent/guide/**"
+      - "src/shared/**"
+      - "knobs.js"
+      - "botTiles.js"
+      - "assets/fonts/**"
+      - "src/main/preload.js"
+      - "src/main/uiBundle.js"
+      - "scripts/ui-bundle.js"
+      - ".github/workflows/ui.yml"
+  workflow_dispatch:
+    inputs:
+      min_app:
+        description: "Oldest app version the bundle may run in (default: package.json's version)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ui-bundle
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # The loader's own tests, including a round trip through this script's bundle.
+      - name: Test the bundle and its loader
+        run: node --test src/main/uiBundle.test.js
+      - name: Build the bundle
+        env:
+          MIN_APP: ${{ inputs.min_app }}
+        run: |
+          if [ -n "$MIN_APP" ]; then node scripts/ui-bundle.js --out dist/ui --min-app "$MIN_APP"; else node scripts/ui-bundle.js --out dist/ui; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-bundle
+          path: dist/ui
+          if-no-files-found: error
+      - name: Publish to the server
+        if: ${{ github.event_name == 'workflow_dispatch' || vars.UI_PUBLISH_ON_PUSH != 'false' }}
+        shell: bash
+        env:
+          KEY: ${{ secrets.DOWNLOADS_SSH_KEY }}
+          HOST: ${{ vars.DOWNLOADS_HOST || '91.108.104.168' }}
+        run: |
+          if [ -z "$KEY" ]; then echo "No DOWNLOADS_SSH_KEY secret: kept as an artifact only."; exit 0; fi
+          V=$(node -p "require('./dist/ui/latest.json').v")
+          MIN=$(node -p "require('./dist/ui/latest.json').minApp")
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/tailzu_ci
+          chmod 600 ~/.ssh/tailzu_ci
+          ssh-keyscan -T 20 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || echo "keyscan failed; ssh accepts the key on first use"
+          up() { ssh -i "$HOME/.ssh/tailzu_ci" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 "root@$HOST" "ui $V $MIN" < "dist/ui/$V.json"; }
+          # A dropped connection (255) is tried again; a refusal is not. A receiver from before UI bundles refuses
+          # the name (2): said, not failed, until the backend's deploy/receive-download.sh is deployed.
+          rc=0
+          for i in 1 2 3 4; do if up; then rc=0; break; else rc=$?; fi; [ "$rc" -ne 255 ] && break; echo "connection dropped, again in $((i*20))s"; sleep $((i*20)); done
+          rm -f ~/.ssh/tailzu_ci
+          if [ "$rc" -eq 2 ]; then echo "::warning::The server's receiver does not take UI bundles yet (deploy/receive-download.sh)."; exit 0; fi
+          exit "$rc"
