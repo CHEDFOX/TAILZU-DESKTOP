@@ -126,6 +126,9 @@ function rig(o = {}) {
     "desktop.agent.doneMs": 1,
     "desktop.agent.confirmMs": 500,
     "desktop.agent.snapshotTimeoutMs": 200,
+    // Most of these tests are of the yes card itself, driven by a command (heardDo); a command taken as its own yes is tested on its
+    // own below ("said as a command"), with this on.
+    "desktop.agent.trustCommands": false,
   }, o.knobs);
   const agent = createAgent({
     driver, guide, post,
@@ -3597,4 +3600,37 @@ test("a page slower than its wait does not hold step 0 up", async () => {
   await r.agent.heard(AUDIO);
   assert.strictEqual(r.post.requests.length, 1);
   assert.strictEqual(r.post.reqs()[0].page, undefined);
+});
+
+// SAID AS A COMMAND, IT IS ASKED FOR (desktop.agent.trustCommands). "Open Chrome on my computer" was answered with a card asking
+// "Open Chrome?" — a second yes to the thing they had just said. The server hears a command (mode "do"); the run is then theirs in so
+// many words, and only what is concerning still asks.
+test("said as a command: opening the app they named is not asked about again", async () => {
+  const r = rig({ knobs: { "desktop.agent.trustCommands": true }, scripts: [[heardDo("open Chrome on my computer"), { t: "action", kind: "open", app: "Google Chrome", risk: "confirm", confirm: "Open Google Chrome?" }], [{ t: "done" }]] });
+  r.agent.begin({ app: "Windows Explorer" });
+  await r.agent.heard(AUDIO);
+  await until(() => r.post.requests.length === 2);
+  assert.strictEqual(r.guide.of("confirm").length, 0, "no card for what they said to do");
+  assert.ok(r.driver.acts().some((c) => c[0] === "open"));
+});
+
+test("said as a command: paying still asks, and so does anything the server marks always", async () => {
+  const PAY = snap([{ id: "e7", role: "button", label: "Pay ₹1,240", frame: [10, 10, 80, 30] }]);
+  const pay = rig({ knobs: { "desktop.agent.trustCommands": true }, snaps: [PAY], scripts: [[heardDo("pay the bill"), press("e7", { risk: "confirm" })], [{ t: "done" }]], confirm: false });
+  pay.agent.begin({ app: "Chrome" });
+  await pay.agent.heard(AUDIO);
+  await until(() => pay.guide.of("confirm").length === 1);
+  assert.ok(!pay.driver.acts().some((c) => c[0] === "press"));
+  const always = rig({ knobs: { "desktop.agent.trustCommands": true }, scripts: [[heardDo("tidy this up"), press("e3", { risk: "always", confirm: "Do this?" })], [{ t: "done" }]], confirm: false });
+  always.agent.begin({ app: "Slack" });
+  await always.agent.heard(AUDIO);
+  await until(() => always.guide.of("confirm").length === 1);
+});
+
+test("a question is not a command: a change in a show run is still refused, and nothing is trusted by it", async () => {
+  const r = rig({ knobs: { "desktop.agent.trustCommands": true }, scripts: [[heardShow("what's this?"), { t: "action", kind: "open", app: "Google Chrome", risk: "confirm", confirm: "Open?" }]] });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  await until(() => r.agent.active() === false || r.guide.of("done").length > 0 || r.guide.of("confirm").length > 0, 2000).catch(() => undefined);
+  assert.ok(!r.driver.acts().some((c) => c[0] === "open"));
 });
