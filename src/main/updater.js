@@ -20,6 +20,14 @@
 //        Linux    the AppImage, renamed over this one, started once this
 //                 process has exited.
 //
+// NEVER BACKWARDS. A build is taken only when its version is greater than the
+// running one (newerThan), whoever asks: the version the server names, and on
+// a Mac the version written inside the .app itself, which must be the same
+// one. An older genuine build at another address cannot be put in as an
+// "update". (Windows and Linux are held to the server's word for the version
+// inside the file; the SHA-512 is the server's word too: there is no
+// publisher signature yet.)
+//
 // A copy that cannot replace itself — a Mac app run from the disk image, an
 // Applications folder this user cannot write to, a Linux build that is not
 // an AppImage — says so, and the window falls back to the download link.
@@ -42,6 +50,16 @@ const STALL_MS = 45_000;
 const writable = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
 /** Our own server, over https: the only place a build is taken from. */
 const trusted = (u) => u.protocol === "https:" && HOSTS.has(u.hostname);
+
+/** Dotted versions as numbers: is `candidate` strictly greater than `current`? A part that is not a number counts as 0. */
+function newerThan(candidate, current) {
+  const a = String(candidate || "").split("."), b = String(current || "").split(".");
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = parseInt(a[i], 10) || 0, y = parseInt(b[i], 10) || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
 
 /** Where this build lives and how it is replaced, or null when it cannot be. */
 function target() {
@@ -158,7 +176,7 @@ function detached(cmd, args, env) {
 
 /** Put the downloaded build in place. Resolves once the swap is under way;
  *  the caller then quits so it can finish. */
-async function install(t, file, dir) {
+async function install(t, file, dir, version) {
   if (t.kind === "nsis") {
     await detached(file, ["--updated", "/S", "--force-run"]);
     return;
@@ -175,6 +193,12 @@ async function install(t, file, dir) {
       await run("ditto", [path.join(mnt, name), staged]);
     } finally {
       await run("hdiutil", ["detach", mnt, "-force"]).catch(() => {});
+    }
+    // The version the build says it is, from its own Info.plist: the one the server named, or nothing is swapped.
+    const inside = String(await run("plutil", ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", path.join(staged, "Contents", "Info.plist")]).catch(() => "")).trim();
+    if (inside !== version || !newerThan(inside, app.getVersion())) {
+      fs.rmSync(staged, { recursive: true, force: true });
+      throw new Error("the disk image holds version " + (inside || "?") + ", not a newer " + version);
     }
     // Written by this process, not a browser, so it should carry none; if it
     // does, macOS would stop the new build at launch to ask about it.
@@ -210,7 +234,7 @@ let busy = false;
  * Download, check and install `{ url, version, sha512 }`. `send` gets
  * `{ phase, pct }` as it goes. Resolves `{ ok: true }` when the new build is
  * being put in place (the caller quits), or `{ ok: false, reason }`:
- * "unsupported" (use the download link), "busy", "invalid" or "failed".
+ * "unsupported" (use the download link), "busy", "invalid", "current" (not newer than this build) or "failed".
  */
 async function update(u, send) {
   if (busy) return { ok: false, reason: "busy" };
@@ -225,6 +249,8 @@ async function update(u, send) {
       !/^[a-f0-9]{128}$/.test(sha512) || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(version)) {
     return { ok: false, reason: "invalid" };
   }
+  // Never the same build again, never an older one.
+  if (!newerThan(version, app.getVersion())) return { ok: false, reason: "current" };
   busy = true;
   // A NEW DIRECTORY, ONLY OURS. A fixed name in a shared /tmp could be made
   // first by another user, who could then swap the file between the checksum
@@ -238,7 +264,7 @@ async function update(u, send) {
     if (got.bytes < MIN_BYTES) throw new Error("download too small: " + got.bytes);
     if (got.sha512 !== sha512) throw new Error("checksum does not match the published build");
     send({ phase: "installing", pct: 100 });
-    await install(t, file, dir);
+    await install(t, file, dir, version);
     return { ok: true };
   } catch (err) {
     console.warn("[update] " + ((err && err.message) || err));
@@ -249,4 +275,4 @@ async function update(u, send) {
   }
 }
 
-module.exports = { update, canSelfUpdate };
+module.exports = { update, canSelfUpdate, newerThan };

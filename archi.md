@@ -75,7 +75,7 @@ src/
     notices.js          the server's notifications on this computer (Plan Ease's reminders and day notes): a /v1/live socket of
                         its own, "notices" and "here" said on it, a notice shown with its buttons on a Mac, a press answered at
                         the act door and kept until it lands
-    updater.js          in-place updates: download, verify SHA-512, swap, restart
+    updater.js          in-place updates: only a newer version (on a Mac, the .app's own too), download, verify SHA-512, swap, restart
     testkit.js          for tests: main.js run whole with Electron faked (not shipped)
 
   dictation/            one-key dictation
