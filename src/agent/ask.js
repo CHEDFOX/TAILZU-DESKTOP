@@ -253,7 +253,8 @@ function createAsk(ctx) {
     // Only this window's own close: a late one from a window already
     // replaced must not forget the new one.
     w.on("closed", () => { if (win === w) { win = null; ready = false; bounds = null; } });
-    w.loadFile("src/agent/guide/guide.html");
+    // The server's UI bundle when main hands a loader in (uiBundle.js), the built-in page otherwise.
+    if (typeof ctx.loadPage === "function") ctx.loadPage(w, "guide"); else w.loadFile("src/agent/guide/guide.html");
     send({ type: "area", inset: insetOf(display, bounds) });
     dock();
     return true;

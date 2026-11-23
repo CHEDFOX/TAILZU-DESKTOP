@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer, systemPreferences,
+  desktopCapturer, systemPreferences, protocol,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -47,6 +47,8 @@ const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
 const { createBlipSync } = require("./blipSync.js");
+// The overlay windows' pages (the pill, Ask's card, Blip at rest), from the server's UI bundle when it has one (uiBundle.js).
+const { createUiBundle, SCHEME: UI_SCHEME, SCHEME_PRIVILEGES: UI_SCHEME_PRIVILEGES } = require("./uiBundle.js");
 // The server's notifications on this computer: Plan Ease's reminders and day notes, on a live socket of its own (notices.js).
 const { createNotices, actKey } = require("./notices.js");
 const { connectWs } = require("../runner/ws.js");
@@ -187,6 +189,21 @@ function blipSync() {
   }));
 }
 
+// The pill's, Ask's card's and the resting Blip's pages, as the server's UI bundle has them (uiBundle.js): fetched when
+// the bootstrap names another (desktop.ui), checked whole and file by file, kept in userData/ui/, and loaded by those
+// three windows in place of the pages built in — same window, same preload, same powers. Its scheme is registered
+// here, before the app is ready (Electron allows it only then), and served once it is (serveUi).
+try { protocol.registerSchemesAsPrivileged([{ scheme: UI_SCHEME, privileges: UI_SCHEME_PRIVILEGES }]); } catch { /* the built-in pages, then */ }
+let uiBundler = null;
+function uiBundle() {
+  return uiBundler || (uiBundler = createUiBundle({
+    userData: app.getPath("userData"), appVersion: app.getVersion(), baseUrl: () => cfg.baseUrl,
+    fetch: (url, init) => fetch(url, init), log: (line) => console.warn("[X0 Bot] " + line),
+    // Taken by the next window made; one already open keeps the pages it has.
+    onChange: (v) => console.log("[X0 Bot] ui: bundle " + v + " is kept; the next window made loads it"),
+  }));
+}
+
 // ---- Server-drawn chrome -----------------------------------------------------
 // THE WINDOW'S SCREENS WERE SERVER-DRAWN. EVERYTHING AROUND THEM WAS NOT.
 //
@@ -272,6 +289,7 @@ function adoptBoot(boot) {
   // pill is up: looked at again, or a launch whose first word came from the server never rests.
   updateRest();
   void blipSync().check(boot.flags && boot.flags["desktop.blip"]);
+  void uiBundle().check(boot.flags && boot.flags["desktop.ui"]);
   // The server may have turned its notices on or off for this computer (desktop.notices.enabled).
   if (notices) { try { notices.sync(); } catch { /* their own */ } }
   try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed adopt */ }
@@ -1112,7 +1130,8 @@ function createPillWindow() {
     try { win.destroy(); } catch { /* already gone */ }
     if (pillOn() && Date.now() - pillRebuiltAt > 5000) { pillRebuiltAt = Date.now(); createPillWindow(); }
   });
-  win.loadFile("src/dictation/pill/pill.html");
+  // The server's bundle when there is one to use, the page built in otherwise (uiBundle.js).
+  uiBundle().load(win, "pill");
   return win;
 }
 
@@ -1182,7 +1201,7 @@ function createRestWindow(bounds) {
   hardenWindow(win);
   win.webContents.on("did-finish-load", () => { if (restShown) restSend({ shown: true, duck: restDuck }); });
   win.on("closed", () => { if (restWin === win) restWin = null; });
-  win.loadFile("src/dictation/rest/rest.html");
+  uiBundle().load(win, "rest");
   return win;
 }
 /** Shown while he rests, hidden otherwise; the pill told whether he is with it. */
@@ -3190,6 +3209,8 @@ function setupAsk() {
     openPanel: () => { openAppWindow({ screenId: "bots.sites", params: {} }); },
     // The guide's window is raised under the pill, not over it (raiseGuide).
     webPrefs, hardenWindow, raisePill: raiseGuide, setBoundsExactly,
+    // The card's page: the server's UI bundle when there is one to use, the one built in otherwise (uiBundle.js).
+    loadPage: (w, page) => uiBundle().load(w, page),
     // The question's card grows out of the pill, and the pill follows its
     // phases (pillAsk).
     pillAsk,
@@ -3934,6 +3955,9 @@ app.whenReady().then(() => {
   localState.launchCount = (Number(localState.launchCount) || 0) + 1;
   saveLocalState();
 
+  // The UI bundle's scheme, before the pill, the card or the resting Blip is made: a window made before it would
+  // only ever have the built-in page.
+  uiBundle().serve(protocol);
   createRecorderWindow();
   // The Windows helper that names the app in front starts now, so the first
   // press does not wait for PowerShell to load.

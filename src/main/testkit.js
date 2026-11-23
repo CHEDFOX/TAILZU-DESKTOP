@@ -32,6 +32,11 @@ function mainProcess(o = {}) {
   if (o.state) fs.writeFileSync(path.join(dir, "desktop-state.json"), JSON.stringify(o.state));
   // This computer's own settings (config.json), when a test needs one: the one key it binds, say.
   if (o.config) fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(o.config));
+  // Other files an earlier launch left in userData (a kept UI bundle): { "relative/path": content }.
+  for (const [rel, content] of Object.entries(o.files || {})) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  }
   const dictation = [];   // what plain dictation records, sends and pastes
   const guide = [];       // what the guide's window was sent
   const pills = [];       // what the pill's window was sent
@@ -41,6 +46,7 @@ function mainProcess(o = {}) {
   const handles = new Map();
   const shortcuts = [];
   const windows = [];
+  const protocols = {};      // the schemes main registered and served, by name
   const trayMenus = [];   // the tray's menus, as built (Menu.buildFromTemplate's template)
   const notifications = [];   // every native notification made, with what it was made with
   const sockets = [];         // every WebSocket main opened (ws.js connectWs, faked): its address and what was sent on it
@@ -65,13 +71,15 @@ function mainProcess(o = {}) {
           else if (self.file === "src/app/app.html") (self.appSent = self.appSent || []).push([ch, copy(m)]);
           else if (self.file === "src/dictation/pill/pill.html") pills.push([ch, copy(m)]);
         },
-        isLoading: () => false, isDestroyed: () => self.destroyed, getURL: () => "file://" + self.file,
+        isLoading: () => false, isDestroyed: () => self.destroyed, getURL: () => self.url || "file://" + self.file,
         setWindowOpenHandler() {},
       });
       windows.push(this);
     }
     static getFocusedWindow() { return focused && !focused.destroyed ? focused : null; }
-    loadFile(f) { this.file = f; setImmediate(() => this.webContents.emit("did-finish-load")); }
+    loadFile(f) { this.file = f; this.url = null; setImmediate(() => this.webContents.emit("did-finish-load")); }
+    // A page from the UI bundle (x0ui://<v>/<page>): known by its page's path, as a built-in one is, and by its url.
+    loadURL(u) { this.url = u; this.file = String(u).replace(/^x0ui:\/\/[^/]+\//, ""); setImmediate(() => this.webContents.emit("did-finish-load")); return Promise.resolve(); }
     setVisibleOnAllWorkspaces() {} setIgnoreMouseEvents() {} setContentProtection() {} setAlwaysOnTop() {} moveTop() {}
     isVisible() { return this.visible; } isDestroyed() { return this.destroyed; }
     show() { this.visible = true; } showInactive() { this.visible = true; } hide() { this.visible = false; } focus() {}
@@ -102,6 +110,8 @@ function mainProcess(o = {}) {
     },
     nativeImage: { createFromPath: () => img, createEmpty: () => img, createFromBuffer: () => img },
     session: { defaultSession: { setPermissionRequestHandler() {} } },
+    // The UI bundle's scheme: what was registered, and the handler main serves it with.
+    protocol: { registerSchemesAsPrivileged: (s) => { protocols.privileged = s; }, handle: (scheme, f) => { protocols[scheme] = f; } },
     shell: { openExternal: async (u) => { opened.push(u); }, openPath: async () => {} },
     nativeTheme: { shouldUseDarkColors: false }, powerMonitor: { on() {} },
     desktopCapturer: { getSources: async () => [] },
@@ -172,7 +182,7 @@ function mainProcess(o = {}) {
   const win = (file) => windows.find((w) => w.file === file && !w.destroyed);
   const from = (file) => ({ sender: win(file).webContents });
   return {
-    dictation, guide, pills, carets, ipc, handles, windows, win, dir, app, notifications, sockets, fetches, opened,
+    dictation, guide, pills, carets, ipc, handles, windows, win, dir, app, notifications, sockets, fetches, opened, protocols,
     /** The tray's menu as it is now: its template's items. */
     tray: () => (trayMenus.length ? trayMenus[trayMenus.length - 1].t : []),
     ready: () => sleep(20),
