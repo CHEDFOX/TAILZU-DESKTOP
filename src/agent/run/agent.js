@@ -859,6 +859,11 @@ function createAgent(deps) {
       case "heard": {
         const text = squash(ev.text);
         if (!run.mode && (ev.mode === "show" || ev.mode === "do")) run.mode = ev.mode;
+        // SAID AS A COMMAND, IT IS ASKED FOR. "Open Chrome on my computer" is a yes to opening Chrome: the server heard a command
+        // (mode "do") in what they said, so the run is theirs in so many words, as one the one key's brain hands over is (trusted).
+        // Only the ordinary steps stop asking — opening the app, a press on a page, the Enter that sends what they asked to send. Words
+        // that pay, delete or sign out, and anything the server marks "always", still wait for a yes (classifyRisk, serverRisk below).
+        if (ev.mode === "do" && run.step === 0 && bool("desktop.agent.trustCommands", true)) run.trusted = true;
         if (run.fresh && text) run.said = text;
         if (run.step === 0 && text && !run.goal) run.goal = clip(text, 1000);
         if (text && text !== run.lastHeard) { run.lastHeard = text; tell(run, "heard", text); }
