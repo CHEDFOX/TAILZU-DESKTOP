@@ -23,6 +23,159 @@ step 0 and the server's own context carries the conversation. In a conversation 
 once (as `askOpensMic` does). Still to decide: the one key's `askHeard` route stays one question (not a conversation).
 Tests: 15 in `ask.test.js`, 3 in `agent.test.js`; eleven one-question tests now say `"desktop.agent.thread": false`.
 
+## 21 Nov: A SET ENDS ON WORDS THAT NAME WHAT HAPPENED — the only reward in here
+
+`setEnd` had **no callers**: it was written for an end-of-set moment that never existed, because until two days
+ago a set never ended. A finished set rolled straight into the next one, so a sitting had no end at all — and
+the end is most of what a sitting is remembered by, which `order.ts` already knows and spends five rules on.
+
+A set now stops on its own words. They are the only reward in Lingo: no points, no gems, no score, because a
+reward made contingent on the thing weakens the wanting to do it. So the words have to earn their place, and
+what earns it is NAMING WHAT HAPPENED:
+
+1. a word that crossed into **learned** — "gracias is yours now, said out loud and held" — the biggest thing that
+   can happen in a sitting, and the one that was never said out loud to anybody;
+2. else what was **said out loud**, which is the part that makes a word stick;
+3. else the band's line, which says what the NEXT set does rather than how this one went.
+
+**Never about the person.** Person praise is the one kind the evidence is clear about: it leaves somebody
+helpless at the first failure, worse than saying nothing, and the next bad set breaks the promise it makes. A
+test holds the praise strings against "natural", "clever", "smart" and the rest. A struggling set is still told
+only what happens next, and gets no brightness it can see is untrue (`gestureFor` already gave it no confetti).
+
+Rendered both ends to check: a flying set naming two words, a struggling one naming none.
+
+## 21 Nov: LINGO'S STREAK FORGIVES ONE DAY — and what the motivation research actually supports
+
+The streak was unforgiving: `streakAfter` reset the run to 1 on the first missed day, and **no test covered it**.
+That punishes exactly the person it is meant to keep, and what they lose is not the number but the reason to come
+back: Silverman and Barasch (Journal of Consumer Research, 2023, seven studies) found a broken run cuts later
+engagement most in people who blame themselves for breaking it. Every app that keeps streaks kind does it with a
+freeze of some sort.
+
+**One missed day is forgiven; two are not.** No thing to buy, spend or remember. The count stays DAYS THEY TURNED
+UP — a missed day is never counted — so the number keeps meaning what it says, and a streak that forgave
+everything would count nothing. Five cases now hold it.
+
+### What the research says, and what this codebase already gets right
+
+Worth writing down, because the obvious moves here are the wrong ones:
+
+* **No points, no XP, no gems — keep it that way.** Expected tangible rewards made contingent on performance
+  reliably UNDERMINE intrinsic motivation (the overjustification literature). Mogavi et al. (2022) found learners
+  fixating on streaks and XP in ways that distracted from the learning itself. Lingo has never had a score, and
+  that is a decision, not an omission.
+* **The scaled celebration is already right.** `gestureFor` gives a bad set nothing, and its own comment says why:
+  confetti for everything makes the celebration worthless and tells somebody who just failed six things that they
+  did well. That is honest competence feedback, which is the need the research finds best supported in apps
+  (autonomy ~0.31, competence ~0.29 in one mobile-app study; both modest and correlational).
+* **Gamification's effect is real but small.** Meta-analyses put motivation gains around g = .36 to .54, with one
+  outlier at 1.06; the only language-specific one (South Korea, 11 cases) found g = .52. Small, not magic.
+* **Relatedness is the weakest of the three needs in apps** — and Lingo already owns the asset nobody else has
+  here: a bot with a face, its own idlings and a moment per unit. That is the lever with the most room.
+
+### Next, in order of what the evidence supports
+
+1. **A floor that counts.** The daily goal is `goalMin` minutes; one reported test found 40% more people kept a
+   seven-day run when the day's requirement was ONE lesson rather than the full goal. One set should count.
+2. **Show the can-do list where it is seen.** `canDo()` — "the things they could not do a month ago and can do
+   today", the strongest competence signal in the product — reaches exactly ONE screen, the unit-finished one that
+   nothing opened until yesterday. It belongs on the territory card too.
+3. **Lean on the bot for relatedness.** It already knows why they are learning (`whyNote`), how long they think
+   before answering, and which kinds they find hard (`portrait.ts`). None of that is ever said back to them.
+4. **Never guilt them.** No "you made Lingo sad". The design writing is unanimous and the evidence for guilt
+   notifications is anecdotal at best; the downside is churn by people who already feel bad.
+
+**A constraint worth remembering:** a unit's content is cached per PAIR and shared by everybody learning it, so
+lessons cannot be personalised by `why` without giving up that cache. Personalisation belongs in what is said
+around the lesson, not in the lesson's words.
+
+## 21 Nov: LINGO TEACHES NOTHING BEFORE IT ASKS — a new word now stands among the ones they know
+
+`shapeFor` sends a brand-new item straight to `choose`, and `distractors` drew the wrong answers from the WHOLE
+course, met or not. So the first lesson is eight unknown words offered against each other: nothing on the screen
+is known, nothing is identifiable, every question is a coin toss. It reads as an app that assumes you already
+speak the language because that is literally what the code does — it has testing moments and no teaching moment.
+
+**Done: a new word stands among met ones** (`session.ts` `beside`). Met first, same kind first, unmet behind to
+fill. A new word among three known ones is identifiable by elimination, which is how immersion teaches without
+translating, and it is the thing that makes each new word need less telling than the last.
+
+**What the research actually says**, because the obvious answer is wrong. Pictures are NOT a clean win: a PLOS
+ONE study of Chinese vocabulary found translations better on recognition; an ESL study with Swahili found
+translations recalled better with no significant picture effect, and learners OVERCONFIDENT after picture
+learning; a Cambridge study found the image advantage vanished when tested with an L1 word. Pictures win for
+CONCRETE words (dual coding: abstract words cannot be imaged), which is why Rosetta Stone's no-translation
+immersion is fine for apples and falls apart past them. Receptive-before-productive is well supported and the
+ladder already does it.
+
+**Still open, in order:**
+
+1. **A meet step.** The first encounter has nothing to eliminate against, so the word wants showing — written,
+   its meaning, and said in the language's voice — before it is asked for. One tap, no images, no model call;
+   `voice` is already on the learner row. Gate it on there being nothing met to stand beside, and it fades by
+   itself as the course fills.
+2. **Hearing from the start.** `listen` is on the ladder but only reachable at `reps <= 1` AFTER review state, so
+   a beginner never hears anything. Hearing a word is part of meeting it.
+3. **Two options before four**, in the easy direction (meaning -> word) at the very start.
+4. **Images last, for concrete nouns only** — and the architecture is the good part: an image is
+   LANGUAGE-INDEPENDENT, so one bank keyed by concept serves all 85 pairs, which is the opposite of the sentence
+   bank's per-pair problem. Needs a licence gate like the sentence bank has.
+
+## 20 Nov: A PHOTO ON THE ASK IS SHOWN ON THE ASK, not only inside the card it was picked in
+
+Pick a photo and it uploads, goes on the list and IS sent with the message — but close the card and the composer
+looks exactly as it did before you picked anything. Nothing outside the card said a file was on the ask.
+
+Two reasons, and both read as deliberate in the code. `askBar`'s comment: *"what is already on the ask is drawn in
+the card, which is where it was chosen"* — but the card is a modal you must close to type. And the chip above the
+bar could not have shown it anyway: `uploadChip` draws `up` (on its way) and `sent` (one file), while `uploadAdd`
+**clears `sent`** the moment the file joins the list, on the reasoning that one file's chip only muddles a list.
+So after a successful pick there was nothing left for the bar to draw.
+
+The bar now carries the same strip the card does, at 40px: a picture per file, bound to the copy still on the
+phone, and the same "Clear". Taking ONE item off is still not in the vocabulary — `appendState` adds,
+`clearState` empties, nothing removes an index — so Clear takes them all, as in the card.
+
+Rendered to check, not just asserted: two files on the ask, card shut, both above the composer.
+
+## 20 Nov: XODE PICKS THE PROJECT FROM THE WORDS — the front door can do work now, not only answer
+
+`handlers.ts` had one line standing between Xode and everything it can do:
+
+    if (!c.ctx.projectId) throw new FrontError("no_project", "Pick a project first.", 400);
+
+Every road that DOES something — `code_task`, the `code_job` road, `createWorkBranch`, `createJob`,
+`agent.enqueue` — was already written and working. It refused only because nobody had named a repo, and the box
+on Xode's own home therefore branched: `startTask` inside a project, `codeAsk` outside it. Inside, it shipped a
+branch; outside, it answered a question about the thing you asked it to do. That is the ceremony of
+read-one-then-ask, and it was never a missing engine, only a missing router.
+
+**The router is told what they have.** `FrontCtx.projects` is the plural of a pattern that was already there
+(`projectName`, `projectAbout` — the brain's `welcome`, one line): id, name and a line each, for up to twelve,
+read only when the message came from NO project and cached for the same ten minutes. `decide` lists them and
+answers with `projects`: the names it means, the main one first. They are matched back to ids **exactly and
+case-blind**, so a name the model invented picks nothing rather than something near it — near enough is the
+wrong repo, and the wrong repo is a branch in it.
+
+**One id leads; the rest span.** `front.ask` puts the lead in `ctx.projectId` — never over one the person was
+already standing in — and the others go to the job as `projects`, which is the split engine that has existed
+since the teams landed and that nothing but a direct API call could reach: each repo gets its own branch, plan
+and pull request, linked, with the lead waiting.
+
+**And the box follows the work.** Asking from the home navigated to the answer page whatever came back; it now
+goes to the job when a job started (`shell.job`).
+
+Saying nothing is still a real answer: a question about none of them in particular ("what changed this week?")
+is answered across all of them as before, and `clarify` — already in the decision and already drawn — asks which
+when two would fit. The role's contract names the new field and still fits its size budget; the guidance itself
+rides on the message, where it is only sent to somebody who has projects to pick from.
+
+Five cases in `front-decide.test.ts`. 12,713 pass; the standing two fail as always.
+
+**Still to do:** one conversation instead of one per project. The thread id is literally `threadFor(user,
+projectId)`, so a project-less thread is a schema change, not a screen change — worth doing now the routing is
+proved, not before.
 ## 20 Nov: TALK IS THE APP NOW — what this window had to learn for it
 
 The server side is TAILZU-BACKEND/docs/talk-door.md: the app opens on `bots.talk`, one thread every bot answers in,
