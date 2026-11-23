@@ -119,6 +119,14 @@ Applications folder the user cannot write to, a Linux build that is not an
 AppImage) gets the download link instead. Builds before 0.2.2 have no updater,
 so reaching 0.2.2 is one last manual download.
 
+**Silently, from 0.4.8** (src/main/silentUpdate.js): a copy that can replace
+itself fetches the new build in the background (resumed, retried, checked),
+keeps it in userData/updates, and puts it in when the app quits or after
+`desktop.update.idleMinutes` (15) of no input with nothing of ours running,
+then comes back up with one quiet "Updated to {version}." Required builds
+(`min`) go in after a minute's quiet. Any failure falls back to the notice.
+`desktop.update.silent` false restores the old behaviour. Never a Store copy.
+
 On a Mac, until the app is signed with a Developer ID, macOS treats each new
 build as a new app: it may ask again for the microphone and Accessibility.
 

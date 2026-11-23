@@ -222,6 +222,43 @@ function classifyRisk(action, snapshot, ctx) {
   if (!action || typeof action !== "object") return "free";
   const c = ctx || {};
   const kind = action.kind;
+  const focused = focusedOf(snapshot);
+  // ASKED FOR ALREADY: a task or a message the person gave in so many words
+  // (the one key's brain, a command the server heard, or the server's flow
+  // `trusted`), and nothing in it moves money or deletes. Its ordinary steps
+  // (the Enter that sends what they asked to send, a press on a web page,
+  // opening the app the task is in) are what they asked for, and are not
+  // asked about again. floorRisk still is, whatever anyone says.
+  const asked = c.trusted === true;
+  let risk = floorRisk(action, snapshot, c);
+  if (kind === "key" && !asked) {
+    const chord = parseChord(action.keys || action.text);
+    if (chord.key === "enter" && looksLikeComposer(focused)) risk = maxRisk(risk, "confirm");
+  }
+  if (kind === "press" && !asked && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
+    risk = maxRisk(risk, "confirm");
+  }
+  if (kind === "open" && !asked) {
+    const given = c.startApp != null ? [].concat(c.startApp) : [snapshot && snapshot.app && snapshot.app.name];
+    const starts = given.filter((s) => typeof s === "string" && s.trim());
+    if (!sameApp(action.app || action.text, starts)) risk = maxRisk(risk, "confirm");
+  }
+  return risk;
+}
+
+/**
+ * THE FLOOR: what asks however trusted the run is, whoever said so (the
+ * server's flow included). The words that pay or delete ("always"), the rest
+ * of the confirm words but plain sending (share, invite, sign out, uninstall,
+ * close without saving), the chords that send, close, quit or delete, a key
+ * or TYPE with no text box focused (it would fire a shortcut), and text
+ * copied off the screen. A trusted message's own words typed into a message
+ * box are theirs, and not read for risky words.
+ */
+function floorRisk(action, snapshot, ctx) {
+  if (!action || typeof action !== "object") return "free";
+  const c = ctx || {};
+  const kind = action.kind;
   const els = elementsOf(snapshot);
   const focused = focusedOf(snapshot);
   const named = action.id != null ? els.find((e) => e.id === String(action.id)) || null : null;
@@ -231,36 +268,14 @@ function classifyRisk(action, snapshot, ctx) {
   // ready" pays for nothing); the press that sends it is checked on its own. A command typed anywhere else still is.
   const messageWords = c.trusted === true && (kind === "type" || kind === "set") && looksLikeComposer(target);
   for (const t of [target && target.label, messageWords ? "" : action.text]) risk = maxRisk(risk, keywordRisk(t, c.trusted === true));
-
-  // ASKED FOR ALREADY: a task or a message the person gave in so many words
-  // (the one key's brain said task or send, and nothing in it moves money or
-  // deletes). Its ordinary steps (the Enter that sends what they asked to
-  // send, a press on a web page, opening the app the task is in) are what
-  // they asked for, and are not asked about again. Words on the target, the
-  // chords that close, quit or delete, and anything copied off the screen
-  // still are.
-  const asked = c.trusted === true;
   if (kind === "key") {
     const chord = parseChord(action.keys || action.text);
     risk = maxRisk(risk, chordRisk(chord));
-    if (chord.key === "enter" && looksLikeComposer(focused) && !asked) risk = maxRisk(risk, "confirm");
     if (!takesText(focused) && (isPrintable(chord) || chord.key === "delete" || chord.key === "backspace")) {
       risk = maxRisk(risk, "confirm");
     }
   }
-
   if (kind === "type" && !takesText(focused)) risk = maxRisk(risk, "confirm");
-
-  if (kind === "press" && !asked && BROWSERS.test(squash(snapshot && snapshot.app && snapshot.app.name))) {
-    risk = maxRisk(risk, "confirm");
-  }
-
-  if (kind === "open" && !asked) {
-    const given = c.startApp != null ? [].concat(c.startApp) : [snapshot && snapshot.app && snapshot.app.name];
-    const starts = given.filter((s) => typeof s === "string" && s.trim());
-    if (!sameApp(action.app || action.text, starts)) risk = maxRisk(risk, "confirm");
-  }
-
   if (kind === "type" || kind === "set") {
     if (copiesFromScreen(action.text, snapshot, target, c.said) || carriesScreenSecret(action.text, snapshot, target, c.said)) {
       risk = maxRisk(risk, "confirm");
@@ -269,4 +284,4 @@ function classifyRisk(action, snapshot, ctx) {
   return risk;
 }
 
-module.exports = { maxRisk, appWords, sameApp, classifyRisk, wordsRisk };
+module.exports = { maxRisk, appWords, sameApp, classifyRisk, floorRisk, wordsRisk };

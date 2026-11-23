@@ -77,7 +77,8 @@ const MADE_LATER = /^(build\/(audiotap|tzocr|tzax|tzkey|no-such-helper)|config\.
 
 const REQUIRE = /require\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
 const LOAD_FILE = /\.loadFile\(\s*["']([^"']+)["']\s*\)/g;
-const DIRNAME_JOIN = /path\.join\(\s*__dirname((?:\s*,\s*["'][^"'\n]*["'])+)\s*\)/g;
+const ROOT_PAGE = /:\s*["'](src\/[\w/.-]+\.html)["']/g;
+const DIRNAME_JOIN =/path\.join\(\s*__dirname((?:\s*,\s*["'][^"'\n]*["'])+)\s*\)/g;
 const SCRIPT_SRC = /<script[^>]*\ssrc=["']([^"']+)["']/g;
 const CSS_URL = /url\(\s*["']?([^)"']+)["']?\s*\)/g;
 const PAGE_NAME = /["']([\w-]+\.html)(?:[?#][^"']*)?["']/g;
@@ -90,6 +91,8 @@ function pathsIn(abs) {
   if (abs.endsWith(".js")) {
     for (const m of src.matchAll(REQUIRE)) out.push({ kind: "require", target: resolveModule(dir, m[1]) || path.resolve(dir, m[1]), label: m[1] });
     for (const m of src.matchAll(LOAD_FILE)) out.push({ kind: "loadFile", target: path.resolve(ROOT, m[1]), label: m[1] });
+    // A page named by its path from the app's root (uiBundle.js PAGES), loaded with loadFile from there.
+    for (const m of src.matchAll(ROOT_PAGE)) out.push({ kind: "loadFile", target: path.resolve(ROOT, m[1]), label: m[1] });
     for (const m of src.matchAll(DIRNAME_JOIN)) out.push({ kind: "join", target: path.resolve(dir, ...joinArgs(m[1])), label: joinArgs(m[1]).join("/") });
   }
   if (abs.endsWith(".html")) {

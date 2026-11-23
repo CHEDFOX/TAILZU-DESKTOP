@@ -23,25 +23,38 @@
 // A copy that cannot replace itself — a Mac app run from the disk image, an
 // Applications folder this user cannot write to, a Linux build that is not
 // an AppImage — says so, and the window falls back to the download link.
+//
+// THE SAME STEPS, ON THEIR OWN. silentUpdate.js fetches the build in the
+// background and puts it in place at a quiet moment (the computer idle and
+// nothing of ours running, or the app quitting), with no click at all. It
+// uses the pieces below, so there is one way a build gets in, whoever asks:
+//
+//   netGet    one GET over Electron's net, redirects handed back unfollowed
+//             (the caller decides whether the next address is ours);
+//   prepare   everything that can take a while and must not happen in the
+//             moment of quitting: the .app copied out of the disk image
+//             beside this one, the AppImage copied beside this one. Nothing
+//             running is touched, so a prepared build can still be dropped
+//             (discard) when something starts in the meantime;
+//   commit    the quick, last step: the installer started, or the swap
+//             script started, or the AppImage renamed over this one. Told
+//             whether to start the new build when it is done (an install at
+//             a quiet moment does; an install because the person quit does
+//             not: they asked for the app to be closed).
 
 const { app, net } = require("electron");
 const { spawn, execFile } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+// Which build may be taken and from where: the same rules for the card and
+// for the silent updater (updateRules.js).
+const { MIN_BYTES, trusted, checkRelease } = require("./updateRules.js");
 
-// x0bot.com, and tailzu.space: the server names the old address to builds up
-// to 0.4.4, which trust nothing else (the backend's desktopRelease.ts).
-const HOSTS = new Set(["x0bot.com", "www.x0bot.com", "tailzu.space", "www.tailzu.space"]);
-const FILES = { win32: "Tailzu-Setup.exe", darwin: "Tailzu.dmg", linux: "Tailzu.AppImage" };
-// receive-download.sh refuses anything smaller; so does this.
-const MIN_BYTES = 5_000_000;
 // A download that stops sending for this long is given up on.
 const STALL_MS = 45_000;
 
 const writable = (p) => { try { fs.accessSync(p, fs.constants.W_OK); return true; } catch { return false; } };
-/** Our own server, over https: the only place a build is taken from. */
-const trusted = (u) => u.protocol === "https:" && HOSTS.has(u.hostname);
 
 /** Where this build lives and how it is replaced, or null when it cannot be. */
 function target() {
@@ -129,7 +142,8 @@ function download(url, file, onProgress) {
 }
 
 // Waits for the old process to be gone, swaps the bundles (putting the old one
-// back if the new one cannot be moved in), and opens whichever is there.
+// back if the new one cannot be moved in), and opens whichever is there — when
+// $4 says to: an install because the person quit leaves the app closed.
 const SWAP_MAC = `#!/bin/sh
 i=0
 while kill -0 "$1" 2>/dev/null && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i+1)); done
@@ -138,7 +152,8 @@ if mv "$2" "$old"; then
   if mv "$3" "$2"; then rm -rf "$old"; else mv "$old" "$2"; fi
 fi
 rm -rf "$3"
-open "$2"
+[ "$4" = "1" ] && open "$2"
+exit 0
 `;
 // The file is already replaced; this only waits for the old process to exit,
 // so the new one is not turned away by the single-instance lock.
@@ -156,45 +171,88 @@ function detached(cmd, args, env) {
   });
 }
 
-/** Put the downloaded build in place. Resolves once the swap is under way;
- *  the caller then quits so it can finish. */
-async function install(t, file, dir) {
+/**
+ * The slow half of putting `file` (a verified download) in place, done while
+ * this build still runs and touching nothing of it. Resolves a handle for
+ * commit() or discard(), or rejects (the build could not be got ready: the
+ * current one is untouched). `t` defaults to this copy's own target().
+ */
+async function prepare(file, t = target()) {
+  if (!t) throw new Error("this copy cannot replace itself");
+  // A NEW DIRECTORY, ONLY OURS, for the disk image's mount point and the
+  // scripts. A fixed name in a shared /tmp could be made first by another
+  // user. mkdtemp makes it fresh and private (0700).
+  const dir = fs.mkdtempSync(path.join(app.getPath("temp"), "tailzu-update-"));
+  const h = { t, file, dir, staged: null };
+  try {
+    if (t.kind === "app") {
+      const mnt = path.join(dir, "mnt");
+      fs.mkdirSync(mnt, { recursive: true });
+      const staged = path.join(path.dirname(t.bundle), "." + path.basename(t.bundle, ".app") + "-update.app");
+      h.staged = staged;
+      await run("hdiutil", ["attach", file, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mnt]);
+      try {
+        const name = fs.readdirSync(mnt).find((n) => n.endsWith(".app"));
+        if (!name) throw new Error("no app in the disk image");
+        fs.rmSync(staged, { recursive: true, force: true });
+        await run("ditto", [path.join(mnt, name), staged]);
+      } finally {
+        await run("hdiutil", ["detach", mnt, "-force"]).catch(() => {});
+      }
+      // Written by this process, not a browser, so it should carry none; if it
+      // does, macOS would stop the new build at launch to ask about it.
+      await run("xattr", ["-dr", "com.apple.quarantine", staged]).catch(() => {});
+    } else if (t.kind === "appimage") {
+      // Beside the old file, so the rename is on one filesystem and atomic. The
+      // running build keeps its own copy open; it is only the name that moves.
+      const staged = path.join(path.dirname(t.file), "." + path.basename(t.file) + ".update");
+      h.staged = staged;
+      // Written fresh, never through something already at that name (a link
+      // left there would carry the verified build somewhere else).
+      fs.rmSync(staged, { force: true });
+      fs.copyFileSync(file, staged, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(staged, 0o755);
+    }
+    // nsis: nothing to get ready. The installer is the build, and it is run
+    // from where it was verified.
+    return h;
+  } catch (err) {
+    discard(h);
+    throw err;
+  }
+}
+
+/** A prepared build not used after all: what prepare() left goes. */
+function discard(h) {
+  if (!h) return;
+  if (h.staged) try { fs.rmSync(h.staged, { recursive: true, force: true }); } catch { /* in use */ }
+  if (h.dir) try { fs.rmSync(h.dir, { recursive: true, force: true }); } catch { /* in use */ }
+}
+
+/**
+ * The quick half: start what puts the prepared build in place once this
+ * process has gone. Resolves once that is under way; the caller then quits so
+ * it can finish. `relaunch` starts the new build when it is done.
+ */
+async function commit(h, { relaunch = true } = {}) {
+  const t = h.t;
   if (t.kind === "nsis") {
-    await detached(file, ["--updated", "/S", "--force-run"]);
+    // --updated: an update, so app data and the session stay (build/installer.nsh).
+    // /S: silent, no window. --force-run: start the new build when done, only
+    // when this install is to come back up.
+    await detached(h.file, ["--updated", "/S"].concat(relaunch ? ["--force-run"] : []));
     return;
   }
   if (t.kind === "app") {
-    const mnt = path.join(dir, "mnt");
-    fs.mkdirSync(mnt, { recursive: true });
-    const staged = path.join(path.dirname(t.bundle), "." + path.basename(t.bundle, ".app") + "-update.app");
-    await run("hdiutil", ["attach", file, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mnt]);
-    try {
-      const name = fs.readdirSync(mnt).find((n) => n.endsWith(".app"));
-      if (!name) throw new Error("no app in the disk image");
-      fs.rmSync(staged, { recursive: true, force: true });
-      await run("ditto", [path.join(mnt, name), staged]);
-    } finally {
-      await run("hdiutil", ["detach", mnt, "-force"]).catch(() => {});
-    }
-    // Written by this process, not a browser, so it should carry none; if it
-    // does, macOS would stop the new build at launch to ask about it.
-    await run("xattr", ["-dr", "com.apple.quarantine", staged]).catch(() => {});
-    const script = path.join(dir, "swap.sh");
+    const script = path.join(h.dir, "swap.sh");
     fs.writeFileSync(script, SWAP_MAC, { mode: 0o755 });
-    await detached("/bin/sh", [script, String(process.pid), t.bundle, staged]);
+    await detached("/bin/sh", [script, String(process.pid), t.bundle, h.staged, relaunch ? "1" : "0"]);
     return;
   }
   if (t.kind === "appimage") {
-    // Beside the old file, so the rename is on one filesystem and atomic. The
-    // running build keeps its own copy open; it is only the name that moves.
-    const staged = path.join(path.dirname(t.file), "." + path.basename(t.file) + ".update");
-    // Written fresh, never through something already at that name (a link
-    // left there would carry the verified build somewhere else).
-    fs.rmSync(staged, { force: true });
-    fs.copyFileSync(file, staged, fs.constants.COPYFILE_EXCL);
-    fs.chmodSync(staged, 0o755);
-    fs.renameSync(staged, t.file);
-    const script = path.join(dir, "relaunch.sh");
+    fs.renameSync(h.staged, t.file);
+    if (!relaunch) return;
+    const script = path.join(h.dir, "relaunch.sh");
     fs.writeFileSync(script, RELAUNCH, { mode: 0o755 });
     // The AppImage runtime sets these for the build it runs; the new one sets
     // its own.
@@ -204,6 +262,37 @@ async function install(t, file, dir) {
   }
 }
 
+/**
+ * One GET over Electron's net, for silentUpdate.js. Redirects are NOT
+ * followed: the answer comes back as `{ status, location }` and the caller
+ * decides whether the next address is ours (the same rule as download()
+ * above). Otherwise `{ status, header(name), body, abort }`, where `body` is
+ * the response itself, read as an async iterable of Buffers.
+ */
+function netGet(url, { headers = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const req = net.request({ url, redirect: "manual", cache: "no-cache" });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    req.on("redirect", (status, _method, to) => {
+      if (settled) return;
+      settled = true;
+      try { req.abort(); } catch { /* already over */ }
+      resolve({ status, location: to, header: () => "", body: null, abort() {} });
+    });
+    req.on("response", (res) => {
+      if (settled) return;
+      settled = true;
+      const header = (n) => { const v = res.headers[String(n).toLowerCase()]; return String(Array.isArray(v) ? v[0] : v == null ? "" : v); };
+      resolve({ status: res.statusCode, header, body: res, abort: () => { try { req.abort(); } catch { /* over */ } } });
+    });
+    req.on("error", (err) => { if (!settled) { settled = true; reject(err); } });
+    req.end();
+  });
+}
+
+// One install at a time, whoever asks: the card's button, or the silent
+// updater (claim / release).
 let busy = false;
 
 /**
@@ -216,37 +305,38 @@ async function update(u, send) {
   if (busy) return { ok: false, reason: "busy" };
   const t = target();
   if (!t) return { ok: false, reason: "unsupported" };
-  const name = FILES[process.platform];
-  const sha512 = String((u && u.sha512) || "").toLowerCase();
-  const version = String((u && u.version) || "");
-  let url;
-  try { url = new URL(String((u && u.url) || "")); } catch { return { ok: false, reason: "invalid" }; }
-  if (!trusted(url) || path.posix.basename(url.pathname) !== name ||
-      !/^[a-f0-9]{128}$/.test(sha512) || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(version)) {
-    return { ok: false, reason: "invalid" };
-  }
+  const rel = checkRelease(u, process.platform);
+  if (!rel) return { ok: false, reason: "invalid" };
   busy = true;
   // A NEW DIRECTORY, ONLY OURS. A fixed name in a shared /tmp could be made
   // first by another user, who could then swap the file between the checksum
   // and the install. mkdtemp makes it fresh and private (0700).
-  let dir = null;
+  let dir = null, h = null;
   try {
     dir = fs.mkdtempSync(path.join(app.getPath("temp"), "tailzu-update-"));
-    const file = path.join(dir, name);
+    const file = path.join(dir, rel.name);
     send({ phase: "downloading", pct: 0 });
-    const got = await download(url.toString(), file, (pct) => send({ phase: "downloading", pct }));
+    const got = await download(rel.url, file, (pct) => send({ phase: "downloading", pct }));
     if (got.bytes < MIN_BYTES) throw new Error("download too small: " + got.bytes);
-    if (got.sha512 !== sha512) throw new Error("checksum does not match the published build");
+    if (got.sha512 !== rel.sha512) throw new Error("checksum does not match the published build");
     send({ phase: "installing", pct: 100 });
-    await install(t, file, dir);
+    h = await prepare(file, t);
+    await commit(h, { relaunch: true });
     return { ok: true };
   } catch (err) {
     console.warn("[update] " + ((err && err.message) || err));
     // A failed attempt leaves nothing behind; the next one starts clean.
+    discard(h);
     if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* in use */ }
     busy = false;
     return { ok: false, reason: "failed" };
   }
 }
 
-module.exports = { update, canSelfUpdate };
+/** The silent updater's own install is starting: the card's button waits
+ *  (false when one is already under way). */
+function claim() { if (busy) return false; busy = true; return true; }
+/** That install did not go ahead: the button works again. */
+function release() { busy = false; }
+
+module.exports = { update, canSelfUpdate, prepare, commit, discard, netGet, claim, release };

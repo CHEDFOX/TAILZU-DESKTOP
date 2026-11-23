@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer, systemPreferences,
+  desktopCapturer, systemPreferences, net, protocol,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -34,6 +34,9 @@ const { createWindowVoice } = require("../dictation/windowVoice.js");
 const restSpot = require("../dictation/restSpot.js");
 const { joinStretch } = require("../dictation/pasteJoin.js");
 const updater = require("./updater.js");
+// The new build fetched in the background and put in at a quiet moment (silentUpdate.js).
+const { createSilentUpdate } = require("./silentUpdate.js");
+const { compareVersions } = require("./updateRules.js");
 const frontApp = require("../context/frontApp.js");
 const screenRead = require("../context/screenRead.js");
 const driver = require("../agent/driver/driver.js");
@@ -47,6 +50,8 @@ const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
 const { createBlipSync } = require("./blipSync.js");
+// The overlay windows' pages (the pill, Ask's card, Blip at rest), from the server's UI bundle when it has one (uiBundle.js).
+const { createUiBundle, SCHEME: UI_SCHEME, SCHEME_PRIVILEGES: UI_SCHEME_PRIVILEGES } = require("./uiBundle.js");
 // The server's notifications on this computer: Plan Ease's reminders and day notes, on a live socket of its own (notices.js).
 const { createNotices, actKey } = require("./notices.js");
 const { connectWs } = require("../runner/ws.js");
@@ -187,6 +192,21 @@ function blipSync() {
   }));
 }
 
+// The pill's, Ask's card's and the resting Blip's pages, as the server's UI bundle has them (uiBundle.js): fetched when
+// the bootstrap names another (desktop.ui), checked whole and file by file, kept in userData/ui/, and loaded by those
+// three windows in place of the pages built in — same window, same preload, same powers. Its scheme is registered
+// here, before the app is ready (Electron allows it only then), and served once it is (serveUi).
+try { protocol.registerSchemesAsPrivileged([{ scheme: UI_SCHEME, privileges: UI_SCHEME_PRIVILEGES }]); } catch { /* the built-in pages, then */ }
+let uiBundler = null;
+function uiBundle() {
+  return uiBundler || (uiBundler = createUiBundle({
+    userData: app.getPath("userData"), appVersion: app.getVersion(), baseUrl: () => cfg.baseUrl,
+    fetch: (url, init) => fetch(url, init), log: (line) => console.warn("[X0 Bot] " + line),
+    // Taken by the next window made; one already open keeps the pages it has.
+    onChange: (v) => console.log("[X0 Bot] ui: bundle " + v + " is kept; the next window made loads it"),
+  }));
+}
+
 // ---- Server-drawn chrome -----------------------------------------------------
 // THE WINDOW'S SCREENS WERE SERVER-DRAWN. EVERYTHING AROUND THEM WAS NOT.
 //
@@ -241,9 +261,9 @@ function prettyKey(accel) {
  *  once rather than at nine call sites. `onClick`, when given, is what a click
  *  on it does (an update notice opens the download). */
 const clickable = new Set();   // held so a click handler is not collected before it fires
-function notify(body, onClick) {
+function notify(body, onClick, opts) {
   if (!body) return;
-  const n = new Notification({ title: t("notify.title") || txt("desktop.notify.title", "X0 Bot"), body });
+  const n = new Notification(Object.assign({ title: t("notify.title") || txt("desktop.notify.title", "X0 Bot"), body }, opts));
   if (onClick) {
     clickable.add(n);
     n.on("click", () => { clickable.delete(n); onClick(); });
@@ -272,6 +292,7 @@ function adoptBoot(boot) {
   // pill is up: looked at again, or a launch whose first word came from the server never rests.
   updateRest();
   void blipSync().check(boot.flags && boot.flags["desktop.blip"]);
+  void uiBundle().check(boot.flags && boot.flags["desktop.ui"]);
   // The server may have turned its notices on or off for this computer (desktop.notices.enabled).
   if (notices) { try { notices.sync(); } catch { /* their own */ } }
   try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed adopt */ }
@@ -344,17 +365,6 @@ function scheduleBootRefresh() {
 // update (updater.js) sends them to the window's card, where one click does
 // it; one that cannot sends them to the download.
 
-/** Dotted numbers, compared as numbers: 0.1.10 is newer than 0.1.9. A part
- *  that is not a number counts as 0, so "1.2" equals "1.2.0". */
-function compareVersions(a, b) {
-  const pa = String(a || "").split("."), pb = String(b || "").split(".");
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = parseInt(pa[i], 10) || 0, y = parseInt(pb[i], 10) || 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return 0;
-}
-
 let requiredAnnounced = "";   // once per launch: a required update keeps asking
 function checkForUpdate() {
   const u = obj("desktop.update", { latest: "", min: "", url: "", notes: "" });
@@ -364,6 +374,12 @@ function checkForUpdate() {
   const inApp = typeof u.sha512 === "string" && /^[a-f0-9]{128}$/i.test(u.sha512) && updater.canSelfUpdate();
   const open = inApp ? () => openAppWindow() : url ? () => { shell.openExternal(url).catch(() => {}); } : null;
   const vars = { current, latest: latest || min, min, notes: String(u.notes || "") };
+  // Silent first: a build this copy can fetch and put in itself, at a quiet
+  // moment, needs no notice at all. It hands back here (fallback) when it
+  // gives up, and then the notices below speak as they always did.
+  let quiet = false;
+  try { quiet = silentUpdate().offer(u); } catch { quiet = false; }
+  if (quiet) return;
   if (min && compareVersions(current, min) < 0) {
     if (requiredAnnounced === min) return;
     requiredAnnounced = min;
@@ -380,6 +396,117 @@ function checkForUpdate() {
       ? txt("desktop.notify.updateReady", "X0 Bot {latest} is ready. Click to update.", vars)
       : txt("desktop.notify.updateAvailable", "X0 Bot {latest} is available. Click to download it.", vars), open);
   }
+}
+
+// ---- Silent updates (silentUpdate.js) ---------------------------------------
+// Everything it needs from this process, handed in: the knobs, the idle time,
+// what is running, the install (updater.js) and the quit.
+let silentUpdater = null;
+let systemEnding = false;     // the OS is shutting down or logging out: no install on this quit
+let relaunchAsked = false;    // app.relaunch() is under way: no install on this quit
+let quitInstall = null;       // the install a quit is waiting on, then "done"
+function silentUpdate() {
+  return silentUpdater || (silentUpdater = createSilentUpdate({
+    dir: path.join(app.getPath("userData"), "updates"),
+    platform: process.platform,
+    version: () => app.getVersion(),
+    canSelfUpdate: () => updater.canSelfUpdate(),
+    isStore: () => !!process.windowsStore,
+    get: (url, o) => updater.netGet(url, o),
+    prepare: (file) => updater.prepare(file),
+    commit: (h, o) => updater.commit(h, o),
+    discard: (h) => updater.discard(h),
+    claim: () => (updater.claim ? updater.claim() : true),
+    release: () => { if (updater.release) updater.release(); },
+    idleSeconds: () => powerMonitor.getSystemIdleTime(),
+    busy: updateBusy,
+    constrained: () => {
+      try { if (net && typeof net.isOnline === "function" && !net.isOnline()) return "offline"; } catch { /* unknown: try */ }
+      try { if (bool("desktop.update.waitForPower", true) && powerMonitor.isOnBatteryPower()) return "battery"; } catch { /* unknown: try */ }
+      return "";
+    },
+    windowShown: () => !!appWin && !appWin.isDestroyed() && appWin.isVisible(),
+    settings: () => ({
+      silent: bool("desktop.update.silent", true),
+      idleMinutes: num("desktop.update.idleMinutes", 15),
+      requiredIdleMinutes: num("desktop.update.requiredIdleMinutes", 1),
+      maxRetries: num("desktop.update.maxRetries", 6),
+      retryMs: num("desktop.update.retryMs", 60000),
+      retryMaxMs: num("desktop.update.retryMaxMs", 3600000),
+      pollMs: num("desktop.update.pollMs", 60000),
+      requiredNagMinutes: num("desktop.update.requiredNagMinutes", 60),
+    }),
+    quit: () => { quitInstall = "done"; quitting = true; app.quit(); },
+    fallback: () => { try { checkForUpdate(); } catch { /* a notice the OS refuses */ } },
+    nag: (version) => notify(txt("desktop.notify.updateRestart",
+      "X0 Bot {latest} is required. It installs when you are not using it, or click to restart now.", { latest: version }),
+    () => { void silentUpdate().installNow().then((r) => { if (r.ok) { quitInstall = "done"; quitting = true; app.quit(); } }); }),
+    log: (line) => console.warn("[update] " + line),
+  }));
+}
+
+/** What of ours is running ("" when nothing): an update never lands on top of it. */
+async function updateBusy() {
+  if (recording || holdActive || tapActive) return "dictation";
+  if (["listening", "writing", "ask", "talk", "routed"].includes(pillState)) return "pill";
+  if (ask && (ask.active() || ask.shown())) return "ask";
+  if (talk && typeof talk.active === "function" && talk.active()) return "talk";
+  if (winVoice && typeof winVoice.active === "function" && winVoice.active()) return "voice";
+  if (notes && notes.state) return "notes";
+  if (clipper && clipper.recording()) return "clip";
+  if (CAPTURING) return "capture";
+  if (runner && typeof runner.status === "function" && runner.status().working) return "xode";
+  return appWindowWork();
+}
+
+// The app window: a call up, its bot listening, or words typed into a field
+// and not sent. Asked of the page itself; an answer that does not come counts
+// as busy (the quit still installs).
+const WINDOW_WORK = `(() => {
+  try { if (typeof V2_CALL !== "undefined" && V2_CALL) return "call"; } catch (e) {}
+  try { if (typeof MIC !== "undefined" && MIC) return "mic"; } catch (e) {}
+  try { if (typeof VOICE !== "undefined" && VOICE) return "voice"; } catch (e) {}
+  for (const el of document.querySelectorAll("textarea, input, [contenteditable]")) {
+    if (el.isContentEditable) { if ((el.textContent || "").trim()) return "typing"; continue; }
+    if (el.disabled || el.readOnly || !/^(text|search|email|url|tel|number|)$/i.test(el.tagName === "TEXTAREA" ? "" : el.type || "")) continue;
+    if (String(el.value || "").trim() && el.value !== el.defaultValue) return "typing";
+  }
+  return "";
+})()`;
+async function appWindowWork() {
+  if (!appWin || appWin.isDestroyed()) return "";
+  try {
+    const r = await Promise.race([appWin.webContents.executeJavaScript(WINDOW_WORK, false), new Promise((res) => setTimeout(() => res("window"), 2000))]);
+    return typeof r === "string" ? r : "window";
+  } catch { return "window"; }
+}
+
+// QUITTING WITH A BUILD STAGED puts it in, and the app stays closed. The quit
+// is held (and not for ever) while the slow half runs, with nothing on screen.
+app.on("before-quit", (e) => {
+  if (quitInstall === "done") return;
+  if (quitInstall) { e.preventDefault(); return; }
+  if (systemEnding || relaunchAsked || !silentUpdater) return;
+  let job = null;
+  try { job = silentUpdater.atQuit(); } catch { job = null; }
+  if (!job) return;
+  e.preventDefault();
+  try { if (tray) { tray.destroy(); tray = null; } } catch { /* going anyway */ }
+  for (const w of [appWin, pillWin, overlayWin, notesWin, runnerWin]) { try { if (w && !w.isDestroyed()) w.hide(); } catch { /* going */ } }
+  const cap = new Promise((res) => setTimeout(res, num("desktop.update.quitWaitMs", 90000)));
+  quitInstall = Promise.race([job, cap]).catch(() => {}).finally(() => { quitInstall = "done"; app.quit(); });
+});
+app.on("session-end", () => { systemEnding = true; });   // Windows: logging off or shutting down
+
+/** Once at launch: the build we just put in, said quietly. Whether the window stays hidden. */
+function afterUpdateLaunch() {
+  let r = null;
+  try { r = silentUpdate().afterLaunch(); } catch { r = null; }
+  if (!r || !r.updated) return { hidden: false };
+  if (bool("desktop.update.notice", true)) {
+    try { notify(txt("desktop.notify.updated", "Updated to {version}.", { version: r.updated }), null, { silent: true }); } catch { /* best effort */ }
+  }
+  return { hidden: r.relaunched && !r.reopenWindow, open: r.relaunched && r.reopenWindow };
 }
 
 let configError = null; // surfaced as a notification once the app is ready
@@ -1112,7 +1239,8 @@ function createPillWindow() {
     try { win.destroy(); } catch { /* already gone */ }
     if (pillOn() && Date.now() - pillRebuiltAt > 5000) { pillRebuiltAt = Date.now(); createPillWindow(); }
   });
-  win.loadFile("src/dictation/pill/pill.html");
+  // The server's bundle when there is one to use, the page built in otherwise (uiBundle.js).
+  uiBundle().load(win, "pill");
   return win;
 }
 
@@ -1182,7 +1310,7 @@ function createRestWindow(bounds) {
   hardenWindow(win);
   win.webContents.on("did-finish-load", () => { if (restShown) restSend({ shown: true, duck: restDuck }); });
   win.on("closed", () => { if (restWin === win) restWin = null; });
-  win.loadFile("src/dictation/rest/rest.html");
+  uiBundle().load(win, "rest");
   return win;
 }
 /** Shown while he rests, hidden otherwise; the pill told whether he is with it. */
@@ -2360,6 +2488,12 @@ ipcMain.handle("app:installUpdate", async (e, u) => {
   if (!fromApp(e)) return { ok: false, reason: "refused" };
   const version = String((u && u.version) || "");
   if (compareVersions(app.getVersion(), version) >= 0) return { ok: false, reason: "current" };
+  // Already fetched and checked in the background: put in now, no second download.
+  if (silentUpdater && silentUpdater.staged() === version) {
+    const r = await silentUpdater.installNow();
+    if (r.ok) setTimeout(() => { quitInstall = "done"; quitting = true; app.quit(); }, 300);
+    if (r.ok || r.reason === "busy") return r;
+  }
   const send = (p) => { try { if (!e.sender.isDestroyed()) e.sender.send("app:updateProgress", p); } catch { /* window gone */ } };
   const r = await updater.update({ url: u && u.url, version, sha512: u && u.sha512 }, send);
   if (r.ok) setTimeout(() => { quitting = true; app.quit(); }, 300);
@@ -3144,7 +3278,7 @@ const askSetup = createAskSetup({
   openMediaSettings,
   // Through quit, not exit: a note being taken is finished on the server
   // (before-quit), and the helpers are stopped (will-quit), as on any quit.
-  relaunch: () => { app.relaunch(); app.quit(); },
+  relaunch: () => { relaunchAsked = true; app.relaunch(); app.quit(); },
   send: (state) => {
     if (appWin && !appWin.isDestroyed() && !appWin.webContents.isLoading()) appWin.webContents.send("ask-setup", state);
   },
@@ -3190,6 +3324,8 @@ function setupAsk() {
     openPanel: () => { openAppWindow({ screenId: "bots.sites", params: {} }); },
     // The guide's window is raised under the pill, not over it (raiseGuide).
     webPrefs, hardenWindow, raisePill: raiseGuide, setBoundsExactly,
+    // The card's page: the server's UI bundle when there is one to use, the one built in otherwise (uiBundle.js).
+    loadPage: (w, page) => uiBundle().load(w, page),
     // The question's card grows out of the pill, and the pill follows its
     // phases (pillAsk).
     pillAsk,
@@ -3934,6 +4070,9 @@ app.whenReady().then(() => {
   localState.launchCount = (Number(localState.launchCount) || 0) + 1;
   saveLocalState();
 
+  // The UI bundle's scheme, before the pill, the card or the resting Blip is made: a window made before it would
+  // only ever have the built-in page.
+  uiBundle().serve(protocol);
   createRecorderWindow();
   // The Windows helper that names the app in front starts now, so the first
   // press does not wait for PowerShell to load.
@@ -3962,6 +4101,10 @@ app.whenReady().then(() => {
   // one, and it is the launch that most needs the server's current answer —
   // it may run for days. The cache already answered for the moments before
   // this lands, and the timer keeps asking after it.
+  // The first launch after a silent update: one quiet notice, and the window
+  // only if it was up (silentUpdate.js). Before checkForUpdate, which it informs.
+  powerMonitor.on("shutdown", () => { systemEnding = true; });   // macOS, Linux
+  const updatedNow = afterUpdateLaunch();
   void refreshBoot().then(scheduleBootRefresh);
   try { checkForUpdate(); } catch { /* a notice the OS refuses is not a failed launch */ }
 
@@ -3979,7 +4122,7 @@ app.whenReady().then(() => {
   //
   // A login start still opens nothing — nobody asked for it then; that is what
   // the --hidden argument is for.
-  if (!startedHidden()) {
+  if (updatedNow.open || (!startedHidden() && !updatedNow.hidden)) {
     try { openAppWindow(); } catch { /* the tray is still a way in */ }
   }
 
