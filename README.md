@@ -125,6 +125,10 @@ window rather than recording into a history no account owns.
   `desktop.agent.privateWindows` is off; slow or down, the
   word lists decide). A message or task asked for in so many words, with no
   money and nothing deleted, is not asked about again at its ordinary steps.
+  "In so many words" is decided here: the person's own words (typed, or the
+  live caption) must start with a command verb (`desktop.agent.doWords`) and
+  not be a question; the server's "do" alone, or its transcript on a step that
+  carried page text, never waives the yes.
   A permission Ask needs and the setup card has not given (using the apps,
   seeing the screen) is asked for at that turn, never before. On Linux no text
   box can be read, so the words are typed as they come unless they say where

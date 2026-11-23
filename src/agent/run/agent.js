@@ -97,6 +97,8 @@ const { needsWhole } = require("../../context/pageRead.js");
 
 /** What a device result may carry back, as the server reads it. */
 const DEVICE_DATA_MAX = 5000;
+/** The first words of a command to do something (saysDo), English; the server's desktop.agent.doWords replaces them. */
+const DO_WORDS = Object.freeze(["send", "post", "submit", "reply", "tell", "message", "text", "email", "write", "open", "launch", "click", "press", "turn", "go", "start", "play", "type", "search", "close", "switch", "set", "add", "create", "make", "book", "call", "save", "share", "forward"]);
 /** A long job's plan, and the facts it keeps (the server takes the same: AgentJob). */
 const JOB_PLAN_MAX = 12;
 const JOB_NOTES_MAX = 8;
@@ -637,7 +639,7 @@ function createAgent(deps) {
       if (typeof p.text === "string" && p.text) page.text = stripUrls(p.text).slice(0, PAGE_TEXT_MAX);
       if (typeof p.where === "string" && p.where.trim()) page.where = clip(stripUrls(squash(p.where)), 200);
       if (p.source === "tree" || p.source === "scroll") page.source = p.source;
-      if (page.text || page.outline) req.page = page;
+      if (page.text || page.outline) { req.page = page; run.pageSent = true; }
     }
     return req;
   }
@@ -911,7 +913,16 @@ function createAgent(deps) {
         // (mode "do") in what they said, so the run is theirs in so many words, as one the one key's brain hands over is (trusted).
         // Only the ordinary steps stop asking — opening the app, a press on a page, the Enter that sends what they asked to send. Words
         // that pay, delete or sign out, and anything the server marks "always", still wait for a yes (classifyRisk, serverRisk below).
-        if (ev.mode === "do" && run.step === 0 && bool("desktop.agent.trustCommands", true)) run.trusted = true;
+        //
+        // The server's "do" is not enough on its own: step 0 also carries the page (untrusted text that can talk the model into
+        // answering "do"). So the person's own words must read as a command too (saysDo), and those words are the ones this
+        // computer has (typed, or its live caption: run.goal). The server's transcript of the recording counts only when step 0
+        // carried no page text, since then nothing but the person's voice went with it.
+        if (ev.mode === "do" && run.step === 0 && bool("desktop.agent.trustCommands", true)) {
+          const own = run.goal || run.said || (run.pageSent ? "" : text);
+          if (saysDo(own)) run.trusted = true;
+          else if (own || run.pageSent) log(`agent ${run.tag}: "do" not trusted: ${own ? "their words are not a command" : "only the server's words, with a page"}`);
+        }
         if (run.fresh && text) run.said = text;
         if (run.step === 0 && text && !run.goal) run.goal = clip(text, 1000);
         if (text && text !== run.lastHeard) { run.lastHeard = text; tell(run, "heard", text); }
@@ -1108,6 +1119,17 @@ function createAgent(deps) {
       }
       default: return { ok: false, error: "unknown action" };
     }
+  }
+
+  /**
+   * Do these words, the person's own, read as a command to do something ("send it", "open Chrome", "please reply yes")? Not a
+   * question ("what does this say?"). The verbs are a knob (desktop.agent.doWords), English by default.
+   */
+  function saysDo(words) {
+    const t = squash(words).trim().toLowerCase().replace(/^(?:(?:ok(?:ay)?|hey|so|now|and|then|please|just)[\s,]+)+/u, "");
+    if (!t || /\?\s*$/u.test(t)) return false;
+    const first = t.split(/[\s,.!]+/u)[0];
+    return list("desktop.agent.doWords", DO_WORDS).some((w) => w.toLowerCase() === first);
   }
 
   /** Everything the person said in this run, for the risk check that asks
@@ -1967,7 +1989,7 @@ function createAgent(deps) {
       over: false, started: false, stop: "",
       app: clip(squash(o.app), 60), firstApp: "", privateWindow: !!o.privateWindow,
       snapshot: { ok: false, error: "not read yet", elements: [] }, frames: new Map(), byId: new Map(),
-      mode: null, step: 0, history: [], goal: "", said: "", fresh: false, lastHeard: "", seen: new Map(),
+      mode: null, step: 0, history: [], goal: "", said: "", fresh: false, pageSent: false, lastHeard: "", seen: new Map(),
       plan: null, planDone: 0, job: null, deadline: 0, deadlineTimer: null, snapPromise: null, lookPromise: null, pagePromise: null,
       pointer, look: null, snapSeen: null, lookSeen: null, previewCache: null, previewKey: "", tentative: false,
       acted: false, pictureSent: false, permit: "", pictureFrame: null, marks: 0, says: 0,
