@@ -526,6 +526,7 @@ function createAsk(ctx) {
       // A conversation's card is a chat from its first question, with the
       // microphone's button (and its key, when that could be had) in it.
       if (convo) send(muteMessage(convo));
+      send({ type: "voiceOff", off: voiceOff() });
     },
     // listening / thinking / acting (with what it is doing) / done (with
     // what it has to say about it).
@@ -556,7 +557,8 @@ function createAsk(ctx) {
       if (!text) return;
       phaseTo("showing");
       send(o.append ? { type: "say", text, append: true } : { type: "say", text });
-      if (bool("desktop.agent.speak", true)) sayAloud(text, o);
+      // READ, NOT HEARD (the card's speaker button): someone who would rather read keeps the words and loses the voice.
+      if (bool("desktop.agent.speak", true) && !voiceOff()) sayAloud(text, o);
     },
     // `tentative`: a guess while they are still talking, or the part of the
     // window a picture is being taken of. Drawn lightly, with nothing tied
@@ -723,6 +725,19 @@ function createAsk(ctx) {
     speech = Promise.resolve();
     if (spokenWait) spokenWait();
     send({ type: "hush" });
+  }
+  /**
+   * THE VOICE OFF (the card's speaker button, guide:voice). Some answers are for reading: in a meeting, in a library, or because a
+   * long answer is quicker read than heard. Off, nothing is said — what is being said stops at once (quiet) — and the words stay on the
+   * card as they always do. Remembered on this computer (main.js localState.askVoiceOff), so it is a choice made once, not per answer.
+   * The server's desktop.agent.speak still turns the voice off for everyone; this only ever turns it off for one person.
+   */
+  const voiceOff = () => typeof ctx.voiceOff === "function" && ctx.voiceOff() === true;
+  function toggleVoice() {
+    const off = !voiceOff();
+    try { if (typeof ctx.setVoiceOff === "function") ctx.setVoiceOff(off); } catch { /* kept for this run only */ }
+    if (off) quiet();
+    send({ type: "voiceOff", off });
   }
   function sayAloud(text, opts) {
     const tok = voiceTok;
@@ -1683,6 +1698,8 @@ function createAsk(ctx) {
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
   // The conversation's microphone button: muted, or listening again.
   ipcMain.on("guide:mute", (e) => { if (fromGuide(e)) toggleMute(); });
+  // The speaker button: answers said aloud, or only shown (toggleVoice).
+  ipcMain.on("guide:voice", (e) => { if (fromGuide(e)) toggleVoice(); });
   // The card's button (guide offer): only the one it was given, once. The
   // settings page comes up over the card, which goes: there is nothing more
   // to do on it.

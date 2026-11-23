@@ -170,6 +170,7 @@ contextBridge.exposeInMainWorld("tailzuGuide", {
   dismiss: () => ipcRenderer.send("guide:dismiss"),
   // A conversation's microphone button: muted, or listening again (ask.js toggleMute). It carries nothing.
   mute: () => ipcRenderer.send("guide:mute"),
+  toggleVoice: () => ipcRenderer.send("guide:voice"),
   // The finished card's button ("screenSettings"): main opens that page only.
   offer: (kind) => ipcRenderer.send("guide:offer", String(kind || "")),
   knobs: () => ipcRenderer.invoke("app:knobs"),
