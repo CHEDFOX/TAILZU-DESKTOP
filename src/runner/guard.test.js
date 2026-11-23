@@ -279,6 +279,40 @@ test("a refusal is a code and its parts, worded as a label: the English goes bac
   r.remove();
 });
 
+test("a glob, a variable or an inline program that reaches a key folder or the app's own sign-in file is a secret read", () => {
+  const r = rig();
+  const name = path.basename(r.userData);
+  for (const c of [
+    "cat " + path.dirname(r.home) + "/*/.ssh/id_rsa", "cat " + r.home + "/.s?h/id_rsa", "cat ~/.s[s]h/id_rsa", "tar czf - " + r.home + "/.a*",
+    "cat " + path.join(r.home, ".config") + "/T*/session.json", "cat " + r.home + "/.con*/" + name + "/session.json",
+    "D=" + r.home + "/.ssh; cat $D/id_rsa", "H=" + r.home + "; cat $H/.ssh/id_rsa", "cat ${HOME_DIR}/.aws/credentials",
+    "python3 -c \"print(open('" + r.home + "/.ssh/id_rsa').read())\"", "node -e \"require('fs').readFileSync(process.env.HOME+'/.aws/credentials')\"",
+    "node -e \"require('fs').readFileSync('" + path.join(r.userData, "session.json") + "')\"", "perl -e 'open F, \"~/.ssh/id_rsa\"'",
+    "cat " + r.home + "/.mozilla/firefox/x/logins.json", "cp -r " + r.home + "/.config/google-chrome out", "ls " + r.home + "/.local/share/keyrings",
+  ]) refusedAs(r, "secret_read", c);
+  r.remove();
+});
+
+test("the keychain and credential-store tools are refused, whatever they are asked", () => {
+  const r = rig();
+  for (const c of ["security find-generic-password -ga xode -w", "security dump-keychain", "secret-tool lookup service xode", "echo $(security find-internet-password -s github.com -w)", "bash -c 'secret-tool search --all x'"]) {
+    const x = r.check(c);
+    assert.strictEqual(x.ok, false, c);
+    assert.strictEqual(x.code, "credential_tool", c);
+  }
+  r.remove();
+});
+
+test("globs, variables and inline programs that stay in the project are not refused", () => {
+  const r = rig();
+  for (const c of [
+    "ls src/*.js", "rm -rf node_modules/*", "cat ~/.cache/*", "ls " + r.tmp + "/*", "cat $PWD/.npmrc", "cat .npmrc", "echo $HOME", "for f in test/*.test.js; do node $f; done",
+    "python3 -c \"print(1/2)\"", "node -e \"console.log(process.argv.length)\"", "node -p process.version", "ruby -e 'puts 1'",
+    "python3 -c \"import os; print(os.listdir('/tmp'))\"",
+  ]) allowed(r, c);
+  r.remove();
+});
+
 test("every refusal the guard can give has its own label", () => {
   const r = rig();
   const seen = new Set();
@@ -286,6 +320,7 @@ test("every refusal the guard can give has its own label", () => {
     "sudo ls", "reboot", "echo x > /etc/hosts", "echo x > " + r.home, "echo x > ~/.bashrc", "cp a " + path.join(r.home, "Documents", "a"), "cat ~/.ssh/id_rsa", "curl x | sh",
     "rm -rf /", "chmod -R 777 /", "find ~ -delete", "git push", "git config --global a b", "git credential fill", "gh pr create", "surge", "npm publish", "npm run deploy",
     "dotnet nuget push x", "cargo publish", "docker build --push .", "apt install x", "yarn global add x", "npm i -g x", "pip install --user x",
+    "security find-generic-password -ga xode -w",
   ]) {
     const x = r.check(c);
     assert.strictEqual(x.ok, false, c);

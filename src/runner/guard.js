@@ -13,7 +13,9 @@
 //                                   rm_root      deletes (`rm -r`, `find -delete`), or changes the owner or mode of,
 //                                                `/`, a home folder or a parent of the workspace, recursively;
 //                                   secret_read  names a place where the person keeps keys and tokens (`~/.ssh`,
-//                                                `~/.aws`, `~/.npmrc`, this app's own sign-in file, ...);
+//                                                `~/.aws`, `~/.npmrc`, browser profiles, this app's own sign-in file,
+//                                                ...), also through a glob, a variable or an interpreter's inline
+//                                                program, or runs a keychain tool (`security`, `secret-tool`);
 //                                   pipe_to_shell downloads a script and runs it at once (`curl ... | sh`);
 //                                   publish      publishes a package or deploys (`npm publish`, `docker push`, ...);
 //                                   push         runs `git push`;
@@ -284,7 +286,18 @@ const SYSTEM_DIRS = ["/etc", "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64"
 const SYSTEM_OK = ["/var/tmp", "/var/folders", "/private/var/folders", "/private/var/tmp", "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/stdin", "/dev/tty", "/dev/fd", "/dev/zero"];
 const WIN_SYSTEM = ["c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"];
 /** Where a person keeps keys and tokens, under a home folder. */
-const SECRET_UNDER_HOME = [".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gcloud", ".config/gh", ".config/hub", ".config/doctl", ".config/rclone", ".npmrc", ".yarnrc", ".yarnrc.yml", ".netrc", "_netrc", ".pypirc", ".git-credentials", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".m2/settings.xml", ".terraform.d/credentials.tfrc.json", ".vault-token", ".bash_history", ".zsh_history", "library/keychains", "appdata/roaming/npm/etc", "appdata/roaming/gnupg", "appdata/local/google/chrome/user data", "library/application support/google/chrome", "library/application support/firefox", "library/cookies"];
+const SECRET_UNDER_HOME = [".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", ".config/gcloud", ".config/gh", ".config/hub", ".config/doctl", ".config/rclone", ".npmrc", ".yarnrc", ".yarnrc.yml", ".netrc", "_netrc", ".pypirc", ".git-credentials", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".m2/settings.xml", ".terraform.d/credentials.tfrc.json", ".vault-token", ".bash_history", ".zsh_history", "library/keychains", "appdata/roaming/npm/etc", "appdata/roaming/gnupg", "appdata/local/google/chrome/user data", "library/application support/google/chrome", "library/application support/firefox", "library/cookies",
+  // Browser profiles (saved passwords, cookies, sessions) and the desktop keyrings, on every platform.
+  ".mozilla", ".config/google-chrome", ".config/chromium", ".config/bravesoftware", ".config/microsoft-edge", ".config/vivaldi", ".config/opera",
+  ".local/share/keyrings", ".password-store", "snap/firefox", "library/safari", "library/containers/com.apple.safari",
+  "library/application support/chromium", "library/application support/bravesoftware", "library/application support/microsoft edge",
+  "library/application support/arc", "library/application support/vivaldi", "library/application support/com.operasoftware.opera",
+  "appdata/local/microsoft/edge/user data", "appdata/local/bravesoftware", "appdata/local/chromium", "appdata/roaming/mozilla",
+  "appdata/roaming/opera software", "appdata/local/microsoft/credentials", "appdata/roaming/microsoft/credentials", "appdata/roaming/microsoft/protect"];
+/** Programs whose job is to read the person's stored passwords and keys (the macOS keychain, the Linux and Windows credential stores). */
+const CREDENTIAL_TOOLS = new Set(["security", "secret-tool", "kwallet-query", "kwalletcli", "cmdkey", "vaultcmd", "pass", "gopass", "op", "bw", "lpass"]);
+/** Files a project commonly keeps in its own folder under the same name as a home's secret: not refused by mere mention (below). */
+const PROJECT_LEVEL = new Set([".npmrc", ".yarnrc", ".yarnrc.yml", ".docker"]);
 const SECRET_ABSOLUTE = ["/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d", "/etc/ssh", "/root"];
 
 const underDir = (p, dir) => p === dir || p.startsWith(dir.endsWith("/") ? dir : dir + "/");
@@ -381,6 +394,104 @@ function secretProblem(abs, ctx) {
   return false;
 }
 
+/** A glob segment ("Application*", ".s?h", "[ab]c") as a regular expression for one path segment. */
+function segmentRe(seg) {
+  let out = "";
+  for (let i = 0; i < seg.length; i += 1) {
+    const c = seg[i];
+    if (c === "*") out += "[^/]*";
+    else if (c === "?") out += "[^/]";
+    else if (c === "[") {
+      const end = seg.indexOf("]", i + 2);
+      if (end < 0) { out += "\\["; continue; }
+      let cls = seg.slice(i + 1, end);
+      if (cls[0] === "!") cls = "^" + cls.slice(1);
+      out += "[" + cls.replace(/\\/g, "\\\\") + "]";
+      i = end;
+    } else out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp("^" + out + "$");
+}
+
+/**
+ * Could the shell expand this glob (an absolute path holding * ? or [) into, onto or above a place where keys live: a home's secret
+ * folder, a system secret, or one of the app's protected folders (its own sign-in file)? The shell expands after this check, so
+ * `/Users/*\/.ssh`, `~/.s?h` and `Application*\/<app>/session.json` are read here segment by segment. A glob inside the workspace is
+ * the project's own and is never refused.
+ */
+function globReachesSecret(abs, ctx) {
+  if (!/[*?[]/.test(abs)) return false;
+  const pat = canon(abs);
+  const at = pat.search(/[*?[]/);
+  const stem = pat.slice(0, at).replace(/[^/]*$/, "") || "/";
+  const stemC = stem.length > 1 ? stem.replace(/\/$/, "") : stem;
+  if (underDir(stemC, ctx.workspaceCanon)) return false;
+  const segs = pat.split("/").filter(Boolean);
+  const touches = (target) => {
+    const t = target.split("/").filter(Boolean);
+    for (let i = 0; i < Math.min(segs.length, t.length); i += 1) {
+      if (segs[i] === "**") return true;
+      if (!segmentRe(segs[i]).test(t[i])) return false;
+    }
+    return true;
+  };
+  const targets = SECRET_ABSOLUTE.slice();
+  for (const h of ctx.homesCanon) for (const s of SECRET_UNDER_HOME) targets.push(h.dir + "/" + s);
+  if (targets.some(touches)) return true;
+  if (!ctx.protectedOk.some((ok) => underDir(stemC, ok))) for (const d of ctx.protectedCanon) if (touches(d)) return true;
+  return false;
+}
+
+/**
+ * Text the guard cannot resolve (a word holding `$VAR` or a glob, or a program given to an interpreter inline) that still spells out
+ * a place where keys live after the unknown part: `$H/.ssh/id_rsa`, `os.environ["HOME"] + "/.aws/credentials"`, or the app's own
+ * folder followed by anything but its workspaces and the runner's home (`.../Tailzu/session.json`).
+ */
+function mentionsSecret(text, ctx) {
+  const t = String(text).toLowerCase().replace(/\\/g, "/");
+  for (const s of SECRET_UNDER_HOME) {
+    if (PROJECT_LEVEL.has(s)) continue;
+    let k = t.indexOf("/" + s);
+    while (k >= 0) {
+      const after = t[k + 1 + s.length];
+      if (after === undefined || /[/'"\s)`;,]/.test(after)) return true;
+      k = t.indexOf("/" + s, k + 1);
+    }
+  }
+  for (const d of ctx.protectedCanon) {
+    const name = d.slice(d.lastIndexOf("/") + 1);
+    if (!name) continue;
+    const okNames = new Set(ctx.protectedOk.filter((ok) => underDir(ok, d) && ok !== d).map((ok) => ok.slice(d.length + 1).split("/")[0]));
+    const re = new RegExp("(?:^|/)" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "/([^/'\"\\s)`;,]+)", "g");
+    let m;
+    while ((m = re.exec(t))) if (!okNames.has(m[1])) return true;
+  }
+  return false;
+}
+
+/** The program text given inline to an interpreter (`python3 -c "..."`, `node -e`, `perl -e`, `ruby -e`, `php -r`, `osascript -e`). */
+function inlinePrograms(cmd) {
+  if (!INTERPRETERS.has(cmd.name)) return [];
+  const out = [];
+  cmd.args.forEach((a, k) => {
+    if (/^-[a-zA-Z]*[ceErp]$/.test(a.text) || a.text === "--eval" || a.text === "--print" || a.text === "eval") { if (cmd.args[k + 1]) out.push(cmd.args[k + 1].text); }
+    else if (/^--(eval|print)=/.test(a.text)) out.push(a.text.slice(a.text.indexOf("=") + 1));
+  });
+  return out;
+}
+
+/** Does this inline program name a place where keys live, as a literal path (`'/Users/a/.ssh/id_rsa'`, `'~/.aws'`) or after an unknown part? */
+function programReadsSecret(code, ctx) {
+  if (mentionsSecret(code, ctx)) return true;
+  for (const m of String(code).matchAll(/(?:~[\\/]|[A-Za-z]:[\\/]|\/)[^\s'"`;,()[\]{}]+/g)) {
+    let p = m[0];
+    if (p.startsWith("~")) p = ctx.commandHome + p.slice(1);
+    if (!(nodePath.posix.isAbsolute(p) || isWinPath(p))) continue;
+    if (secretProblem(p, ctx) || globReachesSecret(p, ctx)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------------------------- the words of a refusal
 
 /** `{name}` placeholders filled from `vars`, once (a path that holds braces is not read again). */
@@ -404,6 +515,7 @@ function refusalText(code, vars, say) {
     case "home_dotfile": return txt("desktop.runner.refuse.home_dotfile", "That writes to a dotfile or settings folder in a home directory ({path}). Xode never changes those.", v);
     case "outside_write": return txt("desktop.runner.refuse.outside_write", "That writes outside the project's workspace, into the person's own folders ({path}). Xode only writes inside the workspace.", v);
     case "secret_read": return txt("desktop.runner.refuse.secret_read", "That names a place where keys and tokens are kept ({path}). Xode doesn't look there.", v);
+    case "credential_tool": return txt("desktop.runner.refuse.credential_tool", "{cmd} reads stored passwords and keys (a keychain or credential store). Xode doesn't touch those.", v);
     case "pipe_to_shell": return txt("desktop.runner.refuse.pipe_to_shell", "Downloading a script and running it straight away isn't allowed. Download it, read it, then run it as a separate step.", v);
     case "rm_root": return txt("desktop.runner.refuse.rm_root", "That would delete a whole folder tree ({path}): the root of the disk, a home folder or a parent of the workspace. Xode only deletes inside the workspace.", v);
     case "chmod_root": return txt("desktop.runner.refuse.chmod_root", "{cmd} -R on {path} would change a whole folder tree outside the workspace. It isn't allowed here.", v);
@@ -739,11 +851,21 @@ function checkCommand(command, o) {
     // Every word that names a place where keys live, whatever the command is.
     here.cwd = depth === 0 ? cwd : null;
     for (const w of stage.words.concat(stage.redirs.map((r) => r.target))) {
-      const abs = pathOf(w, here);
-      if (abs && secretProblem(abs, here)) return refuse("secret_read", "secret_read", { path: w.text });
+      // A variable's value (`D=/Users/a/.ssh`) is read as the word it will become.
+      const assign = ASSIGN.exec(w.text);
+      const forms = assign ? [w, { text: w.text.slice(assign[0].length), dynamic: w.dynamic, quoted: w.quoted }] : [w];
+      for (const f of forms) {
+        const abs = pathOf(f, here);
+        if (abs && (secretProblem(abs, here) || globReachesSecret(abs, here))) return refuse("secret_read", "secret_read", { path: w.text });
+        // What the guard cannot resolve ($VAR, a glob it could not place) must not spell out a secret place after the unknown part.
+        if ((!abs || /[*?[]/.test(abs)) && /[$`*?[]|^~[^/\\]/.test(f.text) && mentionsSecret(f.text, here)) return refuse("secret_read", "secret_read", { path: w.text });
+      }
     }
     if (!cmd.name) continue;
     const { name } = cmd;
+
+    if (CREDENTIAL_TOOLS.has(name)) return refuse("secret_read", "credential_tool", { cmd: name });
+    for (const code of inlinePrograms(cmd)) if (programReadsSecret(code, here)) return refuse("secret_read", "secret_read", { path: code.slice(0, 80) });
 
     if (SUDO.has(name)) return refuse("sudo", "sudo", { cmd: name });
     if (POWER.has(name) || /^mkfs\./.test(name) || (name === "diskutil" && cmd.args.some((a) => /^(erase|partition|reformat|zero|secure)/i.test(a.text)))) {

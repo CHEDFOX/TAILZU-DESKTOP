@@ -2030,7 +2030,9 @@ function setupRunner() {
     // Everything the runner asks of the server is as the signed-in person, renewed once on a 401 (authorizedFetch).
     api: { fetch: authorizedFetch, signedIn },
     secrets: () => [authSession && authSession.access_token, authSession && authSession.refresh_token].filter(Boolean),
-    notify: (body) => notify(body),
+    notify: (body, onClick) => notify(body, onClick),
+    // "Xode wants to run commands for <project>": a click opens the window where the person allows the project or not.
+    openWindow: () => openRunnerWindow(),
     // The words it says to the person (desktop.runner.*): the knobs' reader.
     txt,
     // config.json: "runnerImage" (the Docker image) and "runnerName" (the name this computer is listed under); read when used.
@@ -2130,8 +2132,8 @@ function pushRunnerWindow() {
 }
 
 // What the runner's window may ask for: narrow, checked here, and only from that window (no other window has these
-// calls). Its switch, the container setting, a project's "Don't allow" (or Allow again, or back to the default), Stop,
-// and the audit folder. Nothing here asks first: on, and every project allowed, are the defaults.
+// calls). Its switch, the container setting, a project's Allow or "Don't allow" (or back to the default, not allowed),
+// Stop, and the audit folder. No project runs here until the person allows it in this window.
 const fromRunnerWin = (e) => isFrom(e, runnerWin);
 ipcMain.handle("runner:state", async (e) => (fromRunnerWin(e) && runner ? runner.snapshot() : null));
 ipcMain.handle("runner:knobs", (e) => (fromRunnerWin(e) ? knobsPayload() : null));

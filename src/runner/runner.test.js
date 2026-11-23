@@ -29,7 +29,13 @@ async function rig(o = {}) {
   const remote = bareRepo(owner, o.commits || [{ "a.txt": "A\n", "package.json": "{}\n", ".gitignore": "node_modules\n" }, { "a.txt": "A2\n" }], "main", "app");
   const cloud = await startFakeCloud({ jobs: o.jobs || { "job-1": { projectId: "proj-1" }, "job-2": { projectId: "proj-2" } }, projects: o.projects || [{ id: "proj-1", fullName: "acme/app" }, { id: "proj-2", fullName: "acme/other" }] });
   const state = o.state || {};
+  // Most tests are about what happens once a project is allowed: both are, unless the test is about asking (fresh). The container is
+  // the person's choice (off) unless the test is about the automatic one (autoBox).
+  if (!o.fresh && state.projects === undefined) state.projects = { "proj-1": { name: "acme/app", allowed: true, at: 1 }, "proj-2": { name: "acme/other", allowed: true, at: 1 } };
+  if (!o.autoBox && state.containerChosen === undefined) state.containerChosen = true;
   const notes = [];
+  const clicks = [];
+  const opened = { n: 0 };
   const sig = { in: o.signedIn !== false };
   const power = { reading: o.power || { onBattery: false, percent: 100, lowPower: false } };
   const dockerState = { value: o.docker || { installed: true, running: true, version: "27", reason: "" } };
@@ -39,7 +45,8 @@ async function rig(o = {}) {
     state, saveState: () => { saves += 1; },
     api: { fetch: (p, init) => fetch(cloud.url + p, init), signedIn: () => sig.in },
     secrets: () => ["the-apps-own-access-token-123"],
-    notify: (m) => notes.push(m),
+    notify: (m, onClick) => { notes.push(m); clicks.push(onClick); },
+    openWindow: () => { opened.n += 1; },
     txt: o.txt,
     config: o.config || {},
     urlPolicy: () => true, power: { read: async () => power.reading }, dockerStatus: async () => dockerState.value,
@@ -49,7 +56,7 @@ async function rig(o = {}) {
     onlyProject: o.onlyProject,
   });
   const rigged = {
-    t, cloud, runner, remote, state, notes, sig, power, dockerState, saves: () => saves,
+    t, cloud, runner, remote, state, notes, clicks, opened, sig, power, dockerState, saves: () => saves,
     offer: (jobId, extra = {}) => {
       const offer = cloud.sessionOffer(jobId, { repo: { cloneUrl: remote.url, headSha: remote.shas[1], branch: "tailzu/fix" }, ...extra });
       return offer;
@@ -128,17 +135,17 @@ withTimeout("turned on, it goes online: a ticket for its device, the hello, and 
   assert.strictEqual(r.cloud.devices.length, 1, "it did not come back");
 });
 
-withTimeout("a LIVE SESSION, end to end: nothing asked, the code fetched, the room joined, a command run, the result reported with the real minutes", async () => {
+withTimeout("a LIVE SESSION, end to end: an allowed project: the code fetched, the room joined, a command run, the result reported with the real minutes", async () => {
   const r = await rig({ leaseEveryMs: 60 });
   const dev = await r.online();
   const offer = r.offer("job-1");
   dev.send({ t: "offer", offer });
 
-  // The step's lease is kept from the first moment. The project was never refused here, so it runs: nothing is asked or kept for it.
+  // The step's lease is kept from the first moment. The person allowed the project here, so it runs with nothing asked.
   await until(() => r.cloud.api.progress.length >= 1, 5000, "the first progress");
   assert.deepStrictEqual(r.cloud.api.progress[0], { jobId: "job-1", epoch: 3 });
   await r.cloud.roomWaiter.until(1, 15000);
-  assert.deepStrictEqual(r.state.projects, {}, "nothing is kept for the default");
+  assert.strictEqual(r.notes.length, 0, "an allowed project runs with nothing asked");
   const state = await dev.waitFor((f) => f.t === "state" && f.busy === true);
   assert.deepStrictEqual(state, { t: "state", busy: true });
 
@@ -466,6 +473,58 @@ withTimeout("an offer that arrives while paused is declined", async () => {
   assert.ok(r.cloud.devices.length === 1);
 });
 
+withTimeout("ASKED FIRST: a project nobody allowed is declined, nothing is fetched or run, and the person is asked once; allowed, it runs", async () => {
+  const r = await rig({ fresh: true });
+  const dev = await r.online();
+  assert.strictEqual((await dev.waitFor("hello")).projects, "all", "nothing asked yet");
+  dev.send({ t: "offer", offer: r.offer("job-1") });
+  const decline = await dev.waitFor("decline");
+  assert.deepStrictEqual([decline.jobId, decline.reason], ["job-1", "project_not_allowed"]);
+  assert.ok(!fs.existsSync(r.workspace()), "nothing was fetched");
+  assert.strictEqual(r.cloud.rooms.length, 0);
+  await until(() => r.notes.some((n) => /acme\/app/.test(n)), 3000, "asked");
+  const k = r.notes.findIndex((n) => /acme\/app/.test(n));
+  assert.match(r.notes[k], /wants to run commands/);
+  r.clicks[k]();
+  assert.strictEqual(r.opened.n, 1, "a click on the notification opens the runner's window");
+  // The server is told to stop offering it while the person has not answered.
+  const st = await dev.waitFor((f) => f.t === "state" && Array.isArray(f.projects));
+  assert.deepStrictEqual(st.projects, ["proj-2"]);
+  const snap = await r.runner.snapshot({ fetchProjects: false });
+  assert.deepStrictEqual(snap.projects.map((p) => [p.id, p.state]), [["proj-1", "waiting"], ["proj-2", "ask"]], "the waiting project comes first");
+  assert.ok(r.auditLines().some((l) => l.event === "asked" && l.projectId === "proj-1"));
+  assert.ok(!r.auditLines().some((l) => l.event === "start"));
+  // Asked again: declined, but not a second notification.
+  dev.send({ t: "offer", offer: r.offer("job-1", { offer: { epoch: 4 } }) });
+  await dev.waitFor((f) => f.t === "decline" && f.epoch === 4);
+  assert.strictEqual(r.notes.filter((n) => /acme\/app/.test(n)).length, 1);
+  // The person allows it in the window: kept, and the next offer runs.
+  await r.runner.setProject("proj-1", "acme/app", "allow");
+  assert.strictEqual(r.state.projects["proj-1"].allowed, true);
+  await until(() => r.runner.status().state === "online", 3000);
+  dev.send({ t: "offer", offer: r.offer("job-1", { offer: { epoch: 5 } }) });
+  await r.cloud.roomWaiter.until(1, 15000);
+  r.cloud.rooms[0].send({ t: "close", reason: "job_end" });
+  await until(() => r.cloud.api.results.length === 1, 8000, "the allowed job reported");
+});
+
+withTimeout("PREFERS THE CONTAINER: when the person never chose, a job runs in a container while Docker is running, and on the host otherwise", async () => {
+  const r = await rig({ autoBox: true });
+  const dev = await r.online();
+  dev.send({ t: "offer", offer: r.offer("job-1") });
+  await until(() => r.auditLines().some((l) => l.event === "accepted"), 8000, "accepted");
+  assert.strictEqual(r.auditLines().find((l) => l.event === "accepted").container, true, "Docker running: in a container");
+  await r.cloud.roomWaiter.until(1, 15000);
+  r.cloud.rooms[0].send({ t: "close", reason: "job_end" });
+  await until(() => r.cloud.api.results.length === 1, 8000, "reported");
+  const snap = await r.runner.snapshot({ fetchProjects: false });
+  assert.strictEqual(snap.container.auto, true);
+  assert.strictEqual(snap.container.onHost, false);
+  r.runner.setContainer(false);
+  assert.strictEqual(r.state.containerChosen, true, "the person's choice is kept and stands from then on");
+  assert.strictEqual((await r.runner.snapshot({ fetchProjects: false })).container.onHost, true);
+});
+
 withTimeout("signed out: nothing connects; signing out takes it down, forgets what was refused, and keeps the switch as the person left it", async () => {
   const r = await rig({ signedIn: false });
   r.runner.setEnabled(true);
@@ -483,7 +542,7 @@ withTimeout("signed out: nothing connects; signing out takes it down, forgets wh
   await r.cloud.devices[0].waitClosed();
   assert.strictEqual(r.runner.status().state, "off");
   assert.strictEqual(r.state.enabled, false, "turned off stays off: a sign-out never turns it back on");
-  assert.deepStrictEqual(r.state.projects, {}, "every project allowed again");
+  assert.deepStrictEqual(r.state.projects, {}, "every answer forgotten: no project allowed until asked again");
   await new Promise((s) => setTimeout(s, 150));
   assert.strictEqual(r.cloud.devices.length, 1, "nothing connects while signed out");
 });
@@ -537,7 +596,7 @@ withTimeout("the window's snapshot lists the projects with what the person said,
   await until(() => r.cloud.api.results.length === 1, 8000);
   await until(() => r.runner.status().state === "online", 3000);
   const snap = await r.runner.snapshot();
-  assert.deepStrictEqual(snap.projects.map((p) => [p.id, p.name, p.state]), [["proj-1", "acme/app", "allowed"], ["proj-2", "acme/other", "allowed"]], "every project is allowed by default");
+  assert.deepStrictEqual(snap.projects.map((p) => [p.id, p.name, p.state]), [["proj-1", "acme/app", "allowed"], ["proj-2", "acme/other", "allowed"]], "both allowed by the person");
   assert.strictEqual(snap.activity[0].command, "echo hi");
   assert.strictEqual(snap.container.on, false);
   assert.strictEqual(snap.container.image, "node:22-bookworm");
@@ -548,7 +607,7 @@ withTimeout("the window's snapshot lists the projects with what the person said,
   await r.runner.setProject("proj-1", "acme/app", "deny");
   await r.runner.setProject("proj-1", "acme/app", "ask");
   const again = await r.runner.snapshot({ fetchProjects: false });
-  assert.deepStrictEqual(again.projects.map((p) => [p.id, p.state]), [["proj-1", "allowed"], ["proj-2", "denied"]], "forgotten is back to allowed");
+  assert.deepStrictEqual(again.projects.map((p) => [p.id, p.state]), [["proj-1", "ask"], ["proj-2", "denied"]], "forgotten is back to not allowed");
   await r.runner.setProject("../etc", "x", "allow");
   assert.ok(!("../etc" in r.state.projects));
 });

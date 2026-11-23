@@ -47,8 +47,8 @@
     const explain = $("explain");
     if (explain) {
       explain.textContent = "";
-      explain.appendChild(el("b", "", K.txt("desktop.runner.explainLead", "On unless you turn it off.")));
-      explain.appendChild(document.createTextNode(" " + K.txt("desktop.runner.explain", "While it is on, and only while X0 Bot is open, Xode can run its commands (tests, builds, installs) on this computer, for every project of yours but the ones you say \"Don't allow\" to below. It works in a folder of its own, from a read-only copy of your code, and cannot see your passwords, keys or other files: commands get a clean environment and a private home folder, and things like sudo, git push, publishing or deleting your home folder are refused. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed below and kept in a log on this computer for 7 days.")));
+      explain.appendChild(el("b", "", K.txt("desktop.runner.explainAllowLead", "Only the projects you allow.")));
+      explain.appendChild(document.createTextNode(" " + K.txt("desktop.runner.explainAllow", "While it is on, and only while X0 Bot is open, Xode can run its commands (tests, builds, installs) on this computer for the projects you allow below, and no others: the first time a project wants to run here you are asked. With Docker running, each command runs in a container that sees only that project's folder. Without it, commands run on this computer itself, as you: they start in a folder of their own with a clean environment and a private home folder, and things like sudo, git push, publishing, reading your keys or deleting your home folder are refused, but that is a check on the command, not a wall, so allow only projects you trust. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed below and kept in a log on this computer for 7 days.")));
     }
     put("stop", K.txt("desktop.tray.runnerStop", "Stop"));
     put("stopNote", K.txt("desktop.runner.stopNote", "Stop ends what is running and turns this off until you turn it on again."));
@@ -87,19 +87,28 @@
         : d.checked ? K.txt("desktop.runner.dockerWaiting", "{reason} Nothing will run until it is available or this is turned off.", { reason: d.reason })
           : K.txt("desktop.runner.dockerChecking", "Checking Docker…");
     $("dockerNote").textContent = (now ? now + " " : "") +
-      K.txt("desktop.runner.dockerExplain", "Each command runs in a throwaway container (image {image}) with only this project's workspace mounted, so it cannot touch the rest of this computer. Needs Docker installed and running; if it is not, nothing runs here. Off by default.", { image: s.container.image });
+      K.txt("desktop.runner.dockerExplainAuto", "Each command runs in a throwaway container (image {image}) with only this project's workspace mounted, so it cannot touch the rest of this computer. Needs Docker installed and running; if it is not, nothing runs here. Until you choose, it is used whenever Docker is running.", { image: s.container.image }) +
+      (s.container.onHost ? " " + K.txt("desktop.runner.onHost", "Right now commands run on this computer itself, as you, for the projects you allow.") : "");
 
     const box = $("projects");
     box.textContent = "";
-    if (!s.projects.length) box.appendChild(el("div", "empty", K.txt("desktop.runner.noProjects", "No projects yet. Every project of yours may run here unless you say otherwise.")));
-    // Every project is allowed until the person says "Don't allow"; Allow puts a refused one back.
+    if (!s.projects.length) box.appendChild(el("div", "empty", K.txt("desktop.runner.noProjectsAllow", "No projects yet. A project runs here only once you allow it.")));
+    // No project runs until the person allows it: one that asked to run ("waiting") or was never answered ("ask") shows Allow and
+    // "Don't allow"; an allowed one can be refused, a refused one allowed.
+    const BADGES = {
+      allowed: () => K.txt("desktop.runner.badgeAllowed", "allowed"),
+      denied: () => K.txt("desktop.runner.badgeDenied", "denied"),
+      waiting: () => K.txt("desktop.runner.badgeWaiting", "wants to run"),
+      ask: () => K.txt("desktop.runner.badgeAsk", "not allowed yet"),
+    };
     for (const p of s.projects) {
-      const denied = p.state === "denied";
+      const st = BADGES[p.state] ? p.state : "ask";
       const row = el("div", "proj");
       row.appendChild(el("span", "name", p.name));
-      row.appendChild(el("span", "badge " + (denied ? "denied" : "allowed"), denied ? K.txt("desktop.runner.badgeDenied", "denied") : K.txt("desktop.runner.badgeAllowed", "allowed")));
+      row.appendChild(el("span", "badge " + st, BADGES[st]()));
       const act = (text, action, primary) => { const b = el("button", primary ? "primary" : "", text); b.addEventListener("click", () => api.project(p.id, p.name, action).then(refresh)); return b; };
-      row.appendChild(denied ? act(K.txt("desktop.runner.allow", "Allow"), "allow", true) : act(K.txt("desktop.runner.deny", "Don't allow"), "deny"));
+      if (st !== "allowed") row.appendChild(act(K.txt("desktop.runner.allow", "Allow"), "allow", true));
+      if (st !== "denied") row.appendChild(act(K.txt("desktop.runner.deny", "Don't allow"), "deny"));
       box.appendChild(row);
     }
 

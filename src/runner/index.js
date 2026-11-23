@@ -3,12 +3,14 @@
 // docs/desktop-runner-session.md (in the backend repository) is the protocol; this is the app's side of it, from the switch in
 // the tray to the last process killed. In the order things happen:
 //
-//   the switch     "Use this computer for Tailzu Code", ON by default (state.enabled): nothing is asked first, it is said in the privacy
-//                  policy (x0bot.com/privacy section 10). The person can turn it off from the tray or its window, and that sticks
+//   the switch     "Use this computer for Tailzu Code", ON by default (state.enabled): this computer is present for Xode, but no
+//                  project's command runs until the person allows that project here (below). The person can turn it off from the
+//                  tray or its window, and that sticks
 //   presence       presence.js keeps one WebSocket open to the jobs Worker, so the router knows this computer is here. Paused (the
 //                  socket closed, nothing polled) while the battery is under 20% or a low-power mode is on (power.js)
 //   an offer       the router chose this computer for a step. Which project is it? (the server's job record). Has the person said
-//                  "Don't allow" to it here? (allow.js; every project is allowed until they do.) Then the code: a workspace under
+//                  allowed it here? (allow.js; none is until they do: the first offer is declined and they are asked.) In a container
+//                  when they chose that, or never chose and Docker runs here; on the host otherwise. Then the code: a workspace under
 //                  <userData>/workspaces, fetched with the read-only token the offer carries (workspace.js)
 //   a session      the step is a live session: connect to the job's room and do what it sends, one thing at a time (session.js)
 //   a plain step   no session: run its commands, hand back what they changed (changes.js) and report
@@ -60,11 +62,12 @@ function repoName(cloneUrl) {
 /**
  * o: {
  *   userData, version, platform, hostname,
- *   state            the runner's saved settings: { enabled, container, deviceId, projects, defaultOnV1 } - mutated in place, then saveState()
+ *   state            the runner's saved settings: { enabled, container, containerChosen, deviceId, projects, defaultOnV1 } - mutated in place, then saveState()
  *   saveState()
  *   api              { fetch(path, init) -> Response (as the signed-in person), signedIn() -> boolean }
  *   secrets()        the app's own tokens, so no output can carry them
- *   notify(text)     a native notification
+ *   notify(text, onClick)  a native notification; onClick, when given, is what a click on it does
+ *   openWindow()     opens the runner's window (a click on "Xode wants to run commands for <project>")
  *   txt(key, fallback, vars)  the knobs' reader for words (desktop.runner.*), so the server words what the person is told; English without it
  *   config           { image, name } from config.json
  *   powerMonitor     Electron's, for the battery
@@ -369,19 +372,29 @@ function createRunner(o) {
     j.projectId = await projectIdOf(j.id);
     if (j.aborted) return;
     if (!j.projectId) { decline(j, "unknown_project"); return; }
-    // Allowed unless the person said "Don't allow" to it in the window: nothing is asked.
-    const verdict = only && j.projectId !== only ? "denied" : await allow.check({ projectId: j.projectId, name: j.project });
+    // Only a project the person allowed on this computer runs here. The first offer for one they never answered about is declined and
+    // they are asked once (a notification that opens the runner's window, where the project waits with Allow and Don't allow). The
+    // terminal (onlyProject) is the person starting xode in that project's folder, so that project, and no other, is allowed.
+    const verdict = only ? (j.projectId === only ? "allowed" : "denied") : await allow.check({ projectId: j.projectId, name: j.project });
     if (j.aborted) return;
     if (verdict !== "allowed") {
       decline(j, "project_not_allowed");
-      // The server stops offering a refused project once it is told which projects are left.
+      if (verdict === "ask") {
+        audit.log({ event: "asked", jobId: j.id, project: j.project, projectId: j.projectId });
+        if (o.notify) o.notify(txt("desktop.runner.askProject", "Xode wants to run commands for {project} on this computer. Open Xode activity to allow it or not.", { project: j.project || j.projectId }), o.openWindow);
+        changed();
+      }
+      // The server stops offering a refused (or waiting) project once it is told which projects are left.
       void pushProjects();
       return;
     }
     if (power.paused) { decline(j, "paused"); return; }
     if (offer.session && offer.session.expiresAt && offer.session.expiresAt < now()) { decline(j, "ticket_expired"); return; }
 
-    const inBox = !!settings.container;
+    // In a container when the person turned that on, and also when they never chose and Docker is running here: the host is the
+    // fallback, not the default.
+    const inBox = !!settings.container || (settings.containerChosen !== true && !!(await dockerNow()).running);
+    if (j.aborted) return;
     if (inBox) {
       const d = await dockerNow(true);
       if (!d.running) {
@@ -495,6 +508,7 @@ function createRunner(o) {
     /** "Run in a container". */
     setContainer(on) {
       settings.container = !!on;
+      settings.containerChosen = true;
       o.saveState();
       if (on) dockerNow(true).catch(() => {});
       changed();
@@ -507,7 +521,7 @@ function createRunner(o) {
       sync();
       if (o.notify) o.notify(txt("desktop.runner.stopped", "Xode stopped. This computer is off for Xode until you turn it on again."));
     },
-    /** A project's setting, from the window: "allow", "deny" or "ask" (forget what was said: back to the default, allowed). */
+    /** A project's setting, from the window: "allow", "deny" or "ask" (forget what was said: back to the default, not allowed). */
     async setProject(id, name, action) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(String(id))) return;
       if (action === "allow") allow.decide(id, name, true);
@@ -520,15 +534,20 @@ function createRunner(o) {
     async snapshot({ fetchProjects = true } = {}) {
       const known = fetchProjects ? await refreshProjects() : projects;
       const answered = new Map(allow.list().map((p) => [p.id, p]));
+      const waiting = new Map(allow.waiting().map((p) => [p.id, p]));
       const rows = [];
-      // A project nobody said anything about is allowed (the default).
-      for (const id of known.ids) rows.push({ id, name: known.names[id] || (answered.get(id) && answered.get(id).name) || id, state: answered.has(id) ? answered.get(id).state : "allowed" });
+      // A project nobody said anything about is not allowed ("ask"); one that asked to run is first ("waiting").
+      const unanswered = (id) => (waiting.has(id) ? "waiting" : "ask");
+      for (const id of known.ids) rows.push({ id, name: known.names[id] || (answered.get(id) && answered.get(id).name) || (waiting.get(id) && waiting.get(id).name) || id, state: answered.has(id) ? answered.get(id).state : unanswered(id) });
       for (const [id, p] of answered) if (!known.ids.includes(id)) rows.push({ id, name: p.name, state: p.state });
-      rows.sort((a, b) => a.name.localeCompare(b.name));
-      if (settings.container && (!docker.at || now() - docker.at > DOCKER_TTL_MS)) dockerNow().catch(() => {});
+      for (const [id, p] of waiting) if (!known.ids.includes(id) && !answered.has(id)) rows.push({ id, name: p.name, state: "waiting" });
+      rows.sort((a, b) => (a.state === "waiting") !== (b.state === "waiting") ? (a.state === "waiting" ? -1 : 1) : a.name.localeCompare(b.name));
+      const autoBox = settings.containerChosen !== true;
+      if ((settings.container || autoBox) && (!docker.at || now() - docker.at > DOCKER_TTL_MS)) dockerNow().catch(() => {});
       return {
         status: status(), projects: rows, activity: activity.list().slice(0, 100), power: power.state(),
-        container: { on: settings.container, image: config.image || DEFAULT_IMAGE, docker: { installed: docker.installed, running: docker.running, version: docker.version, reason: docker.reason, checked: !!docker.at } },
+        // onHost: what the next command would run on, so the window can say "on this computer itself" plainly.
+        container: { on: settings.container, auto: autoBox, onHost: !settings.container && !(autoBox && docker.running), image: config.image || DEFAULT_IMAGE, docker: { installed: docker.installed, running: docker.running, version: docker.version, reason: docker.reason, checked: !!docker.at } },
         auditDir: paths.audit, workspacesDir: paths.workspaces,
       };
     },

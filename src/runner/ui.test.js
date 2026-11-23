@@ -99,10 +99,20 @@ test("every word is the server's when it sends one, the English otherwise, and a
   assert.strictEqual(p.ids["#state"].textContent, "Online für Xode");
   assert.strictEqual(p.ids["#activity"].textContent, "Noch nichts.");
   assert.strictEqual(p.ids["#audit"].textContent, "Open the audit log folder", "a word the server did not send stays English");
-  assert.match(p.ids["#explain"].textContent, /^On unless you turn it off\. While it is on/);
+  assert.match(p.ids["#explain"].textContent, /^Only the projects you allow\. While it is on/);
   p.api.pushKnobs({ labels: { "desktop.runner.allow": "Erlauben", "desktop.runner.deny": "Nicht erlauben", "desktop.runner.workspaces": "Arbeitsordner: {dir}" }, flags: {} });
   const buttons = []; p.ids["#projects"].walk((e) => { if (e.tag === "button") buttons.push(e.textContent); });
   assert.deepStrictEqual(buttons, ["Nicht erlauben", "Nicht erlauben", "Erlauben"]);
   assert.strictEqual(p.ids["#where"].textContent, "Arbeitsordner: /x/workspaces");
   assert.strictEqual(p.ids["#heading"].textContent, "Xode on this computer", "the newer knobs replace the older ones");
+});
+
+test("a project that wants to run, or was never answered, shows Allow and Don't allow; running on the host is said plainly", async () => {
+  const p = page(snap({ projects: [{ id: "p1", name: "acme/app", state: "waiting" }, { id: "p2", name: "acme/two", state: "ask" }], container: { on: false, auto: true, onHost: true, image: "node:22-bookworm", docker: { installed: false, running: false, version: "", reason: "", checked: true } } }));
+  await new Promise((r) => setImmediate(r));
+  const rows = []; p.ids["#projects"].walk((e) => { if (e.className && e.className.startsWith("badge")) rows.push([e.className, e.textContent]); });
+  assert.deepStrictEqual(rows, [["badge waiting", "wants to run"], ["badge ask", "not allowed yet"]]);
+  const buttons = []; p.ids["#projects"].walk((e) => { if (e.tag === "button") buttons.push(e.textContent); });
+  assert.deepStrictEqual(buttons, ["Allow", "Don't allow", "Allow", "Don't allow"]);
+  assert.match(p.ids["#dockerNote"].textContent, /run on this computer itself, as you/);
 });

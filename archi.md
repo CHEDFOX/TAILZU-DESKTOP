@@ -40,9 +40,12 @@ JavaScript, with no bundler. It does five things:
 - **The app window.** Every screen is JSON from the server, drawn by a renderer
   of the server's node kinds (the same catalog the phone apps draw).
 - **The runner.** On by default (said in the privacy policy, x0bot.com/privacy
-  section 10, not asked), this computer runs the commands of Xode's live
-  sessions (tests, builds, a dev server) in a guarded workspace; the tray or
-  the runner's window turns it off.
+  section 10), this computer runs the commands of Xode's live sessions (tests,
+  builds, a dev server) in a guarded workspace, but only for projects the
+  person allowed here: the first offer for any other is declined and they are
+  asked (a notification that opens the runner's window). In a Docker container
+  when Docker is running, unless the person chose otherwise; the tray or the
+  runner's window turns it off.
 
 The server (TAILZU-BACKEND) decides almost everything the app shows: words,
 numbers and switches arrive as *knobs* in the bootstrap, and screens arrive as
@@ -198,7 +201,7 @@ src/
     workspace.js gitrun.js overlay.js changes.js search.js   the per-project checkout
     exec.js env.js guard.js docker.js procs.js watchdog.js redact.js   running commands safely
     preview.js          the dev server for the design round
-    power.js allow.js audit.js activity.js   battery, the projects refused here (all allowed by default), audit log, activity
+    power.js allow.js audit.js activity.js   battery, the projects allowed or refused here (none allowed until the person says so), audit log, activity
     runner.html ui.js   the runner's own window (the tray's "Xode activity…")
     testkit.js          for tests (not shipped)
 

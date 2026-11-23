@@ -32,7 +32,7 @@
       .proj:first-child { border-top:0; }
       .proj .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .badge { font:500 11px/1 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing:.08em; text-transform:uppercase; padding:4px 7px; border-radius:6px; border:1px solid var(--faint); color:var(--dim); }
-      .badge.allowed { color:var(--green); border-color:rgba(143,196,138,.4); } .badge.denied { color:var(--red); border-color:rgba(229,115,107,.4); }
+      .badge.allowed { color:var(--green); border-color:rgba(143,196,138,.4); } .badge.denied { color:var(--red); border-color:rgba(229,115,107,.4); } .badge.waiting { color:var(--amber); border-color:rgba(232,162,60,.4); }
       table { width:100%; border-collapse:collapse; font-size:13px; }
       th { text-align:left; font:500 11px/1 "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); padding:6px 8px; border-bottom:1px solid var(--faint); }
       td { padding:6px 8px; border-bottom:1px solid var(--faint); vertical-align:top; }
@@ -52,12 +52,12 @@
         <span class="status"><span class="dot" id="dot"></span><span id="state"></span></span>
       </div>
       <p class="small" style="margin-top:10px" id="explain">
-        <b>On unless you turn it off.</b> While it is on, and only while X0 Bot is open, Xode can run its commands (tests, builds,
-        installs) on this computer, for every project of yours but the ones you say "Don't allow" to below. It works in a folder of
-        its own, from a read-only copy of your code, and cannot see your passwords, keys or other files: commands get a clean
-        environment and a private home folder, and things like <code>sudo</code>, <code>git push</code>, publishing or deleting your home
-        folder are refused. It pauses by itself when the battery is under 20% or Low Power Mode is on. Everything it runs is listed
-        below and kept in a log on this computer for 7 days.
+        <b>Only the projects you allow.</b> While it is on, and only while X0 Bot is open, Xode can run its commands (tests, builds,
+        installs) on this computer for the projects you allow below, and no others: the first time a project wants to run here you
+        are asked. With Docker running, each command runs in a container that sees only that project's folder. Without it, commands
+        run on this computer itself, as you, behind checks that refuse things like <code>sudo</code>, <code>git push</code> or reading
+        your keys; that is a check, not a wall, so allow only projects you trust. Everything it runs is listed below and kept in a log
+        on this computer for 7 days.
       </p>
       <div class="row" id="workingRow" hidden style="margin-top:6px">
         <span class="grow" id="working"></span>

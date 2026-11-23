@@ -276,8 +276,9 @@ because nothing waits for a cloud computer to start. This
 app speaks the backend's runner protocol for that
 (`TAILZU-BACKEND/docs/desktop-runner-session.md`; the code is `src/runner/`).
 
-**It is on by default**, with nothing asked first: it is said in the privacy policy
-(x0bot.com/privacy section 10). An install that kept the old default (off) is turned on
+**The switch is on by default**: this computer is present for Xode (said in the
+privacy policy, x0bot.com/privacy section 10), but **no project's command runs here
+until the person allows that project** (below). An install that kept the old default (off) is turned on
 once (the runner's state gets `defaultOnV1`); after that the person's choice stands
 (tray: *Use this computer for Xode*, on or off at once; *Xode activity…* opens the
 runner's own window, which has the same switch). Signing out puts it back to the
@@ -287,10 +288,19 @@ the router knows this computer is here. That costs one small text frame every 30
 seconds and nothing else; reconnects wait 1, 2, 4 … 60 seconds with a little jitter,
 each with a new one-use ticket (`POST /v1/code/runner/ticket`).
 
-**Which projects.** All of the person's projects, with nothing asked. The runner's
-window lists them, each with *Don't allow* (or *Allow* again for one refused): a
-refused project is never run here and is left out of the list the server is told.
-Signing out forgets the refusals.
+**Which projects.** Only the ones the person allowed on this computer; none by
+default (`src/runner/allow.js`). The first time the server offers a job for a project
+nobody answered about, the job is declined (`project_not_allowed`), nothing is fetched
+or run, and a notification says *Xode wants to run commands for <project> on this
+computer*; a click opens the runner's window, where that project waits at the top
+(*wants to run*) with **Allow** and **Don't allow**. It is asked once per run of the app,
+and the project is left out of the list the server is told until the person answers. The
+answer is kept per project (the runner's state, `projects`): an allowed project runs from
+then on with nothing asked; a refused one is never run here and is left out of the list.
+Every project the account has is listed in the window with its state, so one can also be
+allowed before it ever asks. Signing out forgets the answers. The terminal (`xode`) is the
+person starting it in a project's folder, so it offers that one project and no other
+(`onlyProject`; `--no-runner` turns it off).
 
 **The code.** `<userData>/workspaces/<projectId>`, a git repository kept from job to
 job: the first job fetches the commit (shallow), later ones only what changed (nothing
@@ -320,7 +330,11 @@ request is read first; a refusal is `done` with exit code 126):
   `Library`, `AppData`), anywhere else in the person's own home outside the workspace,
   and system folders (`/etc`, `/usr`, `C:\Windows`, ...)
 - `rm -rf` (or `find -delete`, `chmod -R`) of `/`, a home folder, `..`, or a parent of the workspace
-- naming places where keys live (`~/.aws`, `~/.npmrc`, the app's own sign-in file, ...)
+- naming places where keys live (`~/.aws`, `~/.npmrc`, browser profiles and keyrings, the
+  app's own data folder and sign-in file, ...), also through a glob the shell would expand
+  there (`/Users/*/.ssh`, `~/.s?h`), a variable (`D=~/.ssh; cat $D/id_rsa`) or an
+  interpreter's inline program (`python3 -c "open('/Users/a/.ssh/id_rsa')"`)
+- the keychain and credential-store tools (`security`, `secret-tool`, `cmdkey`, `pass`, `op`, ...)
 - `curl` or `wget` piped to a shell (`| sh`, `bash <(curl ...)`, `eval "$(curl ...)"`)
 - publishing and deploying: `npm publish`, `cargo publish`, `twine upload`, `docker push`,
   `terraform apply`, `vercel deploy`, ... and `git push`, which would fail anyway (the
@@ -328,10 +342,15 @@ request is read first; a refusal is `done` with exit code 126):
 - installing software for the whole computer (`apt`, `brew`, `npm -g`, `pip --user`)
 
 This is a guard against mistakes, and against a repository that talks the agent into
-one, not a sandbox: a shell can say the same thing many ways. The wall is the next part.
+one, not a sandbox: a shell can say the same thing many ways, and a command on the host
+runs as the person. What keeps the person in control is the per-project consent above;
+the wall is the next part.
 
-**Run in a container (Docker).** In the window, turn on *Run in a container* and each
-command runs in a throwaway container instead: `docker run --rm --init`, the workspace
+**Run in a container (Docker).** Until the person chooses in the window, a job runs in a
+container whenever Docker is running on this computer, and on the computer itself only
+when it is not (the window then says commands run *on this computer itself, as you*).
+Once the person turns *Run in a container* on or off (`containerChosen` in the runner's
+state), that stands. In a container each command runs in a throwaway container instead: `docker run --rm --init`, the workspace
 mounted at `/workspace` (the only part of this computer a command can change), the tool
 caches in a folder mounted at `/cache`, all capabilities dropped, `no-new-privileges`, run
 as the person's own user, the image `node:22-bookworm` unless `runnerImage` in
