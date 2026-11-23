@@ -362,7 +362,10 @@ Live pages inside the app window are `<webview>`s in a session of their own
 (`app/liveViewMain.js`), with one preload (`app/liveViewGuest.js`).
 
 **IPC.** `preload.js` exposes one bridge per kind of window, and the main
-process checks which window sent each message (`isFrom` in `main.js`):
+process checks which window sent each message (`isFrom` in `main.js`; every
+handler, `wake:*` from the recorder only, and `app:knobs`, which every window
+of ours asks, from a top-level page loaded from the app's own files,
+`fromOwnPage`):
 
 - `window.tailzu` (recorder, pill, overlay): `start-recording`,
   `recording-target`, `recording-field`, `recording-around`, `stop-recording`,

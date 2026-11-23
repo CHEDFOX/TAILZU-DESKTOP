@@ -16,6 +16,7 @@ live mode.
 hotkey / hold-key → record mic ─┬─ batch: POST /v1/transcribe-clean
                                 └─ live:  WS /v1/transcribe-stream (+ overlay captions)
         → cleaned text → clipboard → paste keystroke into the focused app
+          → the person's own copied text put back on the clipboard
 ```
 
 Where everything lives, and how the parts connect: [archi.md](archi.md).

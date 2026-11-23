@@ -1380,6 +1380,17 @@ function cancelDictation() {
 // the pill, only the recorder may report a dictation, and only the app window
 // may touch the session, the settings, the browser or the updater.
 const isFrom = (e, w) => !!w && !w.isDestroyed() && e.sender === w.webContents;
+/** Sent by one of this app's own windows: a top-level page loaded from the app's own files (not a webview, not a site). */
+const ownRoot = path.join(__dirname, "..");
+function fromOwnPage(e) {
+  try {
+    if (!e || !e.sender || (typeof e.sender.getType === "function" && e.sender.getType() !== "window")) return false;
+    const u = new URL((e.senderFrame && e.senderFrame.url) || e.sender.getURL());
+    if (u.protocol !== "file:") return false;
+    const file = path.normalize(require("url").fileURLToPath(u));
+    return file === ownRoot || file.startsWith(ownRoot + path.sep);
+  } catch { return false; }
+}
 const fromPill = (e) => isFrom(e, pillWin);
 ipcMain.on("pill:spot", (e, m) => {
   if (!fromPill(e) || !m || !Number.isFinite(m.blip)) return;
@@ -2224,7 +2235,8 @@ ipcMain.handle("app:env", (e) => {
     navigate,
   };
 });
-ipcMain.handle("app:knobs", () => knobsPayload());
+// Every window of ours loads knobs.js and asks for them; a page that is not one of ours (a webview, a site) never does.
+ipcMain.handle("app:knobs", (e) => (fromOwnPage(e) ? knobsPayload() : null));
 
 /** This computer's settings, as the window's pages show them. The bound keys
  *  are the ones actually bound, which is not always what was asked for. */
@@ -2960,12 +2972,27 @@ function undoPastes(times) {
   })).catch(() => { /* an undo that failed must not stop the pastes after it */ });
   return pasting;
 }
+//
+// THE CLIPBOARD IS THE PERSON'S. What they had copied (its text) is put back
+// once the keystroke has landed and the app has had time to read it, unless
+// something else has been copied since; so their copy is not lost, and the
+// dictated words do not stay there for every app and clipboard manager to
+// read. Only text can be kept: a copied picture is still replaced, as before.
 function paste(text) {
   const delay = num("desktop.paste.delayMs", 120);
   pasting = pasting.then(() => new Promise((done) => {
+    let before = "";
+    const restore = bool("desktop.paste.restoreClipboard", true) && typeof clipboard.readText === "function";
+    if (restore) { try { before = clipboard.readText(); } catch { before = ""; } }
     clipboard.writeText(text);
     // Small delay so the clipboard write settles before the paste keystroke.
-    setTimeout(() => pasteIntoFocusedApp(() => setTimeout(done, delay)), delay);
+    setTimeout(() => pasteIntoFocusedApp(() => {
+      if (!restore || !before) { setTimeout(done, delay); return; }
+      setTimeout(() => {
+        try { if (clipboard.readText() === text) clipboard.writeText(before); } catch { /* the clipboard is the system's */ }
+        done();
+      }, Math.max(delay, num("desktop.paste.restoreMs", 400)));
+    }), delay);
   })).catch(() => { /* one failed paste must not stop the ones after it */ });
 }
 
@@ -4084,9 +4111,10 @@ async function wakeSpeech() {
 
 // A listener, when there is one, talks to these. Named so that a helper process can reach them over the same bridge
 // everything else uses; the renderer never sees them, because the renderer is not what hears.
-ipcMain.handle("wake:heard", (_e, score) => wakeHeard(typeof score === "number" ? score : 0));
-ipcMain.handle("wake:speech", () => wakeSpeech());
-ipcMain.handle("wake:state", () => wakeNow().state());
+// Only the recorder window, which is where a listener would live, like every other handler's sender check.
+ipcMain.handle("wake:heard", (e, score) => (isFrom(e, recorderWin) ? wakeHeard(typeof score === "number" ? score : 0) : null));
+ipcMain.handle("wake:speech", (e) => (isFrom(e, recorderWin) ? wakeSpeech() : null));
+ipcMain.handle("wake:state", (e) => (isFrom(e, recorderWin) ? wakeNow().state() : null));
 
 app.on("window-all-closed", (e) => { e.preventDefault(); }); // stay alive in the tray
 app.on("will-quit", () => {
