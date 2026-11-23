@@ -2515,8 +2515,11 @@ function toggleDictation() {
   if (!recorderWin || recorderWin.isDestroyed()) createRecorderWindow();
   // One microphone: a dictation starting ends a question still open, and
   // puts away a finished answer's card, which may still be saying it: the
-  // microphone would write its voice into what they are about to say.
-  if (!recording && ask && (ask.active() || ask.shown())) ask.cancel("dictation");
+  // microphone would write its voice into what they are about to say. Ask's
+  // conversation (desktop.agent.thread) is not ended by it: it stops
+  // listening, and listens again once the dictation is over (ask.js
+  // dictationStarts).
+  if (!recording && ask && (ask.active() || ask.shown())) ask.dictationStarts();
   if (!recording) { talk.end("dictation"); winVoice.end("dictation"); }
   recording = !recording;
   if (recording) {
@@ -3175,6 +3178,8 @@ function setupAsk() {
     // The question's card grows out of the pill, and the pill follows its
     // phases (pillAsk).
     pillAsk,
+    // A conversation's mute key (desktop.agent.muteHotkey), held only while one is up.
+    globalShortcut,
     driver,
     // One microphone: a question opening it stops the bot on X0's screen listening.
     sendToRecorder: (channel, payload) => {

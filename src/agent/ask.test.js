@@ -83,6 +83,8 @@ function harness(opts = {}) {
   // The stream's final text is not waited for unless a test says so: most
   // of them hand over a clip and nothing else.
   // trustCommands off: these tests are of the yes card, which a command now skips for ordinary steps (agent.test.js "said as a command").
+  // desktop.agent.thread is on by default (Ask is a conversation): the tests whose premise is one question and one card
+  // that goes doneMs after say "desktop.agent.thread": false in their own knobs.
   const knobs = Object.assign({ "desktop.agent.serverVoice": false, "desktop.agent.settleMs": 0, "desktop.agent.doneMs": 50, "desktop.agent.finalTextMs": 0, "desktop.agent.askOpensMic": true, "desktop.agent.trustCommands": false }, opts.knobs);
   for (const k of opts.unset || []) delete knobs[k];
   const pick = (k, f) => (k in knobs ? knobs[k] : f);
@@ -183,6 +185,8 @@ function harness(opts = {}) {
     screenSettings: opts.screenSettings,
     pillBlip: opts.pillBlip,
     blipAway: opts.blipAway,
+    // Electron's globalShortcut, when a test plays the mute key.
+    globalShortcut: opts.globalShortcut,
   });
   return { setPoint: (f) => { screenPoint = f; }, ask, sent, recorder, log, windows, requests, speakCalls, taskCalls, ipc, actions, calls, allowed, deps: () => deps,
     heardCalls: () => calls.filter((c) => c[0] === "heard"),
@@ -347,7 +351,7 @@ test("the tray's Ask item never answers a card: it stops the run", async () => {
 });
 
 test("a card nobody answered in confirmMs lets go: the next Alt twice is a new question", async () => {
-  const h = harness({ steps: RISKY, knobs: { "desktop.agent.confirmMs": 40, "desktop.agent.doneMs": 5000 } });
+  const h = harness({ steps: RISKY, knobs: { "desktop.agent.thread": false, "desktop.agent.confirmMs": 40, "desktop.agent.doneMs": 5000 } });
   await h.ask.tap();
   h.ask.audioIn({ session: h.lastSession(), data: new Uint8Array([1]).buffer });
   await until(() => h.types().includes("confirm"));
@@ -647,7 +651,7 @@ const LONG_ANSWER = [[
 ]];
 
 test("a long answer is said to its end before its card goes: doneMs counts from the last sentence said", async () => {
-  const h = harness({ steps: LONG_ANSWER, sayMs: 40, knobs: { "desktop.agent.doneMs": 30 } });
+  const h = harness({ steps: LONG_ANSWER, sayMs: 40, knobs: { "desktop.agent.thread": false, "desktop.agent.doneMs": 30 } });
   await h.ask.tap();
   h.clip();
   await until(() => h.types().includes("hide"), 3000);
@@ -1568,7 +1572,7 @@ test("the card grows out of the pill: the pill parts first, the guide opens on i
 
 test("the pill's phase follows the card: listening, thinking, showing; closing the moment it hides; given back once the fold is over", async () => {
   const pill = fakePill();
-  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 120, "desktop.agent.doneMs": 30 } });
+  const h = harness({ pill, knobs: { "desktop.agent.thread": false, "desktop.guide.foldMs": 120, "desktop.agent.doneMs": 30 } });
   await h.ask.tap();
   h.clip();
   await until(() => pill.calls.includes("closing"));
@@ -1585,7 +1589,7 @@ test("the pill's phase follows the card: listening, thinking, showing; closing t
 
 test("an ASK's reply opens the microphone again: the bead goes back to listening", async () => {
   const pill = fakePill();
-  const h = harness({ pill, knobs: FAST, steps: [
+  const h = harness({ pill, knobs: Object.assign({ "desktop.agent.thread": false }, FAST), steps: [
     [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
     [{ t: "done", text: "Okay." }],
   ] });
@@ -1613,7 +1617,7 @@ test("a guess rung while they still talk leaves the bead listening; the answer's
 
 test("a new question while the card folds turns it round: the same window, the pill never given back between", async () => {
   const pill = fakePill();
-  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } });
+  const h = harness({ pill, knobs: { "desktop.agent.thread": false, "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } });
   await h.ask.tap();
   h.clip();
   await until(() => pill.calls.includes("closing"));
@@ -1637,7 +1641,7 @@ test("a new question while the last card is still up, the pointer now on another
   // main's pillBounds: the foot of the work area under the cursor.
   const under = () => { const wa = displayAt(cursor).workArea; return { x: wa.x, y: wa.y + wa.height - 132 - 4, width: wa.width, height: 132 }; };
   const pill = fakePill({ under });
-  const h = harness({ pill, platform: "darwin", knobs: { "desktop.agent.doneMs": 5000 }, screen: {
+  const h = harness({ pill, platform: "darwin", knobs: { "desktop.agent.thread": false, "desktop.agent.doneMs": 5000 }, screen: {
     getCursorScreenPoint: () => cursor, getDisplayNearestPoint: displayAt,
   } });
   await h.ask.tap();
@@ -1697,7 +1701,7 @@ test("a dictation that starts mid-run ends with the pill the dictation's: never 
 
 test("a dictation started under a finished card keeps the pill when the card goes, and a card put up meanwhile grows from a seed", async () => {
   const pill = fakePill();
-  const h = harness({ pill, knobs: { "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 200 } });
+  const h = harness({ pill, knobs: { "desktop.agent.thread": false, "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 200 } });
   await h.ask.tap();
   h.clip();
   await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
@@ -1744,7 +1748,7 @@ test("a ring on another display takes the guide there: the pill stays, no tether
 
 test("desktop.guide.dock off: the pill is left alone and the card is what it was", async () => {
   const pill = fakePill();
-  const h = harness({ pill, knobs: Object.assign({ "desktop.guide.dock": false }, FAST) });
+  const h = harness({ pill, knobs: Object.assign({ "desktop.guide.dock": false, "desktop.agent.thread": false }, FAST) });
   await h.ask.tap();
   h.clip();
   await until(() => h.sent.some((m) => m.type === "state" && m.state === "done"));
@@ -1913,7 +1917,7 @@ const DICTATION_MOMENTS = [
     [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
     [{ t: "done", text: "Okay." }],
   ] }, async (h, o) => { await h.ask.tap(); h.clip(); await until(() => h.starts() === 2); o.later = () => h.clip(); }],
-  ["while the card folds back into the pill", { knobs: { "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } }, async (h, o) => {
+  ["while the card folds back into the pill", { knobs: { "desktop.agent.thread": false, "desktop.guide.foldMs": 300, "desktop.agent.doneMs": 30 } }, async (h, o) => {
     await h.ask.tap(); h.clip(); await until(() => o.pill.calls.includes("closing"));
   }],
   ["under a card left up when its run is over", { knobs: { "desktop.guide.foldMs": 40, "desktop.agent.doneMs": 200 } }, async (h) => {
@@ -3152,7 +3156,7 @@ test("main.js: a space's invite link opens the window at Spaces with the code, a
 
 test("an ASK waits: no microphone after the question, a hint on the card, and the next press opens it for the answer", async () => {
   const h = harness({
-    knobs: { "desktop.agent.askOpensMic": false },
+    knobs: { "desktop.agent.thread": false, "desktop.agent.askOpensMic": false },
     steps: [
       [{ t: "heard", text: "tell them it's ready", mode: "do" }, { t: "ask", text: "Which channel?" }],
       [{ t: "done", text: "Okay." }],
@@ -3173,7 +3177,7 @@ test("an ASK waits: no microphone after the question, a hint on the card, and th
 
 test("an ASK nobody answers ends quietly after replyWaitMs; Esc puts it away at once", async () => {
   const h = harness({
-    knobs: { "desktop.agent.askOpensMic": false, "desktop.agent.replyWaitMs": 5000 },
+    knobs: { "desktop.agent.thread": false, "desktop.agent.askOpensMic": false, "desktop.agent.replyWaitMs": 5000 },
     steps: [[{ t: "heard", text: "book it", mode: "do" }, { t: "ask", text: "Which day?" }]],
   });
   await h.ask.tap();
@@ -3223,4 +3227,260 @@ test("peek: a question taking the guide gives Blip back to the pill at once", as
   await h.ask.tap();
   await until(() => h.types().includes("show"));
   assert.deepStrictEqual(away, [true, false]);
+});
+
+// ---- Ask is a conversation (desktop.agent.thread) ----------------------------------------------------------------
+
+// Two questions, two answers: each request is a run of its own.
+const TWO_ANSWERS = [
+  [{ t: "heard", text: "where's export", mode: "show" }, { t: "say", text: "Top right." }, { t: "point", id: "e1", caption: "Export" }, { t: "done" }],
+  [{ t: "heard", text: "and send", mode: "show" }, { t: "say", text: "Bottom right, by the box." }, { t: "point", id: "e2", caption: "Send" }, { t: "done" }],
+];
+/** Where the card is in a conversation: its first answer said, and the microphone open again for the next question. */
+async function firstAnswer(h) {
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.starts() === 2);
+}
+const fromCard = (h) => ({ sender: h.windows[0].webContents });
+// What the card shows: the last state it was told, or "listening" when that was a conversation's next turn (guide/messages.js turn).
+const lastState = (h) => { const m = h.sent.filter((x) => x.type === "state" || x.type === "turn").pop(); return m.type === "turn" ? "listening" : m.state; };
+/** The card went: told to hide, and no conversation left. */
+function goneAway(h) {
+  assert.ok(h.types().includes("hide"), "the card was put away");
+  assert.strictEqual(h.ask.shown(), false);
+  assert.strictEqual(h.ask.conversation(), false);
+  assert.strictEqual(h.ask.active(), false);
+}
+/** A fake globalShortcut: what is held, and the key pressed. */
+function fakeShortcuts(ok = true) {
+  const held = new Map();
+  return {
+    held,
+    register: (k, f) => { if (!ok) return false; held.set(k, f); return true; },
+    unregister: (k) => { held.delete(k); },
+    press: (k) => { const f = held.get(k); if (f) f(); },
+  };
+}
+
+test("a conversation: once the answer has been said, the microphone opens again in the same card, which stays", async () => {
+  const h = harness({ steps: TWO_ANSWERS });
+  await firstAnswer(h);
+  const t = h.types();
+  assert.ok(t.indexOf("turn") > t.lastIndexOf("say"), "the answer went up into the turns, after it was said");
+  assert.ok(!t.includes("hide"), "the card never went");
+  assert.strictEqual(h.ask.shown(), true);
+  assert.strictEqual(h.ask.conversation(), true);
+  assert.strictEqual(h.ask.active(), true, "listening for the next question");
+  const start = h.recorder.filter(([c]) => c === "start-recording").pop()[1];
+  assert.strictEqual(start.mode, "ask");
+  // Long after doneMs (50 here), still up and listening: nothing put it away.
+  await sleep(150);
+  assert.ok(!h.types().includes("hide"));
+  assert.strictEqual(lastState(h), "listening");
+});
+
+test("a conversation: the second answer comes into the same card, below the first, as a new run of its own", async () => {
+  const h = harness({ steps: TWO_ANSWERS });
+  await firstAnswer(h);
+  // The app is named and the screen read only once they speak: nothing yet.
+  assert.strictEqual(h.calls.filter((c) => c[0] === "begin").length, 1);
+  h.clip();
+  await until(() => h.requests.length === 2);
+  await until(() => h.said(/Bottom right/));
+  const shows = h.sent.filter((m) => m.type === "show");
+  assert.strictEqual(shows.length, 2);
+  assert.ok(!shows[0].thread, "the first question opens a card of its own");
+  assert.strictEqual(shows[1].thread, true, "the second is shown in the card already up");
+  const t = h.types();
+  assert.ok(t.indexOf("turn") < t.lastIndexOf("show"), "the first exchange went up into the turns before the second question");
+  const says = h.sent.filter((m) => m.type === "say").map((m) => m.text);
+  assert.deepStrictEqual(says, ["Top right.", "Bottom right, by the box."], "both answers, in order, in one card");
+  assert.ok(!t.includes("hide"));
+  // Step 0 of a new run: the server keeps the conversation, and nothing of the first run's goes as its history.
+  const [a, b] = h.requests.map((r) => r.req);
+  assert.notStrictEqual(a.runId, b.runId);
+  assert.strictEqual(b.step, 0);
+  assert.strictEqual(b.history, undefined);
+  // And listening again after that one too.
+  await until(() => h.starts() === 3);
+});
+
+test("a conversation ends on Alt twice once it has had an answer: the microphone is let go and the card goes", async () => {
+  const h = harness({ steps: TWO_ANSWERS });
+  await firstAnswer(h);
+  await h.ask.tap();
+  goneAway(h);
+  assert.ok(h.recorder.some(([c]) => c === "cancel-recording"), "the open microphone is thrown away, not sent");
+  await sleep(60);
+  assert.strictEqual(h.starts(), 2, "and it does not open again");
+});
+
+test("a conversation ends on Esc, and on the card's ✕", async () => {
+  for (const off of [(h) => assert.strictEqual(h.ask.escape(), true), (h) => h.ipc.emit("guide:dismiss", fromCard(h))]) {
+    const h = harness({ steps: TWO_ANSWERS });
+    await firstAnswer(h);
+    off(h);
+    goneAway(h);
+    assert.ok(h.recorder.some(([c]) => c === "cancel-recording"));
+    await sleep(60);
+    assert.strictEqual(h.starts(), 2);
+  }
+});
+
+test("a conversation's run at work stops when Ask is turned off", async () => {
+  const h = harness({ steps: TWO_ANSWERS });
+  await firstAnswer(h);
+  h.clip();
+  await until(() => h.calls.filter((c) => c[0] === "begin").length === 2);
+  await h.ask.tap();
+  goneAway(h);
+});
+
+test("a conversation nobody speaks into for threadIdleMs ends itself: the microphone closes and the card goes", async () => {
+  const h = harness({ steps: TWO_ANSWERS, knobs: { "desktop.agent.threadIdleMs": 150 } });
+  await firstAnswer(h);
+  await sleep(60);
+  assert.strictEqual(h.ask.conversation(), true, "not yet");
+  await until(() => !h.ask.conversation(), 1000);
+  goneAway(h);
+  assert.ok(h.recorder.some(([c]) => c === "cancel-recording"));
+});
+
+test("a conversation: someone speaking stops the idle clock, and the question is answered", async () => {
+  const h = harness({ steps: TWO_ANSWERS, knobs: { "desktop.agent.threadIdleMs": 150 } });
+  await firstAnswer(h);
+  h.ask.partial({ session: h.lastSession(), text: "and where's send" });
+  await sleep(250);
+  assert.strictEqual(h.ask.conversation(), true, "words heard: no idle end");
+  h.clip();
+  await until(() => h.said(/Bottom right/));
+});
+
+test("desktop.agent.thread off: one question, one card, gone doneMs after, the microphone not opened again", async () => {
+  const h = harness({ steps: TWO_ANSWERS, knobs: { "desktop.agent.thread": false } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.types().includes("hide"));
+  assert.strictEqual(h.starts(), 1);
+  assert.ok(!h.types().includes("turn"));
+  assert.ok(!h.types().includes("mute"), "no microphone button");
+  assert.strictEqual(h.ask.conversation(), false);
+  // Alt twice after it is a new question in a new card, as it always was.
+  await h.ask.tap();
+  assert.strictEqual(h.starts(), 2);
+  assert.ok(!h.sent.filter((m) => m.type === "show").pop().thread);
+});
+
+test("a conversation's next question from a sensitive app is refused, and the refusal ends it with its message", async () => {
+  let n = 0;
+  const h = harness({ steps: TWO_ANSWERS, frontInfo: async () => (++n === 1 ? { label: "Keynote", pictureKey: "Keynote" } : { label: "HDFC Bank", sensitive: true }) });
+  await firstAnswer(h);
+  h.clip();
+  await until(() => h.types().includes("hide"), 2000);
+  assert.strictEqual(h.requests.length, 1, "nothing of the bank was asked about");
+  const err = h.sent.findIndex((m) => m.type === "state" && m.state === "error");
+  assert.ok(err > 0, "the card said it would not look");
+  assert.ok(h.sent.slice(err).some((m) => m.type === "say" && m.text), "with its message");
+  assert.strictEqual(h.ask.conversation(), false);
+  await sleep(60);
+  assert.strictEqual(h.starts(), 2, "the microphone did not open again");
+});
+
+test("a dictation while a conversation is up: it stops listening (one microphone), and listens again once the dictation is over", async () => {
+  let dictating = false;
+  const h = harness({ steps: TWO_ANSWERS, get dictating() { return dictating; }, knobs: { "desktop.agent.threadResumePollMs": 50 } });
+  await firstAnswer(h);
+  // main.js toggleDictation, starting.
+  h.ask.dictationStarts();
+  dictating = true;
+  assert.strictEqual(h.recorder[h.recorder.length - 1][0], "cancel-recording", "the conversation's microphone gives way");
+  assert.strictEqual(lastState(h), "paused");
+  assert.strictEqual(h.ask.shown(), true, "the card stays");
+  assert.strictEqual(h.ask.conversation(), true);
+  await sleep(150);
+  assert.strictEqual(h.starts(), 2, "never both at once");
+  dictating = false;
+  await until(() => h.starts() === 3);
+  assert.strictEqual(lastState(h), "listening");
+});
+
+test("a dictation starting under a first question (no answer yet) still ends it, as before", async () => {
+  const h = harness({ steps: TWO_ANSWERS });
+  await h.ask.tap();
+  await until(() => h.types().includes("show"));
+  h.ask.dictationStarts();
+  goneAway(h);
+});
+
+test("mute: the card's button closes the microphone, the card stays and says so, and the idle clock does not run", async () => {
+  const h = harness({ steps: TWO_ANSWERS, knobs: { "desktop.agent.threadIdleMs": 150 } });
+  await firstAnswer(h);
+  h.ipc.emit("guide:mute", fromCard(h));
+  assert.strictEqual(h.ask.muted(), true);
+  assert.strictEqual(h.recorder[h.recorder.length - 1][0], "cancel-recording", "the microphone closed");
+  assert.deepStrictEqual(h.sent.filter((m) => m.type === "mute").pop(), { type: "mute", muted: true, key: "" });
+  assert.strictEqual(lastState(h), "muted");
+  // Well past threadIdleMs: a muted conversation waits.
+  await sleep(400);
+  assert.strictEqual(h.ask.conversation(), true);
+  assert.strictEqual(h.ask.shown(), true);
+  assert.strictEqual(h.starts(), 2, "and the microphone stays closed");
+  // Unmuted: listening again, for a fresh threadIdleMs.
+  h.ipc.emit("guide:mute", fromCard(h));
+  assert.strictEqual(h.ask.muted(), false);
+  assert.strictEqual(h.starts(), 3);
+  assert.strictEqual(h.sent.filter((m) => m.type === "mute").pop().muted, false);
+  assert.strictEqual(lastState(h), "listening");
+  await until(() => !h.ask.conversation(), 1000);
+  goneAway(h);
+});
+
+test("mute while the answer is still being said: the microphone stays closed when it has been", async () => {
+  // Each sentence takes 150 ms to say: the microphone would open once it has.
+  const h = harness({ steps: TWO_ANSWERS, sayMs: 150 });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.said(/Top right/));
+  h.ipc.emit("guide:mute", fromCard(h));
+  await sleep(300);
+  assert.strictEqual(h.starts(), 1, "not opened after the answer");
+  assert.strictEqual(lastState(h), "muted");
+  assert.strictEqual(h.ask.shown(), true);
+  h.ipc.emit("guide:mute", fromCard(h));
+  assert.strictEqual(h.starts(), 2);
+});
+
+test("the mute key is held only while a conversation is up, and does what the button does", async () => {
+  const keys = fakeShortcuts();
+  const h = harness({ steps: TWO_ANSWERS, globalShortcut: keys });
+  assert.strictEqual(keys.held.size, 0, "not before");
+  await firstAnswer(h);
+  assert.deepStrictEqual([...keys.held.keys()], ["Alt+M"]);
+  assert.strictEqual(h.sent.filter((m) => m.type === "mute").pop().key, "Alt+M", "the card names it");
+  keys.press("Alt+M");
+  assert.strictEqual(h.ask.muted(), true);
+  assert.strictEqual(h.recorder[h.recorder.length - 1][0], "cancel-recording");
+  keys.press("Alt+M");
+  assert.strictEqual(h.ask.muted(), false);
+  assert.strictEqual(h.starts(), 3);
+  assert.strictEqual(h.ask.escape(), true);
+  assert.strictEqual(keys.held.size, 0, "let go when the conversation ends");
+});
+
+test("the mute key: another name from the server, and a key that cannot be had leaves the button alone", async () => {
+  const keys = fakeShortcuts();
+  const h = harness({ steps: TWO_ANSWERS, globalShortcut: keys, knobs: { "desktop.agent.muteHotkey": "CommandOrControl+Shift+M" } });
+  await h.ask.tap();
+  assert.deepStrictEqual([...keys.held.keys()], ["CommandOrControl+Shift+M"]);
+  const taken = fakeShortcuts(false);
+  const h2 = harness({ steps: TWO_ANSWERS, globalShortcut: taken });
+  await firstAnswer(h2);
+  assert.strictEqual(h2.sent.filter((m) => m.type === "mute").pop().key, "", "no key on the card");
+  h2.ipc.emit("guide:mute", fromCard(h2));
+  assert.strictEqual(h2.ask.muted(), true, "the button still works");
+  const off = fakeShortcuts();
+  const h3 = harness({ steps: TWO_ANSWERS, globalShortcut: off, knobs: { "desktop.agent.thread": false } });
+  await h3.ask.tap();
+  assert.strictEqual(off.held.size, 0, "no conversation, no key");
 });

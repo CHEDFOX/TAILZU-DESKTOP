@@ -135,11 +135,11 @@
      everything else, the quote and its buttons above all, keeps its size. */
   #inner { position:relative; padding:15px 18px 16px; box-sizing:border-box; display:flex; flex-direction:column; }
   #inner > * { flex:none; }
-  #inner > #say, #inner > #steps { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
+  #inner > #chat, #inner > #steps { flex:0 1 auto; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain;
     scrollbar-width:thin; scrollbar-color:rgba(243,226,198,.22) transparent; }
   /* Room inside them for what moves a little past their edges (a word rising
      into place, the step's spinning ring), so only real overflow scrolls. */
-  #inner > #say { padding-bottom:4px; margin-bottom:-4px; }
+  #inner > #chat { position:relative; padding-bottom:4px; margin-bottom:-4px; }
   #inner > #steps { padding:5px 0; margin-bottom:-5px; }
 
   header { display:flex; align-items:center; gap:8px; height:22px; }
@@ -163,9 +163,45 @@
   #badge:empty { display:none; }
   #badge::before { content:""; display:inline-block; width:5px; height:4px; margin-right:6px; vertical-align:1px; border-radius:1px;
     box-shadow:inset 0 0 0 1px var(--pale-2); }
-  #badge:not(:empty) + #close { margin-left:4px; }
+  #badge:not(:empty) ~ #close, #badge:not(:empty) ~ #mute { margin-left:4px; }
   #close:hover { background:rgba(243,226,198,.08); color:var(--pale); }
   #close svg { width:10px; height:10px; }
+  /* A CONVERSATION'S MICROPHONE (ask.js MUTE): amber while it listens after
+     each answer, as the lamp and the pill's bead are; struck through, and
+     quiet, while it is muted. Only on a conversation's card. */
+  #mute { margin-left:auto; flex:0 0 auto; width:24px; height:24px; border-radius:50%; border:0; padding:0; background:transparent; color:var(--live);
+    display:grid; place-items:center; cursor:pointer; transition:background .15s, color .15s; }
+  #mute[hidden] { display:none; }
+  #mute:not([hidden]) ~ #close { margin-left:2px; }
+  #mute svg { width:12px; height:14px; }
+  #mute .slash { display:none; }
+  #mute:hover { background:rgba(243,226,198,.08); }
+  #mute[aria-pressed="true"] { color:var(--pale-2); background:rgba(243,226,198,.1); box-shadow:inset 0 0 0 1px var(--rule); }
+  #mute[aria-pressed="true"] .slash { display:inline; }
+  #card[data-state="muted"] #lamp { background:var(--pale-3); }
+
+  /* A CONVERSATION IS A CHAT (ask.js desktop.agent.thread; guide/card.js
+     keepTurn). What they said is a bubble on the right, what Ask said is the
+     row under it, turn after turn, newest at the bottom of one scroll view
+     (#chat) that the card grows with up to its cap and then scrolls. Earlier
+     answers are a size down and a shade quieter than the one being given,
+     and whole: an answer is never cut short to keep the card small. */
+  #turns { display:grid; gap:14px; margin:12px 0 0; }
+  #turns:empty { display:none; }
+  #turns .t { display:grid; gap:7px; min-width:0; }
+  #turns p { margin:0; overflow-wrap:anywhere; }
+  #turns .q, #card[data-convo] #heard { width:fit-content; max-width:84%; margin-left:auto; box-sizing:border-box; padding:6px 11px 7px;
+    border-radius:14px 14px 4px 14px; background:rgba(243,226,198,.075); box-shadow:inset 0 0 0 1px var(--rule);
+    font:400 14px/1.36 var(--sans); font-style:normal; color:var(--pale); }
+  #card[data-convo] #heard { display:block; -webkit-line-clamp:unset; margin-top:14px; }
+  #card[data-convo] #heard:empty { display:none; }
+  /* Scrolled, what passes under the header fades out rather than being cut
+     through a line; at the top the fade is over the turns' own margin. */
+  #card[data-convo] #chat { -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 12px); mask-image:linear-gradient(180deg, transparent 0, #000 12px); }
+  #turns .a { font:400 14px/1.42 var(--sans); color:var(--pale-2); text-wrap:pretty; }
+  #turns .t[data-err] .a { color:var(--pale-3); }
+  #turns .t[data-err] .a::before { content:""; display:inline-block; width:5px; height:5px; margin-right:6px; vertical-align:1px; border-radius:50%; background:var(--err); opacity:.8; }
+  #card[data-convo] #say { margin-top:8px; font-size:15px; }
 
   /* A URL, a path or an address has nowhere to break, and the column is
      312px wide: it breaks anywhere rather than run off the card's edge,
@@ -336,7 +372,11 @@
   :root.bots #chip { background:#ffffff; color:var(--pale); box-shadow:inset 0 0 0 1px var(--rule), 0 6px 18px rgba(0,0,0,.14);
     font:400 12px/1 "Tailzu Geist Medium", var(--sans); letter-spacing:0; text-transform:none; }
   :root.bots #chip::before { background:#0a0a0a; }
-  :root.bots #say, :root.bots #steps { scrollbar-color:rgba(10,10,10,.2) transparent; }
+  :root.bots #chat, :root.bots #steps { scrollbar-color:rgba(10,10,10,.2) transparent; }
+  :root.bots #turns .q, :root.bots #card[data-convo] #heard { background:var(--ink-2); box-shadow:none; font:400 14px/1.4 var(--sans); color:var(--pale); }
+  :root.bots #turns .a { font:400 14px/1.45 var(--sans); }
+  :root.bots #mute { width:28px; height:28px; }
+  :root.bots #mute:hover, :root.bots #mute[aria-pressed="true"] { background:var(--ink-2); box-shadow:none; }
 
   /* THE REVIEW PAGE ONLY: an app to point at, and the pill under it all. */
   body.demo { background:#E9E5DE; }
@@ -425,11 +465,18 @@
   <div id="inner">
     <header>
       <i id="lamp"></i><span id="eyebrow">Listening</span><span id="app"></span><span id="badge"></span>
+      <button id="mute" aria-label="Mute" aria-pressed="false" hidden><svg viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3.6" y="1" width="4.8" height="7.6" rx="2.4"/><path d="M1.6 6.6a4.4 4.4 0 0 0 8.8 0M6 11v2"/><path class="slash" d="M1.2 1.4l9.6 11.2"/></svg></button>
       <button id="close" aria-label="Stop"><svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/></svg></button>
     </header>
-    <p id="heard"></p>
+    <!-- One scroll view for what was asked and answered: a conversation's earlier turns (card.js keepTurn), then this
+         question and its answer. The card grows with it up to its cap (placement.js capCard), then it scrolls, held at
+         the newest unless they have scrolled up to read back (card.js CHAT). -->
+    <div id="chat">
+      <div id="turns" aria-label="Earlier in this conversation"></div>
+      <p id="heard"></p>
+      <p id="say"></p>
+    </div>
     <div id="voice"><canvas id="wave"></canvas></div>
-    <p id="say"></p>
     <ol id="steps"></ol>
     <div id="offer" hidden><button id="offerBtn"></button></div>
     <div id="ask">

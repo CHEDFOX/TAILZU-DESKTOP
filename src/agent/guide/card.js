@@ -152,11 +152,78 @@ function gone() {
   chip.classList.remove("on");
   S.ring = null; S.chipBox = null;
   $("badge").textContent = "";
+  clearTurns();
 }
+
+// ---- a conversation's turns --------------------------------------------------
+// Ask's conversation (ask.js, desktop.agent.thread) asks each next question in
+// the card that is up, and the card is a chat: what they said a bubble on the
+// right, what Ask said the row under it, turn after turn, newest at the bottom.
+// Every answer whole: the card grows with them up to its cap (placement.js
+// capCard, desktop.guide.threadMaxH) and then they scroll inside it. Only the
+// last TURNS_KEPT turns are kept at all.
+const TURNS_KEPT = 12;
+/** This card is a conversation's (ask.js says so with every show of one: mute). */
+const inConvo = () => card.dataset.convo !== undefined;
+/**
+ * THE CHAT FOLLOWS THE NEWEST, unless they have scrolled up to read back.
+ * Whether it is held at the bottom is read from where they leave it (a
+ * scroll ending within 24px of the bottom is "at the newest"); anything new
+ * in it (a turn, an answer's next sentence, a word rising into place) is then
+ * scrolled to at once. At once, not smoothly: a smooth scroll still under way
+ * reads as "scrolled up", and the next sentence would not have been followed.
+ * Never past the start of this turn, though: an answer taller than the card
+ * is read from its first line (with their question above it, as a chat keeps
+ * it), not shown from its last; the rest is theirs to scroll to, and scrolled
+ * back down to the end it follows again.
+ */
+const CHAT = { el: $("chat"), pinned: true, held: false, self: false };
+CHAT.el.addEventListener("scroll", () => {
+  if (CHAT.self) return;
+  const el = CHAT.el;
+  CHAT.pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}, { passive: true });
+/** A new question (show, turn): the chat is held at the newest again. */
+function chatFresh() { CHAT.pinned = true; CHAT.held = false; }
+function followChat() {
+  if (!CHAT.pinned) return;
+  const el = CHAT.el, start = $("heard").textContent ? $("heard") : $("say");
+  const bottom = el.scrollHeight - el.clientHeight;
+  const top = start.textContent ? Math.max(0, start.offsetTop - 12) : bottom;
+  // Its own scroll is not theirs: it leaves the chat held where it was.
+  CHAT.self = true;
+  if (!CHAT.held && top < bottom) { el.scrollTop = top; CHAT.held = true; CHAT.pinned = false; }
+  else el.scrollTop = bottom;
+  requestAnimationFrame(() => { CHAT.self = false; });
+}
+new MutationObserver(followChat).observe(CHAT.el, { childList: true, subtree: true, characterData: true });
+// Grown to its cap (the card capped, or a font in), what is new is still in view.
+new ResizeObserver(followChat).observe(CHAT.el);
+/** What is on the card now, asked and answered, up into the turns. */
+function keepTurn() {
+  const q = String(S.heard || "").trim();
+  const a = $("say").textContent.replace(/\s+/g, " ").trim();
+  if (!q && !a) return;
+  const box = $("turns");
+  const t = document.createElement("div");
+  t.className = "t";
+  // A turn that went wrong keeps saying so, quietly.
+  if (S.state === "error") t.dataset.err = "";
+  if (q) { const p = document.createElement("p"); p.className = "q"; p.textContent = q; t.appendChild(p); }
+  if (a) { const p = document.createElement("p"); p.className = "a"; p.textContent = a; t.appendChild(p); }
+  box.appendChild(t);
+  while (box.children.length > TURNS_KEPT) box.firstElementChild.remove();
+  S.convo = true;
+}
+function clearTurns() { $("turns").textContent = ""; S.convo = false; }
 
 // ---- what it says ----------------------------------------------------------
 const LABELS = {
   listening: () => K.txt("desktop.guide.listening", "Listening"),
+  // A dictation has the microphone; the conversation listens again after it.
+  paused: () => K.txt("desktop.guide.paused", "Paused"),
+  // They muted it (ask.js MUTE): the microphone is closed until they say.
+  muted: () => K.txt("desktop.guide.muted", "Muted"),
   thinking: () => K.txt("desktop.guide.thinking", "Looking"),
   showing: () => K.txt("desktop.guide.showing", "Here"),
   doing: () => K.txt("desktop.guide.doing", "Doing it"),
@@ -166,7 +233,10 @@ const LABELS = {
   error: () => K.txt("desktop.guide.error", "Couldn't"),
 };
 const FOOT = {
-  listening: () => K.txt("desktop.guide.footListening", "Ask about anything on screen"),
+  // In a conversation, the way out is the thing to know: it listens until told.
+  listening: () => (S.convo ? K.txt("desktop.guide.footConvo", "Ask more · Esc to end") : K.txt("desktop.guide.footListening", "Ask about anything on screen")),
+  paused: () => K.txt("desktop.guide.footPaused", "Back after the dictation"),
+  muted: () => (S.muteKey ? K.txt("desktop.guide.footMutedKey", "Not listening · {key} or the mic to talk", { key: S.muteKey }) : K.txt("desktop.guide.footMuted", "Not listening · the mic to talk")),
   thinking: () => "",
   showing: () => K.txt("desktop.guide.footShowing", "Esc to close"),
   doing: () => K.txt("desktop.guide.footDoing", "Esc to stop"),
@@ -201,10 +271,9 @@ function poseFor() {
  *  `append`: added after what is there, and only the new words rise; an
  *  answer that grows a sentence at a time keeps the ones already read
  *  still, and follows the new ones down unless they have scrolled up to
- *  read back. */
+ *  read back (the chat it is in does that: CHAT). */
 function words(el, text, append) {
-  const follow = append && el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  if (!append) { el.textContent = ""; el.scrollTop = 0; }
+  if (!append) el.textContent = "";
   else if (el.childNodes.length) el.appendChild(document.createTextNode(" "));
   const parts = String(text || "").split(/(\s+)/);
   let i = 0;
@@ -216,7 +285,6 @@ function words(el, text, append) {
     w.style.animationDelay = Math.min(1600, i++ * K.num("desktop.guide.wordMs", 34)) + "ms";
     el.appendChild(w);
   }
-  if (follow) requestAnimationFrame(() => el.scrollTo({ top: el.scrollHeight, behavior: reduced ? "auto" : "smooth" }));
 }
 function setSteps(items) {
   const ol = $("steps");

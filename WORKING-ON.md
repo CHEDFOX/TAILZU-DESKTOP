@@ -1,5 +1,28 @@
 # Being built right now (read before you start)
 
+## 23 Nov: ASK IS A CONVERSATION — the card stays, listens again, and is a chat
+
+Asked for in so many words: "it should keep listening after responding and work like a thread of conversation". Alt
+twice starts a conversation (`desktop.agent.thread`, on; off is exactly the old one question, one card). Each answer
+stays; once it has been said the microphone opens again and the next question is answered **in the same card**, which is
+now a chat: their words a bubble on the right, the answer under it, earlier turns above, one scroll view that grows to
+`desktop.guide.threadMaxH` (0.7 of the work area) and then scrolls, held at the newest (never past the start of a long
+answer) unless they scrolled up. Ask is off on Alt twice (once it has had an answer), Esc or ✕; nobody speaking for
+`desktop.agent.threadIdleMs` (120 s) ends it. **Mute**: the card's mic button or `desktop.agent.muteHotkey` (Alt+M, a
+global shortcut held only while a conversation is up; a key that cannot be had leaves the button alone) closes the
+microphone with no idle clock until unmuted. A dictation pauses it and it listens again after (main.js toggleDictation
+→ `ask.dictationStarts`, polled every `desktop.agent.threadResumePollMs`). A refusal (sensitive app, private field or
+window with them off) ends it with its message.
+
+Where it lives: `ask.js` (THE CONVERSATION, MUTE; `question(later)` names the app and reads the screen only once someone
+speaks into a waiting turn, never when the microphone opened up to two minutes before), `agent.js` (`deps.onEnd`, the
+caller keeping the card; `cancel(reason, { keep })`), `guide/messages.js` (`turn`, `mute`), `guide/card.js` (keepTurn,
+CHAT), `guide.html?demo=thread|threadNext|threadMuted`. **Not sent as `history`**: the server reads a run's mode from the
+first `said` in its history and any `did` as "already acted" (TAILZU-BACKEND src/agent/run.ts), so each turn is a plain
+step 0 and the server's own context carries the conversation. In a conversation an ASK's reply opens the microphone at
+once (as `askOpensMic` does). Still to decide: the one key's `askHeard` route stays one question (not a conversation).
+Tests: 15 in `ask.test.js`, 3 in `agent.test.js`; eleven one-question tests now say `"desktop.agent.thread": false`.
+
 ## 20 Nov: TALK IS THE APP NOW — what this window had to learn for it
 
 The server side is TAILZU-BACKEND/docs/talk-door.md: the app opens on `bots.talk`, one thread every bot answers in,

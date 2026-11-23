@@ -328,6 +328,46 @@ function runDemo(scene) {
       send({ type: "offer", kind: "screenSettings", text: "Open Screen Recording settings" });
       send({ type: "state", state: "done" });
     },
+    // ASK'S CONVERSATION (ask.js, desktop.agent.thread): three questions in one
+    // card, a chat, as ask.js sends them. Each answer is said, the card takes it
+    // up into the turns (turn) and listens; the next question is shown in the
+    // same card (show with `thread`), answered below the ones before it. The
+    // third answer is a long one, a sentence at a time: the chat grows to its
+    // cap (desktop.guide.threadMaxH, set low here so it shows on this mock) and
+    // scrolls, held at the start of the newest turn. The microphone's button is
+    // in the header, with its key (mute).
+    thread: () => {
+      // The review page has no bootstrap of its own: this is the only knob it sets (?maxh= overrides it).
+      K.setKnobs({ labels: {}, flags: { "desktop.guide.threadMaxH": Number(params.get("maxh")) || 330 } });
+      const turn = (heard, say, more) => {
+        send(Object.assign({ type: "show", state: "listening", app: "Keynote", anchor: { x: 520, y: 200 } }, more ? { thread: true } : {}));
+        send({ type: "mute", muted: false, key: "Alt+M" });
+        send({ type: "heard", text: heard });
+        if (say) send({ type: "say", text: say });
+      };
+      turn("where's the export button?", "Up here, top right: Export. Pick PDF in the menu it opens.");
+      send({ type: "state", state: "done" });
+      send({ type: "turn" });
+      turn("and can it keep the speaker notes?", "Yes. In the PDF options, tick “Include presenter notes” before you save.", true);
+      send({ type: "state", state: "done" });
+      send({ type: "turn" });
+      turn("what's that formula on the slide, and why is it a third?", "", true);
+      send({ type: "point", frame: box("m-fig"), caption: "∫ x² dx" });
+      [
+        "It's the area under the curve y = x², from x = 0 to x = 1.",
+        "Integrating x² gives x³ / 3, so you take that at 1 and subtract it at 0.",
+        "At 1 it's 1/3; at 0 it's 0. The difference, a third, is the area.",
+        "Picture the unit square: the curve hugs the bottom edge for most of the way and only rises near the right, so the area under it is well under half the square.",
+        "The same trick works for any power: the area under xⁿ from 0 to 1 is 1 / (n + 1).",
+      ].forEach((s, i) => send(i ? { type: "say", text: s, append: true } : { type: "say", text: s }));
+      send({ type: "state", state: "done" });
+    },
+    // The same conversation after its third answer has been said: the card
+    // listening for the fourth question, the three turns above it.
+    threadNext: () => { scenes.thread(); send({ type: "unpoint" }); send({ type: "turn" }); },
+    // Muted (Alt+M, or the microphone's button): the last answer stays, the
+    // microphone is closed, and the card says how to talk again.
+    threadMuted: () => { scenes.thread(); send({ type: "unpoint" }); send({ type: "mute", muted: true, key: "Alt+M" }); send({ type: "state", state: "muted" }); },
     // A browser's picture card: no Always, there is no app to remember it by.
     permitOnce: () => {
       send({ type: "show", state: "thinking", app: "Chrome: Gmail" });

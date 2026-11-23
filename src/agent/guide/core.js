@@ -105,6 +105,9 @@ const S = {
   level: 0, levelTo: 0,
   hideAt: 0,
   speaking: false,
+  heard: "",           // what was heard of this question, as said (the card shows it in quotes)
+  convo: false,        // the card holds a conversation's earlier turns (card.js keepTurn)
+  muteKey: "",         // the key that mutes a conversation, when main could have it (mute)
   lastFrame: 0,
   chipBox: null,       // where the ring's label is, while it is on
   // What of the window is not the work area: on a Mac the window covers
@@ -121,6 +124,6 @@ function fakeBridge() {
   return {
     onGuide: (f) => { cb = f; }, send: (m) => cb(m),
     confirm: (y) => console.log("confirm", y), permit: (c) => console.log("permit", c), mouse: () => { mouseCalls++; }, spoken: () => {}, dismiss: () => console.log("dismiss"),
-    offer: (k) => console.log("offer", k),
+    offer: (k) => console.log("offer", k), mute: () => console.log("mute"),
   };
 }

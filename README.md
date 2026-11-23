@@ -192,6 +192,15 @@ window rather than recording into a history no account owns.
     nothing is typed for you. A question back waits on the card ("Hold
     {key} to answer") until the one key, or Alt twice, is pressed
     (`desktop.agent.askOpensMic` opens the microphone at once instead).
+  - **A conversation** (`desktop.agent.thread`, on): once an answer has been
+    said the microphone opens again and the next question is answered in the
+    same card, a chat that grows up to `desktop.guide.threadMaxH` (0.7 of the
+    work area) and then scrolls. Alt twice, Esc or the card's ✕ turns Ask
+    off; nobody speaking for `desktop.agent.threadIdleMs` (2 min) ends it
+    too. The card's microphone button, or `desktop.agent.muteHotkey`
+    (Alt+M, held only while a conversation is up), mutes it: the
+    microphone stays closed, and nothing times out, until unmuted. A
+    dictation pauses it; a refusal (a sensitive app) ends it.
   - **Instant**: the question streams as it is said, and a plain "where's
     X" is matched on the device (`src/agent/resolver.js`) and ringed before the
     question ends, with no Ask request. Its words still come from the

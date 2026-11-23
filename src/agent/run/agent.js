@@ -200,6 +200,12 @@ function pressMayHaveHappened(r) {
  *        the whole page in front (pageRead.readPage): with needWhole false the tree's
  *        read only; with true, the read a screen at a time when the tree has little.
  *        Without it, step 0 carries no page.
+ * @param {(end: { how: "done"|"error"|"quiet", stop: string, refused: boolean }) => boolean} [deps.onEnd]
+ *        the run is over, however it ended except a cancel: `stop` is why it stopped short ("" when it
+ *        did not), `refused` that it stopped because the window must not be read (a sensitive app, a
+ *        private window while the server has them off). True when the caller keeps the card (Ask's
+ *        thread: the next question is asked in it), and then the agent neither hides it nor schedules
+ *        its hide: putting it away is the caller's. Without it, or false, the card goes as it always has.
  */
 function createAgent(deps) {
   const d = deps || {};
@@ -345,8 +351,22 @@ function createAgent(deps) {
     // Whatever is still in flight for this run — a stream, a fetch — is
     // dropped, not left to finish into nothing.
     try { run.controller.abort(); } catch { /* already */ }
-    if (how === "quiet") callGuide("hide"); else scheduleHide();
     log(`agent ${run.tag}: ${how}${how === "done" && run.stop ? ` (${run.stop})` : ""} after ${run.step + 1} step(s)`);
+    // THE CARD MAY STAY FOR THE NEXT QUESTION (ask.js's thread). Asked once the run is over, so whatever the caller
+    // does next (open the microphone, begin the next run) finds no run in progress. Only a caller that says so keeps
+    // it; one that throws has not, and the card goes as it always did.
+    if (keptBy(run, how)) return;
+    if (how === "quiet") callGuide("hide"); else scheduleHide();
+  }
+  /** deps.onEnd's answer for a run that is over: whether the caller keeps the card. Never throws. */
+  function keptBy(run, how) {
+    if (typeof d.onEnd !== "function") return false;
+    try {
+      return d.onEnd({ how, stop: run.stop || "", refused: run.stop === "blocked" || run.stop === "private" }) === true;
+    } catch (e) {
+      log(`agent: onEnd threw: ${errText(e)}`);
+      return false;
+    }
   }
   function stop(run, why) {
     if (!alive(run)) return;
@@ -1873,17 +1893,21 @@ function createAgent(deps) {
    *  wires to it. Only ever called on purpose: the key hook cannot tell this
    *  run's own synthetic keys and clicks from the person's, so "they started
    *  typing" is not a signal this file listens for. The run stops where it
-   *  is, its request is aborted and the guide goes away. */
-  function cancel(reason) {
+   *  is, its request is aborted and the guide goes away.
+   *  `opts.keep`: the guide does NOT go, the card is the caller's to keep
+   *  (ask.js's thread, paused while a dictation has the microphone: the run
+   *  in it stops, the card and what it already says stay). */
+  function cancel(reason, opts) {
     unscheduleHide();
+    const keep = !!(opts && opts.keep);
     const run = current;
-    if (!run) { callGuide("hide"); return false; }
+    if (!run) { if (!keep) callGuide("hide"); return false; }
     run.over = true;
     current = null;
     clearTimeout(run.deadlineTimer);
     try { run.controller.abort(); } catch { /* already */ }
     log(`agent ${run.tag}: cancelled (${clip(squash(reason) || "cancel", 30)})`);
-    callGuide("hide");
+    if (!keep) callGuide("hide");
     return true;
   }
 
