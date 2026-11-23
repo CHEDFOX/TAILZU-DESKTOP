@@ -3246,6 +3246,9 @@ function setupAsk() {
     // off). Turned off from the tray ("Ask again for all of them") or the
     // setup card; back to the default at sign-out, like the list.
     picturesAlwaysAll: picturesForAll,
+    // Answers read, not heard: the card's speaker button, remembered here (ask.js toggleVoice).
+    voiceOff: () => localState.askVoiceOff === true,
+    setVoiceOff: (off) => { localState.askVoiceOff = off === true; saveLocalState(); },
     // A look's word on Screen Recording changed: the setup card is told, so
     // it can offer the restart a granted permission still needs — and when the
     // look was refused for want of it, the window's own card asks for it where

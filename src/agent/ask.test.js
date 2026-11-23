@@ -40,6 +40,7 @@ function ndjson(events) {
 function harness(opts = {}) {
   let screenPoint = null;   // where the pointer is, when a test moves it (setPoint)
   const sent = [];          // what the guide window was sent
+  const voiceState = { off: opts.voiceOff === true };   // the speaker button's choice
   const recorder = [];      // what the recorder was sent
   const log = [];           // both, in the order they happened
   const windows = [];
@@ -128,6 +129,9 @@ function harness(opts = {}) {
     // The setup card's yes for every app (main.js localState.askPicturesAlwaysAll),
     // and what a look said about Screen Recording, when a test plays them.
     picturesAlwaysAll: opts.alwaysAll != null ? () => opts.alwaysAll : undefined,
+    // The card's speaker button, as main keeps it (localState.askVoiceOff).
+    voiceOff: () => voiceState.off === true,
+    setVoiceOff: (off) => { voiceState.off = off === true; },
     lookPermission: opts.lookPermission,
     screen: opts.screen || {
       getCursorScreenPoint: () => (screenPoint ? screenPoint() : { x: 500, y: 400 }),
@@ -3522,4 +3526,30 @@ test("the mute key: another name from the server, and a key that cannot be had l
   const h3 = harness({ steps: TWO_ANSWERS, globalShortcut: off, knobs: { "desktop.agent.thread": false } });
   await h3.ask.tap();
   assert.strictEqual(off.held.size, 0, "no conversation, no key");
+});
+
+// READ, NOT HEARD (ask.js toggleVoice, the card's speaker button). Some answers are for reading.
+test("with the voice off, the answer is on the card and nothing is said", async () => {
+  const h = harness({ voiceOff: true, knobs: { "desktop.agent.serverVoice": true } });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.said(/Top right/));
+  await sleep(60);
+  assert.deepStrictEqual(h.speakCalls, [], "no voice fetched");
+  assert.ok(!h.types().includes("voice"), "nothing played");
+  assert.ok(h.sent.some((m) => m.type === "voiceOff" && m.off === true), "the card shows the button pressed");
+});
+
+test("the speaker button turns the voice off mid-answer: what is being said stops, and the choice is kept", async () => {
+  const h = harness({ knobs: { "desktop.agent.serverVoice": true }, speakMs: 80 });
+  await h.ask.tap();
+  h.clip();
+  await until(() => h.speakCalls.length === 1);
+  h.ipc.emit("guide:voice", fromCard(h));
+  assert.ok(h.types().includes("hush"), "what was being said stops");
+  assert.ok(h.sent.some((m) => m.type === "voiceOff" && m.off === true));
+  await sleep(150);
+  assert.ok(!h.types().includes("voice"), "the audio that was on its way is dropped");
+  h.ipc.emit("guide:voice", fromCard(h));
+  assert.ok(h.sent.filter((m) => m.type === "voiceOff").at(-1).off === false, "pressed again, answers are said aloud again");
 });

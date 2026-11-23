@@ -111,6 +111,13 @@ const handlers = {
   // (a chat, with the button), muted or listening, and the key that does
   // the same when there is one. Sent after every show of one, and on every
   // change.
+  // THE VOICE (ask.js toggleVoice): answers said aloud, or only shown for reading. Sent with every show, and on every change.
+  voiceOff: (m) => {
+    const b = $("speak"), off = m.off === true;
+    b.setAttribute("aria-pressed", off ? "true" : "false");
+    const what = off ? K.txt("desktop.guide.voiceOn", "Read answers aloud") : K.txt("desktop.guide.voiceOff", "Read only, no voice");
+    b.title = what; b.setAttribute("aria-label", what);
+  },
   mute: (m) => {
     card.dataset.convo = "";
     const b = $("mute"), muted = m.muted === true;
@@ -359,6 +366,8 @@ for (const [id, choice] of [["once", "once"], ["always", "always"], ["notnow", "
 press("close", () => bridge.dismiss());
 // Muted or listening: main decides, and says which (mute).
 press("mute", () => { if (bridge.mute) bridge.mute(); });
+// Said aloud or only shown: main decides, and says which (voice).
+press("speak", () => { if (bridge.toggleVoice) bridge.toggleVoice(); });
 press("offerBtn", () => {
   const kind = $("offerBtn").dataset.kind;
   if (kind && bridge.offer) bridge.offer(kind);
