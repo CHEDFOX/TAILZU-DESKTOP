@@ -41,6 +41,16 @@ function capCard() {
   const a = room(), P = pillRect();
   const bottom = P ? Math.min(a.b, P.y - K.num("desktop.guide.tether", 56)) : a.b;
   inner.style.maxHeight = Math.max(160, Math.floor(bottom - a.t - HEAD)) + "px";
+  // A conversation's chat grows with what is said in it up to
+  // desktop.guide.threadMaxH (a share of the work area's height, or pixels
+  // when over 1), and scrolls inside past that: a card that took the whole
+  // screen hid the app the conversation is about.
+  const chat = $("chat");
+  if (card.dataset.convo === undefined) { chat.style.maxHeight = ""; return; }
+  const v = K.num("desktop.guide.threadMaxH", 0.7);
+  const tall = (H - S.inset.top - S.inset.bottom);
+  const cap = v > 0 && v <= 1 ? tall * v : v > 1 ? v : tall * 0.7;
+  chat.style.maxHeight = Math.max(120, Math.floor(cap)) + "px";
 }
 /** The ring the card keeps beside. A tentative one while they are still
  *  talking is not: the guess changes with their words, and the card they

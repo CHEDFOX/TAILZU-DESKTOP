@@ -366,4 +366,6 @@ module.exports = {
   match, isVisualQuestion,
   commandText, modeOf, plainWords, resolverAsk, resolve, labelScore, nameWords,
   ACCEPT_AT, MARGIN, NAMES,
+  // run/video.js asks the same of a question about something moving.
+  FIND_OR_ACT, HOW_TO_DO,
 };

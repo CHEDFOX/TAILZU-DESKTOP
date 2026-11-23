@@ -192,6 +192,15 @@ window rather than recording into a history no account owns.
     nothing is typed for you. A question back waits on the card ("Hold
     {key} to answer") until the one key, or Alt twice, is pressed
     (`desktop.agent.askOpensMic` opens the microphone at once instead).
+  - **A conversation** (`desktop.agent.thread`, on): once an answer has been
+    said the microphone opens again and the next question is answered in the
+    same card, a chat that grows up to `desktop.guide.threadMaxH` (0.7 of the
+    work area) and then scrolls. Alt twice, Esc or the card's ✕ turns Ask
+    off; nobody speaking for `desktop.agent.threadIdleMs` (2 min) ends it
+    too. The card's microphone button, or `desktop.agent.muteHotkey`
+    (Alt+M, held only while a conversation is up), mutes it: the
+    microphone stays closed, and nothing times out, until unmuted. A
+    dictation pauses it; a refusal (a sensitive app) ends it.
   - **Instant**: the question streams as it is said, and a plain "where's
     X" is matched on the device (`src/agent/resolver.js`) and ringed before the
     question ends, with no Ask request. Its words still come from the
@@ -210,6 +219,18 @@ window rather than recording into a history no account owns.
     Always to and asks again for any of them. Signing out puts pictures back
     to the default (on) for whoever signs in next. `desktop.agent.pictures:
     never` turns pictures off, whatever is kept here.
+  - **Clips**: "what's happening in this video?", or "what's this?" while
+    VLC, QuickTime, YouTube, Netflix… is in front (`src/agent/run/video.js`;
+    the players are `desktop.agent.videoApps`). Instead of one picture, the
+    window is recorded for `desktop.agent.videoSeconds` (6) at most
+    `desktop.agent.videoMaxSide` (960) pixels and `desktop.agent.videoFps`
+    (4) frames a second, with the computer's own sound where it can be heard
+    (Windows loopback, macOS audiotap unless a note is being taken, Linux's
+    output monitor) and never the microphone (`src/agent/watch/`). The card
+    says "Watching…" while it records. The same say-so as a picture, never
+    from a sensitive app or a private window; over
+    `desktop.agent.videoMaxBytes` (8 MB) the still picture goes instead.
+    `desktop.agent.video: false` turns clips off.
   - **Out of the pill**: the card grows out of the pill on a thread, stays
     tied to it while it is up, and folds back into it at the end.
   - **Drawing**: while it explains, it circles, underlines, numbers and

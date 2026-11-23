@@ -86,6 +86,37 @@ function createAsk(ctx) {
   // An ASK said and waiting for its answer, the microphone NOT open: the next press of the one key (or Alt twice)
   // opens it for the answer. Nobody answering in replyWaitMs: the run ends quietly.
   let replyWait = null, replyTimer = null;
+  /**
+   * THE CONVERSATION (desktop.agent.thread, on). The person's word for it is a thread; it is called a conversation
+   * here because "the thread" in this file and in guide/ is already the line that ties the card to the pill.
+   *
+   * Ask is a conversation, not a question. Alt twice starts it, and it goes on until Ask is turned off. Each answer
+   * stays on the card; once it has been said the microphone opens again, the way an ASK's reply opens it
+   * (askOpensMic), and the next question is asked and answered IN THE SAME CARD, the turns before it kept small
+   * above it (guide/messages.js turn). Each question is a run of its own (agent.js begin, step 0 of a new /v1/agent
+   * run): the server remembers the conversation itself, every Ask with its answer kept in the person's context and
+   * fed to step 0. The earlier turns are NOT sent as the request's `history`: the server reads a run's mode from
+   * the first `said` in its history and takes any `did` in it as "this run has acted already", so an earlier turn
+   * there would have a new question answered as the old one's follow-up (TAILZU-BACKEND src/agent/run.ts runStep).
+   *
+   * Turned off by Alt twice once it has had an answer, by Esc, or by the card's ✕ (cancel): only then does the card
+   * go, and a run still at work in it stops with it. A turn's microphone waits up to threadIdleMs for someone to
+   * speak; nobody does, and the conversation ends itself, so a microphone is never left open on a desk somebody
+   * walked away from. The privacy rules are each run's own, every turn: a sensitive app, a private field or (with
+   * them off) a private window refuses, and the refusal ends the conversation with its message. A dictation
+   * starting while it is up does not end it: it stops listening (one microphone, never both) and listens again once
+   * the dictation is over (dictationStarts). Off, Ask is what it was: one question, one card, gone doneMs after.
+   *
+   * `turns`: questions asked in it so far. `kept`: it has had an answer and the card is the conversation's now
+   * (Alt twice is Ask off from then on). `quietAt`: when the open microphone gives up waiting; `answered`: the last
+   * turn was answered, so the next gets a fresh threadIdleMs (a turn that failed buys no more time: a noisy room
+   * that keeps tripping the microphone still ends it). `spoke`: someone has spoken into this turn's microphone.
+   * `wake`: the waiting turn's go, once someone speaks (or its clip comes back). `paused`: a dictation has the
+   * microphone. `tok`: which "open the microphone once the answer has been said" may still happen.
+   */
+  let convo = null;
+  const threadOn = () => bool("desktop.agent.thread", true);
+  const threadIdleMs = () => Math.max(100, num("desktop.agent.threadIdleMs", 120000));
   // Counts the questions begun and thrown away, so a tap still waiting to
   // learn which app is in front can tell it has been overtaken.
   let asking = 0;
@@ -481,13 +512,20 @@ function createAsk(ctx) {
       // where it is. The guide opens on that display, told where the pill is
       // before it shows anything, so the thread starts from it. Without a
       // pill (off, or a dictation's), the cursor's display, as before.
-      const r = pillTo(state === "listening" || state === "thinking" ? state : "showing", true);
+      // A conversation's next question is asked in the card already up
+      // (`more`): the pill stays where it is, and the card keeps the turns
+      // before it. Put under the cursor again, it took the card with it.
+      const more = !!convo && convo.kept && shown;
+      const r = pillTo(state === "listening" || state === "thinking" ? state : "showing", !more);
       const anchor = (data && data.anchor) || screen.getCursorScreenPoint();
       if (!ensureWindow(displayFor(r ? { x: r.x + r.w / 2, y: r.y + r.h / 2 } : anchor))) dock();
       showWindow();
       shown = true;
       // The key that answers the card: the one key, tapped once, or Ask's own pair.
-      send({ type: "show", state, app: (data && data.app) || "", anchor: localPoint(anchor), key: oneKeyName() || str("desktop.agent.tapKey", "Alt"), once: !!oneKeyName() });
+      send(Object.assign({ type: "show", state, app: (data && data.app) || "", anchor: localPoint(anchor), key: oneKeyName() || str("desktop.agent.tapKey", "Alt"), once: !!oneKeyName() }, more ? { thread: true } : {}));
+      // A conversation's card is a chat from its first question, with the
+      // microphone's button (and its key, when that could be had) in it.
+      if (convo) send(muteMessage(convo));
     },
     // listening / thinking / acting (with what it is doing) / done (with
     // what it has to say about it).
@@ -578,7 +616,8 @@ function createAsk(ctx) {
       }, (v) => (v === true ? "approve" : v && typeof v === "object" && v.id ? v : typeof v === "string" && v ? v : ""), "");
       return fields.length ? done.finally(() => keyboard(false)) : done;
     },
-    hide() { hide(); },
+    // The card going is the conversation over, whoever put it away.
+    hide() { dropConvo(); hide(); },
     // A button on the finished card for what stopped the answer: only
     // "screenSettings", the Mac's Screen Recording page (agent.js
     // TEXT.needScreen), and only where this computer can open it. Its click
@@ -620,6 +659,9 @@ function createAsk(ctx) {
   };
   /** An error only this file knows of, on a card it then puts away itself. */
   function cardError(msg) {
+    // What it says ends a conversation too ("I couldn't tell which window
+    // this is" may be a bank's): the card goes doneMs after, as it always did.
+    dropConvo();
     guide.error(msg);
     later(num("desktop.agent.doneMs", 9000));
   }
@@ -859,11 +901,34 @@ function createAsk(ctx) {
     }
   }
 
+  // ---- the clip ------------------------------------------------------------------
+  /**
+   * A few seconds of the look's window, recorded now, for a question about
+   * something moving in it (run/video.js, agent.js allowedClip, which has
+   * already had the person's say-so as it has for a picture). Main records it
+   * (agent/watch/clipper.js): the window found by its title, which goes no
+   * further than this computer, and the computer's own sound where it can
+   * be heard, never the microphone. What comes back is checked again in the
+   * run before anything goes.
+   */
+  async function clip(look, o) {
+    const w = look && look.window;
+    const title = w && typeof w.title === "string" ? w.title : "";
+    if (!title.trim()) return null;
+    try {
+      return await ctx.recordClip(Object.assign({}, o, { title, frame: Array.isArray(w.frame) ? w.frame.slice() : null }));
+    } catch (e) {
+      console.warn("[ask] the clip could not be recorded:", (e && e.message) || e);
+      return null;
+    }
+  }
+
   // ---- the microphone ------------------------------------------------------------
   /** Opens the microphone for a question (`question`), streamed when
    *  desktop.agent.liveStream is on, or for an ASK's reply, which is only
-   *  ever its audio. */
-  function record(question) {
+   *  ever its audio. `ceiling`: how long it may stay open, when not
+   *  listenMaxMs (a conversation's turn, waiting for someone to speak). */
+  function record(question, ceiling) {
     if (!ctx.recorderReady()) ctx.createRecorderWindow();
     // Nothing is said while a question records: the microphone would hear it.
     quiet();
@@ -875,7 +940,7 @@ function createAsk(ctx) {
     streamText = ""; finalText = null; finalWait = null; previewing = false;
     ctx.sendToRecorder("start-recording", Object.assign(ctx.recorderStart(session), { live: streamed, pauseFlush: false, mode: "ask" }));
     clearTimeout(listenTimer);
-    listenTimer = soft(setTimeout(stopListening, num("desktop.agent.listenMaxMs", 15000)));
+    listenTimer = soft(setTimeout(stopListening, typeof ceiling === "number" ? Math.max(0, ceiling) : num("desktop.agent.listenMaxMs", 15000)));
   }
   function stopListening() {
     clearTimeout(listenTimer);
@@ -961,6 +1026,9 @@ function createAsk(ctx) {
     // the stop come as its final text, and change nothing on screen.
     if (!streamed || !listening) return true;
     streamText = squash(p.text);
+    // The first words into a conversation's waiting microphone: someone is
+    // asking the next question.
+    if (streamText) spoke();
     if (previewing) preview(streamText);
     return true;
   }
@@ -1052,8 +1120,10 @@ function createAsk(ctx) {
     // was listening before they had decided to say anything, and it heard the room. The question stays on the card
     // with "Hold {key} to answer"; the next press opens the microphone for the answer (tap), and a reply in ask mode
     // ends at its first pause. Nobody answers within replyWaitMs: null, and the run ends quietly.
+    // In a conversation it IS the microphone at once (askOpensMic): opening it after each answer is what was asked
+    // for there, and an ASK that waited for a key would be the one turn of it that did not listen.
     listen: () => new Promise((resolve) => {
-      if (bool("desktop.agent.askOpensMic", false)) {
+      if (askOpensMic()) {
         onAudio = reply = resolve;
         afterSpeech().then(() => { if (onAudio === resolve && !listening && agent.active()) record(); });
         return;
@@ -1069,6 +1139,10 @@ function createAsk(ctx) {
     // The words it shows the person that are its own (the plan card's "This computer").
     txt: (key, fallback, vars) => txt(key, fallback, vars),
     knob: (name, fallback) => {
+      // The card's "Listening" on an ASK (agent.js ask) says what listen() above does.
+      if (name === "desktop.agent.askOpensMic") return askOpensMic();
+      // A list (desktop.agent.videoApps): the server's, when the knobs can read one.
+      if (Array.isArray(fallback)) return typeof K.list === "function" ? K.list(name, fallback) : fallback;
       if (typeof fallback === "boolean") return bool(name, fallback);
       if (typeof fallback === "number") return num(name, fallback);
       return str(name, fallback);
@@ -1090,6 +1164,10 @@ function createAsk(ctx) {
     pictures,
     permit,
     crop,
+    // A run is over: in a conversation the card stays for the next question (convoEnded).
+    onEnd: (end) => convoEnded(end),
+    // And the clip, for something moving: only where main can record one.
+    ...(typeof ctx.recordClip === "function" ? { clip } : {}),
   });
 
   /** Where the pointer is, in the driver's units (UI Automation's are
@@ -1140,15 +1218,40 @@ function createAsk(ctx) {
       record();
       return;
     }
+    // A CONVERSATION THAT HAS HAD AN ANSWER: the gesture is Ask off, whatever
+    // it is doing (waiting for the next question, hearing it, working on it).
+    // Before its first answer it means what it always has: the question being
+    // said is over (Alt twice again ends the clip), a run at work stops.
+    if (convo && convo.kept) { cancel("ask off"); return; }
     if (listening) { stopListening(); return; }
     if (agent.active() || onAudio || naming || finalWait) { cancel("tap"); return; }
     // One microphone: while a dictation records, it keeps it.
     if (ctx.dictating && ctx.dictating()) return;
     if (!ctx.requireAccount()) return;
+    // A card still up from the last question (saying it, or in its doneMs)
+    // starts no conversation of its own: this question's is a new one.
+    dropConvo();
+    if (threadOn()) {
+      convo = { turns: 1, kept: false, quietAt: 0, answered: false, spoke: false, wake: null, idleTimer: null, paused: false, resumeTimer: null, tok: 0, muted: false, hotkey: "" };
+      muteKey(convo, true);
+    }
+    return question(false);
+  }
+  /**
+   * A question: the microphone first, then the app in front named and the
+   * run begun. `later`: a conversation's next question, in the card that is
+   * up. Its microphone opens as soon as the last answer has been said, so
+   * the app is named and the screen read only once someone speaks into it
+   * (spoke: its first words, or its clip): read when the microphone opened,
+   * it was a screen from up to threadIdleMs before, maybe another app's, and
+   * a sensitive app brought to the front while it waited would not have been
+   * refused.
+   */
+  async function question(later) {
     const mine = ++asking;
     // Where the pointer was at Alt twice, not wherever it has wandered by
     // the time the app is named.
-    const pointer = pointerNow();
+    let pointer = later ? null : pointerNow();
     let begun = false, early = null;
     const answer = (audio, said) => {
       const text = (said && said.text) || "";
@@ -1162,11 +1265,29 @@ function createAsk(ctx) {
         : txt("desktop.agent.notHeard", "I didn't catch that. Tap {key} twice and ask again.", { key: str("desktop.agent.tapKey", "Alt") }));
     };
     // A clip back before the run has begun (a short "undo", or Alt twice
-    // again while the app was still being named) is held for it.
-    onAudio = (audio, said) => { if (begun) answer(audio, said); else early = { audio, said }; };
-    // The microphone first: what they say in the moment it takes to name the
-    // app is not lost.
-    record(true);
+    // again while the app was still being named) is held for it. A
+    // conversation's turn still waiting for its first words starts on it.
+    onAudio = (audio, said) => {
+      if (begun) { answer(audio, said); return; }
+      early = { audio, said };
+      if (later) spoke();
+    };
+    if (later) {
+      const c = convo;
+      // Open until someone speaks; the idle timer (convoIdle) is what ends a
+      // wait nobody answers, and listenMaxMs counts from their first words.
+      record(true, Math.max(0, c.quietAt - Date.now()) + num("desktop.agent.listenMaxMs", 15000));
+      await new Promise((resolve) => { c.wake = resolve; });
+      if (mine !== asking || convo !== c) return;   // Ask off, or a dictation, meanwhile
+      // The clip back with nothing in it: nobody spoke. Listening again,
+      // to the same deadline; past it, the conversation is over.
+      if (early && !early.audio && !(early.said && early.said.text)) { early = null; onAudio = null; convoQuiet(c); return; }
+      pointer = pointerNow();
+    } else {
+      // The microphone first: what they say in the moment it takes to name
+      // the app is not lost.
+      record(true);
+    }
     // NOT KNOWING WHICH WINDOW IS NOT "FINE". A bank is refused before
     // anything is read (and a private window, while the server has them off;
     // otherwise one is read, and the server is told so it keeps nothing), and
@@ -1189,20 +1310,241 @@ function createAsk(ctx) {
     begun = true;
     pictureApp = { label: info.label || "", key: typeof info.pictureKey === "string" && info.pictureKey.trim() ? info.pictureKey : null };
     agent.begin({ app: info.label || "", privateWindow: !!info.private, sensitive: !!info.sensitive, pointer });
-    if (!agent.active()) { dropListening(); return; }   // refused: a bank (a private window, with them off)
+    // Refused: a bank (a private window, with them off). The card says so,
+    // and goes doneMs after (agent.js begin): a conversation ends with it.
+    if (!agent.active()) { dropListening(); dropConvo(); return; }
     if (early) { const a = early; early = null; answer(a.audio, a.said); return; }
     // Still being said: the words so far (spoken while the app was being
     // named) are shown to it now, and every partial after them as it comes.
     previewing = listening;
     if (previewing && streamText) preview(streamText);
   }
+  /** Esc, the card's ✕, Alt twice while it works (or, in a conversation, at
+   *  any time once it has had an answer): Ask off. The conversation ends,
+   *  any run in it stops, and the card goes. */
   function cancel(reason) {
+    dropConvo();
     if (replyWait) { const w = replyWait; replyWait = null; clearTimeout(replyTimer); w(null); }
     dropListening();
     if (confirmWait) confirmWait(false);
     if (permitWait) permitWait("no");
     agent.cancel(reason);
     hide();
+  }
+
+  // ---- the conversation (desktop.agent.thread) --------------------------------------
+  /** An ASK's reply opens the microphone at once: the knob, or a conversation. */
+  function askOpensMic() { return bool("desktop.agent.askOpensMic", false) || (!!convo && threadOn()); }
+  /** The conversation is over, and nothing of it is left to happen: no turn
+   *  waiting for words, no microphone due to open, no idle or dictation
+   *  watch. Whatever is on screen is the caller's: the card is left as it is
+   *  (cancel hides it; a refusal's card goes doneMs after, the agent's). */
+  function dropConvo() {
+    const c = convo;
+    if (!c) return;
+    convo = null;
+    c.tok++;
+    clearTimeout(c.idleTimer); c.idleTimer = null;
+    clearInterval(c.resumeTimer); c.resumeTimer = null;
+    // Its key is nobody's once it is over: Alt+M types into the app again.
+    muteKey(c, false);
+    // A turn still waiting for its first words lets go (question() sees it
+    // has been overtaken, and returns).
+    const w = c.wake; c.wake = null;
+    if (w) w();
+  }
+
+  /**
+   * MUTE. Listening after every answer is what a conversation is, and it is
+   * also a microphone hearing whatever is said near it: a colleague, a call.
+   * Muted, the microphone is closed and stays closed; the card stays, says
+   * so, and waits, with no idle timer running (a muted conversation is not
+   * one nobody is at: it ends when they unmute and then say nothing, or turn
+   * Ask off). Unmuted, the microphone opens for the next question, with a
+   * fresh threadIdleMs. Two ways, the card's microphone button
+   * (guide:mute) and a key of its own (desktop.agent.muteHotkey, "Alt+M"),
+   * held only while a conversation is up: a global shortcut swallows its
+   * key everywhere, and outside a conversation Alt+M is the app's.
+   *
+   * Muted mid-question, what was being said is dropped (the run waiting
+   * for it with it, the card kept); an ASK's reply being recorded is no
+   * reply, and that run ends as one nobody answered. A run already at work
+   * goes on: muting is about the microphone, and it stays closed when the
+   * run is over.
+   */
+  function toggleMute() { const c = convo; if (c) setMute(c, !c.muted); }
+  function setMute(c, on) {
+    if (convo !== c || c.muted === !!on) return;
+    // Its key pressed before the first card is even up (the app still being
+    // named): there is no card to wait muted on, so it is Ask off.
+    if (on && !shown) { cancel("mute"); return; }
+    c.muted = !!on;
+    console.log("[ask] the conversation is " + (on ? "muted" : "listening again"));
+    send(muteMessage(c));
+    if (on) {
+      clearTimeout(c.idleTimer); c.idleTimer = null;
+      c.tok++;   // a microphone due to open once the answer is said does not
+      c.kept = true;   // the card is the conversation's now, muted or not
+      if (reply && onAudio === reply) { const r = reply; dropListening(); reply = null; r(null); }
+      else if (listening || clipDue || finalWait || naming || (onAudio && !agent.active())) {
+        // A question still being heard (or a turn waiting for one): dropped,
+        // and the run that was waiting for its words stops, card kept.
+        if (agent.active()) agent.cancel("mute", { keep: true });
+        dropListening();
+      }
+      const w = c.wake; c.wake = null;
+      if (w) w();
+      if (!agent.active() && !confirmWait && !permitWait && !c.paused) { quiet(); send({ type: "state", state: "muted" }); phaseTo("showing"); }
+      return;
+    }
+    c.quietAt = 0;
+    nextTurn();
+  }
+  /** What the card is told about its microphone button: muted or not, and
+   *  the key that does the same, when it could be had. */
+  function muteMessage(c) { return { type: "mute", muted: !!c.muted, key: c.hotkey || "" }; }
+  /** The mute key, held while conversation `c` is up (`on`) or let go. A key
+   *  another app already holds, or a name Electron does not take, leaves the
+   *  card's button as the only way: said in the log, never as an error. */
+  function muteKey(c, on) {
+    const gs = ctx.globalShortcut;
+    if (!gs || typeof gs.register !== "function") return;
+    if (!on) {
+      if (!c.hotkey) return;
+      const k = c.hotkey; c.hotkey = "";
+      try { gs.unregister(k); } catch { /* already gone */ }
+      return;
+    }
+    const k = String(str("desktop.agent.muteHotkey", "Alt+M") || "").trim();
+    if (!k) return;
+    let ok = false;
+    try { ok = gs.register(k, () => { if (convo === c) setMute(c, !c.muted); }) === true; } catch (e) { console.warn("[ask] the mute key could not be had:", (e && e.message) || e); }
+    if (ok) c.hotkey = k; else console.log(`[ask] the mute key (${k}) is taken: the card's button only`);
+  }
+  /** Someone is speaking into a conversation's waiting microphone (its
+   *  first words, or its clip back): the wait is over, the question has
+   *  begun, and it may take listenMaxMs from now, as a first question may. */
+  function spoke() {
+    const c = convo;
+    if (!c || !c.wake) return;
+    c.spoke = true;
+    clearTimeout(c.idleTimer); c.idleTimer = null;
+    if (listening) { clearTimeout(listenTimer); listenTimer = soft(setTimeout(stopListening, num("desktop.agent.listenMaxMs", 15000))); }
+    const w = c.wake; c.wake = null;
+    w();
+  }
+  /** Nobody has spoken by the conversation's deadline. Streamed, the
+   *  stream would have heard any words by now: it is over, the microphone
+   *  closes and the card goes. Not streamed, only the clip can say whether
+   *  anyone spoke: the microphone stops, and the clip decides (convoQuiet). */
+  function convoIdle(c) {
+    if (convo !== c || c.spoke || c.paused || c.muted || !c.wake) return;
+    // Stopped already (its pause), its clip on the way: the clip decides.
+    if (!listening && clipDue) return;
+    if (!listening || (streamed && !streamText)) { console.log("[ask] the conversation ended: nobody spoke"); cancel("idle"); return; }
+    stopListening();
+  }
+  /** A waiting turn's clip came back with nobody in it: listening again
+   *  until the deadline; past it, the conversation is over. */
+  function convoQuiet(c) {
+    if (convo !== c) return;
+    if (Date.now() >= c.quietAt - 50) { console.log("[ask] the conversation ended: nobody spoke"); cancel("idle"); return; }
+    nextTurn(true);
+  }
+  /**
+   * The microphone open for the conversation's next question, in the card
+   * that is up. `again`: the same turn listening again (its clip had nobody
+   * in it), not a new one: the card is left as it is. A dictation that has
+   * the microphone by now pauses the conversation instead.
+   */
+  function nextTurn(again) {
+    const c = convo;
+    if (!c || c.paused || !shown) return;
+    // Something of the last question is still going (it should not be): it is not talked over.
+    if (agent.active() || listening || onAudio || naming || finalWait || confirmWait || permitWait || replyWait) return;
+    if (ctx.dictating && ctx.dictating()) { pauseConvo(); return; }
+    // Muted: the answer stays as it is, the card says so, and nothing opens
+    // or times out until they unmute (setMute).
+    if (c.muted) { clearTimeout(c.idleTimer); c.idleTimer = null; c.quietAt = 0; send({ type: "state", state: "muted" }); phaseTo("showing"); return; }
+    if (!c.quietAt || c.answered) { c.quietAt = Date.now() + threadIdleMs(); c.answered = false; }
+    if (Date.now() >= c.quietAt) { console.log("[ask] the conversation ended: nobody spoke"); cancel("idle"); return; }
+    clearTimeout(hideTimer);
+    if (!again) {
+      c.turns++;
+      // The card keeps what was asked and answered, small, above the next
+      // question (guide/messages.js turn), and listens.
+      send({ type: "turn" });
+    }
+    phaseTo("listening");
+    c.spoke = false;
+    clearTimeout(c.idleTimer);
+    c.idleTimer = soft(setTimeout(() => convoIdle(c), Math.max(0, c.quietAt - Date.now())));
+    void question(true);
+  }
+  /**
+   * agent.js onEnd: a run is over. True when the card stays for the
+   * conversation's next question, which is asked once everything the answer
+   * had to say has been said (as an ASK's reply waits, askOpensMic), and
+   * never later than speechMaxMs. The card goes as it always did (false)
+   * when there is no conversation, when the window may not be read (a
+   * refusal's message is its last word), and when the card offers the way to
+   * the Mac's Screen Recording settings: every next question would stop at
+   * the same place.
+   */
+  function convoEnded(end) {
+    const c = convo;
+    if (!c) return false;
+    if (!threadOn() || !shown || (end && end.refused) || offered) { dropConvo(); return false; }
+    c.kept = true;
+    if (end && end.how === "done") c.answered = true;
+    const tok = ++c.tok;
+    const cap = new Promise((r) => soft(setTimeout(r, Math.max(0, num("desktop.agent.speechMaxMs", 180000)))));
+    Promise.race([allSaid(), cap]).then(() => { if (convo === c && c.tok === tok) nextTurn(); });
+    return true;
+  }
+  /**
+   * A dictation is starting (main.js toggleDictation). One microphone: a
+   * conversation that is up stops listening and waits, card and all, and
+   * listens again once the dictation is over; a run at work in it stops, as
+   * any question's run gives way to a dictation. Anything else of Ask's
+   * (a first question, a finished answer's card) gives way as it always has.
+   */
+  function dictationStarts() {
+    if (convo && convo.kept && shown) { pauseConvo(); return; }
+    cancel("dictation");
+  }
+  function pauseConvo() {
+    const c = convo;
+    if (!c) return;
+    c.tok++;
+    clearTimeout(c.idleTimer); c.idleTimer = null;
+    // The run first, the card kept: the answers it is waiting for below are
+    // then nobody's, and end nothing.
+    if (agent.active()) agent.cancel("dictation", { keep: true });
+    if (replyWait) { const w = replyWait; replyWait = null; clearTimeout(replyTimer); w(null); }
+    dropListening();
+    reply = null;
+    if (confirmWait) confirmWait(false);
+    if (permitWait) permitWait("no");
+    const w = c.wake; c.wake = null;
+    if (w) w();
+    if (c.paused) return;
+    c.paused = true;
+    quiet();
+    send({ type: "state", state: "paused" });
+    // Back once the dictation is over, with a fresh threadIdleMs: they were
+    // here a moment ago. Watched rather than told: a dictation ends in a
+    // dozen places in main.js (written, cancelled, failed, gone idle).
+    clearInterval(c.resumeTimer);
+    c.resumeTimer = setInterval(() => {
+      if (convo !== c) { clearInterval(c.resumeTimer); c.resumeTimer = null; return; }
+      if (ctx.dictating && ctx.dictating()) return;
+      clearInterval(c.resumeTimer); c.resumeTimer = null;
+      c.paused = false;
+      c.quietAt = 0;
+      nextTurn();
+    }, Math.max(50, num("desktop.agent.threadResumePollMs", 250)));
+    soft(c.resumeTimer);
   }
 
   /**
@@ -1339,6 +1681,8 @@ function createAsk(ctx) {
   });
   ipcMain.on("guide:permit", (e, choice) => { if (fromGuide(e) && permitWait) permitWait(String(choice || "")); });
   ipcMain.on("guide:dismiss", (e) => { if (fromGuide(e)) cancel("dismiss"); });
+  // The conversation's microphone button: muted, or listening again.
+  ipcMain.on("guide:mute", (e) => { if (fromGuide(e)) toggleMute(); });
   // The card's button (guide offer): only the one it was given, once. The
   // settings page comes up over the card, which goes: there is nothing more
   // to do on it.
@@ -1354,6 +1698,12 @@ function createAsk(ctx) {
     tap,
     askHeard,
     cancel,
+    /** A dictation is starting: a conversation pauses for it, anything else of Ask's gives way (main.js toggleDictation). */
+    dictationStarts,
+    /** A conversation is up: Ask stays on, turn after turn, until it is turned off. */
+    conversation: () => !!convo,
+    /** The conversation's microphone muted (or not): the card's button and the mute key say the same. */
+    muted: () => !!convo && convo.muted,
     /** The server's knobs changed: the guide's card takes them at once (its words are labels), not from the next launch. */
     knobs(k) { if (win && !win.isDestroyed() && ready) win.webContents.send("knobs", k); },
     audioIn,

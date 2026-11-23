@@ -140,7 +140,7 @@ function rig(o = {}) {
     log: (l) => logs.push(l),
     sensitive: o.sensitive,
     crop: o.crop, pictures: o.pictures, permit: o.permit, names: o.names, afterSpeech: o.afterSpeech,
-    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page, openPanel: o.openPanel,
+    call: o.call, approveElsewhere: o.approveElsewhere, open: o.open, page: o.page, openPanel: o.openPanel, onEnd: o.onEnd,
   });
   return { agent, driver, guide, post, pasted, logs, tick: (ms) => { clock += ms; } };
 }
@@ -221,6 +221,54 @@ test("a finished answer stays up while it is still being said, and doneMs after;
   await broken.agent.heard(AUDIO);
   await sleep(30);
   assert.strictEqual(broken.guide.of("hide").length, 1);
+});
+
+test("onEnd: a caller that keeps the card (Ask's conversation) gets it, told how the run ended; one that does not, or throws, does not", async () => {
+  const ends = [];
+  const kept = rig({ onEnd: (e) => { ends.push(e); return true; }, scripts: [[heardShow("where's export?"), { t: "say", text: "Top right." }, { t: "done" }]] });
+  kept.agent.begin({ app: "Slack" });
+  await kept.agent.heard(AUDIO);
+  await sleep(15);
+  assert.deepStrictEqual(ends, [{ how: "done", stop: "", refused: false }]);
+  assert.deepStrictEqual(kept.guide.of("hide"), [], "the card is the caller's");
+  assert.strictEqual(kept.agent.active(), false, "the run is over when it is asked");
+
+  for (const onEnd of [() => false, () => { throw new Error("no"); }]) {
+    const r = rig({ onEnd, scripts: [[heardShow("where's export?"), { t: "done" }]] });
+    r.agent.begin({ app: "Slack" });
+    await r.agent.heard(AUDIO);
+    await sleep(15);
+    assert.strictEqual(r.guide.of("hide").length, 1, "the card goes as it always did");
+  }
+});
+
+test("onEnd: a run stopped because its window may not be read says so (refused)", async () => {
+  const ends = [];
+  const VAULT = snap([{ id: "e1", role: "field", label: "Master password", secure: true }], { app: { name: "1Password", pid: 9 } });
+  const r = rig({
+    confirm: true, onEnd: (e) => { ends.push(e); return false; },
+    snaps: [SLACK, VAULT],
+    scripts: [[heardDo("open 1password"), { t: "action", kind: "open", app: "1Password", risk: "confirm" }], [{ t: "done" }]],
+  });
+  r.agent.begin({ app: "Slack" });
+  await r.agent.heard(AUDIO);
+  assert.deepStrictEqual(ends, [{ how: "done", stop: "blocked", refused: true }]);
+});
+
+test("cancel with keep: the run stops and the card stays (a conversation paused for a dictation)", async () => {
+  let release = null;
+  const r = rig({ scripts: [[heardShow("where's export?"), () => new Promise((res) => { release = res; }), { t: "done" }]] });
+  r.agent.begin({ app: "Slack" });
+  const over = r.agent.heard(AUDIO);
+  await sleep(10);
+  assert.strictEqual(r.agent.cancel("dictation", { keep: true }), true);
+  assert.strictEqual(r.agent.active(), false);
+  if (release) release();
+  await over;
+  await sleep(10);
+  assert.deepStrictEqual(r.guide.of("hide"), []);
+  assert.strictEqual(r.agent.cancel("esc"), false);
+  assert.strictEqual(r.guide.of("hide").length, 1, "without keep, as before");
 });
 
 test("DONE's words come after an answer said a sentence at a time, not in its place; a DONE with no words says nothing", async () => {

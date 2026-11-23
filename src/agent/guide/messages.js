@@ -19,10 +19,19 @@ function show(m) {
   // Every show is a new question (agent.js begin), and a new card starts
   // over the pill, from wherever the last one is: one asked while the last
   // answer's card was still up, or folding, opened where that answer's
-  // ring had sent it.
-  S.slid = false;
+  // ring had sent it. A conversation's next question (`thread`, ask.js) is
+  // asked in the card already up: it stays where it is, and keeps the turns
+  // before it (turn).
+  const more = m.thread === true && !first;
+  if (!more) {
+    S.slid = false; clearTurns();
+    // A conversation says so itself, right after (mute): until then this is
+    // a question's card, with no microphone button and no chat.
+    delete card.dataset.convo; $("mute").hidden = true; S.muteKey = "";
+  }
+  chatFresh();
   $("app").textContent = m.app || "";
-  $("heard").textContent = "";
+  $("heard").textContent = ""; S.heard = "";
   $("say").textContent = "";
   $("badge").textContent = "";
   setSteps([]);
@@ -96,7 +105,48 @@ const handlers = {
   // in the eyebrow.
   state: (m) => { if (m.risk) S.risk = m.risk; setState(m.state, m.label ? String(m.label).slice(0, 34) : ""); fit(); },
   level: (m) => { S.levelTo = Math.max(0, Math.min(1, Number(m.v) || 0)); },
-  heard: (m) => { $("heard").textContent = m.text ? "“" + m.text + "”" : ""; fit(); },
+  // In a conversation their words are a chat bubble, not a quotation.
+  heard: (m) => { S.heard = m.text ? String(m.text) : ""; $("heard").textContent = S.heard && !inConvo() ? "“" + S.heard + "”" : S.heard; fit(); },
+  // A CONVERSATION'S MICROPHONE (ask.js MUTE): this card is a conversation's
+  // (a chat, with the button), muted or listening, and the key that does
+  // the same when there is one. Sent after every show of one, and on every
+  // change.
+  mute: (m) => {
+    card.dataset.convo = "";
+    const b = $("mute"), muted = m.muted === true;
+    S.muteKey = m.key ? String(m.key).slice(0, 24) : "";
+    b.hidden = false;
+    b.setAttribute("aria-pressed", muted ? "true" : "false");
+    const what = muted ? K.txt("desktop.guide.unmute", "Listen again") : K.txt("desktop.guide.mute", "Mute");
+    b.title = S.muteKey ? what + " (" + S.muteKey + ")" : what;
+    b.setAttribute("aria-label", what);
+    // Their words so far, unquoted now that they are a bubble.
+    if (S.heard) $("heard").textContent = S.heard;
+    if (S.state === "muted") setState("muted");
+    capCard();
+    fit();
+  },
+  // A CONVERSATION'S NEXT TURN (ask.js nextTurn, desktop.agent.thread): what
+  // was just asked and answered goes up into the turns above, small, and the
+  // card listens for the next question. The card stays where it is, tied to
+  // the pill as it was; only its contents change.
+  turn: () => {
+    if (!S.shown) return;
+    keepTurn();
+    $("heard").textContent = ""; S.heard = "";
+    $("say").textContent = "";
+    $("badge").textContent = "";
+    setSteps([]);
+    setOffer(null);
+    S.ring = null; chip.classList.remove("on"); S.chipBox = null;
+    S.risk = "confirm";
+    setState("listening");
+    // The newest is what they are waiting for: back to it, wherever they had scrolled.
+    chatFresh();
+    place(false);
+    fit();
+    wake();
+  },
   // The words at once; the voice when it is ready (`voice`): the server's
   // audio, or the built-in voice with a locale.
   // `append`: the next sentence of an answer that is still coming.
@@ -307,6 +357,8 @@ for (const [id, choice] of [["once", "once"], ["always", "always"], ["notnow", "
   press(id, () => { if (S.state !== "permission") return; bridge.permit(choice); setState("thinking"); fit(); });
 }
 press("close", () => bridge.dismiss());
+// Muted or listening: main decides, and says which (mute).
+press("mute", () => { if (bridge.mute) bridge.mute(); });
 press("offerBtn", () => {
   const kind = $("offerBtn").dataset.kind;
   if (kind && bridge.offer) bridge.offer(kind);

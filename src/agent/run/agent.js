@@ -37,6 +37,13 @@
 //               and the card says it went. Never from a sensitive app (nor a
 //               private window while the server has them off); the window's
 //               picture is checked like its tree.
+//   clip        the same for something MOVING ("what's happening in this
+//               video?", "what's this?" over a player): a few seconds of
+//               the window instead of one still, with the computer's own
+//               sound where it can be heard, never the microphone (video.js
+//               decides; deps.clip records). Same say-so and card as a
+//               picture, and never a private window. Too big, or nothing
+//               recorded: the still picture goes instead.
 //   text        everything else, as before; with the live caption's words
 //               as the utterance when there are some, so the server has
 //               nothing to transcribe.
@@ -64,6 +71,7 @@
 //
 // This file is the loop (createAgent). Its parts, each in a file of its own
 // here: screen.js (the elements sent), picture.js (OCR lines and the crop),
+// video.js (whether a question is about something moving),
 // marks.js (what an answer draws), changes.js (what an action changed),
 // risk.js, actions.js (an action in words), stream.js (the step request and
 // its event stream), text.js (the guide's words), approval.js (the server's
@@ -79,6 +87,7 @@ const { isTaskRoute, CARD_BUTTONS, approvalOf } = require("./approval.js");
 const { str, squash, clip, errText, isFrame, elementsOf, focusedOf, within, sleep, WEB_APPS } = require("./helpers.js");
 const { MAX_ELEMENTS, SCREEN_CHARS, frameMap, ADDRESS_BAR, stripUrls, HAS_URL_TAIL, toRequestElements } = require("./screen.js");
 const { sameWindow, ocrElements, pictureRegion, hasBytes, byteSize } = require("./picture.js");
+const { wantsClip, PLAYERS } = require("./video.js");
 const { resolveMark } = require("./marks.js");
 const { describeChange, focusMoved, focusLandedOn, titleOf } = require("./changes.js");
 const { maxRisk, sameApp, classifyRisk, wordsRisk } = require("./risk.js");
@@ -163,8 +172,8 @@ function pressMayHaveHappened(r) {
  *        draw and clear are called only when the guide has them: one without them draws nothing.
  *        offer("screenSettings"): a button on the finished card to the Mac's Screen Recording
  *        settings, after TEXT.needScreen; a guide without it says the words alone
- * @param {(req: object, audio: object|null, signal: AbortSignal, image?: {mime: string, data: Buffer}|null) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
- *        `image` only on the step that carries the picture
+ * @param {(req: object, audio: object|null, signal: AbortSignal, image?: {mime: string, data: Buffer}|null, video?: {mime: string, data: Buffer}|null) => AsyncIterable<object>|Promise<AsyncIterable<object>>} deps.post
+ *        `image` only on the step that carries the picture, `video` only on the one that carries the clip
  * @param {(route: { method: "POST", path: string, body: object }) => Promise<{ status: number, body: object|null }>} [deps.call]
  *        the confirm card's button: the server route it names (a task's approve or deny), with
  *        the account's token. Status 0 when it could not be reached. Without it nothing is called.
@@ -188,6 +197,11 @@ function pressMayHaveHappened(r) {
  *        is not quite what was asked for. Without it there is no picture path.
  * @param {(app: string) => "never"|"ask"|"always"|Promise<string>} [deps.pictures]
  *        whether pictures of this app may go. Without it there is no picture path.
+ * @param {(look: object, o: { seconds: number, maxSide: number, fps: number, maxBytes: number, sound: boolean }) => Promise<{mime: string, data: Buffer, sound?: boolean, seconds?: number}|null>} [deps.clip]
+ *        a clip of the look's window, recorded now for `seconds`: video/webm (or mp4),
+ *        with the computer's own sound when `sound` and the platform allows (`sound`
+ *        in the answer says whether it is in it), never the microphone. Null when
+ *        nothing could be recorded. Without it (or without `pictures`) there is no clip path.
  * @param {(app: string, about: { region: "element"|"window" }) => Promise<"once"|"always"|"no">} [deps.permit]
  *        the guide's permission card, told whether the picture is one image or
  *        the whole window (ringed on screen while it asks). Without it, "ask" is no.
@@ -200,6 +214,12 @@ function pressMayHaveHappened(r) {
  *        the whole page in front (pageRead.readPage): with needWhole false the tree's
  *        read only; with true, the read a screen at a time when the tree has little.
  *        Without it, step 0 carries no page.
+ * @param {(end: { how: "done"|"error"|"quiet", stop: string, refused: boolean }) => boolean} [deps.onEnd]
+ *        the run is over, however it ended except a cancel: `stop` is why it stopped short ("" when it
+ *        did not), `refused` that it stopped because the window must not be read (a sensitive app, a
+ *        private window while the server has them off). True when the caller keeps the card (Ask's
+ *        thread: the next question is asked in it), and then the agent neither hides it nor schedules
+ *        its hide: putting it away is the caller's. Without it, or false, the card goes as it always has.
  */
 function createAgent(deps) {
   const d = deps || {};
@@ -212,6 +232,8 @@ function createAgent(deps) {
   // The picture path needs both the crop and the per-app policy; with
   // either missing, no picture is taken with the look, let alone sent.
   const canPicture = typeof d.crop === "function" && typeof d.pictures === "function";
+  // The clip path the same: the recording and the per-app policy.
+  const canClip = typeof d.clip === "function" && typeof d.pictures === "function";
 
   function log(line) { try { if (typeof d.log === "function") d.log(line); } catch { /* a logger must not stop a run */ } }
   function num(name, fallback) {
@@ -223,6 +245,11 @@ function createAgent(deps) {
     let v;
     try { v = knob(name, fallback); } catch { v = fallback; }
     return typeof v === "boolean" ? v : fallback;
+  }
+  function list(name, fallback) {
+    let v;
+    try { v = knob(name, fallback); } catch { v = fallback; }
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : fallback;
   }
   /** Whether a private window is read and acted in like any other (the
    *  server's switch; frontApp.privateWindowsOk reads the same one). */
@@ -345,8 +372,22 @@ function createAgent(deps) {
     // Whatever is still in flight for this run — a stream, a fetch — is
     // dropped, not left to finish into nothing.
     try { run.controller.abort(); } catch { /* already */ }
-    if (how === "quiet") callGuide("hide"); else scheduleHide();
     log(`agent ${run.tag}: ${how}${how === "done" && run.stop ? ` (${run.stop})` : ""} after ${run.step + 1} step(s)`);
+    // THE CARD MAY STAY FOR THE NEXT QUESTION (ask.js's thread). Asked once the run is over, so whatever the caller
+    // does next (open the microphone, begin the next run) finds no run in progress. Only a caller that says so keeps
+    // it; one that throws has not, and the card goes as it always did.
+    if (keptBy(run, how)) return;
+    if (how === "quiet") callGuide("hide"); else scheduleHide();
+  }
+  /** deps.onEnd's answer for a run that is over: whether the caller keeps the card. Never throws. */
+  function keptBy(run, how) {
+    if (typeof d.onEnd !== "function") return false;
+    try {
+      return d.onEnd({ how, stop: run.stop || "", refused: run.stop === "blocked" || run.stop === "private" }) === true;
+    } catch (e) {
+      log(`agent: onEnd threw: ${errText(e)}`);
+      return false;
+    }
   }
   function stop(run, why) {
     if (!alive(run)) return;
@@ -574,6 +615,13 @@ function createAgent(deps) {
     // Which part of the window the picture with this step is: one image on
     // it, or all of it. Where it is stays here, like every other frame.
     if (input.image && input.picture) req.picture = { region: input.picture.region === "element" ? "element" : "window" };
+    // A clip is always of the whole window: how long, and whether the
+    // computer's sound is in it, for the words the model is given.
+    if (input.video) {
+      req.picture = { region: "window" };
+      const c = input.clip || {};
+      req.video = { seconds: Math.max(1, Math.round(Number(c.seconds) || 1)), sound: c.sound === true };
+    }
     const lang = language();
     if (lang) req.language = lang;
     // "This computer": the person's own files, offered to the planner only when this copy can do them.
@@ -1402,6 +1450,7 @@ function createAgent(deps) {
     run.says = 0;
     const audio = input.audio || null;
     const image = input.image || null;
+    const video = input.video || null;
     run.fresh = !!audio || !!input.utterance;
     run.said = input.utterance ? clip(squash(input.utterance), 1000) : "";
     const req = buildRequest(run, input);
@@ -1410,11 +1459,17 @@ function createAgent(deps) {
       // Where the picture is, for the answer's marks in it. Never sent.
       run.pictureFrame = isFrame(input.pictureFrame) ? input.pictureFrame.slice() : null;
     }
-    log(`agent ${run.tag}: step ${run.step} (${audio ? "audio" : "text"}${image ? " + picture" : ""}, ${req.screen.elements.length} elements)`);
+    if (video) {
+      // Seen once is seen: a LOOK after it sends no picture as well. And a
+      // clip has no places in it to draw at (its frames moved), so none.
+      run.pictureSent = true;
+      run.pictureFrame = null;
+    }
+    log(`agent ${run.tag}: step ${run.step} (${audio ? "audio" : "text"}${image ? " + picture" : ""}${video ? " + clip" : ""}, ${req.screen.elements.length} elements)`);
 
     let source;
     try {
-      source = d.post(req, audio, run.controller.signal, image);
+      source = video ? d.post(req, audio, run.controller.signal, null, video) : d.post(req, audio, run.controller.signal, image);
       if (source && typeof source.then === "function") source = await race(run, source);
     } catch (e) {
       if (!alive(run)) return null;
@@ -1623,6 +1678,95 @@ function createAgent(deps) {
     return Object.assign(withPicture(run, pic, again), { sameStep: true });
   }
 
+  // ---- the clip path ----------------------------------------------------------------
+
+  /** A private window, by what the run was told at Alt twice or either read's
+   *  title, as buildRequest marks it. */
+  function inPrivate(run) {
+    return run.privateWindow || frontApp.isPrivate(titleOf(run.snapshot))
+      || !!(run.look && run.look.window && frontApp.isPrivate(str(run.look.window.title)));
+  }
+
+  /** Whether this question, in this window, is about something moving
+   *  (video.js): their words, the app, and the window's title, read here. */
+  function clipWanted(run, text) {
+    if (!canClip || !bool("desktop.agent.video", true)) return false;
+    const title = run.look && run.look.window ? str(run.look.window.title) : titleOf(run.snapshot);
+    return wantsClip(text, { app: appLabel(run), title, players: list("desktop.agent.videoApps", PLAYERS), names: names() });
+  }
+
+  /**
+   * The clip, if the person's policy and answer allow it: null when it may
+   * not be recorded at all (pictures never go for this app, the card said no,
+   * a private window, the screen already changed), and { video, clip } or,
+   * when it was allowed but none can go, { none: "failed"|"tooBig" }: then
+   * the still picture goes in its place, with the yes already given.
+   *
+   * NEVER A PRIVATE WINDOW. A picture of one may go while private windows are
+   * on (the server's switch); a clip is seconds of whatever plays there,
+   * sound and all, and that is not something a question about it should
+   * take. The server refuses one too.
+   */
+  async function allowedClip(run) {
+    if (!canClip || run.acted || !run.look || !isFrame(run.look.window && run.look.window.frame)) return null;
+    if (inPrivate(run)) { log(`agent ${run.tag}: a private window: no clip`); return null; }
+    const policy = await picturePolicy(run);
+    if (!alive(run) || policy === "never") return null;
+    const pic = { frame: run.look.window.frame.slice(), picture: { region: "window" } };
+    if (policy === "ask" && !(await askPermission(run, pic))) return null;
+    if (!alive(run)) return null;
+    return recordClip(run);
+  }
+
+  /** Records the clip: the window ringed "Watching…" and the card saying so
+   *  for as long as it takes, then checked as a picture is (a type the server
+   *  takes, bytes in it, under desktop.agent.videoMaxBytes, which is the
+   *  server's AGENT_VIDEO_MAX_BYTES). The ring stays up, as a picture's
+   *  "Looking" does, until the answer comes. */
+  async function recordClip(run) {
+    const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+    const o = {
+      seconds: clamp(num("desktop.agent.videoSeconds", 6), 1, 30),
+      maxSide: Math.round(clamp(num("desktop.agent.videoMaxSide", 960), 160, 3840)),
+      fps: clamp(num("desktop.agent.videoFps", 4), 1, 30),
+      maxBytes: Math.max(100000, num("desktop.agent.videoMaxBytes", 8000000)),
+      sound: bool("desktop.agent.videoSound", true),
+    };
+    run.previewKey = "";
+    run.tentative = true;
+    tell(run, "point", run.look.window.frame.slice(), TEXT.watching, { tentative: true });
+    tell(run, "badge", TEXT.watching);
+    log(`agent ${run.tag}: watching for ${o.seconds} s`);
+    let file = null;
+    try {
+      const asked = Promise.resolve().then(() => d.clip(run.look, o));
+      file = await race(run, within(asked, o.seconds * 1000 + Math.max(0, num("desktop.agent.videoGraceMs", 6000)), null));
+    } catch (e) {
+      log(`agent ${run.tag}: clip failed: ${errText(e)}`);
+      file = null;
+    }
+    if (!alive(run)) return null;
+    // Past the cap (the recorder stops there and keeps nothing, or a file
+    // that came back bigger anyway): never sent, the still picture instead.
+    if (file && typeof file === "object" && (file.tooBig === true || byteSize(file.data) > o.maxBytes)) {
+      log(`agent ${run.tag}: the clip is too big to send`);
+      return { none: "tooBig" };
+    }
+    if (!file || typeof file !== "object" || !hasBytes(file.data) || !/^video\/(?:webm|mp4)\b/i.test(str(file.mime))) {
+      log(`agent ${run.tag}: no clip`);
+      return { none: "failed" };
+    }
+    const mime = /mp4/i.test(str(file.mime)) ? "video/mp4" : "video/webm";
+    const seconds = typeof file.seconds === "number" && file.seconds > 0 ? file.seconds : o.seconds;
+    return { video: { mime, data: file.data }, clip: { seconds, sound: o.sound && file.sound === true } };
+  }
+
+  /** The step input that sends the clip, and the card's word that it went. */
+  function withClip(run, got, input) {
+    tell(run, "badge", TEXT.clipSent);
+    return Object.assign({}, input, { video: got.video, clip: got.clip });
+  }
+
   // ---- the first step -------------------------------------------------------------
 
   /** "Where's Export?" answered here: the ring on it, "Here's Export.", and
@@ -1662,6 +1806,26 @@ function createAgent(deps) {
     if (text && final && bool("desktop.agent.instant", true)) {
       const m = matchOn(text, run.snapshot);
       if (m && m.intent === "show" && instant(run, text, m)) return null;
+    }
+    // Something moving: a clip of it, in place of one picture. Allowed but
+    // not sent (nothing recorded, or more than may go): the still picture
+    // instead, without asking twice, since the question is still about what
+    // is seen. Not allowed at all: the picture's own rules, below.
+    if (text && final && run.look && clipWanted(run, text)) {
+      const got = await allowedClip(run);
+      if (!alive(run)) return null;
+      if (got && got.video) {
+        run.goal = text;
+        return withClip(run, got, { utterance: text });
+      }
+      if (got && got.none && run.look.image) {
+        const pic = await allowedPicture(run);
+        if (!alive(run)) return null;
+        if (pic) {
+          run.goal = text;
+          return withPicture(run, pic, { utterance: text });
+        }
+      }
     }
     // Only a question with words: a recording nobody has transcribed yet
     // cannot say whether it is about a picture, and no picture goes on a guess.
@@ -1873,17 +2037,21 @@ function createAgent(deps) {
    *  wires to it. Only ever called on purpose: the key hook cannot tell this
    *  run's own synthetic keys and clicks from the person's, so "they started
    *  typing" is not a signal this file listens for. The run stops where it
-   *  is, its request is aborted and the guide goes away. */
-  function cancel(reason) {
+   *  is, its request is aborted and the guide goes away.
+   *  `opts.keep`: the guide does NOT go, the card is the caller's to keep
+   *  (ask.js's thread, paused while a dictation has the microphone: the run
+   *  in it stops, the card and what it already says stay). */
+  function cancel(reason, opts) {
     unscheduleHide();
+    const keep = !!(opts && opts.keep);
     const run = current;
-    if (!run) { callGuide("hide"); return false; }
+    if (!run) { if (!keep) callGuide("hide"); return false; }
     run.over = true;
     current = null;
     clearTimeout(run.deadlineTimer);
     try { run.controller.abort(); } catch { /* already */ }
     log(`agent ${run.tag}: cancelled (${clip(squash(reason) || "cancel", 30)})`);
-    callGuide("hide");
+    if (!keep) callGuide("hide");
     return true;
   }
 
