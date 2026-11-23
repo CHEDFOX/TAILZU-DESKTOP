@@ -71,6 +71,7 @@ src/
     shell.js            the tray's and notifications' built-in words, and their merge with the server's
     oauth.js            Apple/Google sign-in without a window: authorize URL, loopback page, code exchange
     links.js            which screen a tulmi:// link may open
+    sessionFile.js      session.json (the account's tokens): sealed with safeStorage where it can be, else the plain 0600 file
     notices.js          the server's notifications on this computer (Plan Ease's reminders and day notes): a /v1/live socket of
                         its own, "notices" and "here" said on it, a notice shown with its buttons on a Mac, a press answered at
                         the act door and kept until it lands
@@ -475,7 +476,10 @@ npm test                              # node --test: every *.test.js, and test/
 
 A dev run keeps `config.json`, `session.json` and `shell.json` at the
 repository root (git-ignored); an installed app keeps them in its user-data
-folder.
+folder. `session.json` is encrypted with Electron's safeStorage (the Keychain,
+DPAPI, a Linux keyring) where it is available; an older build's plain file is
+read and sealed at the next launch, and on Linux without a keyring (or with
+only its basic_text store) it stays plain JSON, 0600.
 
 Installers: `npm run dist:win`, `npm run dist:mac` (on a Mac), `npm run dist`.
 electron-builder ships only what `build.files` matches (`src/**` without tests,

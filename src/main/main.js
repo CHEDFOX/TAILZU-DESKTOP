@@ -17,7 +17,7 @@
 const {
   app, Tray, Menu, globalShortcut, BrowserWindow, screen,
   ipcMain, clipboard, Notification, nativeImage, session, shell, nativeTheme, powerMonitor,
-  desktopCapturer, systemPreferences,
+  desktopCapturer, systemPreferences, safeStorage,
 } = require("electron");
 const { execFile, spawn } = require("child_process");
 const path = require("path");
@@ -46,6 +46,7 @@ const { createClipper } = require("../agent/watch/clipper.js");
 const { createLocalFiles } = require("../agent/localfiles.js");
 // Tailzu Code on this computer: the person's own computer as a runner for Xode (runner/).
 const { createRunner } = require("../runner/index.js");
+const { createSessionFile } = require("./sessionFile.js");
 const { createBlipSync } = require("./blipSync.js");
 // The server's notifications on this computer: Plan Ease's reminders and day notes, on a live socket of its own (notices.js).
 const { createNotices, actKey } = require("./notices.js");
@@ -85,7 +86,8 @@ if (process.windowsStore) {
   try {
     if (!fs.existsSync(own)) {
       fs.mkdirSync(own, { recursive: true });
-      for (const f of ["session.json", "config.json", "desktop-state.json", "bootstrap.json", "shell.json"]) {
+      // "Local State" holds the key safeStorage sealed session.json with: without it the copy could not be opened.
+      for (const f of ["session.json", "Local State", "config.json", "desktop-state.json", "bootstrap.json", "shell.json"]) {
         try { fs.copyFileSync(path.join(shared, f), path.join(own, f)); } catch { /* not there: nothing to bring */ }
       }
     }
@@ -111,22 +113,12 @@ const sessionPath = app.isPackaged
   ? path.join(app.getPath("userData"), "session.json")
   : path.join(__dirname, "..", "..", "session.json");
 
-function loadSession() {
-  try { return JSON.parse(fs.readFileSync(sessionPath, "utf8")); } catch { return null; }
-}
-function saveSession(v) {
-  try {
-    if (v) {
-      fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-      fs.writeFileSync(sessionPath, JSON.stringify(v, null, 2), { mode: 0o600 });
-      // `mode` only applies to a file being created; one an older build wrote
-      // keeps whatever it had, so it is narrowed every time.
-      fs.chmodSync(sessionPath, 0o600);
-    } else if (fs.existsSync(sessionPath)) {
-      fs.unlinkSync(sessionPath);
-    }
-  } catch { /* a session that will not persist still works for this run */ }
-}
+// Sealed with the system's key store (safeStorage) where there is one, the
+// plain 0600 file where there is not (sessionFile.js). A sealed file opens only
+// after `ready`: read again then, and an older build's plain file sealed.
+const sessionFile = createSessionFile({ fs, file: sessionPath, safeStorage, isReady: () => app.isReady(), platform: process.platform });
+function loadSession() { return sessionFile.load(); }
+function saveSession(v) { sessionFile.save(v); }
 
 // ---- The bootstrap, in this process too ---------------------------------------
 // THE MAIN PROCESS ASKS THE SERVER ITSELF.
@@ -557,7 +549,12 @@ function toneLabel(id) {
 // which only ever makes this fresher.
 let runner = null;                 // Tailzu Code on this computer (setupRunner, below)
 let notices = null;                // the server's notifications on this computer (setupNotices, below)
-let authSession = loadSession();   // { access_token, refresh_token, expires_at }
+let authSession = loadSession();   // { access_token, refresh_token, expires_at }; null until ready when the file is sealed
+// Registered before every other `ready` handler, so the runner, the notices and the windows find the session already open.
+app.whenReady().then(() => {
+  if (!authSession && sessionFile.locked()) authSession = loadSession();
+  else if (authSession && sessionFile.plain() && sessionFile.canSeal()) saveSession(authSession);
+});
 let accountTone = null;            // last value read from the account
 let accountPreset = null;          // the voice it belongs to (personality.activePresetId), when one was read
 let accountNickname = "";          // their own name for the assistant ("Jarvis"), "" when none
