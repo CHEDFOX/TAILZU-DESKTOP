@@ -45,10 +45,16 @@ function go(screenId, params, o) {
   paint();
 }
 
-/** `replace`: this screen in place of the one up, nothing behind it added. */
+/**
+ * `replace`: this screen in place of the one up, nothing behind it added. Going UP (a back arrow that names its parent, "Stop for
+ * now": kit.ts up) is a replace too, so a parent already further down is gone back to rather than copied over the top.
+ */
 function replaceTop(screenId, params) {
   if (!screenId || !STACK.length) return;
-  STACK[STACK.length - 1] = params ? { screenId, params } : { screenId };
+  const entry = params ? { screenId, params } : { screenId };
+  const at = STACK.findIndex((e) => sameEntry(e, entry));
+  if (at >= 0 && at < STACK.length - 1) { STACK = STACK.slice(0, at + 1); NAV++; paint(); return; }
+  STACK[STACK.length - 1] = entry;
   NAV++;
   paint();
 }

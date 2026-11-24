@@ -34,9 +34,11 @@ async function run(action, eventValue) {
     // `replace` swaps the top of the stack (Done on Spaces opens the made space's moment with nothing behind it to go back to).
     case "navigate": {
       const params = action.params ? deepResolve(action.params) : action.params;
+      // `root` first: a place of its own (the sidebar's bots, Today, Notes, Settings), started afresh like a tab (navigation.js
+      // go). The server sends it with `replace` too, for a build from before root.
+      if (action.root === true) { go(action.screenId, params, { root: true }); return; }
       if (action.replace === true && STACK.length && action.screenId) { replaceTop(action.screenId, params); return; }
-      // `root`: a place of its own (the sidebar's bots, Today, Notes, Settings), started afresh like a tab (navigation.js go).
-      go(action.screenId, params, action.root === true ? { root: true } : undefined);
+      go(action.screenId, params);
       return;
     }
     // TWO NAMES FOR ONE THING, and only one was answered. The catalog says

@@ -127,3 +127,19 @@ test("while the next screen is on its way, the one up takes no clicks", async ()
   await w.p.settle();
   assert.strictEqual(w.p.run("$('view').inert"), false);
 });
+
+test("going up (a replace) to a screen further down goes back to it, not a copy of it on top", async () => {
+  const w = page();
+  await w.act(nav("bots.lingo"));
+  await w.act(nav("bots.lingo.set"));
+  await w.act(nav("bots.lingo.done"));
+  await w.act(nav("bots.lingo", undefined, { replace: true }));
+  assert.deepStrictEqual(w.stack(), ["bots.talk", "bots.lingo"]);
+});
+
+test("a sidebar place sent with root and replace starts afresh", async () => {
+  const w = page();
+  await w.act(nav("bots.spaces"));
+  await w.act(nav("bots.notes", undefined, { root: true, replace: true }));
+  assert.deepStrictEqual(w.stack(), ["bots.notes"]);
+});
