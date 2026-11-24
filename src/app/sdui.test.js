@@ -1111,3 +1111,34 @@ test("a link's screen comes with its parameters: a space's invite opens Spaces a
   p.run('navigateTo("paywall"); navigateTo("paywall")');
   assert.deepStrictEqual(JSON.parse(p.run("JSON.stringify(STACK.map((s) => s.screenId))")), ["bots.home", "bots.spaces", "paywall"]);
 });
+
+test("a picture whose source is bound to state draws what state holds: the file just picked", () => {
+  const p = page();
+  p.run('setStatePath("shots", [{ url: "https://api.x0bot.com/v1/files/u/1/picture?exp=1&sig=a" }])');
+  p.ctx.__n = { type: "Image", bind: { source: "shots.0" }, props: { contentFit: "cover" }, style: { width: "100%", height: "100%" } };
+  assert.match(p.run("node(__n)"), /<img src="https:\/\/api\.x0bot\.com\/v1\/files\/u\/1\/picture\?exp=1&amp;sig=a"/);
+});
+
+test("a bound picture with nothing there yet, or a link the page may not load, draws nothing (the glyph under it shows)", () => {
+  const p = page();
+  p.ctx.__n = { type: "Image", bind: { source: "shots.0" }, props: { contentFit: "cover" } };
+  assert.strictEqual(p.run("node(__n)"), "");
+  p.run('setStatePath("shots", [{ url: "file:///Users/a/secret.png" }])');
+  assert.strictEqual(p.run("node(__n)"), "");
+  p.run('setStatePath("shots", [{ url: "javascript:alert(1)" }])');
+  assert.strictEqual(p.run("node(__n)"), "");
+});
+
+test("a picture with a plain source draws as it always has", () => {
+  const p = page();
+  p.ctx.__n = { type: "Image", props: { source: { url: "https://api.x0bot.com/blip/listen-s.webp" } } };
+  assert.match(p.run("node(__n)"), /<img src="https:\/\/api\.x0bot\.com\/blip\/listen-s\.webp"/);
+});
+
+test("a picture laid over its parent is placed there, not in the flow (a picked file's picture over its glyph)", () => {
+  const p = page();
+  p.ctx.__n = { type: "Image", props: { source: { url: "https://x.test/a.png" } }, style: { position: "absolute", left: 0, top: 0, right: 0, bottom: 0, width: "100%", height: "100%" } };
+  const html = p.run("node(__n)");
+  assert.match(html, /position:absolute;top:0px;left:0px;right:0px;bottom:0px;/);
+});
+

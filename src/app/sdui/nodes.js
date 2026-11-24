@@ -374,7 +374,13 @@ function nodeDraw(n) {
       // The `media` block's own player (v2/media.js), when the screen asked for it; else the picture below.
       const v2m = n.type === "Video" && typeof v2Node === "function" ? v2Node(n, p, s, kids) : null;
       if (v2m !== null) return v2m;
-      const src = p.source && (p.source.url || p.source.uri);
+      // A source BOUND to state is read from it, as the phone's renderer reads any bound prop: the picture of a file
+      // just picked lives there (the upload's `pic`, a signed link from the server), and nowhere in the tree. Only a link
+      // the page may load (https, or data:) is drawn; anything else draws nothing, and the glyph under it shows.
+      const boundSrc = n.bind && n.bind.source ? stateAt(n.bind.source) : undefined;
+      const source = boundSrc && typeof boundSrc === "object" ? boundSrc : n.bind && n.bind.source ? null : p.source;
+      const raw = source && (source.url || source.uri);
+      const src = typeof raw === "string" && /^(https:|data:image\/)/i.test(raw) ? raw : !(n.bind && n.bind.source) ? raw : "";
       if (!src) return "";
       // The PARENT usually owns the box. A hero is a Stack carrying the aspect
       // ratio and the clipping, holding a media node whose only instruction is
@@ -391,7 +397,11 @@ function nodeDraw(n) {
         // Filling a parent means the parent draws the corners and the spacing.
         "border-radius:" + (st.borderRadius != null ? st.borderRadius : fills ? 0 : K.num("desktop.image.radius", 16)) + "px;" +
         "object-fit:" + (p.contentFit === "contain" ? "contain" : "cover") + ";" +
-        "display:block;" + (fills ? "margin:0;" : "margin:0 auto " + K.num("desktop.image.marginBottom", 14) + "px;");
+        "display:block;" + (fills ? "margin:0;" : "margin:0 auto " + K.num("desktop.image.marginBottom", 14) + "px;") +
+        // Laid over its parent (a picked file's picture over its glyph): placed where the tree says, not in the flow.
+        (st.position === "absolute"
+          ? "position:absolute;" + ["top", "left", "right", "bottom"].filter((k) => typeof st[k] === "number").map((k) => k + ":" + st[k] + "px;").join("")
+          : "");
       return n.type === "Video"
         ? '<video src="' + esc(src) + '" autoplay muted loop playsinline style="' + esc(box) + '"></video>'
         : '<img src="' + esc(src) + '" alt="" style="' + esc(box) + '">';
