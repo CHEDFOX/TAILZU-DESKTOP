@@ -3,9 +3,53 @@
 
 let CURRENT_ACTIONS = {};
 
-function go(screenId, params) {
+/**
+ * WHERE YOU ARE, COUNTED. Every move to another stack entry (go, back, a tab, a replace) adds one. Something started on one
+ * screen that finishes later (a call's answer, its onSuccess) checks it was not left behind: an answer that lands after the
+ * person moved on must not write into, repaint over, or navigate away from the screen they moved to (actions.js callEndpoint).
+ */
+let NAV = 0;
+
+/** The same place: the same screen with the same params. */
+function sameEntry(a, b) {
+  if (!a || !b || a.screenId !== b.screenId) return false;
+  try { return JSON.stringify(a.params || {}) === JSON.stringify(b.params || {}); } catch { return false; }
+}
+
+/**
+ * GOING SOMEWHERE, WITHOUT A PATH THAT GROWS FOREVER.
+ *
+ * Every tap used to push, so a session spent moving between a few screens (the sidebar's bots, Settings, a space and back)
+ * left a stack of every one of them, and Back retraced the whole walk. Now:
+ *   - the screen already up: nothing (a double click is one visit, not two);
+ *   - a screen already in the stack: back to it, dropping what was above it (A, B, A is just A);
+ *   - `root` (the sidebar's destinations, which are places of their own like the tabs): a fresh stack with it alone;
+ *   - anything else: on top.
+ */
+function go(screenId, params, o) {
   if (!screenId) return;
-  STACK.push({ screenId, params });
+  const entry = params ? { screenId, params } : { screenId };
+  const top = STACK[STACK.length - 1];
+  if (o && o.root) {
+    if (STACK.length === 1 && sameEntry(top, entry)) return;
+    const tab = TABS.find((t) => t.screenId === screenId);
+    TAB_ID = tab ? tab.id : TAB_ID;
+    STACK = [entry];
+  } else {
+    if (sameEntry(top, entry)) return;
+    const at = STACK.findIndex((e) => sameEntry(e, entry));
+    if (at >= 0) STACK = STACK.slice(0, at + 1);
+    else STACK.push(entry);
+  }
+  NAV++;
+  paint();
+}
+
+/** `replace`: this screen in place of the one up, nothing behind it added. */
+function replaceTop(screenId, params) {
+  if (!screenId || !STACK.length) return;
+  STACK[STACK.length - 1] = params ? { screenId, params } : { screenId };
+  NAV++;
   paint();
 }
 
@@ -30,14 +74,23 @@ function navigateTo(target) {
   if (top && top.screenId === "onboard") { paint(true); return; }
   go(screenId, params);
 }
+/**
+ * Back: the screen under this one. On a screen with nothing under it that is not a tab's own (one the sidebar opened, a link's),
+ * the tab it belongs to: a × or a back arrow there used to do nothing at all.
+ */
 function back() {
-  if (STACK.length > 1) { STACK.pop(); paint(); }
+  if (STACK.length > 1) { STACK.pop(); NAV++; paint(); return; }
+  const tab = TABS.find((t) => t.id === TAB_ID) || TABS[0];
+  if (tab && STACK[0] && STACK[0].screenId !== tab.screenId) { TAB_ID = tab.id; STACK = [{ screenId: tab.screenId }]; NAV++; paint(); }
 }
 function switchTab(tabId) {
   const tab = TABS.find((t) => t.id === tabId);
   if (!tab) return;
+  // The tab that is up, at its own page: nothing to do (a second click is not a reload that blanks what is there).
+  if (TAB_ID === tabId && STACK.length === 1 && STACK[0].screenId === tab.screenId) return;
   TAB_ID = tabId;
   STACK = [{ screenId: tab.screenId }];
+  NAV++;
   paint();
 }
 
@@ -76,12 +129,22 @@ async function paint(force) {
   const fresh = force || !paint._last || paint._last !== cur.screenId;
   let slow = 0;
   const main = $("main");
-  const settled = () => { delete main.dataset.wait; view.removeAttribute("aria-busy"); };
+  // While the next screen is on its way the one still up takes no clicks: a click on it would act for a screen that is leaving
+  // (two navigations, or a jump somewhere else once the first lands). Not for a reload of the same screen.
+  const leaving = !force && repaint._target !== cur && !!paint._last;
+  const settled = () => { delete main.dataset.wait; view.removeAttribute("aria-busy"); view.inert = false; };
+  // BACK IS INSTANT. The copy of this entry kept when it was last drawn is shown at once, and fetched again behind it; the
+  // fresh copy is drawn quietly over it only if it changed (a screen marked never-kept, cacheTtlSeconds 0, is always fetched).
+  const shown = !force && cur.kept && repaint._target !== cur ? cur.kept : null;
+  if (shown) {
+    settled();
+    land(cur, shown, false);
+  } else if (leaving) view.inert = true;
   if (!paint._last) {
     // tz-loading: held out of sight while the onboarding holds the window, so
     // Blip stands on paper and not over a grey word.
     view.innerHTML = '<div class="pad tz-loading" style="color:var(--label)">' + esc(K.txt("desktop.screen.loading", "Loading…")) + "</div>";
-  } else if (fresh) {
+  } else if (fresh && !shown) {
     slow = setTimeout(() => {
       if (seq !== paint._seq) return;
       dropField();
@@ -102,6 +165,8 @@ async function paint(force) {
     clearTimeout(slow);
     if (seq !== paint._seq) return;
     settled();
+    // The kept copy is up: it stays, rather than a working page swapped for an error because one fetch behind it failed.
+    if (shown && !(err && err.quota)) return;
     // Out of words is not a broken screen: it is the one the server names
     // for it, in place of the one that was refused.
     const quotaScreen = K.str("quota.screenId", "paywall");
@@ -125,18 +190,44 @@ async function paint(force) {
   // the one that should land; this one would paint over it a moment later.
   if (seq !== paint._seq) return;
   settled();
+  if (shown) {
+    // Drawn already from the kept copy: the fresh one goes over it the way a live update does, keeping what was typed since.
+    if (!kept) keep(cur, screen);
+    if (STACK[STACK.length - 1] !== cur || CURRENT_SCREEN !== shown) return;
+    if (JSON.stringify(screen) === JSON.stringify(shown)) return;
+    const live = window.TailzuLive;
+    const patch = live && live.mergeLiveState ? live.mergeLiveState(shown.state || {}, STATE || {}, screen.state || {}) : [];
+    for (const [path, value] of patch) setStatePath(path, value);
+    CURRENT_ACTIONS = screen.actions || {};
+    repaint._next = cur;
+    repaint(screen);
+    return;
+  }
+  if (!kept) keep(cur, screen);
+  land(cur, screen, !kept);
+}
+
+/** The copy of a screen kept on its stack entry, for an instant Back. Never one the server says is not to be kept. */
+function keep(entry, screen) {
+  if (screen && screen.cacheTtlSeconds !== 0) entry.kept = screen; else delete entry.kept;
+}
+
+/** A screen landing for its stack entry: its state, its actions, its chrome, drawn. `fetched`: it came from the server now. */
+function land(cur, screen, fetched) {
   STATE = Object.assign({}, screen.state || {});
   STATE.desktop = Object.assign({}, LOCAL);
   // The same screen fetched again (a write's refresh): an @ field still holding words keeps them (mention.js).
   if (repaint._target === cur && typeof mentionCarry === "function") mentionCarry();
   // `online`, `outbox`, `outboxWaiting` (outbox.js), and the Offline page kept while online.
   if (typeof offlineState === "function") Object.assign(STATE, offlineState());
-  if (!kept && typeof offlineKeep === "function") offlineKeep(cur, screen);
+  if (fetched && typeof offlineKeep === "function") offlineKeep(cur, screen);
   // Picks belong to the thread that was on screen. A new screen has none.
   CHAT_PICKED = {};
   CURRENT_ACTIONS = screen.actions || {};
   $("title").textContent = label(screen.title) || "";
-  $("back").hidden = STACK.length <= 1;
+  // Back leads somewhere from anything but a tab's own page (back() takes a lone screen home to its tab).
+  const tabPage = (TABS.find((t) => t.id === TAB_ID) || TABS[0] || {}).screenId;
+  $("back").hidden = STACK.length <= 1 && (!tabPage || cur.screenId === tabPage);
   applyChrome(screen);
   // The stack entry this screen is for: a repaint of it (or a fetch of it again) is the same screen; another entry is not.
   repaint._next = cur;

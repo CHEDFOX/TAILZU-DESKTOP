@@ -34,8 +34,9 @@ async function run(action, eventValue) {
     // `replace` swaps the top of the stack (Done on Spaces opens the made space's moment with nothing behind it to go back to).
     case "navigate": {
       const params = action.params ? deepResolve(action.params) : action.params;
-      if (action.replace === true && STACK.length && action.screenId) { STACK[STACK.length - 1] = { screenId: action.screenId, params }; paint(); return; }
-      go(action.screenId, params);
+      if (action.replace === true && STACK.length && action.screenId) { replaceTop(action.screenId, params); return; }
+      // `root`: a place of its own (the sidebar's bots, Today, Notes, Settings), started afresh like a tab (navigation.js go).
+      go(action.screenId, params, action.root === true ? { root: true } : undefined);
       return;
     }
     // TWO NAMES FOR ONE THING, and only one was answered. The catalog says
@@ -163,6 +164,7 @@ async function run(action, eventValue) {
     case "callEndpoint": {
       // `stream`: the answer's words, written into state as they come over the live socket (askStreamTake).
       let unlisten = null;
+      const at = NAV;
       try {
         const raw = String(action.path || "");
         const path = typeof v2Literal === "function" && v2Literal(raw) ? raw : raw.replace(/\$state\.[A-Za-z0-9_.]+/g, (m) => {
@@ -176,13 +178,25 @@ async function run(action, eventValue) {
           unlisten = askStreamListen(id, action.stream);
           body = Object.assign({}, body, { streamId: id });
         }
+        // THE SCREEN THIS CALL WAS MADE ON. Its answer can come seconds later; by then the person may be somewhere else, and
+        // what follows (writing the answer into state, onSuccess's navigate or toast-and-refresh) belongs to the screen they
+        // left. Run on the one they moved to, it wrote into the wrong page or took them to a screen they never asked for.
         const res = await api(path, body, action.method || "POST");
+        const write = action.method && action.method.toUpperCase() !== "GET";
+        if (NAV !== at) {
+          if (write) { try { window.tailzuApp.changed(); } catch { /* tray only */ } }
+          return;
+        }
         if (action.assignTo) { setStatePath(action.assignTo, res); repaint(); }
+        const painted = paint._seq;
         await run(action.onSuccess);
-        if (action.method && action.method.toUpperCase() !== "GET") {
+        if (write) {
           // Any write could have been the tone. Telling the tray to re-read is
           // cheaper, and more honest, than guessing which writes matter.
           try { window.tailzuApp.changed(); } catch { /* tray only */ }
+          // ONE FETCH, NOT THREE. onSuccess already moved (a navigate) or fetched this screen again (refresh): another paint
+          // here fetched it once more, cancelling the first, and every save waited on two or three round trips.
+          if (NAV !== at || paint._seq !== painted) return;
           // The onboarding saves as it goes (a language, then the profile at
           // the end) and nothing it shows depends on the answer; a fetch here
           // would rebuild the step under the person's hand. Nor while another
@@ -193,6 +207,8 @@ async function run(action, eventValue) {
         }
       } catch (err) {
         if (err && err.quota) { go(K.str("quota.screenId", "paywall")); return; }
+        // Failed after the person moved on: the error is the old screen's, and its onError would toast or navigate on this one.
+        if (NAV !== at) return;
         // What the server said about it, for the failure's own toast ("$state.lastError.message", said.ts); null when it said nothing.
         setStatePath("lastError", err && err.server ? { code: err.server.code, message: err.server.message } : null);
         await run(action.onError);
