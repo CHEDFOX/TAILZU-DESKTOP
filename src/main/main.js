@@ -3531,7 +3531,7 @@ function sendBot(message, slug) {
 function botAnswered(r) {
   notify(r.text
     ? txt("desktop.route.botAnswer", "{bot}: {text}", { bot: r.name, text: r.text.length > 180 ? r.text.slice(0, 179) + "…" : r.text })
-    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(r.open || (bool("bots.app", false) ? "bots.activity" : undefined)));
+    : txt("desktop.route.botOnIt", "{bot} is on it.", { bot: r.name }), () => openAppWindow(r.open || (bool("bots.app", false) ? "bots.activities" : undefined)));
 }
 
 /**
