@@ -100,6 +100,8 @@ const COMPONENTS = [
   "BotsMotion", "BotTiles", "BotCard",
   // A full-width strip under BotTiles' grid (Notes), its bot at the left, in the same world as the tiles.
   "BotTilesStrip",
+  // BotTilesProps.stage: the bot at the top of each tile, its name and line under him.
+  "BotTilesStage",
   // A bot's own tiny bot on its pages (a header, Xode's setup steps): BotBuddy, on the same core.
   "BotBuddy",
   // BotBuddy's act "carry" and `doneWhen`: a lane under a message on its way, where he hauls it as a bag, heavier
@@ -140,7 +142,7 @@ const SELF_UPDATE = "DeskSelfUpdate";
 /** The note-taker is here: the server sends the Notes tab and its pages. */
 const NOTES = "DeskNotes";
 /** This computer shows the server's notices from the main process's own live
- *  socket (src/main/notices.js): Plan Ease's reminders and day notes reach it,
+ *  socket (src/main/notices.js): Nudj's reminders and day notes reach it,
  *  with their buttons on a Mac, and the phone's copy then comes without a
  *  sound. Said by the main process (env.notices: it can show one at all). A
  *  build that says it also runs a node's onAppear (nodes.js appearAt), so the

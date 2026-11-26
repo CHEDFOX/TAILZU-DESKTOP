@@ -261,7 +261,7 @@ function mfChips(L) {
   };
   if (L.d.toId) chip("@" + L.d.toName, () => Object.assign(L.d, { toId: "", toName: "" }));
   if (L.d.thingId) chip(L.d.thingTitle + " · " + L.d.botName, () => Object.assign(L.d, { bot: "", botName: "", thingId: "", thingTitle: "" }));
-  // The bot a message goes to: its name alone, so the chip reads as "to Plan Ease" and not as a thing of its.
+  // The bot a message goes to: its name alone, so the chip reads as "to Nudj" and not as a thing of its.
   else if (L.d.bot) chip(L.d.botName || L.d.bot, () => Object.assign(L.d, { bot: "", botName: "" }));
   L.el.classList.toggle("has", mfHas(L));
 }

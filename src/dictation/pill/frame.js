@@ -3,7 +3,7 @@
 "use strict";
 
 // Where the words went, and the one other place they can go instead:
-// "Typed · Ask instead", "Sent to Plan Ease · Type it instead". A press on the
+// "Typed · Ask instead", "Sent to Nudj · Type it instead". A press on the
 // pill chooses the alternative; main undoes the first and does the other.
 const SEP = " · ";
 function routedLabel() { return (S.data.label || "") + (S.data.alt ? SEP + S.data.alt : ""); }

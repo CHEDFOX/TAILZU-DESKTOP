@@ -53,10 +53,10 @@ const { createSessionFile } = require("./sessionFile.js");
 const { createBlipSync } = require("./blipSync.js");
 // The overlay windows' pages (the pill, Ask's card, Blip at rest), from the server's UI bundle when it has one (uiBundle.js).
 const { createUiBundle, SCHEME: UI_SCHEME, SCHEME_PRIVILEGES: UI_SCHEME_PRIVILEGES } = require("./uiBundle.js");
-// The server's notifications on this computer: Plan Ease's reminders and day notes, on a live socket of its own (notices.js).
+// The server's notifications on this computer: Nudj's reminders and day notes, on a live socket of its own (notices.js).
 const { createNotices, actKey } = require("./notices.js");
 const { connectWs } = require("../runner/ws.js");
-// "Add this": what is on the screen goes to Plan Ease with the words (addThis.js).
+// "Add this": what is on the screen goes to Nudj with the words (addThis.js).
 const { createAddThis } = require("../dictation/addThis.js");
 // Live pages (the Bots app's LiveView): webviews in a session of their own, locked down here (liveViewMain.js).
 const { setupLiveViews } = require("../app/liveViewMain.js");
@@ -326,9 +326,9 @@ function refreshBoot() {
             // bots.app; pill/, overlay.js, guide/), so this copy's flags,
             // the ones they are sent, must say so as the window's do.
             // DeskNotices: this process shows the server's notices from its own
-            // live socket (notices.js), so the server may send Plan Ease's here
+            // live socket (notices.js), so the server may send Nudj's here
             // and the phone's copy without a sound; DeskAddThis: "add this"
-            // carries what is on the screen to Plan Ease's box (addThis.js).
+            // carries what is on the screen to Nudj's box (addThis.js).
             // The window says the same (sdui/backend.js), from app:env.
             components: ["DeskShell", "Keys", "BotsKit"].concat(noticesCan() ? ["DeskNotices"] : [], ["DeskAddThis"]),
           },
@@ -2187,7 +2187,7 @@ function setupRunner() {
 }
 
 // ---- The server's notifications on this computer (notices.js) ---------------------------
-// Plan Ease's reminders and day notes reach the phone as pushes; here they are this computer's own notifications while the person
+// Nudj's reminders and day notes reach the phone as pushes; here they are this computer's own notifications while the person
 // is at it, with their buttons on a Mac. A live socket of its own, up while signed in and while the server sends them
 // (desktop.notices.enabled). A locked screen or a sleep says "away", so the phone rings instead.
 
@@ -2335,7 +2335,7 @@ ipcMain.handle("app:env", (e) => {
     // (DeskAskSetup) and reads its states with askSetup().
     askSetup: askOn(),
     // This process shows the server's notices (notices.js), and "add this"
-    // carries what is on the screen to Plan Ease (addThis.js): the window
+    // carries what is on the screen to Nudj (addThis.js): the window
     // declares DeskNotices and DeskAddThis as this process's bootstrap does,
     // so the flags it relays here say the same.
     notices: noticesCan(),
@@ -2487,7 +2487,7 @@ ipcMain.handle("app:axStatus", (e) => {
 ipcMain.on("app:openExternal", (e, url) => {
   // Only ever http(s), and mail: a renderer handing this a file:// or a shell
   // scheme is the whole reason this check exists. A mailto: opens the mail app
-  // with a message written and nothing sent (Plan Ease's Send to an address:
+  // with a message written and nothing sent (Nudj's Send to an address:
   // the person presses Send there themselves).
   if (fromApp(e) && typeof url === "string" && /^(?:https?:\/\/|mailto:[^\s]+$)/i.test(url)) shell.openExternal(url).catch(() => {});
 });
@@ -3540,7 +3540,7 @@ function botAnswered(r) {
 }
 
 /**
- * "ADD THIS" (addThis.js): words that point at the screen, going to Plan Ease, carry what they point at to its one box. The
+ * "ADD THIS" (addThis.js): words that point at the screen, going to Nudj, carry what they point at to its one box. The
  * selection comes from the dictation's own field read; else the page in front (the helper's tree, never scrolled for this), else
  * the visible window's text (the same read as the words around a field). Never a sensitive app or a private window: routing.js
  * and pageRead.js both refuse one. Off until the server's box reads it (desktop.plan.addThis).

@@ -1,13 +1,13 @@
 // "ADD THIS": WHAT IS ON THE SCREEN GOES TO PLAN EASE WITH THE WORDS (the backend's docs/plan-ease.md "The one box"; design B11).
 //
 // Said with an email, a page or a selection in front ("add this", "remind me about this on Friday", "isko plan mein daal do"), the
-// words alone told Plan Ease nothing: "this" was on the screen, not in the sentence. Now, when the words point at the screen
-// (router.js pointsAtScreen) and Plan Ease is the bot they go to, what they point at goes with them to Plan Ease's one box:
+// words alone told Nudj nothing: "this" was on the screen, not in the sentence. Now, when the words point at the screen
+// (router.js pointsAtScreen) and Nudj is the bot they go to, what they point at goes with them to Nudj's one box:
 //
 //   POST /v1/botsapp/bots/plan/box { words, tz, seen: { from, text, app?, title?, where? } }   → the box's answer (BoxReply)
 //
 // The server does the reading: one item ("Added: Dentist, Fri 13 Nov, 5 pm", with Undo), or a card of the things in it, through its
-// capture, with the person's yes to AI and Plan Ease's budget, as for a shared circular. The person only says "add this".
+// capture, with the person's yes to AI and Nudj's budget, as for a shared circular. The person only says "add this".
 //
 // What "this" is, in order: the selection (what they picked out), else the page in front (its readable text, the part around where
 // they are first: src/context/pageRead.js, never scrolled for this), else the visible window's text (src/context/screenRead.js), else
@@ -21,7 +21,7 @@
 
 const { pointsAtScreen } = require("./router.js");
 
-/** Plan Ease's slug: the only bot "add this" carries the screen to. */
+/** Nudj's slug: the only bot "add this" carries the screen to. */
 const PLAN = "plan";
 /** The box's own cap on words (the backend's planEase.ts box). */
 const WORDS_MAX = 2000;
@@ -65,7 +65,7 @@ function replyOf(j, name) {
   if (!isObj(j) || j.kind === "chat") return null;
   const text = line(j.line, 300);
   if (!text) return null;
-  const out = { name: String(name || "Plan Ease"), text, kind: typeof j.kind === "string" ? j.kind : "said", open: { screenId: "bots.plan", params: {} } };
+  const out = { name: String(name || "Nudj"), text, kind: typeof j.kind === "string" ? j.kind : "said", open: { screenId: "bots.plan", params: {} } };
   if (isObj(j.open) && typeof j.open.screen === "string" && SCREEN_ID.test(j.open.screen)) {
     const params = {};
     if (isObj(j.open.params)) {

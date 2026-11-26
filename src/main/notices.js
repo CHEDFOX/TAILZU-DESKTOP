@@ -1,7 +1,7 @@
-// THE SERVER'S NOTIFICATIONS ON THIS COMPUTER: Plan Ease's reminders and day notes, with their buttons (the backend's
+// THE SERVER'S NOTIFICATIONS ON THIS COMPUTER: Nudj's reminders and day notes, with their buttons (the backend's
 // docs/plan-ease.md; design A4 "Desktop" and B11).
 //
-// The phone gets Plan Ease's pushes. This computer gets the same ones as its own notifications while the person is at it: the server
+// The phone gets Nudj's pushes. This computer gets the same ones as its own notifications while the person is at it: the server
 // sends a notice here only when this computer was used in the last 10 minutes, and the phone's copy then comes without a sound, so
 // nothing rings twice. A click opens the page it is about (the Plan page, or the hand-off screen that opens Maps). On a Mac its
 // buttons (Done, Later, Move it, Keep, ...) answer it where it is, through the door the phone's buttons use (POST /v1/widgets/act,

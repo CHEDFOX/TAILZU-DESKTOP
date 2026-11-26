@@ -72,7 +72,7 @@ function rig(o = {}) {
     type: async (text) => { did.push(["type", text]); },
     routine: async (g) => { did.push(["routine", g]); return "routine" in o ? o.routine : { text: "Water the plants · every day" }; },
     notes: (start) => did.push(["notes", start]),
-    bot: async (g, b) => { did.push(["bot", g, b]); return "botReply" in o ? o.botReply : { name: "Plan Ease", text: "Saturday is planned." }; },
+    bot: async (g, b) => { did.push(["bot", g, b]); return "botReply" in o ? o.botReply : { name: "Nudj", text: "Saturday is planned." }; },
     told: (r) => did.push(["told", r.name, r.text]),
     requireAccount: () => o.signedIn !== false,
     failed: (p) => did.push(["failed", p.message]),
@@ -344,7 +344,7 @@ test("handoffs: write pastes, routine saves, notes start and stop, a bot is sent
       reply({ t: "handoff", to: "routine", goal: "water the plants every day" }),
       reply({ t: "handoff", to: "notes", goal: "", notes: "start" }),
       reply({ t: "handoff", to: "notes", goal: "", notes: "stop" }),
-      reply({ t: "handoff", to: "bot", goal: "plan Saturday", bot: { slug: "plan", name: "Plan Ease" } }),
+      reply({ t: "handoff", to: "bot", goal: "plan Saturday", bot: { slug: "plan", name: "Nudj" } }),
       reply({ t: "handoff", to: "nowhere", goal: "x" }),
     ],
   });
@@ -356,8 +356,8 @@ test("handoffs: write pastes, routine saves, notes start and stop, a bot is sent
     ["told", "Routines", "Water the plants · every day"],
     ["notes", true],
     ["notes", false],
-    ["bot", "plan Saturday", { slug: "plan", name: "Plan Ease" }],
-    ["told", "Plan Ease", "Saturday is planned."],
+    ["bot", "plan Saturday", { slug: "plan", name: "Nudj" }],
+    ["told", "Nudj", "Saturday is planned."],
   ]);
   assert.deepStrictEqual(r.recorded(), [1, 2, 3, 4, 5, 6, 7], "listening again after each, an unknown handoff included");
 });
