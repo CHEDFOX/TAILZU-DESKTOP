@@ -74,8 +74,8 @@
   }
 
   /**
-   * The share-in screen's params for a drop, given the screen it was dropped on: on Plan Ease's page (or one of its own) what was
-   * dropped is Plan Ease's, so the server shows the capture card there with no bot picker (the backend's planIn.ts, from=plan).
+   * The share-in screen's params for a drop, given the screen it was dropped on: on Nudj's page (or one of its own) what was
+   * dropped is Nudj's, so the server shows the capture card there with no bot picker (the backend's planIn.ts, from=plan).
    */
   function dropParams(params, onScreen) {
     const p = Object.assign({}, params);
@@ -301,7 +301,7 @@ if (typeof module === "undefined" && typeof window !== "undefined" && typeof go 
       // A second drop replaces the first one's screen rather than stacking on it.
       const top = STACK[STACK.length - 1];
       if (top && top.screenId === id) STACK.pop();
-      // Dropped on the Plan page: Plan Ease's, with no bot picker.
+      // Dropped on the Plan page: Nudj's, with no bot picker.
       const under = STACK[STACK.length - 1];
       go(id, window.TailzuShareIn.dropParams(params, under && under.screenId));
     },

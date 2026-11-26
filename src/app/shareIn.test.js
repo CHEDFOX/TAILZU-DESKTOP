@@ -45,7 +45,7 @@ test("at most five files, none over 50 MB; the rest are counted", () => {
   assert.strictEqual(p.tooBig, true);
 });
 
-test("a drop on Plan Ease's page is Plan Ease's: no bot picker", () => {
+test("a drop on Nudj's page is Nudj's: no bot picker", () => {
   assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.plan"), { file: "f1", from: "plan" });
   assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.plan.week"), { file: "f1", from: "plan" });
   assert.deepStrictEqual(dropParams({ file: "f1" }, "bots.home"), { file: "f1" });

@@ -71,7 +71,7 @@ test("BotTiles: a tile per bot, its words, its canvas, its status mark; the make
       columns: 4, height: 150, padding: 18, gap: 14, faces: { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold" },
       tiles: [
         { slug: "code", name: "Xode", sub: "Working · fixing cart", color: "#4F7A3A", kind: "code", state: "working", action: { kind: "navigate", screenId: "bots.code" } },
-        { slug: "plan", name: "Plan Ease", sub: "Needs you · 1 question", color: "#8F6A1F", kind: "plan", state: "needs" },
+        { slug: "plan", name: "Nudj", sub: "Needs you · 1 question", color: "#8F6A1F", kind: "plan", state: "needs" },
         { slug: "make", name: "Make a bot", sub: "Say what it should do", color: "#0a0a0a", kind: "make", state: "idle" },
       ],
     },
@@ -139,7 +139,7 @@ const HOME = {
     columns: 4, height: 150, padding: 18, gap: 14,
     tiles: [
       { slug: "code", name: "Xode", sub: "Idle", color: "#4F7A3A", kind: "code", state: "idle", action: { kind: "navigate", screenId: "bots.code" } },
-      { slug: "plan", name: "Plan Ease", sub: "Idle", color: "#8F6A1F", kind: "plan", state: "idle", action: { kind: "navigate", screenId: "bots.plan" } },
+      { slug: "plan", name: "Nudj", sub: "Idle", color: "#8F6A1F", kind: "plan", state: "idle", action: { kind: "navigate", screenId: "bots.plan" } },
       { slug: "keybot", name: "Keylessbord", sub: "Idle", color: "#A9573A", kind: "keybot", state: "idle" },
     ],
   },

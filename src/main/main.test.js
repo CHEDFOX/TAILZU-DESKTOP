@@ -462,7 +462,7 @@ test("main: a computer that cannot show a notification never says it can, and op
   } finally { m.close(); }
 });
 
-test("main: the window may open a web page or a mail draft, and nothing else (Plan Ease's Send to an address opens the mail app)", async () => {
+test("main: the window may open a web page or a mail draft, and nothing else (Nudj's Send to an address opens the mail app)", async () => {
   const m = mainProcess();
   try {
     await m.ready();

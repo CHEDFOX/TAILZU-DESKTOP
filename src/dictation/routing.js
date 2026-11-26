@@ -21,7 +21,7 @@
 //   unclear          the backend is asked who answers: a bot, or else Ask
 //
 // THE ONE-TAP FIX. After a route the pill says what it did and offers one
-// other thing ("Typed · Ask instead", "Sent to Plan Ease · Type it instead").
+// other thing ("Typed · Ask instead", "Sent to Nudj · Type it instead").
 // Choosing it undoes the first and does the other: what was typed is taken
 // back with the app's own undo, a question is put away, and a bot's task or a
 // notes command is held for a moment before it goes, so taking it back is
@@ -44,9 +44,9 @@
 //   d.needGrant(missing)     optional: ask for the setup card's permissions this ask needs and has not
 //                            been given (["read"], ["see"]), at this turn → true once they are on
 //   d.addThis                optional: "add this" (addThis.js): { slug, on(), points(words), read(o), send(words, seen, name),
-//                            undo(u) }. Words that point at the screen, going to Plan Ease, carry what they point at: the
+//                            undo(u) }. Words that point at the screen, going to Nudj, carry what they point at: the
 //                            selection, else the page in front, read as the route is decided (while it is still the screen
-//                            they meant) and sent only if Plan Ease is the bot. Its answer's Undo is the pill's alternative.
+//                            they meant) and sent only if Nudj is the bot. Its answer's Undo is the pill's alternative.
 //
 // THE BRAIN (d.decide, desktop.route.brain, off until the server turns it on
 // with its knobs, once /v1/ask/decide is there): with it, every session's words are
@@ -277,7 +277,7 @@ function createRouting(d) {
 
   /**
    * What "this" is, as a promise, when the words point at the screen and "add this" is on; null otherwise. Read now, while the
-   * screen is still the one they meant, and sent only if the bot turns out to be Plan Ease: read for nothing, it is dropped, never
+   * screen is still the one they meant, and sent only if the bot turns out to be Nudj: read for nothing, it is dropped, never
    * sent. Never in our own window, a sensitive app or a private window: there the words go alone.
    */
   function seenFor(r, s) {
@@ -292,7 +292,7 @@ function createRouting(d) {
     } catch { return Promise.resolve(null); }
   }
 
-  /** Plan Ease's answer: said (a notification; a click opens what it names), and its Undo offered on the pill while the pill is
+  /** Nudj's answer: said (a notification; a click opens what it names), and its Undo offered on the pill while the pill is
    *  still ours (no newer dictation, no newer label). */
   function addedThis(a, at, mine, quiet) {
     try { d.botAnswered(a); } catch { /* said nothing */ }
@@ -359,7 +359,7 @@ function createRouting(d) {
       return;
     }
     const name = who.name || who.slug;
-    // Plan Ease, with what they pointed at: its one box first; nothing read, or the box can't say, and the words go as before.
+    // Nudj, with what they pointed at: its one box first; nothing read, or the box can't say, and the words go as before.
     const toBox = seen && who.slug === d.addThis.slug ? seen : null;
     const at = seq;
     let mine = null;

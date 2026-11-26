@@ -331,8 +331,8 @@ test("BotTiles: a double-click takes back the tile's tap (its action and its fad
     type: "BotTiles",
     props: {
       columns: 2, height: 132, tiles: [
-        { slug: "plan", name: "Plan Ease", sub: "Plans your day", color: "#8F6A1F", kind: "plan", state: "idle", action: press("opened", "plan"), doubleTap: press("chat", "plan") },
-        { slug: "travel", name: "Travel bot", sub: "Plans your trips", color: "#3E6E8E", kind: "travel", state: "idle", action: press("opened", "travel") },
+        { slug: "plan", name: "Nudj", sub: "Plans your day", color: "#8F6A1F", kind: "plan", state: "idle", action: press("opened", "plan"), doubleTap: press("chat", "plan") },
+        { slug: "travel", name: "Nomaz", sub: "Plans your trips", color: "#3E6E8E", kind: "travel", state: "idle", action: press("opened", "travel") },
       ],
     },
   };

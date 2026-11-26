@@ -30,8 +30,8 @@ function rig(o = {}) {
     ...(o.addThis ? { addThis: addThisFake(did, o.addThis) } : {}),
     askCancel: () => did.push(["askCancel"]),
     notes: (start) => did.push(["notes", start]),
-    whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Plan Ease", confidence: 0.9 }; },
-    sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Plan Ease", text: "Saturday is planned." }; },
+    whichBot: async (m, slug) => { did.push(["whichBot", m, slug]); if (o.whichBot) return o.whichBot(m, slug); return { slug: "plan", name: "Nudj", confidence: 0.9 }; },
+    sendBot: async (m, slug) => { did.push(["sendBot", m, slug]); return o.sendBot ? o.sendBot() : { name: "Nudj", text: "Saturday is planned." }; },
     botAnswered: (a) => did.push(["answered", a.name, a.text]),
     // What Blip does with a label (kind) is checked on its own; the rest of the data as it always was.
     pill: (state, data) => { const { kind, ...rest } = data || {}; kinds.push(kind); pills.push([state, rest]); },
@@ -206,10 +206,10 @@ test("a bot's task with no text box: the backend picks the bot, the pill names i
   await settle();
   // Not named: the backend's own pick, not this file's guess.
   assert.deepStrictEqual(h.did, [["whichBot", "plan my saturday", undefined]]);
-  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Plan Ease", alt: "Type it instead" }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Nudj", alt: "Type it instead" }]);
   h.elapse();
   await settle();
-  assert.deepStrictEqual(h.did.slice(1), [["sendBot", "plan my saturday", "plan"], ["answered", "Plan Ease", "Saturday is planned."]]);
+  assert.deepStrictEqual(h.did.slice(1), [["sendBot", "plan my saturday", "plan"], ["answered", "Nudj", "Saturday is planned."]]);
 });
 
 test("Type it instead in time: the bot is never asked; the words are typed", async () => {
@@ -237,14 +237,14 @@ test("the bot could not be reached: the pill says so", async () => {
 });
 
 test("unclear (a command, no text box): the backend's pick when it is sure, else Ask", async () => {
-  const sure = rig({ whichBot: () => ({ slug: "travel", name: "Travel bot", confidence: 0.8 }) });
+  const sure = rig({ whichBot: () => ({ slug: "travel", name: "Nomaz", confidence: 0.8 }) });
   sure.r.start(1, {});
   sure.r.field(1, null);
   sure.r.end(1, { text: "Open Gmail.", heard: "open gmail" }, true);
   await settle();
   assert.deepStrictEqual(sure.did, [["whichBot", "open gmail", undefined]]);
-  assert.deepStrictEqual(sure.lastPill()[1].label, "Sent to Travel bot");
-  for (const who of [{ slug: "travel", name: "Travel bot", confidence: 0.3 }, { slug: "tailzu", name: "X0", confidence: 1 }, null, () => { throw new Error("offline"); }]) {
+  assert.deepStrictEqual(sure.lastPill()[1].label, "Sent to Nomaz");
+  for (const who of [{ slug: "travel", name: "Nomaz", confidence: 0.3 }, { slug: "tailzu", name: "X0", confidence: 1 }, null, () => { throw new Error("offline"); }]) {
     const h = rig({ whichBot: typeof who === "function" ? who : () => who });
     h.r.start(1, {});
     h.r.field(1, null);
@@ -508,7 +508,7 @@ test("brain: a routine is held a moment, then saved, and said", async () => {
 });
 
 test("brain: one of their bots, by the brain's pick", async () => {
-  const h = rig({ decide: () => ({ do: "bot", goal: "Plan my Saturday", bot: { slug: "plan", name: "Plan Ease" }, sure: 0.9, by: "model" }) });
+  const h = rig({ decide: () => ({ do: "bot", goal: "Plan my Saturday", bot: { slug: "plan", name: "Nudj" }, sure: 0.9, by: "model" }) });
   said(h, 1, "plan my saturday", null);
   await settle();
   assert.deepStrictEqual(h.did.find((x) => x[0] === "whichBot"), ["whichBot", "Plan my Saturday", "plan"]);
@@ -570,25 +570,25 @@ test("brain: a routine that could not be saved never says saved", async () => {
 
 // ---- "add this" (addThis.js) -----------------------------------------------------------------
 
-test("add this, with an email in front: what is on the screen is read as the route is decided, and goes to Plan Ease's box with the words", async () => {
+test("add this, with an email in front: what is on the screen is read as the route is decided, and goes to Nudj's box with the words", async () => {
   const h = rig({ addThis: {} });
   h.r.start(1, {});
   h.r.target(1, { label: "Mail", title: "Your appointment is confirmed" });
   h.r.field(1, null);
   assert.strictEqual(h.r.end(1, { text: "Add this to my plan.", heard: "add this to my plan" }, true), "routed");
   await settle();
-  // Read now, while it is still the screen they meant; Plan Ease not even picked yet.
+  // Read now, while it is still the screen they meant; Nudj not even picked yet.
   assert.deepStrictEqual(h.did.slice(0, 2), [
     ["read", { words: "add this to my plan", selection: "", app: "Mail", title: "Your appointment is confirmed" }],
     ["whichBot", "add this to my plan", undefined],
   ]);
-  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Plan Ease", alt: "Type it instead" }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Sent to Nudj", alt: "Type it instead" }]);
   h.elapse();
   await settle();
-  assert.deepStrictEqual(h.did.slice(2), [["box", "add this to my plan", "page"], ["answered", "Plan Ease", "Added: Dentist, Fri 13 Nov, 5 pm"]]);
+  assert.deepStrictEqual(h.did.slice(2), [["box", "add this to my plan", "page"], ["answered", "Nudj", "Added: Dentist, Fri 13 Nov, 5 pm"]]);
   assert.ok(!h.did.some((x) => x[0] === "sendBot"), "the box answered: not the chat too");
   // Its Undo, on the pill.
-  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Added to Plan Ease", alt: "Undo" }]);
+  assert.deepStrictEqual(h.lastPill(), ["routed", { label: "Added to Nudj", alt: "Undo" }]);
   await h.r.alternative();
   await settle();
   assert.deepStrictEqual(h.did[h.did.length - 1], ["undo it", { item: "pe:e1:2026-11-13", action: "undo" }]);
@@ -646,7 +646,7 @@ test("add this, switched off by the server, or in a private window, a bank or ou
 });
 
 test("add this, and another bot answers: what was read is dropped, never sent", async () => {
-  const h = rig({ addThis: {}, whichBot: () => ({ slug: "travel", name: "Travel bot", confidence: 0.9 }) });
+  const h = rig({ addThis: {}, whichBot: () => ({ slug: "travel", name: "Nomaz", confidence: 0.9 }) });
   h.r.start(1, {});
   h.r.field(1, null);
   h.r.end(1, { text: "Book this hotel.", heard: "book this hotel" }, true);
@@ -699,20 +699,20 @@ test("add this answered after the next dictation began: said in a notification, 
   await settle();
   h.r.start(2, {});
   const before = h.pills.length;
-  land({ name: "Plan Ease", text: "Added: Dentist, Fri 13 Nov, 5 pm", kind: "added", open: { screenId: "bots.plan", params: {} }, undo: { item: "pe:e1:x", action: "undo" } });
+  land({ name: "Nudj", text: "Added: Dentist, Fri 13 Nov, 5 pm", kind: "added", open: { screenId: "bots.plan", params: {} }, undo: { item: "pe:e1:x", action: "undo" } });
   await settle();
-  assert.deepStrictEqual(h.did[h.did.length - 1], ["answered", "Plan Ease", "Added: Dentist, Fri 13 Nov, 5 pm"]);
+  assert.deepStrictEqual(h.did[h.did.length - 1], ["answered", "Nudj", "Added: Dentist, Fri 13 Nov, 5 pm"]);
   assert.strictEqual(h.pills.length, before, "the new dictation's pill is left alone");
 });
 
 test("the brain says whether the words point at the screen: its word over the word list's", async () => {
-  const no = rig({ addThis: {}, decide: () => ({ do: "bot", goal: "Add this to my plan", bot: { slug: "plan", name: "Plan Ease" }, seen: false, sure: 0.9 }) });
+  const no = rig({ addThis: {}, decide: () => ({ do: "bot", goal: "Add this to my plan", bot: { slug: "plan", name: "Nudj" }, seen: false, sure: 0.9 }) });
   no.r.start(1, {});
   no.r.field(1, null);
   no.r.end(1, { text: "Add this to my plan.", heard: "add this to my plan" }, true);
   await settle();
   assert.ok(!no.did.some((x) => x[0] === "read"));
-  const yes = rig({ addThis: {}, decide: () => ({ do: "bot", goal: "Put the dentist on Friday", bot: { slug: "plan", name: "Plan Ease" }, seen: true, sure: 0.9 }) });
+  const yes = rig({ addThis: {}, decide: () => ({ do: "bot", goal: "Put the dentist on Friday", bot: { slug: "plan", name: "Nudj" }, seen: true, sure: 0.9 }) });
   yes.r.start(1, {});
   yes.r.field(1, null);
   yes.r.end(1, { text: "Put the dentist on Friday.", heard: "put the dentist on friday" }, true);

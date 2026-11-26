@@ -143,8 +143,8 @@ const LISTS = {
     "in bullet points", "as bullets", "politely", "hindi mein", "english mein", "हिंदी में"],
   // A task for a bot: the built-ins by name, and the tasks that are theirs (patterns, on normalised words).
   bots: [
-    { slug: "plan", names: ["plan ease", "planease", "plan bot", "planner bot"] },
-    { slug: "travel", names: ["travel bot"] },
+    { slug: "plan", names: ["nudj", "nudge bot", "plan ease", "planease", "plan bot", "planner bot"] },
+    { slug: "travel", names: ["nomaz", "nomads bot", "travel bot"] },
     { slug: "code", names: ["xode", "code bot", "coding bot"] },
     { slug: "keybot", names: ["keylessbord", "keylessboard", "keybot", "key bot"] },
   ],
@@ -156,7 +156,7 @@ const LISTS = {
     { slug: "plan", re: "^(?:whats|what is) on (?:my calendar|my schedule|today|tomorrow)(?: |$)" },
     { slug: "plan", re: "^(?:set|create) (?:a |an )?(?:reminder|meeting|event)(?: |$)" },
     { slug: "plan", re: "(?:^| )(?:plan|schedule) (?:karo|kar do|banao|bana do)$" },
-    // "Add this": something on the screen (an email, a page, a selection) to Plan Ease (addThis.js).
+    // "Add this": something on the screen (an email, a page, a selection) to Nudj (addThis.js).
     { slug: "plan", re: "^(?:add|put|save|keep) (?:this|that|these|those|it)(?: \\S+){0,3} (?:to|on|in|into|for) (?:my |the )?(?:plan|plan ease|planease|calendar|schedule|day|list|to do list|todo list|to dos|todos)(?: |$)" },
     { slug: "plan", re: "^(?:add|save) (?:this|these)(?: (?:email|mail|message|event|invite|meeting|reminder|page|bill|date))?$" },
     { slug: "plan", re: "(?:^| )(?:isko|ise|isse|ye|yeh|inko|inhe) (?:\\S+ ){0,3}(?:plan|calendar|list) (?:me|mein|mai|par|pe) (?:add|daal|dal|daalo|dalo|rakh|rakho|likh|likho)(?: |$)" },
@@ -403,7 +403,7 @@ function writingInstruction(words) { const R = rules(); return R.WRITE_START.tes
 // ---- a task for a bot -----------------------------------------------------------------
 
 /** { slug, named } when the words are a task for a bot: `named` when they say
- *  which bot ("Plan Ease, …", "ask Xode to …"). The slug of an unnamed
+ *  which bot ("Nudj, …", "ask Xode to …"). The slug of an unnamed
  *  task is only a guess; the backend's own routing decides. */
 function botTask(words, bots) {
   if (!words) return null;
@@ -435,7 +435,7 @@ function pointsAtScreen(said) {
   return !!w && R.POINTS.some((re) => re.test(w));
 }
 
-/** "Add this" with text selected: Plan Ease's, and the selection is the thing, not text to rewrite. */
+/** "Add this" with text selected: Nudj's, and the selection is the thing, not text to rewrite. */
 const addsSelection = (r) => !!(r.sel && r.bot && r.bot.slug === "plan" && pointsAtScreen(r.rest));
 
 // ---- the decision -----------------------------------------------------------------------
@@ -495,12 +495,12 @@ function route(i) {
   // Text selected in the box: what they said is about it. A question about it
   // goes to Ask; anything else is the rewrite the server already does.
   if (r.focused && r.sel) {
-    // "Add this to my plan" said over a selection: the selection goes to Plan Ease with the words (addThis.js).
+    // "Add this to my plan" said over a selection: the selection goes to Nudj with the words (addThis.js).
     if (addsSelection(r)) return out("bot", { slug: "plan", named: !!r.bot.named, alt: "type", why: "selection, add this" });
     if (r.askOn && (r.q || explains(r.rest))) return out("ask", { alt: "type", why: "selection question" });
     return out("rewrite", { alt: r.addressed && r.askOn ? "ask" : null, close: r.addressed, why: "selection" });
   }
-  // A bot by name: "Plan Ease, plan my Saturday", "ask Xode to …".
+  // A bot by name: "Nudj, plan my Saturday", "ask Xode to …".
   if (r.bot && r.bot.named) return out("bot", { slug: r.bot.slug, named: true, alt: "type", why: "bot named" });
   // Tailzu by name: the writer's own instruction while a text box is in focus
   // ("Tailzu, reply saying I'm late"), else Ask, or a bot for a bot's task.

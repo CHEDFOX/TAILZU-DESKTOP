@@ -1,7 +1,7 @@
 // node --test
 //
 // "Add this" (addThis.js): which words point at the screen, what "this" is (the selection, else the page, else the visible window),
-// what goes to Plan Ease's box and what comes back, and the old way whenever the box can't say.
+// what goes to Nudj's box and what comes back, and the old way whenever the box can't say.
 const test = require("node:test");
 const assert = require("node:assert");
 const { createAddThis, seenOf, boxBody, replyOf } = require("./addThis.js");
@@ -34,17 +34,17 @@ test("the box's request: the words as the box takes them, the time zone kept in 
 });
 
 test("the box's answer: a line with its Undo, a card's screen to open, or the chat's (the words then go the old way)", () => {
-  assert.strictEqual(replyOf({ slot: "chat", kind: "chat", line: "" }, "Plan Ease"), null);
-  assert.strictEqual(replyOf({ kind: "added", line: "  " }, "Plan Ease"), null);
-  assert.strictEqual(replyOf(null, "Plan Ease"), null);
-  assert.deepStrictEqual(replyOf({ slot: "item", kind: "added", line: "Added: Dentist, Fri 13 Nov, 5 pm", undo: { item: "pe:e1:2026-11-13", action: "undo" } }, "Plan Ease"), {
-    name: "Plan Ease", text: "Added: Dentist, Fri 13 Nov, 5 pm", kind: "added", open: { screenId: "bots.plan", params: {} },
+  assert.strictEqual(replyOf({ slot: "chat", kind: "chat", line: "" }, "Nudj"), null);
+  assert.strictEqual(replyOf({ kind: "added", line: "  " }, "Nudj"), null);
+  assert.strictEqual(replyOf(null, "Nudj"), null);
+  assert.deepStrictEqual(replyOf({ slot: "item", kind: "added", line: "Added: Dentist, Fri 13 Nov, 5 pm", undo: { item: "pe:e1:2026-11-13", action: "undo" } }, "Nudj"), {
+    name: "Nudj", text: "Added: Dentist, Fri 13 Nov, 5 pm", kind: "added", open: { screenId: "bots.plan", params: {} },
     undo: { item: "pe:e1:2026-11-13", action: "undo" },
   });
-  assert.deepStrictEqual(replyOf({ slot: "capture", kind: "capture", line: "4 things from the school circular", open: { screen: "bots.plan.capture", params: { id: "c1", n: 2 } } }, "Plan Ease"), {
-    name: "Plan Ease", text: "4 things from the school circular", kind: "capture", open: { screenId: "bots.plan.capture", params: { id: "c1" } },
+  assert.deepStrictEqual(replyOf({ slot: "capture", kind: "capture", line: "4 things from the school circular", open: { screen: "bots.plan.capture", params: { id: "c1", n: 2 } } }, "Nudj"), {
+    name: "Nudj", text: "4 things from the school circular", kind: "capture", open: { screenId: "bots.plan.capture", params: { id: "c1" } },
   });
-  const odd = replyOf({ kind: "added", line: "Added", undo: { item: "nope", action: "undo" }, open: { screen: "../x" } }, "Plan Ease");
+  const odd = replyOf({ kind: "added", line: "Added", undo: { item: "nope", action: "undo" }, open: { screen: "../x" } }, "Nudj");
   assert.strictEqual(odd.undo, undefined);
   assert.deepStrictEqual(odd.open, { screenId: "bots.plan", params: {} });
 });
@@ -82,14 +82,14 @@ test("what this is with nothing selected: the page in front, else the visible wi
   assert.strictEqual(await none.a.read({ words: "add this" }), null);
 });
 
-test("sent to Plan Ease's box with the words; a failure or the chat's answer is null, so the words go the old way", async () => {
+test("sent to Nudj's box with the words; a failure or the chat's answer is null, so the words go the old way", async () => {
   const h = rig();
   const seen = { from: "page", text: "Dentist Fri 5 pm" };
-  const r = await h.a.send("add this", seen, "Plan Ease");
+  const r = await h.a.send("add this", seen, "Nudj");
   assert.deepStrictEqual(h.did[0], ["post", "/v1/botsapp/bots/plan/box", { words: "add this", tz: 330, seen }]);
   assert.strictEqual(r.text, "Added: Dentist, Fri 13 Nov, 5 pm");
-  assert.strictEqual(await rig({ fail: true }).a.send("add this", seen, "Plan Ease"), null);
-  assert.strictEqual(await rig({ answer: { slot: "chat", kind: "chat", line: "" } }).a.send("add this", seen, "Plan Ease"), null);
+  assert.strictEqual(await rig({ fail: true }).a.send("add this", seen, "Nudj"), null);
+  assert.strictEqual(await rig({ answer: { slot: "chat", kind: "chat", line: "" } }).a.send("add this", seen, "Nudj"), null);
 });
 
 test("Undo through the act door, and only an item of ours", async () => {

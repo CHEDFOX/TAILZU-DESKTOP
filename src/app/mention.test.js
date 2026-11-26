@@ -7,7 +7,7 @@ const assert = require("node:assert");
 const { fakePage } = require("./testkit.js");
 
 const PEOPLE = [{ id: "u-mom", name: "Mom" }, { id: "u-rohan", name: "Rohan Sharma" }];
-const BOTS = [{ slug: "plan", name: "Plan Ease", color: "#8F6A1F", kind: "plan" }, { slug: "notes", name: "Notes", color: "#5B6B3A", kind: "notes" }];
+const BOTS = [{ slug: "plan", name: "Nudj", color: "#8F6A1F", kind: "plan" }, { slug: "notes", name: "Notes", color: "#5B6B3A", kind: "notes" }];
 const field = (extra = {}) => ({
   type: "MentionField",
   props: Object.assign({
@@ -54,7 +54,7 @@ test("the rules: \"@\" and \"/\" at the start or after a space; the filter; a pi
   assert.deepStrictEqual(names("sh"), ["Rohan Sharma"], "any word of the name");
   const bots = (q) => JSON.parse(JSON.stringify(p.run("mentionBots(" + JSON.stringify(BOTS) + "," + JSON.stringify(q) + ")"))).map((x) => x.slug);
   assert.deepStrictEqual(bots(""), ["plan", "notes"]);
-  assert.deepStrictEqual(bots("eas"), ["plan"], "a bot's name holding it");
+  assert.deepStrictEqual(bots("udj"), ["plan"], "a bot's name holding it");
   assert.deepStrictEqual(bots("no"), ["notes"], "or its slug starting with it");
   assert.deepStrictEqual(JSON.parse(JSON.stringify(p.run("mentionCut('hi @mo there', 3, 6)"))), { text: "hi there", caret: 3 });
   const at = (text, people) => JSON.parse(JSON.stringify(p.run("mentionAtSend(" + JSON.stringify({ text }) + "," + JSON.stringify(people || PEOPLE) + ")")));
@@ -91,7 +91,7 @@ test("\"/\" opens the bots and the screen's tools; a bot's things come from thin
   const { p, fetched, input, list, draft } = page();
   input().type("/");
   assert.match(list().textContent, /Share from a bot/);
-  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Plan Ease", "Notes"]);
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Nudj", "Notes"]);
   assert.deepStrictEqual(list().querySelectorAll(".tz-mf-tool").map((r) => r.textContent), ["Ask for money"]);
   input().type("no");
   assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Notes"], "filtered by what follows");
@@ -104,8 +104,8 @@ test("\"/\" opens the bots and the screen's tools; a bot's things come from thin
   assert.deepStrictEqual(list().querySelectorAll(".tz-mf-thing").map((r) => r.textContent), ["Doctor, knee check-upFri, 7:40"]);
   list().querySelector(".tz-mf-thing").click();
   assert.strictEqual(input().value, "");
-  assert.deepStrictEqual(p.view.querySelectorAll(".tz-mf-chip").map((c) => c.textContent), ["Doctor, knee check-up · Plan Ease×"]);
-  assert.deepStrictEqual(draft(), { text: "", toId: "", toName: "", bot: "plan", botName: "Plan Ease", thingId: "e:1@2026-11-14", thingTitle: "Doctor, knee check-up" });
+  assert.deepStrictEqual(p.view.querySelectorAll(".tz-mf-chip").map((c) => c.textContent), ["Doctor, knee check-up · Nudj×"]);
+  assert.deepStrictEqual(draft(), { text: "", toId: "", toName: "", bot: "plan", botName: "Nudj", thingId: "e:1@2026-11-14", thingTitle: "Doctor, knee check-up" });
   // A tool closes the list and runs its action.
   input().type("/");
   list().querySelector(".tz-mf-tool").click();
@@ -187,21 +187,21 @@ test("pick \"bot\": a bot from \"/\" becomes the chip, nothing is fetched, and t
   const { p, input, list, draft, fetched } = page({ props: { pick: "bot", placeholder: "Say what you need…" } });
   input().type("/");
   assert.ok(list() && list().classList.contains("on"));
-  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Plan Ease", "Notes"]);
-  input().type("pl");
-  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Plan Ease"], "filtered by what follows");
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Nudj", "Notes"]);
+  input().type("nu");
+  assert.deepStrictEqual(list().querySelectorAll(".tz-mf-bot").map((r) => r.textContent), ["Nudj"], "filtered by what follows");
   list().querySelector(".tz-mf-bot").click();
   assert.strictEqual(list(), null, "closed at once: there is nothing more to pick");
   assert.deepStrictEqual(fetched, [], "NO things call: Talk's \"/\" ends at the bot");
-  assert.strictEqual(input().value, "", "the \"/pl\" is taken out of the words");
-  assert.deepStrictEqual(p.view.querySelectorAll(".tz-mf-chip").map((c) => c.textContent), ["Plan Ease×"], "the bot's name alone");
+  assert.strictEqual(input().value, "", "the \"/nu\" is taken out of the words");
+  assert.deepStrictEqual(p.view.querySelectorAll(".tz-mf-chip").map((c) => c.textContent), ["Nudj×"], "the bot's name alone");
   input().type("what's on tomorrow");
-  assert.deepStrictEqual(draft(), { text: "what's on tomorrow", toId: "", toName: "", bot: "plan", botName: "Plan Ease", thingId: "", thingTitle: "" });
+  assert.deepStrictEqual(draft(), { text: "what's on tomorrow", toId: "", toName: "", bot: "plan", botName: "Nudj", thingId: "", thingTitle: "" });
 });
 
 test("pick \"bot\": the bot's chip comes off with its ×, and the person's chip lives beside it", () => {
   const { p, input, draft, list } = page({ props: { pick: "bot" } });
-  input().type("/pl");
+  input().type("/nu");
   list().querySelector(".tz-mf-bot").click();
   input().type("@mo");
   list().querySelector(".tz-mf-person").click();
