@@ -100,6 +100,8 @@ const COMPONENTS = [
   "BotsMotion", "BotTiles", "BotCard",
   // A full-width strip under BotTiles' grid (Notes), its bot at the left, in the same world as the tiles.
   "BotTilesStrip",
+  // BotTilesProps.stage: the bot at the top of each tile, its name and line under him.
+  "BotTilesStage",
   // A bot's own tiny bot on its pages (a header, Xode's setup steps): BotBuddy, on the same core.
   "BotBuddy",
   // BotBuddy's act "carry" and `doneWhen`: a lane under a message on its way, where he hauls it as a bag, heavier

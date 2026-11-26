@@ -131,6 +131,8 @@ function btLife(spec, i) {
 function botTilesNode(p) {
   const tiles = Array.isArray(p.tiles) ? p.tiles : [];
   const cols = Math.max(1, Number(p.columns) || 4), H = Number(p.height) || 150, pad = Number(p.padding) || 18, gap = Number(p.gap) || 14;
+  // BotTilesStage: the bot's room at the top of each tile; its words start under it (the floor is read from them).
+  const stage = Number(p.stage) > 0 ? Number(p.stage) : 0, subLines = Math.max(1, Math.min(6, Number(p.subLines) || 2));
   const f = Object.assign({}, BT_FONT, p.faces || {});
   const id = BT_PENDING.push({ kind: "tiles", p }) - 1;
   const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
@@ -139,14 +141,14 @@ function botTilesNode(p) {
     const mark = make ? "" : t.state === "working" ? t.color : t.state === "needs" ? "#0a0a0a" : "";
     const sub = t.state === "working" ? face(f.medium) + ";color:" + esc(t.color) + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
       : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
-        : face(f.regular) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden";
+        : face(f.regular) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:" + subLines + ";-webkit-box-orient:vertical;overflow:hidden";
     return '<div class="tz-bt-tile" data-i="' + i + '" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
       "position:relative;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
       "transition:transform .18s cubic-bezier(.3,1.5,.5,1);" +
       (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
       '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
       (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
-      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;bottom:" + pad + 'px;display:flex;flex-direction:column;gap:3px;transition:opacity .2s;pointer-events:none">' +
+      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;" + (stage ? "top:" + stage : "bottom:" + pad) + 'px;display:flex;flex-direction:column;gap:3px;transition:opacity .2s;pointer-events:none">' +
       '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
       '<div style="' + sub + ';font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
   }).join("");
