@@ -29,6 +29,17 @@
 //              not a tap, and it kills the whole train it belongs to rather
 //              than only itself.
 //
+//   altgr      THE ONE THAT TOOK RIGHT ALT AWAY ON WINDOWS. On most layouts that
+//              have it (UK, India's, Europe's) Right Alt is AltGr, and Windows
+//              sends it as a LEFT CTRL press the hook cannot tell from a real
+//              one, then Right Alt, a millisecond or two apart, and releases
+//              both. Ctrl and Alt are both watched, so every press of Right Alt
+//              was a clean Ctrl tap AND a clean Alt tap, each wiping out the
+//              other's half-made pair (a tap on one key is not half a pair on
+//              another): Right Alt twice did nothing at all, with no sign why.
+//              A left Ctrl that Right Alt follows within altGrMs is Windows',
+//              not a hand's: that press is forgotten, its release with it.
+//
 // Split out of main.js to be testable: the misfire above is a sequence of
 // events with timings, which is the one thing a global key hook cannot be
 // asked to reproduce on demand.
@@ -46,6 +57,8 @@ const TAP_MIN_GAP_MS = 70;
  *  went to another process — is forgotten after this long, or one lost event
  *  would make the gesture impossible until the next restart. */
 const OTHER_KEY_TTL_MS = 8000;
+/** Windows puts its AltGr Ctrl this close before Right Alt: a millisecond or two, never the tenth of a second a hand needs. */
+const ALT_GR_MS = 30;
 
 /** An option as given: a number, or a function read at the moment it is
  *  needed — main.js passes the server's knobs that way, so a retuned
@@ -64,6 +77,9 @@ function option(v, fallback) {
  * @param {number|(() => number)} [opts.gapMs]         default TAP_GAP_MS
  * @param {number|(() => number)} [opts.minGapMs]      default TAP_MIN_GAP_MS
  * @param {number|(() => number)} [opts.otherKeyTtlMs] default OTHER_KEY_TTL_MS
+ * @param {{ ctrl: string, ctrlCode: number, alt: string, altRightCode: number }} [opts.altGr]  Windows' AltGr: the names
+ *        and the keycodes of LEFT Ctrl and RIGHT Alt (main.js passes uiohook's on Windows only)
+ * @param {number|(() => number)} [opts.altGrMs]       default ALT_GR_MS
  */
 function createTapDetector(opts) {
   const onPair = opts.onPair;
@@ -72,12 +88,14 @@ function createTapDetector(opts) {
   const gap = () => option(opts.gapMs, TAP_GAP_MS);
   const minGap = () => option(opts.minGapMs, TAP_MIN_GAP_MS);
   const otherTtl = () => option(opts.otherKeyTtlMs, OTHER_KEY_TTL_MS);
+  const altGr = opts.altGr || null;
+  const altGrMs = () => option(opts.altGrMs, ALT_GR_MS);
 
   // One state per name, so a pair is always the SAME key twice. One shared
   // timer would fire on Ctrl-then-Alt, which is not a gesture anyone is making
   // on purpose.
   const state = new Map(
-    opts.names.map((n) => [n, { lastTapAt: 0, downAt: 0, upAt: 0, clean: false, repeating: false }]),
+    opts.names.map((n) => [n, { lastTapAt: 0, downAt: 0, upAt: 0, clean: false, repeating: false, downCode: null, phantom: false }]),
   );
   /** Keys we do not watch that are down right now: keycode → when. */
   const others = new Map();
@@ -104,6 +122,11 @@ function createTapDetector(opts) {
     }
     const s = state.get(name);
     if (!s) return;
+    // Right Alt right after a left Ctrl: that Ctrl was Windows' AltGr, not a press. Forgotten, and its release too.
+    if (altGr && name === altGr.alt && code === altGr.altRightCode) {
+      const c = state.get(altGr.ctrl);
+      if (c && c.downAt && c.downCode === altGr.ctrlCode && t - c.downAt <= altGrMs()) { c.downAt = 0; c.phantom = true; }
+    }
     if (s.upAt && t - s.upAt < minGap()) {
       // The key is repeating under a finger that never lifted. Everything until
       // it is genuinely released is the same press.
@@ -114,6 +137,7 @@ function createTapDetector(opts) {
     }
     if (!s.downAt) {
       s.downAt = t;
+      s.downCode = code == null ? null : code;
       s.clean = !othersHeld(t);
     }
   }
@@ -124,6 +148,8 @@ function createTapDetector(opts) {
     if (!name) { if (code != null) others.delete(code); return; }
     const s = state.get(name);
     if (!s) return;
+    // The release of Windows' AltGr Ctrl: nothing happened, to this key or any other.
+    if (s.phantom && !s.downAt) { s.phantom = false; return; }
     const t = now();
     // A release with no press behind it — the hook missed one, or the key went
     // down while another window had the hook. It is not a tap either way.

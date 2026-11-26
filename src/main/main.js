@@ -3056,6 +3056,11 @@ function setupKeyHook() {
           }
           if (cfg.tap) toggleDictation();
         },
+        // Windows' AltGr (Right Alt on most layouts that have it) comes as a left Ctrl press and then Right Alt: without
+        // this, Right Alt twice was a Ctrl tap and an Alt tap each time, cancelling each other, and did nothing (tapDetector.js).
+        ...(process.platform === "win32" && typeof UiohookKey.Ctrl === "number" && typeof UiohookKey.AltRight === "number"
+          ? { altGr: { ctrl: "Ctrl", ctrlCode: UiohookKey.Ctrl, alt: "Alt", altRightCode: UiohookKey.AltRight } } : {}),
+        altGrMs: () => num("desktop.tap.altGrMs", 30),
         maxHoldMs: () => num("desktop.tap.maxHoldMs", 350),
         gapMs: () => num("desktop.tap.gapMs", 400),
         minGapMs: () => num("desktop.tap.minGapMs", 70),

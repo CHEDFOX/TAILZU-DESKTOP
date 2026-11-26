@@ -247,3 +247,40 @@ test("a stuck key is forgotten after otherKeyTtlMs", () => {
   tap(); clock += 120; tap();
   assert.deepStrictEqual(fired, ["Ctrl"], "the lost key no longer counts as held");
 });
+
+// ---- Windows' AltGr -----------------------------------------------------------
+// Right Alt on a layout with AltGr arrives as LEFT Ctrl, then Right Alt, a moment apart.
+const LCTRL = 29, RALT = 3640;
+function altGrRig() {
+  let clock = 1_000_000;
+  const fired = [];
+  const d = createTapDetector({ names: ["Ctrl", "Alt"], now: () => clock, onPair: (n) => fired.push(n), altGr: { ctrl: "Ctrl", ctrlCode: LCTRL, alt: "Alt", altRightCode: RALT } });
+  return {
+    fired, wait: (ms) => { clock += ms; },
+    /** one press of Right Alt as Windows sends it under AltGr */
+    altGr(ms = 50) { d.keyDown("Ctrl", LCTRL); clock += 1; d.keyDown("Alt", RALT); clock += ms; d.keyUp("Alt", RALT); clock += 1; d.keyUp("Ctrl", LCTRL); },
+    tap(n, code, ms = 40) { d.keyDown(n, code); clock += ms; d.keyUp(n, code); },
+  };
+}
+
+test("Right Alt twice under AltGr is Alt twice, and never Ctrl", () => {
+  const r = altGrRig();
+  r.altGr(); r.wait(150); r.altGr();
+  assert.deepStrictEqual(r.fired, ["Alt"]);
+});
+
+test("Ctrl twice still dictates after a Right Alt, and a real Ctrl then Right Alt chord is still no tap", () => {
+  const r = altGrRig();
+  r.altGr(); r.wait(600);
+  r.tap("Ctrl", LCTRL); r.wait(150); r.tap("Ctrl", LCTRL);
+  assert.deepStrictEqual(r.fired, ["Ctrl"]);
+});
+
+test("without the AltGr option, Right Alt under AltGr never makes a pair (the bug it fixes)", () => {
+  let clock = 1_000_000;
+  const fired = [];
+  const d = createTapDetector({ names: ["Ctrl", "Alt"], now: () => clock, onPair: (n) => fired.push(n) });
+  const press = () => { d.keyDown("Ctrl", LCTRL); clock += 1; d.keyDown("Alt", RALT); clock += 50; d.keyUp("Alt", RALT); clock += 1; d.keyUp("Ctrl", LCTRL); };
+  press(); clock += 150; press();
+  assert.deepStrictEqual(fired, []);
+});
