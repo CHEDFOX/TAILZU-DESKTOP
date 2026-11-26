@@ -133,6 +133,7 @@ function botTilesNode(p) {
   const cols = Math.max(1, Number(p.columns) || 4), H = Number(p.height) || 150, pad = Number(p.padding) || 18, gap = Number(p.gap) || 14;
   // BotTilesStage: the bot's room at the top of each tile; its words start under it (the floor is read from them).
   const stage = Number(p.stage) > 0 ? Number(p.stage) : 0, subLines = Math.max(1, Math.min(6, Number(p.subLines) || 2));
+  const nameGap = Math.max(0, Math.min(24, Number(p.nameGap) || 3));
   const f = Object.assign({}, BT_FONT, p.faces || {});
   const id = BT_PENDING.push({ kind: "tiles", p }) - 1;
   const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
@@ -148,7 +149,7 @@ function botTilesNode(p) {
       (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
       '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
       (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
-      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;" + (stage ? "top:" + stage : "bottom:" + pad) + 'px;display:flex;flex-direction:column;gap:3px;transition:opacity .2s;pointer-events:none">' +
+      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;" + (stage ? "top:" + stage : "bottom:" + pad) + 'px;display:flex;flex-direction:column;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' +
       '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
       '<div style="' + sub + ';font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
   }).join("");
