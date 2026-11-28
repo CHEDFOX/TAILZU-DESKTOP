@@ -160,7 +160,7 @@ function botTilesNode(p) {
         : stage ? face(f.semibold) + ";color:#5c5c5c" // on a stage the line is never cut: the card grows for it
         : face(f.semibold) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:" + subLines + ";-webkit-box-orient:vertical;overflow:hidden";
     return '<div class="tz-bt-tile" data-i="' + i + '" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
-      "position:relative;" + (stage ? "min-height:" : "height:") + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
+      "position:relative;" + (stage ? "" : "height:" + H + "px;") + "box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
       "transition:transform .18s cubic-bezier(.3,1.5,.5,1);" +
       (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
       '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
