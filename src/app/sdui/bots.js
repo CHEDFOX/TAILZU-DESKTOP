@@ -21,7 +21,7 @@ const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibo
  */
 function btVeil(pad) {
   const mask = "linear-gradient(to bottom,transparent 0,#000 14px)";
-  return '<div aria-hidden="true" style="position:absolute;left:-' + pad + "px;right:-" + pad + "px;top:-4px;bottom:-400px;" +
+  return '<div aria-hidden="true" style="position:absolute;left:-' + pad + "px;right:-" + pad + "px;top:-10px;bottom:-400px;" +
     "background:rgba(255,255,255,.74);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);" +
     "mask-image:" + mask + ";-webkit-mask-image:" + mask + '"></div>';
 }
@@ -360,7 +360,7 @@ function mountBotTiles(root) {
         const isStrip = strip && i === els.length - 1;
         const w = isStrip ? Math.max(80, Math.round(wr.left - r.left)) : el.clientWidth;
         sizes[i] = [w, h];
-        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 3);
+        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 10); // the bot stands 10px above its name
       });
     };
     layout();
