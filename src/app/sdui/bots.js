@@ -12,7 +12,21 @@
 let BT_PENDING = [];
 const BT_LIVES = new Map();
 const BT_CARDS = new Map();   // a BotCard's life across repaints: phase, step, completed, entered
-const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold" };
+const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibold: "Tailzu Geist SemiBold", bold: "Tailzu Geist Bold" };
+/**
+ * THE VEIL UNDER A TILE'S WORDS: the fabric behind the name and line blurred and washed pale, fading in from just above
+ * the words (where the bot stands) so there is no edge, and the words never lose to the pattern. The first child of the
+ * words' box, stretched to the tile's sides and down past its foot (the tile clips it). The phone draws the same
+ * (app BotTiles.tsx Veil).
+ */
+function btVeil(pad) {
+  const mask = "linear-gradient(to bottom,transparent 0,#000 14px)";
+  return '<div aria-hidden="true" style="position:absolute;left:-' + pad + "px;right:-" + pad + "px;top:-24px;bottom:-400px;" +
+    "background:rgba(255,255,255,.42);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);" +
+    "mask-image:" + mask + ";-webkit-mask-image:" + mask + '"></div>';
+}
+/** The name: capitals, bold. */
+const btName = (face, f) => face(f.bold) + ";position:relative;font-size:15px;line-height:20px;letter-spacing:.6px;text-transform:uppercase;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
 
 // The bots' looks and moments (botTiles.js compileLooks; the server's catalog, shared/bots/looks.json): the window's
 // starter (botLooks.js, generated from the server's file at release), the last one the server sent (localStorage), and
@@ -133,25 +147,27 @@ function botTilesNode(p) {
   const cols = Math.max(1, Number(p.columns) || 4), H = Number(p.height) || 150, pad = Number(p.padding) || 18, gap = Number(p.gap) || 14;
   // BotTilesStage: the bot's room at the top of each tile; its words start under it (the floor is read from them).
   const stage = Number(p.stage) > 0 ? Number(p.stage) : 0, subLines = Math.max(1, Math.min(6, Number(p.subLines) || 2));
-  const nameGap = Math.max(0, Math.min(24, Number(p.nameGap) || 3));
+  const nameGap = Math.max(0, Math.min(24, Number(p.nameGap) || 7));
   const f = Object.assign({}, BT_FONT, p.faces || {});
   const id = BT_PENDING.push({ kind: "tiles", p }) - 1;
   const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
   const body = tiles.map((t, i) => {
     const make = t.kind === "make";
     const mark = make ? "" : t.state === "working" ? t.color : t.state === "needs" ? "#0a0a0a" : "";
-    const sub = t.state === "working" ? face(f.medium) + ";color:" + esc(t.color) + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+    // The line is semibold in every state; its colour says which.
+    const sub = t.state === "working" ? face(f.semibold) + ";color:" + esc(t.color) + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
       : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
-        : face(f.regular) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:" + subLines + ";-webkit-box-orient:vertical;overflow:hidden";
+        : stage ? face(f.semibold) + ";color:#5c5c5c" // on a stage the line is never cut: the card grows for it
+        : face(f.semibold) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:" + subLines + ";-webkit-box-orient:vertical;overflow:hidden";
     return '<div class="tz-bt-tile" data-i="' + i + '" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
-      "position:relative;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
+      "position:relative;" + (stage ? "" : "height:" + H + "px;") + "box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
       "transition:transform .18s cubic-bezier(.3,1.5,.5,1);" +
       (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
       '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
       (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
-      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;" + (stage ? "top:" + stage : "bottom:" + pad) + 'px;display:flex;flex-direction:column;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' +
-      '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
-      '<div style="' + sub + ';font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
+      '<div class="tz-bt-w" style="' + (stage ? "position:relative;margin:" + stage + "px " + pad + "px " + pad + "px" : "position:absolute;left:" + pad + "px;right:" + pad + "px;bottom:" + pad + "px") + ';display:flex;flex-direction:column;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' + btVeil(pad) +
+      '<div style="' + btName(face, f) + '">' + esc(t.name) + "</div>" +
+      '<div style="' + sub + ';position:relative;font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
   }).join("");
   return '<div data-bt="' + id + '" style="position:relative;display:grid;grid-template-columns:repeat(' + cols + ",minmax(0,1fr));gap:" + gap + 'px">' + body + btStrip(p, tiles.length, pad, f) + "</div>";
 }
@@ -167,14 +183,15 @@ function btStrip(p, i, pad, f) {
   const H = Number(p.stripHeight) || 112;
   const face = (name) => "font-family:'" + esc(name) + "';font-weight:normal";
   const mark = t.state === "working" ? t.color : t.state === "needs" ? "#0a0a0a" : "";
-  const sub = t.state === "working" ? face(f.medium) + ";color:" + esc(t.color) : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a" : face(f.regular) + ";color:#5c5c5c";
+  const sub = t.state === "working" ? face(f.semibold) + ";color:" + esc(t.color) : face(f.semibold) + ";color:" + (t.state === "needs" ? "#0a0a0a" : "#5c5c5c");
+  const nameGap = Math.max(0, Math.min(24, Number(p.nameGap) || 7));
   return '<div class="tz-bt-tile" data-i="' + i + '" data-strip="1" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
     "position:relative;grid-column:1/-1;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
     'transition:transform .18s cubic-bezier(.3,1.5,.5,1);border:1px solid #e6e6e6">' +
     '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
     (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
-    '<div class="tz-bt-w" style="position:absolute;left:clamp(140px,34%,220px);right:' + (pad + (mark ? 16 : 0)) + 'px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center;gap:3px;transition:opacity .2s;pointer-events:none">' +
-    '<div style="' + face(f.semibold) + ';font-size:16px;line-height:21px;color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.name) + "</div>" +
+    '<div class="tz-bt-w" style="position:absolute;left:clamp(140px,34%,220px);right:' + (pad + (mark ? 16 : 0)) + 'px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' +
+    '<div style="' + btName(face, f) + '">' + esc(t.name) + "</div>" +
     '<div style="' + sub + ';font-size:13px;line-height:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(t.sub) + "</div></div></div>";
 }
 
@@ -344,7 +361,7 @@ function mountBotTiles(root) {
         const isStrip = strip && i === els.length - 1;
         const w = isStrip ? Math.max(80, Math.round(wr.left - r.left)) : el.clientWidth;
         sizes[i] = [w, h];
-        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 3);
+        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 24); // the bot stands 24px above its name
       });
     };
     layout();
