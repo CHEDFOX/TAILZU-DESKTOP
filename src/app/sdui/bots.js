@@ -21,8 +21,8 @@ const BT_FONT = { regular: "Tailzu Geist", medium: "Tailzu Geist Medium", semibo
  */
 function btVeil(pad) {
   const mask = "linear-gradient(to bottom,transparent 0,#000 14px)";
-  return '<div aria-hidden="true" style="position:absolute;left:-' + pad + "px;right:-" + pad + "px;top:-10px;bottom:-400px;" +
-    "background:rgba(255,255,255,.74);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);" +
+  return '<div aria-hidden="true" style="position:absolute;left:-' + pad + "px;right:-" + pad + "px;top:-24px;bottom:-400px;" +
+    "background:rgba(255,255,255,.42);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);" +
     "mask-image:" + mask + ";-webkit-mask-image:" + mask + '"></div>';
 }
 /** The name: capitals, bold. */
@@ -157,14 +157,15 @@ function botTilesNode(p) {
     // The line is semibold in every state; its colour says which.
     const sub = t.state === "working" ? face(f.semibold) + ";color:" + esc(t.color) + ";white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
       : t.state === "needs" ? face(f.semibold) + ";color:#0a0a0a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+        : stage ? face(f.semibold) + ";color:#5c5c5c" // on a stage the line is never cut: the card grows for it
         : face(f.semibold) + ";color:#5c5c5c;display:-webkit-box;-webkit-line-clamp:" + subLines + ";-webkit-box-orient:vertical;overflow:hidden";
     return '<div class="tz-bt-tile" data-i="' + i + '" role="button" tabindex="0" aria-label="' + esc(t.label || (t.name + ". " + t.sub)) + '" style="' +
-      "position:relative;height:" + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
+      "position:relative;" + (stage ? "min-height:" : "height:") + H + "px;box-sizing:border-box;border-radius:20px;overflow:hidden;background:#fff;cursor:pointer;" +
       "transition:transform .18s cubic-bezier(.3,1.5,.5,1);" +
       (make ? "border:1.5px dashed #c9c9c9" : "border:1px solid #e6e6e6") + '">' +
       '<canvas class="tz-bt-c" aria-hidden="true" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>' +
       (mark ? '<span style="position:absolute;top:' + pad + "px;right:" + pad + "px;width:10px;height:10px;border-radius:5px;background:" + esc(mark) + '"></span>' : "") +
-      '<div class="tz-bt-w" style="position:absolute;left:' + pad + "px;right:" + pad + "px;" + (stage ? "top:" + stage : "bottom:" + pad) + 'px;display:flex;flex-direction:column;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' + btVeil(pad) +
+      '<div class="tz-bt-w" style="' + (stage ? "position:relative;margin:" + stage + "px " + pad + "px " + pad + "px" : "position:absolute;left:" + pad + "px;right:" + pad + "px;bottom:" + pad + "px") + ';display:flex;flex-direction:column;gap:' + nameGap + 'px;transition:opacity .2s;pointer-events:none">' + btVeil(pad) +
       '<div style="' + btName(face, f) + '">' + esc(t.name) + "</div>" +
       '<div style="' + sub + ';position:relative;font-size:12px;line-height:16px">' + esc(t.sub) + "</div></div></div>";
   }).join("");
@@ -360,7 +361,7 @@ function mountBotTiles(root) {
         const isStrip = strip && i === els.length - 1;
         const w = isStrip ? Math.max(80, Math.round(wr.left - r.left)) : el.clientWidth;
         sizes[i] = [w, h];
-        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 10); // the bot stands 10px above its name
+        world.place(i, r.left - g.left, r.top - g.top, w, h, isStrip ? h - pad * 0.7 : wr.top - r.top - 24); // the bot stands 24px above its name
       });
     };
     layout();
